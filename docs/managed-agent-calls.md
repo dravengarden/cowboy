@@ -203,7 +203,16 @@ An agent never calls its own family (`claude-code`/`claude-deepseek`;
 settings are cleaned of the caller's family, and such a request is refused with
 `same_agent` (not a policy question, so no approval prompt). The Tools editor
 shows one card per callable agent with its switch and its presets as choices;
-the default-agent chooser appears only when more than one agent is callable.
+the default-agent chooser appears only when more than one agent is callable. Each
+card starts folded to its name, current choice and switch. Unfolded it lists
+the recommended presets, then **Custom** selects for each option the presets
+set (model, reasoning). Their choices come from the newest live session of
+that agent's own configuration options, with any preset-only values added.
+A custom choice is stored on the target as `options` (never with `preset`);
+values equal to a preset are normalized back to that preset. Admission
+records it in the call's `preset` field as `custom:model=…;reasoning_effort=…`
+so durable records keep their schema, and the runner applies only option ids
+the exact generation's presets set (the managed worker refuses others).
 
 The effective policy is the override applied to the defaults. A target names an
 agent kind and optionally a preset from that Provider's signed configuration

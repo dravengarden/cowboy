@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import Check from "@mui/icons-material/Check";
+import ExpandMore from "@mui/icons-material/ExpandMore";
 import {
   alpha,
   Box,
@@ -27,6 +28,11 @@ import {
   saveSessionTools,
   SESSION_LIMIT_CHOICES,
   callableTargets,
+  choiceFor,
+  choiceValues,
+  type TargetChoice,
+  type ToolOption,
+  type ToolPreset,
   sameFamily,
   type ToolsCatalog,
   useRemoteDocument,
@@ -80,10 +86,10 @@ function Heading(
   );
 }
 
-type Preset = ToolsCatalog["call_targets"][number]["presets"][number];
+type Preset = ToolPreset;
 
-/** One selectable model-and-reasoning choice inside a target card, in the
- * same material as the Run configuration preset cards. */
+/** One recommended choice inside a target card: a compact selectable row in
+ * the Run configuration preset material. */
 function PresetChoice(
   { name, detail, tag, selected, disabled, onSelect }: {
     name: string;
@@ -103,9 +109,10 @@ function PresetChoice(
       onClick={onSelect}
       sx={{
         width: "100%",
-        minHeight: 48,
+        minHeight: 44,
         px: 1.25,
-        py: 0.75,
+        py: 0.5,
+        gap: 1,
         borderRadius: 1,
         border: 1,
         borderColor: selected ? "primary.main" : "divider",
@@ -121,7 +128,7 @@ function PresetChoice(
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Stack direction="row" spacing={0.75} alignItems="center">
-          <Typography variant="body2" sx={{ fontWeight: 650 }}>
+          <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
             {name}
           </Typography>
           {tag && (
@@ -130,7 +137,7 @@ function PresetChoice(
               size="small"
               color="primary"
               variant="outlined"
-              sx={{ height: 20, fontSize: "0.625rem" }}
+              sx={{ height: 18, fontSize: "0.625rem" }}
             />
           )}
         </Stack>
@@ -138,7 +145,8 @@ function PresetChoice(
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ display: "block", mt: 0.2 }}
+            noWrap
+            component="div"
           >
             {detail}
           </Typography>
@@ -154,21 +162,67 @@ function PresetChoice(
   );
 }
 
-/** A callable agent: its switch, and when allowed, the model and reasoning
- * its calls use. One card per Provider, so a new Provider is one more card. */
+function SectionLabel(
+  { children }: { children: React.ReactNode },
+): React.JSX.Element {
+  return (
+    <Typography
+      variant="overline"
+      color="text.secondary"
+      sx={{ display: "block", lineHeight: 1.6, letterSpacing: 0.6, pt: 0.5 }}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+/** What a target's calls run with, in a few words for the folded card. */
+function choiceSummary(
+  choice: TargetChoice | undefined,
+  presets: readonly Preset[],
+  options: readonly ToolOption[],
+): string {
+  if (choice?.preset) {
+    return presets.find((preset) => preset.id === choice.preset)?.name ??
+      choice.preset;
+  }
+  if (choice?.options) {
+    const parts = options
+      .filter((option) => choice.options?.[option.id] !== undefined)
+      .map((option) => {
+        const value = choice.options![option.id]!;
+        return option.choices.find((c) => c.value === value)?.name ?? value;
+      });
+    return `Custom · ${parts.join(" · ")}`;
+  }
+  return "Agent default";
+}
+
+/** A callable agent, folded to one row: its name, what its calls run with
+ * and its switch. Unfolded, the recommended presets come first; the finer
+ * settings below them set each option directly. One card per Provider. */
 function CallTargetCard(
-  { agent, presets, allowed, preset, disabled, onAllowed, onPreset }: {
+  { agent, presets, options, allowed, choice, disabled, onAllowed, onChoice }: {
     agent: string;
     presets: readonly Preset[];
+    options: readonly ToolOption[];
     allowed: boolean;
-    preset: string | undefined;
+    choice: TargetChoice | undefined;
     disabled: boolean;
     onAllowed: (allowed: boolean) => void;
-    onPreset: (preset: string | undefined) => void;
+    onChoice: (choice: TargetChoice) => void;
   },
 ): React.JSX.Element {
+  const [open, setOpen] = useState(false);
   const label = agentLabel(agent);
-  const chosen = presets.find((candidate) => candidate.id === preset);
+  const values = choiceValues(choice, presets);
+  const editable = !disabled && allowed;
+  const setValue = (id: string, value: string): void => {
+    const next = { ...values };
+    if (value) next[id] = value;
+    else delete next[id];
+    onChoice(choiceFor(next, presets));
+  };
   return (
     <Box
       data-call-target={agent}
@@ -177,30 +231,49 @@ function CallTargetCard(
         borderColor: allowed && !disabled ? "primary.main" : "divider",
         borderRadius: 1.5,
         bgcolor: (theme) => alpha(theme.palette.background.default, 0.34),
-        opacity: disabled ? 0.6 : 1,
         overflow: "hidden",
       }}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1.25}
-        sx={{ px: 1.5, py: 1, minHeight: 56 }}
-      >
-        <ProviderIcon provider={agent} sx={{ fontSize: "1.375rem" }} />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {label}
-          </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            component="div"
-          >
-            {allowed ? chosen?.name ?? "Agent default" : "Not called"}
-          </Typography>
-        </Box>
+      <Stack direction="row" alignItems="center" sx={{ pr: 1 }}>
+        <ButtonBase
+          aria-expanded={open}
+          aria-label={`${label} call settings`}
+          onClick={(): void => setOpen((value) => !value)}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 56,
+            pl: 1.5,
+            pr: 1,
+            gap: 1.25,
+            justifyContent: "flex-start",
+            textAlign: "left",
+            opacity: disabled ? 0.6 : 1,
+          }}
+        >
+          <ProviderIcon provider={agent} sx={{ fontSize: "1.375rem" }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+              {label}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              component="div"
+            >
+              {allowed ? choiceSummary(choice, presets, options) : "Not called"}
+            </Typography>
+          </Box>
+          <ExpandMore
+            fontSize="small"
+            sx={{
+              color: "text.secondary",
+              transition: "transform 160ms",
+              transform: open ? "rotate(180deg)" : "none",
+            }}
+          />
+        </ButtonBase>
         <Switch
           checked={allowed}
           disabled={disabled}
@@ -208,32 +281,74 @@ function CallTargetCard(
           slotProps={{ input: { "aria-label": `Allow calls to ${label}` } }}
         />
       </Stack>
-      <Collapse in={allowed} unmountOnExit>
-        <Stack
-          role="radiogroup"
-          aria-label={`${label} model and reasoning`}
-          spacing={0.75}
-          sx={{ px: 1.5, pb: 1.5 }}
-        >
-          <PresetChoice
-            name="Agent default"
-            detail={`${label}'s own default model and reasoning`}
-            selected={chosen === undefined}
-            disabled={disabled}
-            onSelect={(): void => onPreset(undefined)}
-          />
-          {presets.map((candidate) => (
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          <SectionLabel>Recommended</SectionLabel>
+          <Stack
+            role="radiogroup"
+            aria-label={`${label} model and reasoning`}
+            spacing={0.75}
+          >
             <PresetChoice
-              key={candidate.id}
-              name={candidate.name}
-              detail={candidate.detail}
-              tag={candidate.is_default ? "Provider default" : undefined}
-              selected={candidate.id === preset}
-              disabled={disabled}
-              onSelect={(): void => onPreset(candidate.id)}
+              name="Agent default"
+              detail={`${label}'s own default model and reasoning`}
+              selected={!choice?.preset && !choice?.options}
+              disabled={!editable}
+              onSelect={(): void => onChoice({})}
             />
-          ))}
-        </Stack>
+            {presets.map((candidate) => (
+              <PresetChoice
+                key={candidate.id}
+                name={candidate.name}
+                detail={candidate.detail}
+                tag={candidate.is_default ? "Provider default" : undefined}
+                selected={candidate.id === choice?.preset}
+                disabled={!editable}
+                onSelect={(): void => onChoice({ preset: candidate.id })}
+              />
+            ))}
+          </Stack>
+          {options.length > 0 && (
+            <>
+              <SectionLabel>Custom</SectionLabel>
+              <Stack spacing={1} data-call-target-options>
+                {options.map((option) => (
+                  <Stack
+                    key={option.id}
+                    direction="row"
+                    alignItems="center"
+                    spacing={1.5}
+                  >
+                    <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>
+                      {option.name}
+                    </Typography>
+                    <Select
+                      size="small"
+                      displayEmpty
+                      value={values[option.id] ?? ""}
+                      disabled={!editable}
+                      onChange={(event): void =>
+                        setValue(option.id, String(event.target.value))}
+                      inputProps={{ "aria-label": `${label} ${option.name}` }}
+                      sx={{ minWidth: 168, maxWidth: "60%" }}
+                    >
+                      <MenuItem value="">
+                        <Typography component="span" color="text.secondary">
+                          Agent default
+                        </Typography>
+                      </MenuItem>
+                      {option.choices.map((item) => (
+                        <MenuItem key={item.value} value={item.value}>
+                          {item.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </Stack>
+                ))}
+              </Stack>
+            </>
+          )}
+        </Box>
       </Collapse>
     </Box>
   );
@@ -306,7 +421,7 @@ export function AgentToolsEditor(
         </Row>
       )}
       <Stack spacing={1} sx={{ py: 0.75 }} data-call-targets>
-        {targets.map(({ agent, presets }) => {
+        {targets.map(({ agent, presets, options = [] }) => {
           const target = calls.targets.find((candidate) =>
             candidate.agent === agent
           );
@@ -315,8 +430,9 @@ export function AgentToolsEditor(
               key={agent}
               agent={agent}
               presets={presets}
+              options={options}
               allowed={target !== undefined}
-              preset={target?.preset}
+              choice={target}
               disabled={disabled || !calls.enabled}
               onAllowed={(allowedNow): void =>
                 setCalls({
@@ -324,12 +440,12 @@ export function AgentToolsEditor(
                     calls.targets,
                     agent,
                     allowedNow,
-                    target?.preset,
+                    target,
                   ),
                 })}
-              onPreset={(preset): void =>
+              onChoice={(choice): void =>
                 setCalls({
-                  targets: withTarget(calls.targets, agent, true, preset),
+                  targets: withTarget(calls.targets, agent, true, choice),
                 })}
             />
           );

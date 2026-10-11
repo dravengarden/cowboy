@@ -401,19 +401,36 @@ fn apply_preset(
     let Some(preset) = &record.preset else {
         return Ok(());
     };
-    let values = state
+    let presets = state
         .provider_catalog
         .package(&record.provider, version, digest)
-        .and_then(|package| {
-            package
-                .manifest
-                .configuration
-                .presets
+        .map(|package| package.manifest.configuration.presets)
+        .ok_or("preset_unavailable")?;
+    let values: std::collections::BTreeMap<String, serde_json::Value> =
+        if let Some(custom) = super::super::agent_tools::custom_values(preset) {
+            // A custom choice may set only the options this generation's
+            // presets set; the managed worker refuses any other.
+            if !custom.keys().all(|id| {
+                presets
+                    .iter()
+                    .any(|candidate| candidate.values.contains_key(id))
+            }) {
+                return Err("preset_unavailable");
+            }
+            custom
+                .into_iter()
+                .map(|(id, value)| (id, json!(value)))
+                .collect()
+        } else {
+            presets
                 .into_iter()
                 .find(|candidate| candidate.id == *preset)
-        })
-        .ok_or("preset_unavailable")?
-        .values;
+                .ok_or("preset_unavailable")?
+                .values
+                .into_iter()
+                .map(|(id, value)| (id, json!(value)))
+                .collect()
+        };
     for (config_id, value) in values {
         state
             .hub

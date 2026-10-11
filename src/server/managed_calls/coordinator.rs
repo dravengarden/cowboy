@@ -720,6 +720,7 @@ async fn start(
         }
         for target in &mut targets {
             target.preset = Some(preset.to_owned());
+            target.options = None;
         }
     }
     // A soft per-session budget: concurrent admissions may pass it together.
@@ -762,7 +763,7 @@ async fn start(
     let call_id = random_id("call");
     let child_id = state.supervisor.reserve_session_id();
     let choice = crate::managed_calls::service::Choice {
-        preset: target.preset.clone(),
+        preset: target.recorded_preset(),
         selection,
     };
     let record = match ledger

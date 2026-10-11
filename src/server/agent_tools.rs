@@ -80,6 +80,45 @@ pub(super) struct CallTarget {
     /// own default model and reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// A custom choice instead of a preset: values for the option ids its
+    /// presets set (model, reasoning). Never both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// A record names a custom choice in its `preset` field as `custom:k=v;k=v`,
+/// so durable call records keep their schema.
+pub(super) const CUSTOM_PREFIX: &str = "custom:";
+
+fn valid_option_part(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| !c.is_control() && !matches!(c, ';' | '=' | ':'))
+}
+
+impl CallTarget {
+    /// What an admitted call records for this choice.
+    pub(super) fn recorded_preset(&self) -> Option<String> {
+        if let Some(options) = self.options.as_ref().filter(|options| !options.is_empty()) {
+            let pairs: Vec<String> = options.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            return Some(format!("{CUSTOM_PREFIX}{}", pairs.join(";")));
+        }
+        self.preset.clone()
+    }
+}
+
+/// The values of a recorded `custom:` choice, or `None` for a preset id.
+pub(super) fn custom_values(recorded: &str) -> Option<std::collections::BTreeMap<String, String>> {
+    let body = recorded.strip_prefix(CUSTOM_PREFIX)?;
+    body.split(';')
+        .map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (valid_option_part(key) && valid_option_part(value))
+                .then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 /// A session's changes to its agent kind's defaults. Absent means inherited.
@@ -131,6 +170,17 @@ fn valid_targets(targets: &[CallTarget]) -> bool {
                     .preset
                     .as_ref()
                     .is_none_or(|preset| !preset.is_empty() && preset.len() <= 128)
+                && target.options.as_ref().is_none_or(|options| {
+                    target.preset.is_none()
+                        && !options.is_empty()
+                        && options.len() <= 4
+                        && options
+                            .iter()
+                            .all(|(k, v)| valid_option_part(k) && valid_option_part(v))
+                        && target
+                            .recorded_preset()
+                            .is_some_and(|recorded| recorded.len() <= 128)
+                })
         })
 }
 
@@ -146,6 +196,7 @@ impl AgentTools {
             .map(|target| CallTarget {
                 agent: target.to_owned(),
                 preset: None,
+                options: None,
             })
             .collect();
         Self {
@@ -292,6 +343,7 @@ fn widen(targets: &mut Vec<CallTarget>, caller: &str, requested: &str) {
     targets.extend(missing.into_iter().map(|agent| CallTarget {
         agent: agent.to_owned(),
         preset: None,
+        options: None,
     }));
 }
 
@@ -381,6 +433,77 @@ fn agents_listing(state: &AppState) -> Vec<String> {
 }
 
 /// Presets of an agent's newest signed package, for choosing a target model.
+/// The option ids an agent's presets set, in their first order.
+fn preset_option_ids(state: &AppState, agent: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    if let Some((_, _, package)) = state.provider_catalog.latest_package(agent) {
+        for preset in &package.manifest.configuration.presets {
+            for id in preset.values.keys() {
+                if !ids.contains(id) {
+                    ids.push(id.clone());
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Custom choices for the option ids presets set. Labels and choices come
+/// from the newest live session of that agent, which reports them as its
+/// configuration options; values only presets name are added as they are.
+fn option_choices(state: &AppState, agent: &str) -> serde_json::Value {
+    let ids = preset_option_ids(state, agent);
+    let live: Vec<serde_json::Value> = state
+        .hub
+        .session_list()
+        .into_iter()
+        .rev()
+        .filter(|meta| {
+            meta.provider == agent
+                && meta
+                    .execution_binding
+                    .as_ref()
+                    .is_none_or(|b| b.managed_child().is_none())
+        })
+        .find_map(|meta| state.hub.config_options(&meta.id))
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    let mut preset_values: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    if let Some((_, _, package)) = state.provider_catalog.latest_package(agent) {
+        for preset in &package.manifest.configuration.presets {
+            for (id, value) in &preset.values {
+                let text = value.clone();
+                let list = preset_values.entry(id.clone()).or_default();
+                if !list.contains(&text) {
+                    list.push(text);
+                }
+            }
+        }
+    }
+    json!(ids.iter().map(|id| {
+        let option = live.iter().find(|option| option.get("id").and_then(serde_json::Value::as_str) == Some(id));
+        let mut choices: Vec<serde_json::Value> = option
+            .and_then(|option| option.get("options"))
+            .and_then(serde_json::Value::as_array)
+            .map(|values| values.iter().filter_map(|choice| {
+                let value = choice.get("value")?;
+                let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
+                Some(json!({"value": value, "name": choice.get("name").and_then(serde_json::Value::as_str).unwrap_or(&value)}))
+            }).collect())
+            .unwrap_or_default();
+        for value in preset_values.get(id).into_iter().flatten() {
+            if !choices.iter().any(|choice| choice["value"] == json!(value)) {
+                choices.push(json!({"value": value, "name": value}));
+            }
+        }
+        json!({
+            "id": id,
+            "name": option.and_then(|option| option.get("name")).and_then(serde_json::Value::as_str).unwrap_or(id),
+            "choices": choices,
+        })
+    }).collect::<Vec<_>>())
+}
+
 /// Whether `preset` is one of `agent`'s signed configuration presets.
 pub(super) fn preset_exists(state: &AppState, agent: &str, preset: &str) -> bool {
     state
@@ -409,7 +532,7 @@ pub(super) fn presets(state: &AppState, agent: &str) -> serde_json::Value {
                     .iter()
                     .map(|preset| json!({
                         "id": preset.id, "name": preset.name, "detail": preset.detail,
-                        "is_default": preset.is_default,
+                        "is_default": preset.is_default, "values": preset.values,
                     }))
                     .collect::<Vec<_>>()
             )
@@ -423,7 +546,9 @@ fn catalog(state: &AppState, caller: Option<&str>) -> serde_json::Value {
         "call_targets": CALL_TARGETS.iter().filter(|agent| {
             caller.is_none_or(|caller| !same_family(agent, caller))
         }).map(|agent| json!({
-            "agent": agent, "presets": presets(state, agent),
+            "agent": agent,
+            "presets": presets(state, agent),
+            "options": option_choices(state, agent),
         })).collect::<Vec<_>>(),
     })
 }
@@ -595,11 +720,37 @@ mod tests {
         stored.calls.targets.push(CallTarget {
             agent: "claude-code".into(),
             preset: None,
+            options: None,
         });
         stored.calls.default = "claude-code".into();
         let cleaned = stored.for_caller("claude-code");
         assert_eq!(agents(&cleaned), ["codex"]);
         assert_eq!(cleaned.calls.default, AUTO);
+    }
+
+    #[test]
+    fn a_custom_choice_records_its_values_in_the_preset_field() {
+        let custom = CallTarget {
+            agent: "codex".into(),
+            preset: None,
+            options: Some(
+                [("model", "gpt-6-astra"), ("reasoning_effort", "high")]
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .into(),
+            ),
+        };
+        assert!(valid_targets(std::slice::from_ref(&custom)));
+        let recorded = custom.recorded_preset().unwrap();
+        assert_eq!(recorded, "custom:model=gpt-6-astra;reasoning_effort=high");
+        assert_eq!(custom_values(&recorded), custom.options);
+        assert_eq!(custom_values("astra-max"), None);
+        // Never both, and never a separator inside a value.
+        let mut both = custom.clone();
+        both.preset = Some("astra-max".into());
+        assert!(!valid_targets(&[both]));
+        let mut forged = custom;
+        forged.options = Some([("model".to_owned(), "a;b=c".to_owned())].into());
+        assert!(!valid_targets(&[forged]));
     }
 
     #[test]
@@ -642,6 +793,7 @@ mod tests {
                 targets: Some(vec![CallTarget {
                     agent: "codex".into(),
                     preset: Some("astra-max".into()),
+                    options: None,
                 }]),
                 default: Some("claude-code".into()),
             },
@@ -661,6 +813,7 @@ mod tests {
         invalid.calls.targets.push(CallTarget {
             agent: "claude-code".into(),
             preset: None,
+            options: None,
         });
         assert!(!invalid.validate());
         invalid = AgentTools::builtin("codex");

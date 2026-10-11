@@ -1,6 +1,8 @@
 import { test } from "bun:test";
 import { assert } from "@std/assert";
 import {
+  choiceFor,
+  choiceValues,
   agentLabel,
   type AgentTools,
   normalizedDefault,
@@ -63,4 +65,28 @@ test("agents are named as users know them", () => {
   assert(agentLabel("codex") === "Codex");
   assert(agentLabel("claude-code") === "Claude");
   assert(agentLabel("claude-deepseek") === "Claude Deepseek");
+});
+
+test("a custom choice that equals a preset becomes that preset", () => {
+  const presets = [{
+    id: "astra-max",
+    name: "Astra · Max",
+    detail: "",
+    is_default: false,
+    values: { model: "gpt-6-astra", reasoning_effort: "max" },
+  }];
+  assert(
+    JSON.stringify(choiceFor({ model: "gpt-6-astra", reasoning_effort: "max" }, presets)) ===
+      JSON.stringify({ preset: "astra-max" }),
+  );
+  assert(
+    JSON.stringify(choiceFor({ model: "gpt-6-astra", reasoning_effort: "high" }, presets)) ===
+      JSON.stringify({ options: { model: "gpt-6-astra", reasoning_effort: "high" } }),
+  );
+  assert(JSON.stringify(choiceFor({}, presets)) === "{}");
+  assert(choiceValues({ preset: "astra-max" }, presets).reasoning_effort === "max");
+  assert(
+    JSON.stringify(withTarget([], "codex", true, { options: { model: "m" } })) ===
+      JSON.stringify([{ agent: "codex", options: { model: "m" } }]),
+  );
 });

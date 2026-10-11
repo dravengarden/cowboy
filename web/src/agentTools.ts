@@ -4,7 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 export interface CallTarget {
   agent: string;
   preset?: string;
+  /** A custom choice instead of a preset: values for the option ids presets
+   * set (model, reasoning). Never together with `preset`. */
+  options?: Record<string, string>;
 }
+
+/** What a target's calls run with: a preset, custom values, or neither. */
+export type TargetChoice = Pick<CallTarget, "preset" | "options">;
 
 export interface CallsPolicy {
   enabled: boolean;
@@ -31,10 +37,50 @@ export interface ToolPreset {
   name: string;
   detail: string;
   is_default: boolean;
+  values?: Record<string, string>;
+}
+
+/** One finer setting a target's presets set, with its choices. */
+export interface ToolOption {
+  id: string;
+  name: string;
+  choices: { value: string; name: string }[];
 }
 
 export interface ToolsCatalog {
-  call_targets: { agent: string; presets: ToolPreset[] }[];
+  call_targets: {
+    agent: string;
+    presets: ToolPreset[];
+    options?: ToolOption[];
+  }[];
+}
+
+/** The values a choice sets: its preset's, or its custom ones. */
+export function choiceValues(
+  choice: TargetChoice | undefined,
+  presets: readonly ToolPreset[],
+): Record<string, string> {
+  if (choice?.options) return { ...choice.options };
+  const preset = presets.find((candidate) => candidate.id === choice?.preset);
+  return { ...(preset?.values ?? {}) };
+}
+
+/** A choice from values: the preset that sets exactly them, else custom. */
+export function choiceFor(
+  values: Record<string, string>,
+  presets: readonly ToolPreset[],
+): TargetChoice {
+  const keys = Object.keys(values).sort();
+  if (keys.length === 0) return {};
+  const same = presets.find((preset) => {
+    const own = preset.values ?? {};
+    const ownKeys = Object.keys(own).sort();
+    return ownKeys.length === keys.length &&
+      ownKeys.every((key, index) =>
+        key === keys[index] && own[key] === values[key]
+      );
+  });
+  return same ? { preset: same.id } : { options: values };
 }
 
 export interface SessionToolsView {
@@ -90,11 +136,18 @@ export function withTarget(
   targets: CallTarget[],
   agent: string,
   allowed: boolean,
-  preset?: string,
+  choice?: string | TargetChoice,
 ): CallTarget[] {
   const existing = targets.find((target) => target.agent === agent);
   if (!allowed) return targets.filter((target) => target.agent !== agent);
-  const next: CallTarget = preset === undefined ? { agent } : { agent, preset };
+  const picked: TargetChoice = typeof choice === "string"
+    ? { preset: choice }
+    : choice ?? {};
+  const next: CallTarget = picked.preset !== undefined
+    ? { agent, preset: picked.preset }
+    : picked.options && Object.keys(picked.options).length > 0
+    ? { agent, options: picked.options }
+    : { agent };
   return existing
     ? targets.map((target) => target.agent === agent ? next : target)
     : [...targets, next];
@@ -109,8 +162,14 @@ export function normalizedDefault(policy: CallsPolicy): string {
 }
 
 function sameTargets(left: CallTarget[], right: CallTarget[]): boolean {
-  return JSON.stringify(left.map((target) => [target.agent, target.preset])) ===
-    JSON.stringify(right.map((target) => [target.agent, target.preset]));
+  const key = (target: CallTarget): unknown[] => [
+    target.agent,
+    target.preset,
+    target.options
+      ? Object.entries(target.options).sort(([a], [b]) => a.localeCompare(b))
+      : undefined,
+  ];
+  return JSON.stringify(left.map(key)) === JSON.stringify(right.map(key));
 }
 
 /** The minimal session override producing `next` over the agent defaults:

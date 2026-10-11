@@ -48,7 +48,26 @@ const toolsCatalog = {
         name: "Astra · Max",
         detail: "",
         is_default: false,
+        values: { model: "gpt-6-astra", reasoning_effort: "max" },
       }],
+      options: [
+        {
+          id: "model",
+          name: "Model",
+          choices: [
+            { value: "gpt-6-astra", name: "GPT-6-Astra" },
+            { value: "gpt-6.1-sol", name: "GPT-6.1-Sol" },
+          ],
+        },
+        {
+          id: "reasoning_effort",
+          name: "Reasoning",
+          choices: [
+            { value: "high", name: "High" },
+            { value: "max", name: "Max" },
+          ],
+        },
+      ],
     },
     {
       agent: "claude-code",
@@ -655,6 +674,18 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       text().includes("Start read-only Codex reviewers"),
       "the switch must name what it starts",
     );
+    // The card starts folded; its settings unfold under its header.
+    check(
+      !document.querySelector("[data-call-target='codex'] [role='radio']"),
+      "a target card must start folded",
+    );
+    (await until(
+      () =>
+        document.querySelector<HTMLElement>(
+          "[data-call-target='codex'] button[aria-label='Codex call settings']",
+        ),
+      "the Codex card must offer to unfold",
+    )).click();
     // The card's presets are choices in the card itself.
     (await until(
       () =>
@@ -683,6 +714,55 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
           : null,
       "the chosen preset must be marked",
     );
+    // A finer setting turns the preset into a custom choice of its values.
+    const reasoning = await until(
+      () => {
+        const select = document.querySelector<HTMLElement>(
+          "[data-call-target='codex'] [role='combobox'][aria-label='Codex Reasoning']",
+        ) ?? [...document.querySelectorAll<HTMLElement>(
+          "[data-call-target='codex'] [data-call-target-options] [role='combobox']",
+        )].at(-1);
+        return select && select.getAttribute("aria-disabled") !== "true"
+          ? select
+          : null;
+      },
+      "the Codex card must offer its finer settings",
+    );
+    check(
+      reasoning.textContent?.includes("Max"),
+      `custom settings must show the preset's values: ${reasoning.textContent}`,
+    );
+    reasoning.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    (await until(
+      () =>
+        [...document.querySelectorAll<HTMLElement>("[role='option']")].find(
+          (node) => node.textContent?.trim() === "High",
+        ),
+      "the reasoning menu must open",
+    )).click();
+    await until(
+      () => sessionWrites.length === 3 ? true : null,
+      "a custom setting was not saved",
+    );
+    check(
+      JSON.stringify(sessionWrites[2]?.calls?.targets) ===
+        JSON.stringify([{
+          agent: "codex",
+          options: { model: "gpt-6-astra", reasoning_effort: "high" },
+        }]),
+      `a custom choice must store its values: ${JSON.stringify(sessionWrites[2])}`,
+    );
+    await until(
+      () =>
+        document.querySelector(
+            "[data-call-target='codex'] [role='radio'][aria-checked='true']",
+          )
+          ? null
+          : true,
+      "a custom choice selects no preset",
+    );
     (await until(
       () => {
         const input = document.querySelector<HTMLInputElement>(
@@ -693,13 +773,13 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "the target switch must be editable after saving",
     )).click();
     await until(
-      () => sessionWrites.length === 3 ? true : null,
+      () => sessionWrites.length === 4 ? true : null,
       "removing a target was not saved",
     );
     check(
-      JSON.stringify(sessionWrites[2]?.calls?.targets) === "[]",
+      JSON.stringify(sessionWrites[3]?.calls?.targets) === "[]",
       `removing Codex must leave no target: ${
-        JSON.stringify(sessionWrites[2])
+        JSON.stringify(sessionWrites[3])
       }`,
     );
     (await until(() => {
@@ -707,11 +787,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       return reset && !reset.disabled ? reset : null;
     }, "reset must be available after saving")).click();
     await until(
-      () => sessionWrites.length === 4 ? true : null,
+      () => sessionWrites.length === 5 ? true : null,
       "reset was not saved",
     );
     check(
-      JSON.stringify(sessionWrites[3]) === JSON.stringify({ schema: 1 }),
+      JSON.stringify(sessionWrites[4]) === JSON.stringify({ schema: 1 }),
       "reset must clear the override",
     );
     check(
@@ -957,7 +1037,7 @@ export async function renderManagedCallsPreview(
 }
 
 /** A Claude session's Tools with calls on and a Codex preset chosen. */
-export function renderAgentToolsPreview(): void {
+export function renderAgentToolsPreview(unfold: unknown = false): void {
   const override: SessionToolsOverride = {
     schema: 1,
     calls: { enabled: true, targets: [{ agent: "codex", preset: "astra-max" }] },
@@ -981,14 +1061,17 @@ export function renderAgentToolsPreview(): void {
                   name: "Astra · Max",
                   detail: "GPT-6 Astra · Max reasoning",
                   is_default: false,
+                  values: { model: "gpt-6-astra", reasoning_effort: "max" },
                 },
                 {
                   id: "astra-high",
                   name: "Astra · High",
                   detail: "GPT-6 Astra · High reasoning",
                   is_default: true,
+                  values: { model: "gpt-6-astra", reasoning_effort: "high" },
                 },
               ],
+              options: toolsCatalog.call_targets[0]!.options,
             }, ...toolsCatalog.call_targets.filter((target) =>
               target.agent !== "codex"
             )],
@@ -1006,4 +1089,14 @@ export function renderAgentToolsPreview(): void {
       </SurfaceProvider>
     </BrowserProductTheme>,
   );
+  if (unfold === true) {
+    const open = (): void => {
+      const header = document.querySelector<HTMLElement>(
+        "button[aria-label='Codex call settings']",
+      );
+      if (header) header.click();
+      else setTimeout(open, 50);
+    };
+    open();
+  }
 }
