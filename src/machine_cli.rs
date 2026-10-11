@@ -29,6 +29,7 @@ mod auth_watch;
 pub(crate) mod execution;
 mod host_resources;
 mod installation;
+mod liveness;
 mod login_process;
 mod projects;
 pub(crate) mod telemetry_binding;
@@ -1307,10 +1308,24 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     // arrive here; record how the socket ended and how long it was silent.
     let connected_at = tokio::time::Instant::now();
     let mut last_inbound = connected_at;
+    let mut liveness_probe = liveness::Probe::default();
     let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
+                () = liveness::wait(liveness_probe.deadline()) => {
+                    tracing::warn!(
+                        inbound_idle_ms = last_inbound.elapsed().as_millis(),
+                        "Machine Controller liveness probe timed out; reconnecting"
+                    );
+                    bail!("Controller did not answer the WebSocket liveness probe");
+                }
                 _ = heartbeat.tick() => {
+                    if let Some(payload) = liveness_probe.ping(
+                        tokio::time::Instant::now(),
+                        config.device_config.get(&crate::config::schema::DEVICE_CONTROLLER_PROBE_TIMEOUT),
+                    ) {
+                        queue_controller_message(&controller_write_tx, Message::Ping(payload.into()))?;
+                    }
                     queue_controller_frame(
                         &controller_write_tx,
                         &MachineFrame::Heartbeat { sent_at_ms: unix_ms() },
@@ -1387,6 +1402,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                             queue_controller_message(&controller_write_tx, Message::Pong(value))?;
                         }
                         Some(Ok(Message::Pong(payload))) => {
+                            liveness_probe.pong(&payload);
                             credit.observe(&payload);
                         }
                         Some(Ok(Message::Text(text))) => {

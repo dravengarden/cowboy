@@ -3,6 +3,12 @@
 # Validate edits with `cowboy config check --scope device`; see docs/configuration.md.
 schema = 1
 
+[connection]
+# Reconnect when the Controller does not answer a WebSocket Ping within
+# this budget, even if a local proxy still accepts writes. Applies to new probes.
+# duration string such as "6h", from 5s to 10m; applies live.
+# controller_probe_timeout = "45s"
+
 [capacity]
 # Maximum detached ACP sessions this Device accepts.
 # An explicit --max-sessions / COWBOY_MACHINE_MAX_SESSIONS still takes precedence.

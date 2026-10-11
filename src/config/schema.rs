@@ -111,7 +111,20 @@ pub const DEVICE_DISK_LOW_WATERMARK: Key<u64> = Key::new(Scope::Device, "disk.lo
 pub const DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER: Key<Duration> =
     Key::new(Scope::Device, "retention.artifact_cache_unreferenced_after");
 
+pub const DEVICE_CONTROLLER_PROBE_TIMEOUT: Key<Duration> =
+    Key::new(Scope::Device, "connection.controller_probe_timeout");
+
 pub static DEVICE_FIELDS: &[Field] = &[
+    Field {
+        key: "connection.controller_probe_timeout",
+        kind: Kind::Duration {
+            min: Duration::from_secs(5),
+            max: Duration::from_mins(10),
+        },
+        default: Value::Duration(Duration::from_secs(45)),
+        reload: Reload::Live,
+        doc: "Reconnect when the Controller does not answer a WebSocket Ping within\nthis budget, even if a local proxy still accepts writes. Applies to new probes.",
+    },
     Field {
         key: "capacity.max_sessions",
         kind: Kind::Integer { min: 1, max: 1024 },

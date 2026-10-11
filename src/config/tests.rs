@@ -35,6 +35,7 @@ fn every_typed_key_matches_a_declared_field_of_its_kind() {
     assert_key(&schema::SESSIONS_RECLAIM_MIN_IDLE);
     assert_key(&schema::DEVICE_MAX_SESSIONS);
     assert_key(&schema::DEVICE_DRAINING);
+    assert_key(&schema::DEVICE_CONTROLLER_PROBE_TIMEOUT);
     assert_key(&schema::DEVICE_DISK_LOW_WATERMARK);
     assert_key(&schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
 }
