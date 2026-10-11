@@ -1641,10 +1641,12 @@ export function DesktopTopBarControls({
       id: "topbar.providerUpdate",
       title: "Update Provider",
       group: "Top Bar",
-      shortcut: "P",
-      // `␣TP` from anywhere; bare `P` while the bar owns focus. Present only
-      // while a newer compatible release is installed for this session.
-      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "P"],
+      shortcut: "N",
+      // `␣TN` (new release) from anywhere; bare `N` while the bar owns focus.
+      // Not `P`: the bar sits inside the conversation context, where `P` is
+      // the Page Index. Present only while a newer compatible release is
+      // installed for this session.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "N"],
       regions: ["topbar.controls"],
       leaderAnywhere: true,
       when: () =>

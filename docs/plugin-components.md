@@ -79,7 +79,7 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
-Component release 3.48.0 records provider-runtime 1.1.14: Claude Code 2.1.296,
+Component release 3.49.0 records provider-runtime 1.1.14: Claude Code 2.1.296,
 Claude Agent ACP 0.89.1, Codex CLI 0.160.1, Codex ACP 2.2.2, Gemini CLI 0.63.0
 and Grok 1.0.50. Node and both DeepSeek gateways keep their exact pins. All six
 Agent Plugins pin that shared runtime component and advance one patch version

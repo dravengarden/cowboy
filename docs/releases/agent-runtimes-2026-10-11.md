@@ -1,7 +1,7 @@
-# Agent runtime upgrade and component release 3.48.0 — 2026-10-11
+# Agent runtime upgrade and component release 3.49.0 — 2026-10-11
 
 This batch takes every Agent Provider's upstream runtime to the newest version
-its adapter supports and cuts component release 3.48.0 (provider-runtime
+its adapter supports and cuts component release 3.49.0 (provider-runtime
 1.1.14). Publication and installation receipts are recorded at the end; a source
 version alone is not evidence of either.
 
@@ -107,8 +107,8 @@ the target's exec-server. It now accepts `provider_cli` and `provider_sha256`
 and records the Provider CLI's digest, so the acceptance covers the pair this
 release produces. The Codex hooks probe takes `--version` for the same reason.
 
-`just check-compact` passes on the source merged with `13e42bb4`: formatting,
+`just check-compact` passes on the source merged with `32b4200f`: formatting,
 lint, dependency policy, the Provider and composition gates, 2,074 core Rust
 tests, 682 Machine tests, 52 code-adapter tests, 126 private Zed adapter
-tests, 2,180 frontend tests, the disposable PostgreSQL checks and the release
+tests, 2,181 frontend tests, the disposable PostgreSQL checks and the release
 builds.

@@ -489,8 +489,9 @@ function IslandGlyphButton(
 }
 
 export interface IslandAction {
+  /** Its accessible name; the island shows only the icon. */
   readonly label: string;
-  readonly icon?: ReactNode;
+  readonly icon: ReactNode;
   readonly onActivate: () => void;
 }
 
@@ -517,12 +518,9 @@ export function MobileSheetBackDismiss(
       }}
     >
       <FloatingActionIsland
-        columns={action
-          ? `${MOBILE_SHEET_DISMISS_BUTTON_PX}px auto ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`
-          : `${MOBILE_SHEET_DISMISS_BUTTON_PX}px ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`}
-        // Glyph cells (and the action), their gaps and the island's own
-        // padding and rim.
-        maxWidth={2 * MOBILE_SHEET_DISMISS_BUTTON_PX + (action ? 148 : 0) +
+        columns={`repeat(${action ? 3 : 2}, ${MOBILE_SHEET_DISMISS_BUTTON_PX}px)`}
+        // Glyph cells, their gaps and the island's own padding and rim.
+        maxWidth={(action ? 3 : 2) * MOBILE_SHEET_DISMISS_BUTTON_PX +
           (action ? 8 : 4) + 2 * (4 + 1)}
         minHeight={MOBILE_SHEET_DISMISS_ISLAND_PX}
       >
@@ -531,21 +529,7 @@ export function MobileSheetBackDismiss(
         </IslandGlyphButton>
         {action && (
           <IslandGlyphButton onActivate={action.onActivate} label={action.label}>
-            <Box
-              component="span"
-              sx={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 0.75,
-                px: 1.5,
-                fontSize: "0.9375rem",
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {action.icon}
-              {action.label}
-            </Box>
+            {action.icon}
           </IslandGlyphButton>
         )}
         <IslandGlyphButton onActivate={onClose} label="Close">
