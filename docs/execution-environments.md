@@ -51,6 +51,55 @@ must not be presented as the host's when the task concerns the actual host.
 Repository tasks use target-owned isolated worktrees. Host administration uses
 an explicit host-access scope; a repository binding alone does not grant it.
 
+## OVH Remote audit, 2026-10-11
+
+The [deployment invariants](requirements.md#ovh-remote-deployment-invariants)
+are normative. This is a point-in-time audit, not a claim about future sessions
+or every possible tool result. No network policy or live session was changed.
+
+- Live OVH Codex, Claude, ACP workers and Machine processes had no HTTP, HTTPS
+  or ALL proxy variables, in either case. The host timezone was UTC; those
+  processes had no `TZ` override.
+- Established Codex and Claude public TCP/443 sockets used OVH public source
+  addresses. Their destinations matched contemporaneous public DNS for
+  `chatgpt.com` and `api.anthropic.com`. IPv4 and IPv6 policy routing used the
+  normal uplink. The sole nftables table redirected only the three execution
+  peers' private addresses on ports 22/443, not public API destinations. This
+  supports direct API egress for the observed connections, not an eternal
+  guarantee from environment variables alone.
+- The Machine's Controller socket used the private interface. The installed
+  stream redirection rules already separated peer traffic from public APIs.
+  Underlay selection, proxy-failure acceptance and latency measurement belong to
+  the separate infrastructure task; this audit does not accept a particular
+  transport or claim the best latency.
+- Pinned executor 0.159.3 initialization was probed on the development host with
+  `TZ=Asia/Shanghai`. Its `environmentInfo` contained paths, shell, platform,
+  version, provider identity and capabilities, but no timezone or geographic
+  field. This is a protocol probe without an Agent or API request.
+- Native Codex also generates a model-visible `<timezone>` element. Setting
+  runtime `TZ=UTC` on Hawk was insufficient: native discovery still used the
+  host's `/etc/localtime`. Isolated mount namespaces then gave the runtime
+  `Etc/UTC` and the executor `Asia/Shanghai`. Both 0.159.3 and 0.160.1 passed:
+  initial and cold-resumed API requests retained the runtime timezone, while
+  a target command returned its real `+0800` offset. Both executable digests
+  were observed on OVH, whose system timezone resolves to `Etc/UTC`. The
+  [0.159.3](experiments/ovh-timezone-0.159.3-2026-10-11.json) and
+  [0.160.1](experiments/ovh-timezone-0.160.1-2026-10-11.json) receipts cover
+  scripted loopback APIs only, without credentials or real model inference.
+- Claude's `WorkspaceTools.context()` constructs the native environment block
+  from cwd, repository membership, OS and shell. It does not spread executor
+  metadata into the prompt. The connection layer keeps raw executor errors
+  private; the tool/Mods boundaries retain generic failure and uncertain-result
+  messages. New regression cases inject regional metadata and error details.
+
+Inherited proxy variables are not globally removed by Cowboy's generic Provider
+launcher: other placements can legitimately use them. OVH's service environment
+and network policy therefore remain part of deployment acceptance. This audit
+does not prove the contents of arbitrary file reads, shell commands, project
+hooks, MCP results or already-existing conversation history. Ordinary target
+commands still use the target's actual environment, including its local time
+conventions. No country-word filtering or falsified tool output is used.
+
 ## Ownership decision
 
 Cowboy must understand the environment. A Provider-only SSH wrapper would leave

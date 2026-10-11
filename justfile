@@ -561,6 +561,8 @@ claude-remote-check:
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     dprint check "plugins/claude-code/runtime/**/*.{ts,js,mjs}"
+    node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
+    dprint check tools/claude-remote-privacy.test.mjs
     dprint check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun run typecheck
     python3 -m unittest discover -s tools -p remote_impact_test.py

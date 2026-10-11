@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -123,6 +125,35 @@ def turn(client, thread_id, selection):
     raise ProbeFailure("native fixture turn timed out")
 
 
+def timezone_launcher(binary, root, timezone):
+    # Native timezone discovery reads /etc/localtime, not necessarily TZ.
+    # Give each process its own /etc in a private mount namespace. This is
+    # fixture-only: never replace the host's configuration or alter tool output.
+    etc = root / "etc"
+    etc.mkdir(parents=True)
+    zone_root = next((path.resolve() for path in
+                      [Path("/etc/zoneinfo"), Path("/usr/share/zoneinfo")]
+                      if (path / timezone).is_file()), None)
+    require(zone_root is not None, "fixture timezone data unavailable")
+    (etc / "zoneinfo").symlink_to(zone_root)
+    (etc / "localtime").symlink_to(zone_root / timezone)
+    (etc / "timezone").write_text(timezone + "\n")
+    for name in ["passwd", "group", "hosts", "nsswitch.conf"]:
+        source = Path("/etc") / name
+        if source.is_file():
+            shutil.copyfile(source, etc / name)
+    launcher = root / "launch"
+    launcher.write_text(
+        "#!/bin/sh\nexport TZDIR=" + shlex.quote(str(zone_root))
+        + "\nexec unshare --mount --propagation private sh -euc "
+        + shlex.quote('mount --bind "$1" /etc; shift; exec "$@"')
+        + " timezone-fixture " + shlex.quote(str(etc)) + " "
+        + shlex.quote(binary) + ' "$@"\n'
+    )
+    launcher.chmod(0o700)
+    return str(launcher)
+
+
 def probe(binary, version):
     checks = []
     with tempfile.TemporaryDirectory(prefix="cowboy-codex-turn-") as temporary:
@@ -137,12 +168,15 @@ def probe(binary, version):
         api = Api([
             {"type": "custom_tool_call", "call_id": "fixture_patch", "name": "apply_patch",
              "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-target before\n+target after '\" $() 中文 🐎\n*** End Patch"},
-            command("fixture_command", "pwd; cat fixture.txt; printf once >> once.txt"),
+            command("fixture_command", "pwd; cat fixture.txt; printf once >> once.txt; date +%z > target-timezone.txt"),
             final("fixture_final_one"),
             command("fixture_resume", "pwd; cat fixture.txt; cat once.txt"),
             final("fixture_final_two"),
         ])
         environment = closed_environment(root / "agent-home")
+        # Model-side time belongs to the runtime, not the execution target.
+        # Match OVH while making accidental target timezone projection visible.
+        environment["TZ"] = "UTC"
         # Disable implicit local execution. The exact session selection is added
         # through the native API, without shared environments.toml mutation.
         environment["CODEX_EXEC_SERVER_URL"] = "none"
@@ -158,6 +192,9 @@ def probe(binary, version):
             'request_max_retries = 0\nstream_max_retries = 0\n'
         )
         executor_environment = closed_environment(root / "executor-home")
+        executor_environment["TZ"] = "Asia/Shanghai"
+        runtime_binary = timezone_launcher(binary, root / "runtime-zone", "Etc/UTC")
+        executor_binary = timezone_launcher(binary, root / "executor-zone", "Asia/Shanghai")
         observed = subprocess.run([binary, "--version"], cwd=runtime, env=environment, check=True,
                                   capture_output=True, timeout=10).stdout.decode().strip()
         require(observed == f"codex-cli {version}", "native CLI version differs")
@@ -166,7 +203,7 @@ def probe(binary, version):
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         url = f"ws://127.0.0.1:{port}"
-        executor = subprocess.Popen([binary, "exec-server", "--listen", url], cwd=target,
+        executor = subprocess.Popen([executor_binary, "exec-server", "--listen", url], cwd=target,
                                     env=executor_environment, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         client = None
@@ -180,7 +217,7 @@ def probe(binary, version):
                     time.sleep(0.05)
             else:
                 raise ProbeFailure("executor readiness timed out")
-            client = app(binary, environment, runtime)
+            client = app(runtime_binary, environment, runtime)
             add_environment(client, url)
             selection = [{"environmentId": "cowboy-fixture-target", "cwd": str(target),
                           "runtimeWorkspaceRoots": [str(target)]}]
@@ -200,12 +237,18 @@ def probe(binary, version):
             encoded = json.dumps(api.requests, ensure_ascii=False)
             require("TARGET_GUIDANCE_MUST_REACH_MODEL" in encoded, "target project guidance missing")
             require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in encoded, "runtime guidance leaked")
+            require("Asia/Shanghai" not in encoded, "target timezone reached model context")
+            require("<timezone>Etc/UTC</timezone>" in encoded or "<timezone>UTC</timezone>" in encoded,
+                    "model context did not use runtime timezone")
+            require((target / "target-timezone.txt").read_text().strip() == "+0800",
+                    "timezone fixture changed target command semantics")
+            checks.append("target_timezone_not_projected_into_model_context")
             checks.append("native_target_guidance_without_runtime_guidance")
             require(len(api.requests) == 3, "native dispatch added fixture model round trips")
             checks.append("one_scripted_response_per_tool_no_connection_turn")
             client.close()
             client = None
-            client = app(binary, environment, runtime)
+            client = app(runtime_binary, environment, runtime)
             add_environment(client, url)
             resumed = client.request("thread/resume", {
                 "threadId": thread_id, "cwd": str(runtime), "excludeTurns": True,
@@ -221,13 +264,15 @@ def probe(binary, version):
             require("fixture_patch" in json.dumps(api.requests[3]), "native resume lost conversation")
             require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests[3]),
                     "cold resume loaded runtime project guidance")
+            require("Asia/Shanghai" not in json.dumps(api.requests[3:]),
+                    "cold resume projected target timezone into model context")
             selected = client.request("thread/read", {"threadId": thread_id, "includeTurns": False})
             require(selected["thread"]["environments"] == selection, "resumed turn did not select target")
             require((target / "once.txt").read_text() == "once", "native cold resume replayed a command")
             checks.append("cold_native_resume_retains_history_target_and_single_effect")
             client.close()
             client = None
-            client = app(binary, environment, runtime)
+            client = app(runtime_binary, environment, runtime)
             client.request("thread/resume", {"threadId": thread_id, "excludeTurns": True})
             client.request("turn/start", {
                 "threadId": thread_id, "input": [{"type": "text", "text": "Must not execute."}],
@@ -264,6 +309,8 @@ def main():
         "schema": "cowboy.codex-execution-turn-probe/v1", "accepted": True,
         "native_cli": {"version": args.version, "sha256": digest}, "checks": checks,
         "topology": "isolated_loopback_scripted_api_and_native_executor",
+        "timezones": {"runtime": "Etc/UTC", "executor": "Asia/Shanghai",
+                      "isolated_system_timezones": True, "target_command_offset": "+0800"},
         "scripted_api_requests": 5, "real_model_requests": 0, "production_credentials": False,
         "proves_cowboy_routing": False, "proves_subscription": False, "proves_token_savings": False,
         "not_checked": ["cross_host_transport", "target_keeper", "background_task_resume",

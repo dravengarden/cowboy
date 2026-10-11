@@ -54,6 +54,50 @@ is implemented. WireGuard Option 2 is deferred roadmap work: isolated transport
 experiments do not authorize a new product mode, weaker TLS/authentication or
 changes to core authority before a reviewed bootstrap and migration design.
 
+## OVH Remote deployment invariants
+
+For Codex and Claude runtimes placed on OVH, inference and Provider API
+connections MUST use OVH's native public egress. Neither inherited proxy
+variables, Provider endpoint overrides nor transparent host routing may send
+those connections through a proxy. Check IPv4 and IPv6 and the actual runtime
+processes; an empty proxy environment alone is not proof of direct egress.
+
+Tools bound to Hawk, Falcon or MacBook Air MUST automatically use the approved
+proxy route for cross-border transport, without a direct fallback. Network
+policy belongs to the infrastructure owner; the Agent must not select proxy
+exits, create tunnels or repair routing. Keep the
+concrete transport protocol and performance tuning outside this contract.
+Unavailable execution must fail closed, preserving operation identity and
+uncertain mutation outcomes; never run the tool on OVH as a fallback.
+
+Framework-generated model context, tool metadata and infrastructure errors MUST
+NOT disclose the execution target's geography, including country, regional
+timezone or network topology. Claude's ordinary tools should preserve their
+native interface without additional remote-placement narration. Failures must
+remain truthful and actionable without exposing private endpoints or raw
+transport diagnostics. Keep operator diagnostics outside model context. Project
+cwd, OS and shell remain accurate where needed for correct execution; do not
+fabricate a local execution environment.
+Native calendar context belongs to the runtime's clock and timezone, not the
+execution target's regional timezone. OVH runtime timezone is UTC; `TZ` alone
+does not establish this when native code reads the system timezone directly.
+
+This boundary covers framework-generated information. User instructions,
+repository files, arbitrary command output, hooks and third-party MCP content
+retain their semantics and can contain location information. It is not a
+guarantee against geographic inference or of Provider account eligibility. Do
+not silently rewrite that content or weaken project instructions.
+
+Every native runtime/executor upgrade must review its initialization and
+model-visible metadata, including newly introduced timezone fields. Recheck
+normal execution, connection failure, uncertain mutations and reconnection.
+Codex uses its native execution extension; Claude is adapter-backed through the
+pinned Mods interface. The residual Cowboy responsibility is authenticated
+Machine binding and faithful context/tool projection; replace the adapter when
+native Claude supports that same binding and projection contract. See
+[execution environments](execution-environments.md#ovh-remote-audit-2026-10-11)
+for the bounded evidence and outstanding acceptance scope.
+
 ## State ownership
 
 | State | Owner and identity |

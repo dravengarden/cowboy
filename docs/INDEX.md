@@ -20,11 +20,11 @@ primary phone/desktop product path.
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`configuration.md`](configuration.md) — Unified Service/Device configuration files, `cowboy config` CLI, reload classes, rolling-update pre-flight, and how to decide config file vs database vs wiring
-- [`execution-environments.md`](execution-environments.md) — Native remote execution decision: separate runtime placement from target files/processes; core, Provider and infrastructure ownership; staged acceptance
+- [`execution-environments.md`](execution-environments.md) — Native remote execution, ownership, staged acceptance and OVH egress/context audit
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat head-of-line blocking, native handshake recovery and same-identity creation recovery
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Implementation design for parent-scoped cross-Provider calls, AI-facing CLI, Suger integration and desktop/mobile lifecycle UI; not yet shipped
-- [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract
+- [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Target architecture: fixed core, typed components and Plugin composition across Service/Machine; first read-only structural slice implemented
 - [`plugin-composition-checker.md`](plugin-composition-checker.md) — Implemented core diagnostic, generated Rust/TS contracts, graph rules and remaining authority/recovery work
