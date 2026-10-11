@@ -15,7 +15,7 @@ import {
 } from "@mui/material";
 import {
   AccountTree,
-  ExpandLess,
+  ChevronRight,
   ExpandMore,
   InfoOutlined,
   OpenInNew,
@@ -38,7 +38,6 @@ import { Markdown } from "./Markdown";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { setActiveSessionId } from "./controlPlane";
 import { useReliableTouchTap } from "./useReliableTouchTap";
-import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
 import {
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
@@ -844,25 +843,25 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     <Box
       data-desktop-calls-surface={desktop ? "true" : undefined}
       sx={{
+        // Desktop adopts the same borderless disclosure rail as Queue and
+        // Drafts. Mobile keeps its established card and touch geometry.
         ...(desktop
-          ? desktopSurfaceSx({ interactive: false, focusWithin: true })
-          : mobileComposerPanelFrameSx),
-        mb: desktop ? 1 : 0,
-        bgcolor: "background.default",
+          ? {
+            border: 0,
+            borderBottom: 1,
+            borderColor: "divider",
+            borderRadius: 0,
+            bgcolor: "transparent",
+            transition: "background-color 120ms ease, border-color 120ms ease",
+            "&:focus-within": { borderColor: "primary.main" },
+          }
+          : { ...mobileComposerPanelFrameSx, bgcolor: "background.default" }),
+        mb: desktop ? 0.5 : 0,
         // Own the text color and typography: rows and details are rendered in
         // ButtonBase/Sheet surfaces that would otherwise inherit the page's.
         color: "text.primary",
         typography: "body2",
         overflow: "hidden",
-        ...(desktop && {
-          transition: "background-color 120ms ease, border-color 120ms ease",
-          // Match PlanDock: workspace focus recolors this surface's own 1px
-          // rounded boundary. A second 3px outer ring read as a doubled edge.
-          "&:focus-within": {
-            borderColor: "primary.main",
-            boxShadow: "none",
-          },
-        }),
       }}
     >
       <ButtonBase
@@ -871,40 +870,67 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           ? (expanded ? "Collapse calls" : "Expand calls")
           : "Open calls"}
         aria-expanded={desktop ? expanded : mobileOpen}
+        disableRipple={desktop}
         sx={{
           width: "100%",
           justifyContent: "flex-start",
           textAlign: "left",
-          px: 1,
-          py: 0.5,
-          minHeight: desktop ? 40 : mobileComposerPanelHeaderMinHeight,
+          touchAction: "manipulation",
+          // Desktop is a compact utility rail matching the Queue/Drafts
+          // header; Mobile keeps native touch height.
+          ...(desktop
+            ? {
+              pl: 0.5,
+              pr: 1,
+              py: 0,
+              minHeight: 32,
+              "&:active, &:focus-visible": { bgcolor: "action.hover" },
+            }
+            : {
+              px: 1,
+              py: 0.5,
+              minHeight: mobileComposerPanelHeaderMinHeight,
+            }),
           "@media (pointer: coarse)": {
             minHeight: mobileComposerPanelHeaderMinHeight,
           },
-          touchAction: "manipulation",
         }}
       >
         <Stack
           direction="row"
           alignItems="center"
-          spacing={1}
+          spacing={desktop ? 0.75 : 1}
           sx={{ width: "100%", minWidth: 0 }}
         >
           {desktop
-            ? (expanded
-              ? <ExpandLess fontSize="small" sx={{ color: "text.secondary" }} />
-              : (
-                <ExpandMore fontSize="small" sx={{ color: "text.secondary" }} />
-              ))
+            ? (
+              // With the 6px row gap this is the 28px chevron column the
+              // Queue/Drafts header uses, so the labels share one left edge.
+              <Box
+                sx={{
+                  width: 22,
+                  display: "inline-flex",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                {expanded
+                  ? <ExpandMore fontSize="small" />
+                  : <ChevronRight fontSize="small" />}
+              </Box>
+            )
             : <AccountTree fontSize="small" sx={{ color: "text.secondary" }} />}
-          <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
+          <Typography
+            variant={desktop ? "caption" : "overline"}
+            sx={desktop ? { fontWeight: 600 } : { lineHeight: 1.4 }}
+          >
             Calls
           </Typography>
           {overview.active > 0 && (
             <CircularProgress size="0.875rem" thickness={5} />
           )}
           <Typography
-            variant="body2"
+            variant={desktop ? "caption" : "body2"}
             noWrap
             sx={{
               flex: 1,

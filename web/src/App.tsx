@@ -4290,9 +4290,10 @@ export function App({
                         boxShadow: "none",
                     },
                     // The Calls and Plan region wrappers have no visual
-                    // geometry of their own. Recolor the real rounded dock
-                    // surface, exactly like Queue/Draft, instead of drawing a
-                    // square ring around its margin box.
+                    // geometry of their own. Recolor the real dock surface
+                    // (Calls' disclosure rail, Plan's rounded card), exactly
+                    // like Queue/Draft, instead of drawing a square ring
+                    // around its margin box.
                     "& [data-desktop-region='prompt.calls'][data-desktop-focused='true'] > [data-desktop-calls-surface], & [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
                         borderColor: desktopFocusBoundary,
                         bgcolor: desktopFocusFill,
