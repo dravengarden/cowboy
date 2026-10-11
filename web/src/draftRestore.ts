@@ -1,7 +1,11 @@
 // Pure policy for restoring a composer draft whose attachment bytes live in
 // IndexedDB while its text is mirrored in localStorage
 // (docs/offline-first-sync.md, conflict 19).
-import { type Attachment, dropOrphanImageTokens } from "./attachments";
+import {
+  type Attachment,
+  dropOrphanImageTokens,
+  imageTokensInText,
+} from "./attachments";
 
 export interface DraftMirror {
   readonly text: string;
@@ -22,30 +26,42 @@ export interface RestoredDraft {
 }
 
 /**
- * Merge the synchronous mirror with the database record. The mirror's text is
- * the freshest (it is written on every keystroke flush); the record supplies
- * the bytes. A mirror that promised bytes the database no longer has drops the
- * orphaned inline tokens so nothing paints as a stray chip. Without a mirror
- * the record is the whole draft.
+ * Merge the live draft with the database record that was read successfully.
+ * The live text is the freshest (it is mirrored on every keystroke flush and
+ * may have been edited since hydration); the record supplies the bytes.
+ *
+ * `awaiting` says the mirror promised bytes in the database. Only then may a
+ * missing record drop the orphaned inline tokens, and only then are record
+ * attachments adopted: an image returns when its token is still in the text
+ * (or nothing was typed since hydration), a tokenless file always returns.
+ * A mirror that never promised bytes is complete and ignores a stale record.
+ * Without a live draft the record is the whole draft.
+ *
+ * Callers must not pass a failed read as `null`: an unreadable database says
+ * nothing about the bytes, and treating it as absence deletes the images.
  */
 export function mergeRestoredDraft(
-  mirror: DraftMirror | undefined,
+  live: DraftMirror | undefined,
   record: StoredDraft | null,
+  hydratedText?: string,
 ): RestoredDraft | null {
-  if (mirror === undefined) {
+  if (live === undefined) {
     if (record === null) return null;
     return { text: record.text, attachments: [...record.attachments] };
   }
-  const attachments = record === null
-    ? [...mirror.attachments]
-    : mirror.attachments.length > 0
-    ? [...mirror.attachments]
-    : [...record.attachments];
-  const ids = new Set(attachments.map((attachment) => attachment.id));
-  const text = mirror.attachmentsInDatabase === true || record !== null
-    ? dropOrphanImageTokens(mirror.text, ids)
-    : mirror.text;
-  if (text === mirror.text && attachments.length === mirror.attachments.length) {
+  if (live.attachmentsInDatabase !== true) return null;
+  const attachments = [...live.attachments];
+  const known = new Set(attachments.map((attachment) => attachment.id));
+  const unedited = hydratedText === undefined || hydratedText === live.text;
+  const tokens = new Set(imageTokensInText(live.text).map((token) => token.id));
+  for (const attachment of record?.attachments ?? []) {
+    if (known.has(attachment.id)) continue;
+    if (attachment.isImage && !unedited && !tokens.has(attachment.id)) continue;
+    attachments.push(attachment);
+    known.add(attachment.id);
+  }
+  const text = dropOrphanImageTokens(live.text, known);
+  if (text === live.text && attachments.length === live.attachments.length) {
     return null;
   }
   return { text, attachments };

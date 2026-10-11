@@ -12,6 +12,7 @@ import {
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
+  dropOrphanImageTokens,
   stripImageTokens,
 } from "./attachments.ts";
 
@@ -208,6 +209,21 @@ test("stripImageTokens hides cowboy-att source even after a prior global scan", 
   assertEquals(
     stripImageTokens(`${token}\n移动端这里没有触发 Obsidian 的渲染吧？`),
     "\n移动端这里没有触发 Obsidian 的渲染吧？",
+  );
+});
+
+test("dropOrphanImageTokens changes nothing but the orphaned token", () => {
+  const kept = "![k](cowboy-att:kept)";
+  const code = `def f():\n    return  1   # runs  of spaces\n${kept}  end`;
+  assertEquals(dropOrphanImageTokens(code, new Set(["kept"])), code);
+  assertEquals(
+    dropOrphanImageTokens(`a  b ![x](cowboy-att:gone) c  d ${kept}`, new Set(["kept"])),
+    `a  b c  d ${kept}`,
+  );
+  assertEquals(dropOrphanImageTokens("![x](cowboy-att:gone)\n  next", new Set()), "\n  next");
+  assertEquals(
+    dropOrphanImageTokens("![x](cowboy-att:g1) ![y](cowboy-att:g2) tail", new Set()),
+    " tail",
   );
 });
 

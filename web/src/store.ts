@@ -83,11 +83,18 @@ import {
   reconcileProviderCatalog,
   refreshProviderCatalog,
 } from "./providerCatalogRegistry";
-import { attachDraftDatabase, getDraft, pruneDrafts } from "./draftStore";
+import {
+  attachDraftDatabase,
+  draftsDurable,
+  getDraft,
+  pruneDrafts,
+  retryDraftRestore,
+} from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
 import {
   claimOrphanedPendingEdits,
   finishOrphanedPendingEdit,
+  flushPendingEdits,
   prunePendingEdits,
 } from "./pendingEditStore";
 import { revealPendingArrival } from "./pendingPanelState";
@@ -2311,6 +2318,10 @@ function openSocket(): void {
   // check and adds a round trip to every foreground recovery. No command is
   // sent until that protocol is selected and bootstrap_complete arrives.
   void Promise.resolve().then(() => syncDatabase.ready()).then(async (dataset) => {
+    // This module loads before a reloaded page has bound its account, so the
+    // first read of the drafts' attachment bytes failed. The dataset is known
+    // now: read them before anything can mistake the wait for a loss.
+    retryDraftRestore();
     await openBoundSocket(dataset);
     openingDataset = false;
   }).catch((error) => {
@@ -3120,6 +3131,11 @@ export function canApplyUpdateNow(): boolean {
     const draft = getDraft(openedSessionId);
     if (draft.text.trim() !== "" || draft.attachments.length > 0) return false;
   }
+  // A reload must find every draft on disk. Attachment bytes reach the
+  // database asynchronously; a page replaced before they land comes back
+  // without the pasted images.
+  flushPendingEdits();
+  if (!draftsDurable()) return false;
   return !editorHoldsUpdate({
     focusedEditable: acceptsText(globalThis.document?.activeElement),
     windowFocused: globalThis.document?.hasFocus() === true,

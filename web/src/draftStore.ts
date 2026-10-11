@@ -56,9 +56,22 @@ export interface DraftDatabase {
 
 let database: DraftDatabase | undefined;
 // Sessions whose localStorage record promised bytes in the database and are
-// still waiting for them, plus every session known to own a database record.
-const awaitingDatabase = new Set<string>();
+// still waiting for them (with the text they hydrated with), plus every session
+// known to own a database record.
+const awaitingDatabase = new Map<string, string>();
 const databaseDrafts = new Set<string>();
+// The database's own list of records has been read. Until then a record this
+// page never wrote may still exist, so a discard is remembered, not skipped.
+let databaseListed = false;
+const pendingDiscards = new Set<string>();
+// Drafts emptied on this page: a record that outlives one is stale, never a
+// draft to bring back.
+const cleared = new Set<string>();
+// Database writes are asynchronous and carry megabytes. One chain per session
+// keeps a save from landing after the discard that followed it, and the count
+// lets a reload wait for bytes that are not on disk yet.
+const databaseChains = new Map<string, Promise<void>>();
+let databaseWritesInFlight = 0;
 const restoreListeners = new Map<string, Set<(draft: RestoredDraft) => void>>();
 
 function draftCache(sessionId: string): ProductCache<StoredDraft> | undefined {
@@ -91,7 +104,7 @@ function hydrate(): void {
         if (parsed.attachmentsInDatabase === true && attachments.length === 0) {
           // The bytes live in IndexedDB; keep the tokens so the restore can
           // put the images back exactly where they were.
-          awaitingDatabase.add(sessionId);
+          awaitingDatabase.set(sessionId, parsed.text ?? "");
           drafts.set(sessionId, { text: parsed.text ?? "", attachments });
           continue;
         }
@@ -111,9 +124,35 @@ function hydrate(): void {
 }
 hydrate();
 
+function writeDatabase(
+  sessionId: string,
+  write: () => Promise<void>,
+): Promise<void> {
+  databaseWritesInFlight += 1;
+  const chained = (databaseChains.get(sessionId) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(write);
+  const settled = chained.catch(() => undefined).then((): void => {
+    databaseWritesInFlight -= 1;
+    if (databaseChains.get(sessionId) === settled) databaseChains.delete(sessionId);
+  });
+  databaseChains.set(sessionId, settled);
+  return chained;
+}
+
 function discardDatabaseDraft(sessionId: string): void {
+  awaitingDatabase.delete(sessionId);
+  if (!databaseListed) {
+    // The record may exist without this page knowing. Discard it once the
+    // database answers, or the draft it holds comes back on the next load.
+    pendingDiscards.add(sessionId);
+    databaseDrafts.delete(sessionId);
+    return;
+  }
   if (!databaseDrafts.delete(sessionId)) return;
-  void draftCache(sessionId)?.discard().catch(() => undefined);
+  const cache = draftCache(sessionId);
+  if (cache === undefined) return;
+  void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
 }
 
 function persist(sessionId: string, draft: Draft | null): void {
@@ -130,6 +169,19 @@ function persist(sessionId: string, draft: Draft | null): void {
     return;
   }
   const attachments = storableAttachments(draft.attachments);
+  if (awaitingDatabase.has(sessionId)) {
+    // The bytes this draft promised have not been read back yet, so what is in
+    // memory is not the whole draft. Keep the promise and the record: writing
+    // either from here would make a slow database look like deleted images.
+    // The restore persists the merged draft once the bytes arrive.
+    const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+    try {
+      ls.setItem(key, JSON.stringify(mirror));
+    } catch {
+      /* the previous mirror and the database record still hold the draft */
+    }
+    return;
+  }
   if (attachments.length === 0) {
     discardDatabaseDraft(sessionId);
   } else {
@@ -147,9 +199,11 @@ function persist(sessionId: string, draft: Draft | null): void {
       }
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
-      void cache.save(stored).catch((): void => {
+      pendingDiscards.delete(sessionId);
+      void writeDatabase(sessionId, () => cache.save(stored)).catch((): void => {
         databaseDrafts.delete(sessionId);
-        persistLegacy(ls, key, draft);
+        // Only if nothing newer replaced this draft while the write failed.
+        if (drafts.get(sessionId) === draft) persistLegacy(ls, key, draft);
       });
       return;
     }
@@ -201,6 +255,14 @@ function schedulePersist(sessionId: string): void {
   flushTimer = setTimeout(flushPending, PERSIST_DEBOUNCE_MS);
 }
 
+/** Write every pending draft now and say whether all of them are on disk.
+ * `false` means attachment bytes are still travelling to the database: a page
+ * that reloads now comes back without them. */
+export function draftsDurable(): boolean {
+  flushPending();
+  return databaseWritesInFlight === 0;
+}
+
 // Flush the debounced tail before the page goes away, so a reload / PWA
 // relaunch / backgrounding never drops the last few hundred ms of typing.
 // pagehide + visibility:hidden are the mobile-safe pair (beforeunload is
@@ -224,41 +286,112 @@ export function attachDraftDatabase(db: DraftDatabase): void {
   void restoreFromDatabase();
 }
 
+/** The database can be read now (its dataset is known). The first attempt runs
+ * at module load, before a reloaded page has bound its account, and fails
+ * there; this is what brings the bytes back. Safe to call on every connect. */
+export function retryDraftRestore(): void {
+  if (database === undefined) return;
+  if (databaseListed && awaitingDatabase.size === 0) return;
+  void restoreFromDatabase();
+}
+
+let restoring = false;
+let restoreAgain = false;
+
 async function restoreFromDatabase(): Promise<void> {
-  let stored: string[] = [];
-  try {
-    stored = await database!.cacheSessions("draft");
-  } catch {
-    // No dataset yet (logged out) or the database is unavailable: the
-    // localStorage text stays authoritative for this page.
+  if (restoring) {
+    restoreAgain = true;
+    return;
   }
-  for (const id of stored) databaseDrafts.add(id);
-  const candidates = new Set([...stored, ...awaitingDatabase]);
-  for (const sessionId of candidates) {
-    let record: StoredDraft | null = null;
-    try {
-      record = (await draftCache(sessionId)?.load()) ?? null;
-    } catch {
-      record = null;
+  restoring = true;
+  try {
+    await restoreOnce();
+  } finally {
+    restoring = false;
+    if (restoreAgain) {
+      restoreAgain = false;
+      void restoreFromDatabase();
     }
+  }
+}
+
+async function restoreOnce(): Promise<void> {
+  let stored: string[] = [];
+  if (!databaseListed) {
+    try {
+      stored = await database!.cacheSessions("draft");
+    } catch {
+      // No dataset yet (logged out, or the account is not bound yet) or the
+      // database is unavailable. That says nothing about the bytes: keep
+      // every promise and wait for `retryDraftRestore`.
+      return;
+    }
+    databaseListed = true;
+    for (const id of stored) databaseDrafts.add(id);
+    const postponed = [...pendingDiscards];
+    pendingDiscards.clear();
+    for (const id of postponed) {
+      // A draft that gained attachments since queued its own save instead.
+      const draft = drafts.get(id);
+      if (draft !== undefined && storableAttachments(draft.attachments).length > 0) continue;
+      // Discarding a record that never existed is harmless; skipping one this
+      // page wrote before the list was read is not.
+      databaseDrafts.add(id);
+      discardDatabaseDraft(id);
+    }
+  }
+  const candidates = new Set([...stored, ...awaitingDatabase.keys()]);
+  for (const sessionId of candidates) {
+    const cache = draftCache(sessionId);
+    if (cache === undefined) return;
+    let record: StoredDraft | null;
+    try {
+      // After any write this page already queued for the same session.
+      await databaseChains.get(sessionId);
+      record = await cache.load();
+    } catch {
+      // An unreadable record is not an absent one. It stays promised.
+      continue;
+    }
+    const live = drafts.get(sessionId);
+    const promised = awaitingDatabase.has(sessionId);
+    const hydratedText = awaitingDatabase.get(sessionId);
     awaitingDatabase.delete(sessionId);
-    // A draft edited after hydration is newer than anything on disk.
-    if (dirty.has(sessionId)) continue;
-    const mirror = drafts.get(sessionId);
+    if (live === undefined && cleared.has(sessionId)) {
+      // Sent or cleared here after the record was written.
+      discardDatabaseDraft(sessionId);
+      continue;
+    }
     const restored = mergeRestoredDraft(
-      mirror === undefined ? undefined : {
-        ...mirror,
-        attachmentsInDatabase: stored.includes(sessionId) || mirror.attachments.length === 0,
-      },
+      live === undefined ? undefined : { ...live, attachmentsInDatabase: promised },
       record,
+      hydratedText,
     );
-    if (restored === null) continue;
+    if (restored === null) {
+      // Nothing to adopt, but a draft that kept typing while its bytes were
+      // promised still needs its ordinary write.
+      if (promised && live !== undefined) schedulePersist(sessionId);
+      continue;
+    }
     if (restored.text === "" && restored.attachments.length === 0) {
       drafts.delete(sessionId);
+      dirty.delete(sessionId);
+      persist(sessionId, null);
     } else {
       drafts.set(sessionId, restored);
+      schedulePersist(sessionId);
     }
     for (const listener of restoreListeners.get(sessionId) ?? []) listener(restored);
+  }
+}
+
+/** Tell a mounted composer that its stored draft changed underneath it: an
+ * image finished encoding after the composer that pasted it was replaced. */
+export function announceDraft(sessionId: string): void {
+  const draft = drafts.get(sessionId);
+  if (draft === undefined) return;
+  for (const listener of restoreListeners.get(sessionId) ?? []) {
+    listener({ text: draft.text, attachments: [...draft.attachments] });
   }
 }
 
@@ -289,11 +422,29 @@ export function setDraft(sessionId: string, draft: Draft): void {
   if (!draft.text && draft.attachments.length === 0) {
     drafts.delete(sessionId);
     dirty.delete(sessionId);
+    cleared.add(sessionId);
     persist(sessionId, null);
-  } else {
-    drafts.set(sessionId, draft);
-    schedulePersist(sessionId);
+    return;
   }
+  const previous = drafts.get(sessionId);
+  drafts.set(sessionId, draft);
+  cleared.delete(sessionId);
+  if (sameStoredAttachments(previous, draft)) {
+    schedulePersist(sessionId);
+    return;
+  }
+  // New bytes exist nowhere else. Start their write now instead of after the
+  // typing pause, so the window in which a reload can lose a pasted image is
+  // the write itself.
+  dirty.delete(sessionId);
+  persist(sessionId, draft);
+}
+
+function sameStoredAttachments(previous: Draft | undefined, next: Draft): boolean {
+  const before = storableAttachments(previous?.attachments ?? []);
+  const after = storableAttachments(next.attachments);
+  return before.length === after.length &&
+    before.every((attachment, index) => attachment === after[index]);
 }
 
 // Drop drafts whose session no longer exists (deleted here or on another
@@ -307,6 +458,7 @@ export function pruneDrafts(liveSessionIds: Set<string>): void {
     if (!liveSessionIds.has(id)) {
       drafts.delete(id);
       dirty.delete(id);
+      awaitingDatabase.delete(id);
     }
   }
   // Deleting the current entry during Set iteration is spec-safe.
