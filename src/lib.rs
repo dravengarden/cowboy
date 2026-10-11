@@ -96,6 +96,8 @@ mod machine_control;
 mod machine_convergence;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_install;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod machine_lanes;
 #[cfg(feature = "machine-host")]
 mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]

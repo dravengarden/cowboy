@@ -164,6 +164,7 @@
           ./src/session_deletion_admission
           ./src/machine_protocol.rs
           ./src/machine_protocol
+          ./src/machine_lanes.rs
           ./src/machine_transport.rs
           ./src/machine_transport
           ./src/generation_retention.rs

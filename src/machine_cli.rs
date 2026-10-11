@@ -1142,6 +1142,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         crate::machine_transport::STREAM_HEADER,
         crate::machine_transport::STREAM.parse()?,
     );
+    request.headers_mut().insert(
+        crate::machine_lanes::LANES_HEADER,
+        crate::machine_lanes::LANES.parse()?,
+    );
+    let lane_endpoint = endpoint.clone();
     let (mut socket, response) = tokio_tungstenite::connect_async(request)
         .await
         .context("connecting Machine WebSocket")?;
@@ -1164,6 +1169,19 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             .headers()
             .get(crate::machine_transport::STREAM_HEADER)
             .is_some_and(|value| value == crate::machine_transport::STREAM);
+    let lane_token = response
+        .headers()
+        .get(crate::machine_lanes::LANES_HEADER)
+        .is_some_and(|value| value == crate::machine_lanes::LANES)
+        .then(|| {
+            response
+                .headers()
+                .get(crate::machine_lanes::LANE_TOKEN_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned)
+        })
+        .flatten()
+        .filter(|_| chunked);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1299,6 +1317,29 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         Some(Arc::clone(&credit)),
     ));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
+    let lanes = Arc::new(crate::machine_lanes::LaneSet::<Message>::default());
+    let (lane_signal_tx, mut lane_signal_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Dropped when this connection ends, which ends its lanes.
+    let (_lanes_alive, lanes_alive) = tokio::sync::watch::channel(());
+    let mut outstanding = crate::machine_lanes::Outstanding::default();
+    let mut opener = crate::machine_lanes::Opener::default();
+    let lane_features = (chunked, compressed, paced, stream);
+    let open_lane = |opener: &mut crate::machine_lanes::Opener| {
+        let Some(token) = lane_token.clone() else {
+            return;
+        };
+        if !opener.should_open(lanes.len(), std::time::Instant::now()) {
+            return;
+        }
+        tokio::spawn(run_lane(
+            lane_endpoint.clone(),
+            token,
+            lane_features,
+            Arc::clone(&lanes),
+            lane_signal_tx.clone(),
+            lanes_alive.clone(),
+        ));
+    };
     heartbeat.tick().await;
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
@@ -1390,10 +1431,18 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                             credit.observe(&payload);
                         }
                         Some(Ok(Message::Text(text))) => {
+                            if text.len() >= crate::machine_lanes::LANE_MIN_BYTES
+                                && lanes.len() == 0
+                            {
+                                open_lane(&mut opener);
+                            }
                             let frame: MachineFrame = serde_json::from_str(&text)
                                 .context("parsing Machine controller frame")?;
                             match frame {
                                 MachineFrame::Runtime { frame } => {
+                                    if let crate::runtime_wire::Frame::ExecutionReply { reply } = &frame {
+                                        outstanding.answered(&reply.request_id);
+                                    }
                                     let workspace_snapshot = config.workspaces.snapshot();
                                     if let Some(rejection) = reject_untrusted_workspace(
                                         &frame,
@@ -1452,10 +1501,70 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     let Some(frame) = frame? else {
                         bail!("Machine broker runtime tunnel closed");
                     };
-                    queue_controller_frame(
-                        &controller_write_tx,
-                        &MachineFrame::Runtime { frame },
-                    )?;
+                    let request_id = match &frame {
+                        crate::runtime_wire::Frame::ExecutionRequest { request } => {
+                            Some(request.request_id.clone())
+                        }
+                        _ => None,
+                    };
+                    let text: Arc<str> =
+                        serde_json::to_string(&MachineFrame::Runtime { frame })?.into();
+                    let Some(request_id) = request_id else {
+                        queue_controller_message(&controller_write_tx, Message::Text(text.to_string().into()))?;
+                        continue;
+                    };
+                    outstanding.insert(&request_id, Arc::clone(&text));
+                    let message = Message::Text(text.to_string().into());
+                    if text.len() < crate::machine_lanes::LANE_MIN_BYTES {
+                        queue_controller_message(&controller_write_tx, message)?;
+                        continue;
+                    }
+                    // Bulk: grow the lanes while it lasts; send on one if open.
+                    open_lane(&mut opener);
+                    if let Err(message) = lanes.send(message, None) {
+                        queue_controller_message(&controller_write_tx, message)?;
+                    }
+                }
+                signal = lane_signal_rx.recv() => {
+                    let Some(signal) = signal else { continue };
+                    match signal {
+                        LaneSignal::Opened => opener.opened(),
+                        LaneSignal::OpenFailed => opener.opened(),
+                        LaneSignal::Text(text) => {
+                            let Ok(MachineFrame::Runtime { frame }) = serde_json::from_str(&text) else {
+                                continue;
+                            };
+                            let crate::runtime_wire::Frame::ExecutionReply { reply } = &frame else {
+                                continue;
+                            };
+                            outstanding.answered(&reply.request_id);
+                            let workspace_snapshot = config.workspaces.snapshot();
+                            if let Some(rejection) = reject_untrusted_workspace(
+                                &frame,
+                                &workspace_snapshot.workspaces,
+                                &config.worktree_roots,
+                                Some(&config.execution),
+                            ) {
+                                queue_controller_frame(
+                                    &controller_write_tx,
+                                    &MachineFrame::Runtime { frame: rejection },
+                                )?;
+                                continue;
+                            }
+                            runtime_write_tx.send(frame).map_err(|_| {
+                                anyhow::anyhow!("Machine runtime writer queue closed")
+                            })?;
+                        }
+                        LaneSignal::Failed => {
+                            // Replies sent on it may be lost; requests are
+                            // idempotent by operation ID, so ask again.
+                            let pending = outstanding.pending();
+                            tracing::warn!(resent = pending.len(), "Machine bulk lane failed; resending unanswered execution requests");
+                            for text in pending {
+                                queue_controller_message(&controller_write_tx, Message::Text(text.to_string().into()))?;
+                            }
+                        }
+                    }
                 }
                 written = &mut controller_writer => {
                     match written {
@@ -1482,6 +1591,130 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     controller_writer.abort();
     runtime_writer.abort();
     result
+}
+
+/// What a bulk lane reports to its primary connection.
+enum LaneSignal {
+    Opened,
+    OpenFailed,
+    /// A decoded frame received on a lane.
+    Text(String),
+    /// The lane ended unexpectedly, so replies sent on it may be lost.
+    Failed,
+}
+
+/// One bulk lane: an extra WebSocket to the Controller bound to the primary
+/// connection by its token. It closes after `LANE_IDLE` without traffic, or
+/// when the primary connection ends.
+async fn run_lane(
+    mut endpoint: reqwest::Url,
+    token: String,
+    features: (bool, bool, bool, bool),
+    lanes: Arc<crate::machine_lanes::LaneSet<Message>>,
+    signals: tokio::sync::mpsc::UnboundedSender<LaneSignal>,
+    mut alive: tokio::sync::watch::Receiver<()>,
+) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    endpoint.set_path(crate::machine_lanes::LANE_PATH);
+    let connected = async {
+        let mut request = endpoint.as_str().into_client_request()?;
+        let headers = request.headers_mut();
+        headers.insert(
+            crate::machine_transport::HEADER,
+            crate::machine_transport::CHUNKED.parse()?,
+        );
+        headers.insert(crate::machine_lanes::LANE_TOKEN_HEADER, token.parse()?);
+        let (socket, _) = tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio_tungstenite::connect_async(request),
+        )
+        .await
+        .context("opening Machine bulk lane timed out")??;
+        anyhow::Ok(socket)
+    }
+    .await;
+    let socket = match connected {
+        Ok(socket) => socket,
+        Err(error) => {
+            tracing::debug!(%error, "Machine bulk lane unavailable");
+            let _ = signals.send(LaneSignal::OpenFailed);
+            return;
+        }
+    };
+    let id = crate::machine_lanes::next_lane_id();
+    let (sink, mut stream) = socket.split();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let credit = Arc::new(crate::machine_transport::Credit::default());
+    let mut writer = tokio::spawn(crate::machine_transport::write(
+        sink,
+        rx,
+        features,
+        Some(Arc::clone(&credit)),
+    ));
+    lanes.add(id, tx.clone());
+    let _ = signals.send(LaneSignal::Opened);
+    tracing::info!(lane = id, lanes = lanes.len(), "Machine bulk lane opened");
+    let mut decoder = crate::machine_transport::Decoder::new(features);
+    let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+    let failed = loop {
+        tokio::select! {
+            _ = alive.changed() => break false,
+            _ = &mut writer => break true,
+            _ = idle_check.tick() => {
+                if lanes.idle_for(id).is_some_and(|idle| idle >= crate::machine_lanes::LANE_IDLE) {
+                    break false;
+                }
+            }
+            message = stream.next() => {
+                let Some(Ok(message)) = message else { break true };
+                lanes.touch(id);
+                let text = match message {
+                    Message::Binary(bytes) => {
+                        let Ok(decoded) = decoder.chunk((features.0, features.1), &bytes).await else {
+                            break true;
+                        };
+                        if let Some(credit) = decoder.credit() {
+                            let _ = tx.send(credit);
+                        }
+                        match decoded {
+                            Some(text) => text,
+                            None => continue,
+                        }
+                    }
+                    Message::Text(text) => {
+                        if decoder.text(&text).is_err() {
+                            break true;
+                        }
+                        text.to_string()
+                    }
+                    Message::Ping(value) => {
+                        let _ = tx.send(Message::Pong(value));
+                        continue;
+                    }
+                    Message::Pong(value) => {
+                        credit.observe(&value);
+                        continue;
+                    }
+                    Message::Close(_) => break true,
+                    Message::Frame(_) => continue,
+                };
+                if signals.send(LaneSignal::Text(text)).is_err() {
+                    break false;
+                }
+            }
+        }
+    };
+    lanes.remove(id);
+    writer.abort();
+    tracing::info!(
+        lane = id,
+        lanes = lanes.len(),
+        failed,
+        "Machine bulk lane closed"
+    );
+    if failed {
+        let _ = signals.send(LaneSignal::Failed);
+    }
 }
 
 async fn publish_provider_auth_observations(

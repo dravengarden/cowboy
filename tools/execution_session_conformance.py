@@ -122,6 +122,14 @@ def agent():
                     cwd = Path(descriptor["binding"]["workspace"]["cwd"])
                     require(initialized["environmentInfo"]["cwd"] == cwd.as_uri(), "wrong native cwd")
                     client.rpc("fs/writeFile", {"path": (cwd / "route.txt").as_uri(), "dataBase64": base64.b64encode("target '\" $() 中文 🐎\n".encode()).decode()})
+                    # Frames above the lane threshold: writes and reads that
+                    # the Machine moves onto bulk lanes once they open.
+                    for index in range(4):
+                        bulk = os.urandom(300 * 1024)
+                        target = (cwd / f"bulk-{index}.bin").as_uri()
+                        client.rpc("fs/writeFile", {"path": target, "dataBase64": base64.b64encode(bulk).decode()})
+                        read = client.rpc("fs/readFile", {"path": target})
+                        require(base64.b64decode(read["dataBase64"]) == bulk, "bulk read differs from bulk write")
                     process = str(uuid.uuid4())
                     client.rpc("process/start", {"processId": process, "argv": ["/bin/sh", "-c", "printf '%s\n' once >> effects"],
                         "cwd": cwd.as_uri(), "env": {}, "tty": False, "pipeStdin": False, "arg0": None,
@@ -382,6 +390,9 @@ def main():
             wait(lambda: effects.exists(), "initial remote command")
             wait(lambda: info()["status"] == "running", "initial turn completion")
             require((cwd / "route.txt").read_text() == "target '\" $() 中文 🐎\n", "target edit differs")
+            require(all((cwd / f"bulk-{index}.bin").stat().st_size == 300 * 1024 for index in range(4)), "bulk writes missing")
+            require(any(b"Machine bulk lane opened" in path.read_bytes() for path in root.glob("controller-*.log")), "large execution frames never used a bulk lane")
+            checks.append("large_execution_frames_use_bulk_lanes")
             require(not (Path(meta["cwd"]) / "route.txt").exists(), "runtime file was changed")
             require(not (root / "target-source/route.txt").exists(), "stable source was changed")
             checks.extend(["public_creation_persists_exact_binding_and_isolated_target_worktree", "worker_tools_cross_both_enrolled_machine_connections", "runtime_and_stable_source_remain_unchanged"])
