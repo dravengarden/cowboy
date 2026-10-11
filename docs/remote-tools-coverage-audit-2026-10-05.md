@@ -612,20 +612,27 @@ baseline is `tools/claude_file_native_baseline.json`. Native behavior:
   file, and a CRLF in `new_string` stays as given in an LF file.
 - Failing edits use native's messages (`String to replace not found in file.`,
   `Found N matches of the string to replace, …`).
-- Rewrites a Latin-1 file as UTF-8, with replacement characters (data loss,
-  natively).
+- Refuses a file that is not valid UTF-8 (a Latin-1 file, for one) and writes
+  nothing: `File is not valid UTF-8. …` (2.1.296; 2.1.287 rewrote it as UTF-8
+  with replacement characters).
 - With an empty `old_string`, creates a missing file or fills an empty one.
   On a non-empty file it fails: `Cannot create new file - file already
   exists.`
 
 **Read-before-write**
 - An unread file may be edited or written. Edit then marks its result
-  `contentNotInModelContext`.
+  `contentNotInModelContext`, as it does for a file Read showed in another
+  decoding (a UTF-16 file reads as UTF-8), and native's result text then
+  leaves out `(file state is current in your context — no need to Read it
+  back)`.
 - A file read and then changed on disk is refused: `File has been modified
   since read, …`. Only NotebookEdit still requires a Read.
 
 **Write**
 - Writes content as given and creates missing directories.
+- Over a file that is not valid UTF-8, content holding U+FFFD is refused and
+  nothing is written: `The file on disk is not valid UTF-8, and the new
+  content holds U+FFFD, …` (2.1.296).
 - Writing to a directory fails: `<path> is a directory, not a file. …`
 
 **Results** name the file as the call did, not as an absolute path.
@@ -646,7 +653,7 @@ Before 3.11.0 the facade differed in several ways:
 3.11.0 follows native on all of these, and the acceptance compares the file
 bytes and modes of every case.
 
-Two differences are stated rather than fixed:
+Three differences are stated rather than fixed:
 
 - **In-place rewrites.** Files are rewritten in place, so the inode stays, a
   hard link sees the change, and editing a read-only file fails. The executor
@@ -655,6 +662,11 @@ Two differences are stated rather than fixed:
   That is a separate design.
 - **Trailing tab.** A Mods-answered Read keeps the tab after the number of an
   empty last line, where native's own Read trims it.
+- **Context note.** Native renders a Mods-answered Edit result without
+  reading its `contentNotInModelContext` (measured on 2.1.287 and 2.1.296), so
+  the result text always ends with the note that the file state is current.
+  The facade still sets the field as native's own Edit does; only the text of
+  an unread or UTF-16 file's edit differs.
 
 Large files read through the range helper (128 KiB and up) are shown the same
 way, so a range Read's text can be matched by a later Edit.

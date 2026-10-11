@@ -79,6 +79,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.48.0 records provider-runtime 1.1.14: Claude Code 2.1.296,
+Claude Agent ACP 0.89.1, Codex CLI 0.160.1, Codex ACP 2.2.2, Gemini CLI 0.63.0
+and Grok 1.0.50. Node and both DeepSeek gateways keep their exact pins. All six
+Agent Plugins pin that shared runtime component and advance one patch version
+each. Codex ACP 2.2 declares native Codex `^0.160.1`, so Codex 0.161 and 0.162
+are not adopted. Claude Code 3.19.20 also follows what native 2.1.296 changed
+for the target tools it answers; see
+[`releases/agent-runtimes-2026-10-11.md`](releases/agent-runtimes-2026-10-11.md).
+Zed and GitHub are unaffected.
+
 Component release 3.46.0 changes no component. It records Claude Code 3.19.18,
 Codex 3.4.2, Claude DeepSeek 3.1.33 and Grok 3.1.34, whose signed collectors
 now call the bundled Bun runtime directly instead of a host-provided

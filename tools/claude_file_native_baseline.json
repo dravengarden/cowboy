@@ -1,5 +1,5 @@
 {
- "claude_version": "2.1.287",
+ "claude_version": "2.1.296",
  "source": "tools/claude_file_native_probe.py on native-local Read/Write/Edit",
  "results": {
   "read_exec": {
@@ -48,15 +48,19 @@
   },
   "edit_utf16": {
    "is_error": false,
-   "content": "The file utf16.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+   "content": "The file utf16.txt has been updated successfully."
   },
   "read_latin1": {
    "is_error": false,
    "content": "1\tcaf� old\n2"
   },
   "edit_latin1": {
-   "is_error": false,
-   "content": "The file latin1.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+   "is_error": true,
+   "content": "<tool_use_error>File is not valid UTF-8. It may use a legacy encoding such as Windows-1252, Shift-JIS or GBK, or be binary. This tool saves the whole file as UTF-8, which would replace every byte it cannot decode with U+FFFD. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first.</tool_use_error>"
+  },
+  "write_latin1_replacement": {
+   "is_error": true,
+   "content": "The file on disk is not valid UTF-8, and the new content holds U+FFFD, which is what Read shows for the bytes of that file it cannot decode. If the content came from Read, writing it destroys those characters. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first."
   },
   "read_readonly": {
    "is_error": false,
@@ -97,6 +101,10 @@
   "edit_missing": {
    "is_error": false,
    "content": "The file missing.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_allow_large": {
+   "is_error": false,
+   "content": "1\tflag\n2"
   }
  },
  "effects": {
@@ -145,8 +153,8 @@
   "latin1.txt": {
    "mode": "0o644",
    "nlink": 1,
-   "same_inode": false,
-   "bytes": "636166efbfbd206e65770a"
+   "same_inode": true,
+   "bytes": "636166e9206f6c640a"
   },
   "readonly.txt": {
    "mode": "0o444",

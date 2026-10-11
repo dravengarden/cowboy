@@ -46,6 +46,7 @@ primary phone/desktop product path.
 ### Architecture
 
 - [`remote-tools-coverage-audit-2026-10-05.md`](remote-tools-coverage-audit-2026-10-05.md) — Claude/Codex remote capability gaps, native extension candidates and fault-injection acceptance matrix
+- [`releases/agent-runtimes-2026-10-11.md`](releases/agent-runtimes-2026-10-11.md) — Claude 2.1.296, Codex 0.160.1 with ACP 2.2.2, Gemini 0.63.0 and Grok 1.0.50; component release 3.48.0, native difference table and remote acceptance
 - [`releases/bun-toolchain-2026-10-10.md`](releases/bun-toolchain-2026-10-10.md) — Bun toolchain, component release 3.45.0, six Agent Plugins republished with byte-identical runtimes; Zed 1.20.6 built but not published
 - [`releases/remote-parity-2026-10-05.md`](releases/remote-parity-2026-10-05.md) — OVH Claude 3.4.8 output/cancellation fixes, exact acceptance and retained parity gaps
 

@@ -1162,6 +1162,7 @@ test("text files keep their encoding and line endings, as natively", () => {
     crlf: true,
     utf16: true,
     bom: false,
+    lossy: false,
   });
   assert.deepEqual(
     textBytes("a\nc\n", file),
@@ -1174,7 +1175,89 @@ test("text files keep their encoding and line endings, as natively", () => {
   assert.equal(bom.text, "x\n");
   assert.equal(bom.bom, true);
   assert.deepEqual(textBytes("y\n", bom), Buffer.from("\ufeffy\n"));
-  assert.equal(textFile(Buffer.from([0x63, 0xe9, 0x0a])).text, "c\ufffd\n");
+  assert.equal(bom.lossy, false);
+  const latin1 = textFile(Buffer.from([0x63, 0xe9, 0x0a]));
+  assert.equal(latin1.text, "c\ufffd\n");
+  assert.equal(latin1.lossy, true);
+  // A replacement character the file itself holds loses nothing.
+  assert.equal(textFile(Buffer.from("c\ufffd\n")).lossy, false);
+});
+
+test("a file that is not UTF-8 is not saved as UTF-8, as natively", async (t) => {
+  const { tools, files } = await fixture(t);
+  const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0x6f, 0x6c, 0x64]);
+  files.set("/target with space/latin1", latin1);
+  await tools.nativeCall("Read", { file_path: "latin1" });
+  assert.match(
+    (await tools.nativeCall("Edit", {
+      file_path: "latin1",
+      old_string: "old",
+      new_string: "new",
+    })).deny,
+    /^File is not valid UTF-8\. .* Nothing was written\. /,
+  );
+  assert.match(
+    (await tools.nativeCall("Write", {
+      file_path: "latin1",
+      content: "caf\ufffd new",
+    })).deny,
+    /^The file on disk is not valid UTF-8, and the new content holds U\+FFFD/,
+  );
+  assert.deepEqual(files.get("/target with space/latin1"), latin1);
+  // Content of its own replaces the file, as any Write does.
+  await tools.nativeCall("Write", { file_path: "latin1", content: "cafe\n" });
+  assert.equal(files.get("/target with space/latin1").toString(), "cafe\n");
+});
+
+test("an edit of a file Read showed in another decoding is not in context", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set(
+    "/target with space/utf16",
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("one\n", "utf16le")]),
+  );
+  await tools.nativeCall("Read", { file_path: "utf16" });
+  const edited = await tools.nativeCall("Edit", {
+    file_path: "utf16",
+    old_string: "one",
+    new_string: "uno",
+  });
+  assert.equal(edited.result.contentNotInModelContext, true);
+  files.set("/target with space/utf8", Buffer.from("one\n"));
+  await tools.nativeCall("Read", { file_path: "utf8" });
+  const plain = await tools.nativeCall("Edit", {
+    file_path: "utf8",
+    old_string: "one",
+    new_string: "uno",
+  });
+  assert.equal(plain.result.contentNotInModelContext, undefined);
+});
+
+test("allow_large reads as usual and says that it raises no limit here", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/small", Buffer.from("flag\n"));
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "small", allow_large: true }))
+      .result.file.content,
+    "flag\n",
+  );
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "small", allow_large: "yes" }))
+      .deny,
+    "Invalid allow_large",
+  );
+  files.set(
+    "/target with space/wide",
+    Buffer.from("x".repeat(70 * 1024) + "\n"),
+  );
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "wide" })).deny,
+    "Selected lines exceed output limit; request a smaller range",
+  );
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "wide", allow_large: true }))
+      .deny,
+    "Selected lines exceed output limit; request a smaller range. allow_large is not available where this read runs; read it in parts with offset and limit.",
+  );
 });
 
 test("edits follow native's rules for empty strings, unread files and directories", async (t) => {

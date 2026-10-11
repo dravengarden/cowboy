@@ -389,6 +389,23 @@ test("the skill listing shows target skills by native name and order", () => {
       "- init: bundled init\nsecond line",
     ].join("\n"),
   );
+  // A skill named apart from its directory keeps native's parenthesis.
+  assert.equal(
+    targetSkillListing(
+      [
+        "The following skills are available for use with the Skill tool:\n",
+        "- cowboy-target:proj (other-name): project skill",
+        "- proj (shadowed): bundled proj",
+        "- init: bundled init",
+      ].join("\n"),
+      skills,
+    ),
+    [
+      "The following skills are available for use with the Skill tool:\n",
+      "- proj (other-name): project skill",
+      "- init: bundled init",
+    ].join("\n"),
+  );
   // Native renders the stored listing again; a projected one is kept.
   const projected = targetSkillListing(listing, skills);
   assert.equal(targetSkillListing(projected, skills), projected);

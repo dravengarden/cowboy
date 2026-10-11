@@ -15,9 +15,14 @@
     "RULE_SCOPED_SUB"
    ],
    "read sub/file.txt again": [],
-   "write sub2/new.txt": [],
+   "write sub2/new.txt": [
+    "NESTED_SUB2_CLAUDE_MD"
+   ],
    "read sub3/e.txt": [
     "NESTED_SUB3_CLAUDE_MD"
+   ],
+   "edit sub4/e.txt": [
+    "NESTED_SUB4_CLAUDE_MD"
    ],
    "read ../other/f.txt": []
   }
@@ -32,6 +37,7 @@
    "read sub/file.txt again": [],
    "write sub2/new.txt": [],
    "read sub3/e.txt": [],
+   "edit sub4/e.txt": [],
    "read ../other/f.txt": []
   }
  },
@@ -43,7 +49,8 @@
    " - Is a git repository: true",
    " - Platform: linux",
    " - Shell: SHELL",
-   " - OS Version: OS"
+   " - OS Version: OS",
+   " - Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory, keep scripts you write in a different directory, and pass paths as arguments instead of running an interpreter or build tool from inside it. Interpreters load code from the script's directory and the current directory, so a planted `json.py` runs on `import json`. Run any Python that reads them with `-I`. This does not apply to code the user asked you to build or run."
   ],
   "git_status_header": true,
   "attached_trailer": true,
@@ -69,7 +76,8 @@
    " - Is a git repository: false",
    " - Platform: linux",
    " - Shell: SHELL",
-   " - OS Version: OS"
+   " - OS Version: OS",
+   " - Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory, keep scripts you write in a different directory, and pass paths as arguments instead of running an interpreter or build tool from inside it. Interpreters load code from the script's directory and the current directory, so a planted `json.py` runs on `import json`. Run any Python that reads them with `-I`. This does not apply to code the user asked you to build or run."
   ],
   "git_status_header": false,
   "attached_trailer": false,

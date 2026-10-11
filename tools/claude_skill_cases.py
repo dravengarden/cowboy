@@ -42,7 +42,8 @@ USER_FILES = {
 }
 
 NAMES = ["shared", "user-only", "ucmd", "basic", "shell-ok", "shell-stderr", "shell-both", "shell-fail", "shell-fail-empty", "shell-fenced",
-         "shell-args", "shell-two", "shell-inert", "shell-pwd", "shell-cd", "shell-file", "renamed-dir", "hidden",
+         "shell-args", "shell-two", "shell-inert", "shell-pwd", "shell-cd", "shell-file", "renamed-dir", "renamed-alias",
+         "hidden",
          "no-frontmatter", "pcmd", "grp:inner"]
 
 CASES = [
@@ -103,7 +104,9 @@ def listing(text):
     """The fixture's entries of native's skill listing, in order."""
     lines = []
     for line in text.split("\n"):
-        match = re.match(r"- ([^:\s]+(?::[^:\s]+)*)(?:: |$)", line)
+        # A skill whose own name differs from its directory's is listed as
+        # `- <directory> (<name>): ...` (2.1.296).
+        match = re.match(r"- ([^:\s]+(?::[^:\s]+)*)(?: \([^)\n]*\))?(?:: |$)", line)
         if match and match[1] in NAMES:
             lines.append(line)
     return lines
