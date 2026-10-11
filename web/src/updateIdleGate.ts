@@ -2,6 +2,10 @@
  * who is using it. */
 export const EDITOR_ENGAGEMENT_MS = 60_000;
 
+/** How long after the last keystroke the page is still mid-task wherever the
+ * focus has moved since. */
+export const RECENT_INPUT_MS = 20_000;
+
 export interface EditorEngagement {
   /** The focused element accepts text. */
   readonly focusedEditable: boolean;
@@ -20,12 +24,18 @@ export interface EditorEngagement {
  * window, and a gate on focus alone never opens there: a deployed build then
  * waits for a manual reload while Mobile, whose keyboard dismisses, has long
  * taken it. An open composition always holds; otherwise the editor holds only
- * while this window is focused and was typed in recently. */
+ * while this window is focused and was typed in recently. Typing in the last
+ * few seconds holds without the focus: the pointer moved the caret out, the
+ * user did not stop working. */
 export function editorHoldsUpdate(
   engagement: EditorEngagement,
   engagementMs = EDITOR_ENGAGEMENT_MS,
 ): boolean {
-  if (!engagement.focusedEditable) return false;
-  if (engagement.composing) return true;
-  return engagement.windowFocused && engagement.sinceInputMs < engagementMs;
+  if (engagement.composing && engagement.focusedEditable) return true;
+  if (!engagement.windowFocused) return false;
+  // Someone who typed a moment ago is mid-task even when the caret has since
+  // left the editor: clicking another session to read something is part of
+  // writing the prompt, and that click must not be what reloads the page.
+  if (engagement.sinceInputMs < RECENT_INPUT_MS) return true;
+  return engagement.focusedEditable && engagement.sinceInputMs < engagementMs;
 }

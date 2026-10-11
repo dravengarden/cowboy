@@ -161,6 +161,7 @@ import {
   resetSticky,
   setSticky,
   useScrollNonce,
+  useTopNonce,
 } from "./stickyStore";
 import {
   keyLeavesLatest,
@@ -4511,6 +4512,7 @@ export function Transcript({
   // Bumped by the composer toggle (requestStickToBottom) to ask us to scroll to
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
+  const topNonce = useTopNonce(sessionId);
   const historyReleaseTimerRef = useRef<number | undefined>(undefined);
   const cancelHistoryRelease = (): void => {
     if (historyReleaseTimerRef.current === undefined) return;
@@ -5434,6 +5436,18 @@ export function Transcript({
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
   }, [scrollNonce]);
+
+  // A "to the start" request: stop following and scroll to the oldest loaded
+  // row (column-reverse: the most negative scrollTop). Reaching it lets the
+  // ordinary scroll-threshold paging load earlier history as usual.
+  const lastTopNonceRef = useRef(topNonce);
+  useEffect(() => {
+    if (topNonce === lastTopNonceRef.current) return;
+    lastTopNonceRef.current = topNonce;
+    stick.current = false;
+    const el = parentRef.current;
+    if (el) el.scrollTo({ top: -el.scrollHeight, behavior: "smooth" });
+  }, [topNonce]);
 
   return (
     <Box

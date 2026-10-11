@@ -16,10 +16,12 @@ import { useSyncExternalStore } from "react";
 interface SessionSticky {
   sticky: boolean;
   scrollNonce: number;
+  /** Bumped to ask the Transcript to show the start of the conversation. */
+  topNonce: number;
 }
 
 // Shared default; safe to share since callers only read primitives off it.
-const DEFAULT: SessionSticky = { sticky: true, scrollNonce: 0 };
+const DEFAULT: SessionSticky = { sticky: true, scrollNonce: 0, topNonce: 0 };
 
 const map = new Map<string, SessionSticky>();
 const listeners = new Set<() => void>();
@@ -44,7 +46,14 @@ function subscribe(onChange: () => void): () => void {
 export function setSticky(sessionId: string, sticky: boolean): void {
   const cur = get(sessionId);
   if (cur.sticky === sticky) return;
-  map.set(sessionId, { sticky, scrollNonce: cur.scrollNonce });
+  map.set(sessionId, { ...cur, sticky });
+  emit();
+}
+
+// Stop following and ask the Transcript to scroll to the oldest message.
+export function requestScrollToTop(sessionId: string): void {
+  const cur = get(sessionId);
+  map.set(sessionId, { ...cur, sticky: false, topNonce: cur.topNonce + 1 });
   emit();
 }
 
@@ -52,7 +61,7 @@ export function setSticky(sessionId: string, sticky: boolean): void {
 // composer toggle's tap while detached).
 export function requestStickToBottom(sessionId: string): void {
   const cur = get(sessionId);
-  map.set(sessionId, { sticky: true, scrollNonce: cur.scrollNonce + 1 });
+  map.set(sessionId, { ...cur, sticky: true, scrollNonce: cur.scrollNonce + 1 });
   emit();
 }
 
@@ -61,7 +70,7 @@ export function requestStickToBottom(sessionId: string): void {
 export function resetSticky(sessionId: string): void {
   const cur = get(sessionId);
   if (cur.sticky) return;
-  map.set(sessionId, { sticky: true, scrollNonce: cur.scrollNonce });
+  map.set(sessionId, { ...cur, sticky: true });
   emit();
 }
 
@@ -70,6 +79,14 @@ export function useSticky(sessionId: string): boolean {
     subscribe,
     () => get(sessionId).sticky,
     () => true,
+  );
+}
+
+export function useTopNonce(sessionId: string): number {
+  return useSyncExternalStore(
+    subscribe,
+    () => get(sessionId).topNonce,
+    () => 0,
   );
 }
 
