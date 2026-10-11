@@ -476,9 +476,12 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         `[data-mobile-sheet-footer-shield] button[aria-label='${label}']`,
       );
     check(
-      island("Scroll to start") && island("Details") &&
-        island("Scroll to latest"),
-      "the transcript island must offer start, details and latest",
+      island("Scroll to start") && island("Details"),
+      "the transcript island must offer start and details",
+    );
+    check(
+      !island("Scroll to latest"),
+      "a call transcript has no Follow control",
     );
     const visible = (needle: string): boolean => {
       const box = document.querySelector("[data-call-transcript]")!
@@ -501,11 +504,6 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     await until(
       () => visible("Review the billing retry change.") ? true : null,
       "scroll to start must show the first message",
-    );
-    island("Scroll to latest")!.click();
-    await until(
-      () => visible("Review complete.") ? true : null,
-      "scroll to latest must return to the newest message",
     );
     await until(
       () => text().includes("can be duplicated") ? true : null,
@@ -553,6 +551,28 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     await until(
       () => button("correctness") ? null : true,
       "floating close did not dismiss the calls page",
+    );
+    // Closing from inside a call leaves the whole page: the next open starts
+    // at the list, not at the call that was showing.
+    const callRow = (): HTMLButtonElement | undefined =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find((
+        node,
+      ) => node.getAttribute("aria-label")?.includes("correctness"));
+    button("Open calls")!.click();
+    (await until(callRow, "reopened calls page lacks its list")).click();
+    await until(backButton, "a reopened call must show its transcript");
+    island("Close")!.click();
+    await until(
+      () => island("Close") ? null : true,
+      "close inside a call did not dismiss the calls page",
+    );
+    button("Open calls")!.click();
+    await until(callRow, "reopening after a close inside a call lacks the list");
+    check(!backButton(), "reopening must start at the list, not the call");
+    island("Close")!.click();
+    await until(
+      () => island("Close") ? null : true,
+      "floating close did not dismiss the reopened calls page",
     );
     tests.push("mobile-page-list-transcript-details-and-back");
 
