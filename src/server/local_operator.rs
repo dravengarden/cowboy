@@ -143,7 +143,13 @@ async fn session_provider_update(
         Ok(fence) => fence,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
-    let result = if meta.status == Status::Exited {
+    let live_worker = state
+        .runtime_router
+        .runtime(&meta.machine_id)
+        .is_some_and(|runtime| runtime.has_worker(&meta.id));
+    // An exited session whose worker survives is reloaded, never re-pinned:
+    // the worker's release would reconcile a re-pin straight back.
+    let result = if meta.status == Status::Exited && !live_worker {
         state
             .hub
             .repin_dormant_provider(&meta, &target.version, &target.digest, &target.behavior)
