@@ -29,8 +29,9 @@ export const AGENT_CALLS_PROMPT = [
   "Run `cowboy claude --request-file - [--preset ID]` with this JSON on stdin:",
   '{"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis","instruction":"<self-contained task>","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}.',
   "It prints a JSON envelope with a call_id; then run `cowboy call wait <call_id>` until it is terminal and `cowboy call result <call_id>`.",
-  "`cowboy call capabilities` lists the preset ids (model and reasoning); omit --preset to use the session's choice.",
-  "The user sees the call in Cowboy. If calls are off, Cowboy asks the user and the command waits for the answer; report a refusal instead of working around it.",
+  "`cowboy call capabilities` reports whether calls are enabled and lists the preset ids (model and reasoning); omit --preset to use the session's choice.",
+  "Reviews are optional and the user turns them on per session: when you have finished a substantive code change and are about to report, run `cowboy call capabilities`; if calls are enabled and Claude is available, get a read-only review from Claude first and fix or report its findings. If they are off, do not review and do not mention it.",
+  "When the user explicitly asks for a call while calls are off, Cowboy asks them and the command waits for the answer; report a refusal instead of working around it.",
 ].join(" ");
 
 // The agent-calls instructions as a native `-c` option, unless the user's
