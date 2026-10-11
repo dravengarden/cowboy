@@ -17,6 +17,7 @@ import {
   settlePendingAttachments,
 } from "../attachments";
 import { getDraft, setDraft, subscribeDraftRestore } from "../draftStore";
+import { handOffSettledAttachments } from "./draftHandOff";
 import {
   getInlineAttachment,
   registerInlineAttachment,
@@ -104,10 +105,33 @@ export function useComposerDraftController(
   // in the same browser task. Claim the commit synchronously so one physical
   // action can mint at most one cmid before React applies the cleared state.
   const committingRef = useRef(false);
+  // Encoding and durability acknowledgements outlive this composer: switching
+  // sessions replaces it while they are still running. Once replaced, its refs
+  // are a snapshot of the past and the draft store is the only live copy.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return (): void => {
+      mountedRef.current = false;
+    };
+  }, []);
   const [attachments, setAttachmentsState] = useState<Attachment[]>(() => {
     seedInlineAttachments(seed.attachments);
     return seed.attachments;
   });
+
+  // The text is stored on every change, whatever else is still in flight. A
+  // pasted image that is still encoding has no bytes to store yet, so it is
+  // left out until it settles; its token stays in the text.
+  const persistDraft = useCallback((): void => {
+    const current = attachmentsRef.current;
+    setDraft(sessionId, {
+      text: textRef.current,
+      attachments: current.some((attachment) => attachment.pending)
+        ? current.filter((attachment) => !attachment.pending)
+        : current,
+    });
+  }, [sessionId]);
 
   const setAttachments = useCallback<React.Dispatch<React.SetStateAction<Attachment[]>>>(
     (update): void => {
@@ -118,9 +142,13 @@ export function useComposerDraftController(
       // before that commit and must reconcile against the new attachments.
       attachmentsRef.current = next;
       if (next !== current) draftRevisionRef.current += 1;
+      if (!mountedRef.current) {
+        handOffSettledAttachments(sessionId, current, next);
+        return;
+      }
       setAttachmentsState(next);
     },
-    [],
+    [sessionId],
   );
 
   // Attachment bytes live in IndexedDB and can land after the mount seed.
@@ -136,9 +164,12 @@ export function useComposerDraftController(
             editorRef.current?.deleteImage(token.id);
           }
         }
-        if (attachmentsRef.current.length === 0 && restored.attachments.length > 0) {
-          setAttachments(restored.attachments);
-        }
+        // Adopt what this composer does not hold yet. It may already hold
+        // something newer (an image pasted while the bytes were on their way),
+        // which must not make the restored ones unsendable.
+        const held = new Set(attachmentsRef.current.map((attachment) => attachment.id));
+        const missing = restored.attachments.filter((attachment) => !held.has(attachment.id));
+        if (missing.length > 0) setAttachments((current) => [...current, ...missing]);
         editorRef.current?.refreshImages();
       }),
     [editorRef, sessionId, setAttachments],
@@ -170,22 +201,17 @@ export function useComposerDraftController(
     }
     const nextHasText = next.trim().length > 0;
     setHasText((current) => current === nextHasText ? current : nextHasText);
-    if (mirrorTextInReact) {
-      setTextState(next);
-    } else if (!reconciled.some((attachment) => attachment.pending)) {
-      // CM6 is uncontrolled and the local draft store already debounces disk
-      // I/O. Update that store directly without routing every keystroke through
-      // React; refs remain authoritative for submit/park/schedule actions.
-      setDraft(sessionId, { text: next, attachments: reconciled });
-    }
-  }, [mirrorTextInReact, sessionId]);
+    // Store before anything else can happen to this composer. The store
+    // already debounces disk I/O, and a React effect would run only after the
+    // next render: on Desktop that render does not come per keystroke, and on
+    // every surface a session switch can unmount the composer first.
+    persistDraft();
+    if (mirrorTextInReact) setTextState(next);
+  }, [mirrorTextInReact, persistDraft]);
 
   useEffect(() => {
-    // A same-gesture paste placeholder has only a local object URL and an empty
-    // wire block. Keep the last durable draft until encoding completes.
-    if (attachments.some((attachment) => attachment.pending)) return;
-    setDraft(sessionId, { text: textRef.current, attachments });
-  }, [sessionId, textState, attachments]);
+    persistDraft();
+  }, [persistDraft, attachments]);
 
   // Desktop reads the live ref whenever another meaningful state transition
   // renders the shell. Mobile/native controls consume the reactive mirror.
@@ -304,6 +330,7 @@ export function useComposerDraftController(
     if (!sendable || committingRef.current) return null;
     committingRef.current = true;
     const submittedRevision = draftRevisionRef.current;
+    const submittedText = textRef.current;
     try {
       if (feedback) haptic();
       const confirmation = action();
@@ -312,7 +339,17 @@ export function useComposerDraftController(
         // an optimistic render. Keep the source editor intact until it resolves.
         // If the user changed the buffer during that short transaction, preserve
         // the newer buffer rather than clearing it underneath their caret.
-        if (draftRevisionRef.current === submittedRevision) clear();
+        if (draftRevisionRef.current !== submittedRevision) return;
+        if (mountedRef.current) {
+          clear();
+          return;
+        }
+        // This composer was replaced while the send was committing. Whatever
+        // the store holds now belongs to its successor: clear it only if it is
+        // still exactly what was sent, never something typed since.
+        if (getDraft(sessionId).text === submittedText) {
+          setDraft(sessionId, { text: "", attachments: [] });
+        }
       }).finally(() => {
         committingRef.current = false;
       });

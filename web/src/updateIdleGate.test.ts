@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
-import { EDITOR_ENGAGEMENT_MS, editorHoldsUpdate } from "./updateIdleGate.ts";
+import {
+  EDITOR_ENGAGEMENT_MS,
+  editorHoldsUpdate,
+  RECENT_INPUT_MS,
+} from "./updateIdleGate.ts";
 
 const typing = {
   focusedEditable: true,
@@ -12,7 +16,19 @@ const typing = {
 
 test("an editor being typed in holds a client update", () => {
   assertEquals(editorHoldsUpdate(typing), true);
-  assertEquals(editorHoldsUpdate({ ...typing, focusedEditable: false }), false);
+  assertEquals(
+    editorHoldsUpdate({ ...typing, focusedEditable: false, sinceInputMs: RECENT_INPUT_MS }),
+    false,
+  );
+});
+
+test("clicking another session right after typing does not open the gate", () => {
+  // The pointer took the focus out of the composer; the user is still writing.
+  assertEquals(editorHoldsUpdate({ ...typing, focusedEditable: false }), true);
+  assertEquals(
+    editorHoldsUpdate({ ...typing, focusedEditable: false, windowFocused: false }),
+    false,
+  );
 });
 
 test("a caret resting in the Desktop composer does not hold an update forever", () => {

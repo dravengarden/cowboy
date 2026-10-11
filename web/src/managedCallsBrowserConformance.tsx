@@ -96,7 +96,11 @@ function childBootstrap(url: string): Response | null {
           "agent_message_chunk",
           "The retry path in `charge.go` resubmits after the provider accepted " +
             "the request, so a charge can be **duplicated**.\n\n" +
-            "The outbound client also has no deadline.",
+            "The outbound client also has no deadline.\n\n" +
+            Array.from(
+              { length: 40 },
+              (_, line) => `Checked step ${line + 1} of the retry path.`,
+            ).join("\n\n") + "\n\nReview complete.",
         ),
       ],
     }],
@@ -467,6 +471,42 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         "[data-mobile-sheet-footer-shield] button[aria-label='Back']",
       );
     check(backButton(), "a nested level must offer Back in the island");
+    const island = (label: string): HTMLElement | null =>
+      document.querySelector<HTMLElement>(
+        `[data-mobile-sheet-footer-shield] button[aria-label='${label}']`,
+      );
+    check(
+      island("Scroll to start") && island("Details") &&
+        island("Scroll to latest"),
+      "the transcript island must offer start, details and latest",
+    );
+    const visible = (needle: string): boolean => {
+      const box = document.querySelector("[data-call-transcript]")!
+        .getBoundingClientRect();
+      return [...document.querySelectorAll("[data-call-transcript] *")].some(
+        (node) => {
+          if (node.children.length > 0 || !node.textContent?.includes(needle)) {
+            return false;
+          }
+          const rect = node.getBoundingClientRect();
+          return rect.bottom > box.top && rect.top < box.bottom;
+        },
+      );
+    };
+    await until(
+      () => visible("Review complete.") ? true : null,
+      "a call transcript must open at its latest message",
+    );
+    island("Scroll to start")!.click();
+    await until(
+      () => visible("Review the billing retry change.") ? true : null,
+      "scroll to start must show the first message",
+    );
+    island("Scroll to latest")!.click();
+    await until(
+      () => visible("Review complete.") ? true : null,
+      "scroll to latest must return to the newest message",
+    );
     await until(
       () => text().includes("can be duplicated") ? true : null,
       `the child's own messages must render: ${text().slice(0, 300)}`,

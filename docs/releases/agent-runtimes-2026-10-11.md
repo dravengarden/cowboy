@@ -107,8 +107,90 @@ the target's exec-server. It now accepts `provider_cli` and `provider_sha256`
 and records the Provider CLI's digest, so the acceptance covers the pair this
 release produces. The Codex hooks probe takes `--version` for the same reason.
 
-`just check-compact` passes on the source merged with `32b4200f`: formatting,
-lint, dependency policy, the Provider and composition gates, 2,074 core Rust
-tests, 682 Machine tests, 52 code-adapter tests, 126 private Zed adapter
-tests, 2,181 frontend tests, the disposable PostgreSQL checks and the release
-builds.
+`just check-compact` passed in one run on the source merged with `13e42bb4`.
+On the source merged with `32b4200f` every step passed, in two runs: formatting,
+lint, dependency policy, the Provider and composition gates in the first, and
+from `test` on in the second, after one timing test failed under host load (see
+the last section). That is 2,074 core Rust tests, 682 Machine tests, 52
+code-adapter tests, 126 private Zed adapter tests, 2,181 frontend tests, the
+disposable PostgreSQL checks and the release builds. The three Web-only commits
+merged after it passed the component graph check and the Web type check, lint
+and tests.
+
+## Published releases
+
+Built from clean source `2a849aa07a65f09e4ee36cc41fe12d83deb2d71b`, which is
+remote `main`, signed with `cowboy-first-party-v1`, verified with its public
+key and published to `/var/lib/cowboy/plugins/catalog`. The Catalog refresh
+returned HTTP 200 and advertises each exact version as `ready` under component
+release 3.49.0.
+
+| Plugin | Version | Composite SHA-256 |
+| --- | --- | --- |
+| claude-code | 3.19.20 | `9684c88f2d97fc8bad469112ef77f9bd76f441c06793cefba995ad50d57641c0` |
+| claude-deepseek | 3.1.34 | `8df4a26d4cb331c25225d084a015f010152dbd52269a45665536243bad62b7fa` |
+| codex | 3.4.4 | `3b64f08e5de8caff514df78d4c0fe25f3e235b086a1d469d4afa3582fc61d7c3` |
+| codex-deepseek | 3.1.33 | `15f719f4086bd26b9b92fc83cd70ff6d7c429c5776c427b806ea31fe0d38016e` |
+| gemini | 3.1.33 | `eb82dbcfd9f2619164315e051006d8decba0bec5c01a9cf661f79e2f6b9d5512` |
+| grok | 3.1.35 | `7ec283994bb668ed13bfd6902b750b609d0004405d34cd72694180f3cba6cc5b` |
+
+- The Claude and Codex runtime archives of this build unpack to the same bytes
+  as the candidates the remote suites accepted. The suites ran on source
+  `a16f2d64`; the merges since changed the component release number, the Web
+  application and one Controller module, and no runtime source.
+- Each release passed Linux worker initialization, session creation, stop with
+  descendant drain and coexistence with its previous release, on the
+  production worker (`sha256:37cc05f4…d96a0`). The two DeepSeek releases ran
+  with both sidecars.
+- Each release's macOS arm64 artifacts ran on macbook-air: every CLI, adapter
+  and gateway probe passed.
+- The active Controller and the cold one in Hawk's system closure each read
+  the Catalog with the six releases twice, on a private copy before
+  publication and from the live files after it.
+- All 26 published package and runtime HTTPS URLs returned bytes matching the
+  SHA-256 digest in their path, through the public hostname.
+- `just provider-release-coverage` passed against the live Catalog.
+
+## Installed
+
+`cowboy operator converge --apply` ran Hawk first, then OVH, then Falcon and
+macbook-air. All 18 upgrades returned an applied receipt, nothing was skipped,
+and each re-read inventory reports the exact digests above as `active` with
+the previous generation retained for rollback. The final dry run is empty on
+all four Machines.
+
+| Machine | Upgraded |
+| --- | --- |
+| hawk | claude-deepseek, codex, codex-deepseek, gemini, grok |
+| ovh | claude-code, codex, grok |
+| falcon | claude-deepseek, codex, codex-deepseek, gemini, grok |
+| macbook-air | claude-deepseek, codex, codex-deepseek, gemini, grok |
+
+Each operation is `<machine>-<plugin>-<version>-converge`. No session was
+stopped or restarted by this task: a running session keeps its own generation
+and a new session starts on the installed one. After the OVH upgrade,
+`cowboy operator usage --refresh anthropic` returned the subscription's plan
+usage through the 3.19.20 collector. Local and public `/healthz` return 200.
+
+## Not released and not checked
+
+- No Web, Controller or Machine component was built or activated. The
+  Controller's embedded fallback Catalog still names the previous versions;
+  the signed Catalog supersedes it.
+- The executor stays 0.159.3 and no `cowboy-workers` pin moved.
+- No model request was made on the new releases by this task. The acceptance
+  uses scripted loopback APIs; real subscription inference, cross-host latency
+  and the other `not_checked` entries of the receipts are unverified.
+- The requested independent Codex review was not run: Agent calls are off for
+  the session that did this work and the request stayed unapproved.
+- One unrelated test,
+  `machine_plugins::telemetry::tests::deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first_attempt`,
+  timed out twice inside the complete gate while the host load average was 15
+  to 19, and passed alone five times and in the rerun at lower load. Its
+  two-second wait was not load tolerant; `aef3d926` on `main` has since
+  bounded that wait instead.
+
+Evidence is retained in `/home/draven/tmp/cowboy-upgrades-20261010` on Hawk:
+probe receipts, conformance inputs and receipts per candidate, the release
+build, Linux and macOS receipts, publication, Catalog readers and each
+Machine's inventory before and after.

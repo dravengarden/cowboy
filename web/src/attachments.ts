@@ -578,10 +578,23 @@ export function attachmentDisplayParts(
 /// Drop only the inline-image tokens whose bytes aren't in `ids` — used when
 /// rehydrating a persisted draft, so a token left orphaned by a prior quota-drop
 /// of its attachment doesn't reload as a stray fallback chip ("的样式 bug").
+///
+/// Every draft passes through here on every load, so the text around a kept
+/// token — and a draft with no orphan at all — must come back byte-identical:
+/// only the single space a removed token leaves doubled is closed up. Collapsing
+/// every run of spaces instead flattened indented code after each reload.
 export function dropOrphanImageTokens(text: string, ids: ReadonlySet<string>): string {
-  return text
-    .replace(IMG_TOKEN_RE, (full, id: string) => (ids.has(id) ? full : ""))
-    .replace(/ {2,}/g, " ");
+  let out = "";
+  let cursor = 0;
+  for (const token of imageTokensInText(text)) {
+    if (ids.has(token.id)) continue;
+    let end = token.to;
+    const before = token.from > cursor ? text[token.from - 1] : out.at(-1);
+    if (before === " " && text[end] === " ") end += 1;
+    out += text.slice(cursor, token.from);
+    cursor = end;
+  }
+  return cursor === 0 ? text : out + text.slice(cursor);
 }
 
 /// Build the ACP `content` block array for a prompt.
