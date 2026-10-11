@@ -256,8 +256,14 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
                 }
                 applied
             }
+            // A surviving worker makes an exited session not dormant: its
+            // release reconciles the binding back on every snapshot.
             Status::Exited
                 if !holds_worker_slot(&state.runtime_router, &meta)
+                    && !state
+                        .runtime_router
+                        .runtime(&meta.machine_id)
+                        .is_some_and(|runtime| runtime.has_worker(&meta.id))
                     && !state.hub.session_has_in_flight_prompt(&meta.id) =>
             {
                 repin_dormant(state, &meta, &target)
