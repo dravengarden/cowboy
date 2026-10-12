@@ -306,7 +306,7 @@ cowboy codex --request-file review.json
 cowboy claude --request-file review.json
 cowboy codex --request-file - < review.json
 cowboy call inspect call_123
-cowboy call wait call_123 --timeout-ms 30000
+cowboy call wait call_123 --timeout-ms 900000   # alias: --wait-ms
 cowboy call result call_123
 cowboy call cancel call_123
 ```
@@ -353,10 +353,17 @@ Suger supplies the exact prompt and output requirements unchanged.
 
 The initial call waits for a bounded interval (default 30 seconds), then returns
 the accepted call id and `running`/`queued` state. This is a successful observation,
-not a timeout error. `wait` observes the same call, never submits a new prompt.
-Cancellation is explicit and idempotent. A failed transport with uncertain
-admission tells the caller to inspect the same request id. It must never return
-an instruction to mint a replacement id and retry blindly.
+not a timeout error. The Controller times this observation from the request's
+receipt, so approval, readiness and admission spend the same budget and the
+response never outlives the gateway exchange. `wait` observes the same call,
+never submits a new prompt. It accepts up to one hour; the CLI splits longer
+waits into 60-second gateway exchanges and returns early once the call is
+terminal, needs input, or is refused, so callers need no polling loop.
+Cancellation is explicit and idempotent. When a start response is lost, the CLI
+itself observes the same request id (observing never submits) and returns the
+accepted call; only an outcome it still cannot resolve tells the caller to
+`cowboy call observe` that id. It must never return an instruction to mint a
+replacement id and retry blindly.
 
 Requests may additionally carry
 `output: {"format":"json_schema","schema":{...}}`. This is a native turn

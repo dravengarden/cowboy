@@ -664,6 +664,9 @@ async fn start(
     wait_ms: u64,
     preset: Option<&str>,
 ) -> Value {
+    // The caller's gateways time this exchange from its receipt; approval,
+    // readiness and admission spend the same budget as the observation.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
     // A repeated request id observes the original call, even if the Provider
     // has since become unavailable or the policy changed; conflicting inputs
     // are refused.
@@ -675,7 +678,7 @@ async fn start(
                 return error("request_conflict", "not_submitted");
             }
             super::runner::ensure_runner(state, &original);
-            return envelope(&wait_started(state, ledger, &original, wait_ms).await);
+            return envelope(&wait_started(state, ledger, &original, deadline).await);
         }
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
@@ -790,7 +793,7 @@ async fn start(
         .admitted(&meta.id, &request.request_id);
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
-    envelope(&wait_started(state, ledger, &record, wait_ms).await)
+    envelope(&wait_started(state, ledger, &record, deadline).await)
 }
 
 /// A policy refusal becomes a question for the session's person: the agent
@@ -827,8 +830,12 @@ fn await_approval(
 
 /// Bounded initial observation: return once the call left the launch
 /// phases, reached a terminal state, or the wait elapsed.
-async fn wait_started(state: &AppState, ledger: &Ledger, record: &Record, wait_ms: u64) -> Record {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+async fn wait_started(
+    state: &AppState,
+    ledger: &Ledger,
+    record: &Record,
+    deadline: tokio::time::Instant,
+) -> Record {
     let mut current = record.clone();
     loop {
         let notified = state.managed_calls.changed.notified();
