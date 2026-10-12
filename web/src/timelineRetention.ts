@@ -1,5 +1,5 @@
 import type { Envelope } from "./protocol";
-import { derive } from "./derive";
+import { derive, pendingPermissions } from "./derive";
 
 /**
  * Translate a visual-row budget into the event suffix needed to preserve it.
@@ -42,17 +42,12 @@ export function retainTimelineState(
 
   let latestPlan = -1;
   let latestCommands = -1;
-  const pendingPermissions = new Map<string, number>();
   for (let index = 0; index < timeline.length; index += 1) {
     const event = timeline[index];
     if (!event) continue;
     if (event.kind === "update") {
       if (event.update.sessionUpdate === "plan") latestPlan = index;
       if (event.update.sessionUpdate === "available_commands_update") latestCommands = index;
-    } else if (event.kind === "permission_request") {
-      pendingPermissions.set(event.request_id, index);
-    } else if (event.kind === "permission_resolved") {
-      pendingPermissions.delete(event.request_id);
     }
   }
 
@@ -69,8 +64,19 @@ export function retainTimelineState(
     }
   }
   if (latestCommands >= 0 && latestCommands < recentStart) keep.add(latestCommands);
-  for (const index of pendingPermissions.values()) {
-    if (index < recentStart) keep.add(index);
+  // Only requests still waiting (derive.ts `pendingPermissions`): carrying
+  // forward one that already ended would pin a dead prompt to the session
+  // for as long as it lives.
+  const waiting = new Set(
+    pendingPermissions(timeline as Envelope[]).map((request) => request.seq),
+  );
+  if (waiting.size > 0) {
+    for (let index = 0; index < recentStart; index += 1) {
+      const event = timeline[index];
+      if (event?.kind === "permission_request" && waiting.has(event.seq)) {
+        keep.add(index);
+      }
+    }
   }
 
   return {

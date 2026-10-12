@@ -363,6 +363,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const items: RenderItem[] = [];
   const toolIndex = new Map<string, number>();
   const permIndex = new Map<string, number>();
+  // toolCallId -> index of the permission marker that asked for it.
+  const permByTool = new Map<string, number>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
   let cursor: {
@@ -467,6 +469,15 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const id = u.toolCallId ?? "";
             const idx = toolIndex.get(id);
             const existing = idx === undefined ? undefined : items[idx];
+            if (u.status === "completed" || u.status === "failed") {
+              // The request's own resolution row can be missing; a tool that
+              // reached a terminal status is no longer asking.
+              const asked = permByTool.get(id);
+              const marker = asked === undefined ? undefined : items[asked];
+              if (marker?.kind === "permission" && !marker.resolved) {
+                marker.resolved = true;
+              }
+            }
             if (existing && existing.kind === "tool") {
               if (u.status) existing.status = u.status;
               if (u.title) existing.title = u.title;
@@ -511,6 +522,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           chosen: null,
         });
         permIndex.set(env.request_id, items.length - 1);
+        const asking = toolCallIdOf(env.tool_call);
+        if (asking !== null) permByTool.set(asking, items.length - 1);
         break;
       }
       case "permission_resolved": {
@@ -652,30 +665,83 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
 /// transcript. A request stays pending until its matching
 /// `permission_resolved` removes it.
 export interface PendingPermission {
+  /** Seq of the `permission_request` envelope that asked. */
+  seq: number;
   requestId: string;
   requestKind: "permission" | "question";
   title: string;
   options: PermissionOption[];
 }
-/// Every unresolved request, oldest first: parallel tool calls each block on
-/// their own answer, so the surface answers them in arrival order and shows
-/// how many wait.
+/// Every request still waiting for an answer, oldest first: parallel tool
+/// calls each block on their own answer, so the surface answers them in
+/// arrival order and shows how many wait.
+///
+/// `permission_resolved` is the normal end, but a request must not stay on
+/// screen because that one row is missing: an answer nobody is waiting for
+/// does nothing, which reads as a dead button. A request has also ended when
+///   - its id is asked again (ids are the agent's JSON-RPC ids and start over
+///     with every agent process, so the earlier asker is gone);
+///   - its tool call reached a terminal status (it ran, or was refused);
+///   - the turn ended or the worker stopped: nothing is waiting any more.
 export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
   const pending = new Map<string, PendingPermission>();
+  // toolCallId -> request id, for the requests still pending.
+  const byTool = new Map<string, string>();
+  const drop = (requestId: string): void => {
+    pending.delete(requestId);
+    for (const [tool, request] of byTool) {
+      if (request === requestId) byTool.delete(tool);
+    }
+  };
   for (const env of timeline) {
     if (env.kind === "permission_request") {
+      // Re-inserting moves a reused id to its real place in arrival order.
+      drop(env.request_id);
       pending.set(env.request_id, {
+        seq: env.seq,
         requestId: env.request_id,
         requestKind: permissionRequestKind(env.tool_call),
         title: titleOfToolCall(env.tool_call),
         options: env.options,
       });
+      const tool = toolCallIdOf(env.tool_call);
+      if (tool !== null) byTool.set(tool, env.request_id);
     } else if (env.kind === "permission_resolved") {
-      pending.delete(env.request_id);
+      drop(env.request_id);
+    } else if (pending.size === 0) {
+      continue;
+    } else if (env.kind === "turn_end") {
+      pending.clear();
+      byTool.clear();
+    } else if (env.kind === "lifecycle") {
+      if (permissionWaiterGone(env.status)) {
+        pending.clear();
+        byTool.clear();
+      }
+    } else if (
+      env.update.sessionUpdate === "tool_call_update" &&
+      (env.update.status === "completed" || env.update.status === "failed")
+    ) {
+      const request = byTool.get(env.update.toolCallId ?? "");
+      if (request !== undefined) drop(request);
     }
   }
   // Map preserves insertion order.
   return [...pending.values()];
+}
+
+/** A worker in one of these states holds no open permission request. */
+function permissionWaiterGone(status: string): boolean {
+  return status === "crashed" || status === "interrupted" ||
+    status === "exited";
+}
+
+function toolCallIdOf(tc: unknown): string | null {
+  if (tc && typeof tc === "object" && "toolCallId" in tc) {
+    const id = (tc as { toolCallId?: unknown }).toolCallId;
+    if (typeof id === "string" && id.length > 0) return id;
+  }
+  return null;
 }
 export function latestPendingPermission(timeline: Envelope[]): PendingPermission | null {
   return pendingPermissions(timeline).at(-1) ?? null;

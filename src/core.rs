@@ -160,6 +160,26 @@ pub struct QuestionPageSummary {
     pub ordinal: u64,
 }
 
+/// Whether `request_id`'s latest request already has its answer in `log`.
+/// Walks back to the nearest row about that id: a resolution means answered,
+/// the request itself (or no row at all) means this answer is the first.
+fn permission_already_resolved<'a>(
+    log: impl DoubleEndedIterator<Item = &'a Event>,
+    request_id: &str,
+) -> bool {
+    log.rev()
+        .find_map(|event| match event {
+            Event::PermissionResolved {
+                request_id: seen, ..
+            } if seen == request_id => Some(true),
+            Event::PermissionRequest {
+                request_id: seen, ..
+            } if seen == request_id => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn is_user_message_chunk(envelope: &Envelope) -> bool {
     matches!(
         &envelope.event,
@@ -4577,13 +4597,15 @@ impl Hub {
             // A permission answered on two devices at once resolves once. The
             // second answer is the same fact: the first row stays and no
             // duplicate is appended (docs/offline-first-sync.md, conflict 7).
+            //
+            // "Same" means the same request, not the same id: the id is the
+            // agent's JSON-RPC request id, which starts over with every agent
+            // process. Only a resolution newer than the id's latest request
+            // answers it; an older one belongs to an earlier request that
+            // happened to reuse the number, and dropping this answer for it
+            // would leave the request pending in every client forever.
             if let Event::PermissionResolved { request_id, .. } = &event
-                && s.log.iter().rev().any(|entry| {
-                    matches!(
-                        &entry.event,
-                        Event::PermissionResolved { request_id: seen, .. } if seen == request_id
-                    )
-                })
+                && permission_already_resolved(s.log.iter().map(|entry| &entry.event), request_id)
             {
                 return;
             }
@@ -8043,6 +8065,55 @@ mod core_tests {
             },
         );
         assert_eq!(resolutions(&hub), vec![Some("allow".to_owned()), None]);
+    }
+
+    // The request id is the agent's JSON-RPC id and starts over with every
+    // agent process, so an old resolution must not swallow the answer to a
+    // later request that reuses the number.
+    #[test]
+    fn a_reused_permission_request_id_is_resolved_again() {
+        let hub = hub_with_session("perm");
+        let request = |hub: &Hub| {
+            hub.push(
+                "perm",
+                Event::PermissionRequest {
+                    request_id: "1".to_owned(),
+                    tool_call: serde_json::json!({}),
+                    options: serde_json::json!([]),
+                },
+            );
+        };
+        let resolve = |hub: &Hub, option: &str| {
+            hub.push(
+                "perm",
+                Event::PermissionResolved {
+                    request_id: "1".to_owned(),
+                    option_id: Some(option.to_owned()),
+                },
+            );
+        };
+        let resolutions = |hub: &Hub| -> Vec<Option<String>> {
+            hub.snapshot("perm")
+                .expect("snapshot")
+                .0
+                .into_iter()
+                .filter_map(|entry| match entry.event {
+                    Event::PermissionResolved { option_id, .. } => Some(option_id),
+                    _ => None,
+                })
+                .collect()
+        };
+        request(&hub);
+        resolve(&hub, "first");
+        // A new agent process asks again under the same id.
+        request(&hub);
+        resolve(&hub, "second");
+        // A second device answering that same request is still a duplicate.
+        resolve(&hub, "late");
+        assert_eq!(
+            resolutions(&hub),
+            vec![Some("first".to_owned()), Some("second".to_owned())]
+        );
     }
 
     // Per-session sync dedupe sets are dropped with the session.

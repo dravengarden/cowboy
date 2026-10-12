@@ -180,6 +180,7 @@ export function mountApprovalKeyboardAcceptance(): void {
   const editorRef = createRef<ComposerEditorHandle>();
   const probe = globalThis as unknown as Record<string, unknown>;
   const request = (id: string, title: string): PendingPermission => ({
+    seq: 0,
     requestId: id,
     requestKind: "permission",
     title,

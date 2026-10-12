@@ -154,3 +154,67 @@ test("pending permissions are answered oldest first and counted", () => {
   assertEquals(one.pendingPermissionCount, 1);
   assert(!sameComposerTimelineSlice(both, one));
 });
+
+test("a request whose resolution never arrived stops waiting", () => {
+  const request = (seq: number, id: string, tool: string): Envelope => ({
+    session_id: "s",
+    seq,
+    kind: "permission_request",
+    request_id: id,
+    tool_call: { title: tool, toolCallId: tool },
+    options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+  });
+  const count = (timeline: Envelope[]): number =>
+    composerTimelineSlice(timeline).pendingPermissionCount;
+
+  // Its tool call finished: it was answered, the row was just lost.
+  const ran: Envelope[] = [
+    request(1, "1", "tool-a"),
+    update(2, "tool_call_update", { toolCallId: "tool-a", status: "completed" }),
+  ];
+  assertEquals(count(ran), 0);
+
+  // Progress on the tool is not an answer.
+  assertEquals(
+    count([
+      request(1, "1", "tool-a"),
+      update(2, "tool_call_update", {
+        toolCallId: "tool-a",
+        status: "in_progress",
+      }),
+    ]),
+    1,
+  );
+
+  // The id is asked again by a new agent process: one request, the new one.
+  const reused = composerTimelineSlice([
+    request(1, "1", "tool-a"),
+    request(2, "2", "tool-b"),
+    request(3, "1", "tool-c"),
+  ]);
+  assertEquals(reused.pendingPermissionCount, 2);
+  assertEquals(reused.pendingPermission?.title, "tool-b");
+
+  // The turn ended, or the worker stopped: nobody is waiting.
+  assertEquals(
+    count([
+      request(1, "1", "tool-a"),
+      { session_id: "s", seq: 2, kind: "turn_end", stop_reason: "end_turn" },
+    ]),
+    0,
+  );
+  assertEquals(
+    count([
+      request(1, "1", "tool-a"),
+      { session_id: "s", seq: 2, kind: "lifecycle", status: "exited", detail: null },
+    ]),
+    0,
+  );
+  assertEquals(
+    count([
+      request(1, "1", "tool-a"),
+      { session_id: "s", seq: 2, kind: "lifecycle", status: "busy", detail: null },
+    ]),
+    1,
+  );
+});
