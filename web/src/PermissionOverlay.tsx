@@ -1,10 +1,17 @@
 import { desktopSize } from "./surface/desktopSize";
-import { type ReactNode, useMemo } from "react";
-import { alpha, Box, Button, Stack, Typography } from "@mui/material";
+import type { ReactNode } from "react";
+import {
+  alpha,
+  Box,
+  Button,
+  CircularProgress,
+  Stack,
+  Typography,
+} from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
 import type { PendingPermission } from "./derive";
-import { send } from "./store";
+import { usePermissionResponse } from "./permissionResponse";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
 import { haptic } from "./haptic";
@@ -24,44 +31,43 @@ import { haptic } from "./haptic";
 //
 // It participates in the Composer stack's normal flow, so the single outer
 // geometry owner reserves its border box together with every other slot.
+//
+// Desktop draws this only while the Conversation pane, whose dock normally
+// owns the answer, is folded (approvalDockStore). It then passes `desktop`:
+// the numbered `␣1`…`␣9` slots, and no collapse, because a wheel tick on the
+// way to a button must not swap the buttons for a pill.
 export function PermissionOverlay({
   item,
+  waiting = 1,
   sessionId,
-  shortcutForAction,
+  desktop,
 }: {
   item: PendingPermission;
+  /** Unresolved requests, this one included; they are answered in order. */
+  waiting?: number;
   sessionId: string;
-  shortcutForAction?: (action: "approve" | "reject") => ReactNode;
+  desktop?: {
+    /** Registers the numbered commands for the choices. */
+    commands: (
+      choices: { label: string; run: () => void }[],
+      available: boolean,
+    ) => ReactNode;
+    keycap: (index: number, available: boolean) => ReactNode;
+  };
 }): React.JSX.Element {
   // `useSticky` is the existing "is the transcript pinned to the bottom" signal,
   // toggled the instant the user wheels/touches away — so it's exactly the
   // auto-collapse trigger (no new scroll listener on the fragile scroll model).
-  const expanded = useSticky(sessionId);
+  const sticky = useSticky(sessionId);
+  const expanded = sticky || desktop !== undefined;
   const isQuestion = item.requestKind === "question";
   const accent = isQuestion ? "primary.main" : "warning.main";
   const label = isQuestion ? "Answer needed" : "Permission required";
-  const preferredActions = useMemo(() => {
-    const find = (prefix: "allow" | "reject"): number => {
-      const once = item.options.findIndex((option) =>
-        option.kind.toLowerCase() === `${prefix}_once`
-      );
-      return once >= 0
-        ? once
-        : item.options.findIndex((option) => option.kind.toLowerCase().startsWith(prefix));
-    };
-    const approve = find("allow");
-    const reject = find("reject");
-    return { approve, reject };
-  }, [item.options]);
+  const response = usePermissionResponse(sessionId, item.requestId);
 
   const respond = (optionId: string): void => {
     haptic();
-    send({
-      type: "permission",
-      session_id: sessionId,
-      request_id: item.requestId,
-      option_id: optionId,
-    });
+    response.respond(optionId);
   };
 
   return (
@@ -85,25 +91,12 @@ export function PermissionOverlay({
         },
       }}
     >
-      {shortcutForAction && preferredActions.approve >= 0 && (
-        <button
-          hidden
-          type="button"
-          tabIndex={-1}
-          aria-hidden="true"
-          data-desktop-permission-action="approve"
-          onClick={(): void => respond(item.options[preferredActions.approve]!.optionId)}
-        />
-      )}
-      {shortcutForAction && preferredActions.reject >= 0 && (
-        <button
-          hidden
-          type="button"
-          tabIndex={-1}
-          aria-hidden="true"
-          data-desktop-permission-action="reject"
-          onClick={(): void => respond(item.options[preferredActions.reject]!.optionId)}
-        />
+      {desktop?.commands(
+        item.options.map((option) => ({
+          label: option.name,
+          run: () => respond(option.optionId),
+        })),
+        !response.busy,
       )}
       {expanded ? (
         <Box
@@ -141,6 +134,11 @@ export function PermissionOverlay({
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               {label}
             </Typography>
+            {waiting > 1 && (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                1 of {waiting} waiting
+              </Typography>
+            )}
           </Stack>
           <Box
             component="pre"
@@ -162,20 +160,18 @@ export function PermissionOverlay({
           <Stack spacing={1}>
             {item.options.map((opt, index) => {
               const reject = opt.kind.startsWith("reject");
-              const action = index === preferredActions.approve
-                ? "approve"
-                : index === preferredActions.reject
-                ? "reject"
-                : null;
               return (
                 <Button
                   key={opt.optionId}
-                  data-desktop-permission-action={action ?? undefined}
                   fullWidth
                   disableElevation
+                  disabled={response.busy}
                   variant={reject ? "outlined" : "contained"}
                   color={reject ? "error" : "primary"}
-                  endIcon={action ? shortcutForAction?.(action) : undefined}
+                  startIcon={response.busy && response.optionId === opt.optionId
+                    ? <CircularProgress size={14} thickness={5} color="inherit" />
+                    : undefined}
+                  endIcon={desktop?.keycap(index, !response.busy)}
                   onClick={(): void => respond(opt.optionId)}
                   sx={{
                     minHeight: { xs: 48, sm: 40 },
@@ -190,6 +186,18 @@ export function PermissionOverlay({
               );
             })}
           </Stack>
+          {response.notice && (
+            <Typography
+              role="alert"
+              variant="body2"
+              sx={{
+                mt: 1,
+                color: response.phase === "unsent" ? "error.main" : "warning.main",
+              }}
+            >
+              {response.notice}
+            </Typography>
+          )}
         </Box>
       ) : (
         <Stack

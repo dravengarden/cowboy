@@ -85,3 +85,20 @@ test("workspace resize commands use physical angle-bracket keys", () => {
     ">",
   );
 });
+
+test("numbered leader choices use the physical digit key", () => {
+  // A CJK input source reports a full-width digit for the same key.
+  assert.equal(
+    workspaceCommandKey({ code: "Digit1", key: "\uff11", shiftKey: false }),
+    "1",
+  );
+  assert.equal(
+    workspaceCommandKey({ code: "Numpad3", key: "3", shiftKey: false }),
+    "3",
+  );
+  // Shift keeps its own character: "!" is not the first choice.
+  assert.equal(
+    workspaceCommandKey({ code: "Digit1", key: "!", shiftKey: true }),
+    "!",
+  );
+});

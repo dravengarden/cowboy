@@ -125,3 +125,32 @@ test("context clear is a composer input-interaction boundary", () => {
   assertEquals(after.contextClearedSeq, 2);
   assert(!sameComposerTimelineSlice(before, after));
 });
+
+test("pending permissions are answered oldest first and counted", () => {
+  const request = (seq: number, id: string): Envelope => ({
+    session_id: "s",
+    seq,
+    kind: "permission_request",
+    request_id: id,
+    tool_call: { title: id },
+    options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+  });
+  const waiting: Envelope[] = [request(1, "first"), request(2, "second")];
+  const both = composerTimelineSlice(waiting);
+  assertEquals(both.pendingPermission?.requestId, "first");
+  assertEquals(both.pendingPermissionCount, 2);
+
+  const one = composerTimelineSlice([
+    ...waiting,
+    {
+      session_id: "s",
+      seq: 3,
+      kind: "permission_resolved",
+      request_id: "first",
+      option_id: "allow",
+    },
+  ]);
+  assertEquals(one.pendingPermission?.requestId, "second");
+  assertEquals(one.pendingPermissionCount, 1);
+  assert(!sameComposerTimelineSlice(both, one));
+});

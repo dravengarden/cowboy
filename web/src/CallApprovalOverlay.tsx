@@ -1,5 +1,5 @@
 import { desktopSize } from "./surface/desktopSize";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import AccountTree from "@mui/icons-material/AccountTree";
 import {
@@ -7,7 +7,7 @@ import {
   type CallApprovalDecision,
   callApprovalReason,
   callApprovalTitle,
-  decideCallApproval,
+  useCallApprovalAnswer,
 } from "./callApproval";
 import { agentLabel } from "./agentTools";
 import { requestStickToBottom, useSticky } from "./stickyStore";
@@ -18,31 +18,35 @@ import { haptic } from "./haptic";
 // tool-permission overlay: the agent is blocked on this answer. "Allow once"
 // admits only the waiting requests and keeps the session's policy (and its
 // token cost) as it is; "Allow for this session" turns calls on in the
-// session's Tools. Desktop A / R reuse the permission shortcuts.
+// session's Tools. Desktop draws it only while the Conversation pane's dock is
+// folded away, with the same numbered slots as a tool permission.
 export function CallApprovalOverlay({
   approval,
   sessionId,
-  shortcutForAction,
+  desktop,
 }: {
   approval: CallApproval;
   sessionId: string;
-  shortcutForAction?: (action: "approve" | "reject") => ReactNode;
+  desktop?: {
+    commands: (
+      choices: { label: string; run: () => void }[],
+      available: boolean,
+    ) => ReactNode;
+    keycap: (index: number, available: boolean) => ReactNode;
+  };
 }): React.JSX.Element {
-  const expanded = useSticky(sessionId);
-  const [busy, setBusy] = useState<CallApprovalDecision | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const sticky = useSticky(sessionId);
+  const expanded = sticky || desktop !== undefined;
+  const { busy, failure, answer: decide } = useCallApprovalAnswer(sessionId);
   const title = callApprovalTitle(approval);
   const answer = (decision: CallApprovalDecision): void => {
     if (busy) return;
     haptic();
-    setBusy(decision);
-    setFailure(null);
-    decideCallApproval(sessionId, decision).catch((reason: unknown) => {
-      setFailure(
-        reason instanceof Error ? reason.message : "Could not answer",
-      );
-    }).finally(() => setBusy(null));
+    decide(decision);
   };
+  const allowLabel = approval.requests === 1
+    ? "Allow once"
+    : "Allow these calls";
   const shown = approval.items.slice(0, 3);
   const more = approval.requests - shown.length;
   return (
@@ -66,25 +70,13 @@ export function CallApprovalOverlay({
         },
       }}
     >
-      {shortcutForAction && (
-        <>
-          <button
-            hidden
-            type="button"
-            tabIndex={-1}
-            aria-hidden="true"
-            data-desktop-permission-action="approve"
-            onClick={(): void => answer("once")}
-          />
-          <button
-            hidden
-            type="button"
-            tabIndex={-1}
-            aria-hidden="true"
-            data-desktop-permission-action="reject"
-            onClick={(): void => answer("decline")}
-          />
-        </>
+      {desktop?.commands(
+        [
+          { label: allowLabel, run: () => answer("once") },
+          { label: "Allow for this session", run: () => answer("session") },
+          { label: "Decline", run: () => answer("decline") },
+        ],
+        busy === null,
       )}
       {expanded
         ? (
@@ -181,20 +173,18 @@ export function CallApprovalOverlay({
                 disableElevation
                 variant="contained"
                 disabled={busy !== null}
-                data-desktop-permission-action={shortcutForAction
-                  ? "approve"
-                  : undefined}
-                endIcon={shortcutForAction?.("approve")}
+                endIcon={desktop?.keycap(0, busy === null)}
                 onClick={(): void => answer("once")}
                 sx={buttonSx}
               >
-                {approval.requests === 1 ? "Allow once" : "Allow these calls"}
+                {allowLabel}
               </Button>
               <Button
                 fullWidth
                 disableElevation
                 variant="outlined"
                 disabled={busy !== null}
+                endIcon={desktop?.keycap(1, busy === null)}
                 onClick={(): void => answer("session")}
                 sx={buttonSx}
               >
@@ -206,10 +196,7 @@ export function CallApprovalOverlay({
                 variant="outlined"
                 color="error"
                 disabled={busy !== null}
-                data-desktop-permission-action={shortcutForAction
-                  ? "reject"
-                  : undefined}
-                endIcon={shortcutForAction?.("reject")}
+                endIcon={desktop?.keycap(2, busy === null)}
                 onClick={(): void => answer("decline")}
                 sx={buttonSx}
               >

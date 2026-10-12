@@ -23,6 +23,7 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_HINT,
+  DESKTOP_APPROVAL_SHORTCUT,
   DESKTOP_SHORTCUTS,
 } from "./commands/workspaceShortcuts";
 
@@ -273,13 +274,9 @@ export function DesktopStatusLine({
         focusedRegion !== "sessions.list"
       ? [{ keys: "Shift+J/K", label: "Reorder" }]
       : []),
-    ...(focusedRegion === "conversation.transcript" &&
-        document.querySelector("[data-desktop-permission-action='approve']")
-      ? [{ keys: "A", label: "Allow" }]
-      : []),
-    ...(focusedRegion === "conversation.transcript" &&
-        document.querySelector("[data-desktop-permission-action='reject']")
-      ? [{ keys: "R", label: "Reject" }]
+    // A pending approval answers from every focus (FOCUS.md "Approvals").
+    ...(document.querySelector("[data-desktop-approval-choice]")
+      ? [{ keys: DESKTOP_APPROVAL_SHORTCUT, label: "Answer" }]
       : []),
     ...(status === "busy"
       ? [{ keys: DESKTOP_SHORTCUTS.stop, label: "Stop" }]

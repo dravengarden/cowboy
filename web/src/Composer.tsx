@@ -196,6 +196,7 @@ import {
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
 import { PermissionOverlay } from "./PermissionOverlay";
+import { useApprovalDockOwns } from "./approvalDockStore";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";
 import { useCallApproval } from "./callApproval";
 import {
@@ -368,6 +369,30 @@ const DesktopPendingEditCommandBindings = lazy(async () => {
   const module = await import("./desktop/commands/DesktopPendingEditShortcuts");
   return { default: module.DesktopPendingEditCommandBindings };
 });
+const DesktopApprovalCommands = lazy(async () => {
+  const module = await import("./desktop/DesktopApprovalCommands");
+  return { default: module.DesktopApprovalCommands };
+});
+const DesktopApprovalKeycap = lazy(async () => {
+  const module = await import("./desktop/DesktopApprovalCommands");
+  return { default: module.DesktopApprovalKeycap };
+});
+/** The numbered `␣1`…`␣9` slots an approval overlay draws on Desktop. */
+const DESKTOP_APPROVAL_SLOTS = {
+  commands: (
+    choices: { label: string; run: () => void }[],
+    available: boolean,
+  ): React.JSX.Element => (
+    <Suspense fallback={null}>
+      <DesktopApprovalCommands choices={choices} available={available} />
+    </Suspense>
+  ),
+  keycap: (index: number, available: boolean): React.JSX.Element => (
+    <Suspense fallback={null}>
+      <DesktopApprovalKeycap index={index} available={available} />
+    </Suspense>
+  ),
+};
 const DesktopRegionShortcut = lazy(async () => {
   const module = await import("./desktop/DesktopRegionShortcut");
   return { default: module.DesktopRegionShortcut };
@@ -1218,6 +1243,9 @@ export function ComposerWorkspace({
   // Agent calls the session's policy refused, waiting for this person's
   // answer. It ranks below a tool permission and above the turn status.
   const callApproval = useCallApproval(sessionId);
+  // Desktop answers both in the Conversation pane's dock; this stack keeps
+  // them only where no dock is on screen (Mobile, a folded Conversation).
+  const approvalDocked = useApprovalDockOwns(sessionId);
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
@@ -1953,48 +1981,21 @@ export function ComposerWorkspace({
           blocking decision beats a status), and the two remain mutually
           exclusive. */
       }
-      {pendingPermission
+      {pendingPermission && !approvalDocked
         ? (
           <PermissionOverlay
             item={pendingPermission}
+            waiting={timelineState.pendingPermissionCount}
             sessionId={sessionId}
-            {...(desktop
-              ? {
-                shortcutForAction: (action: "approve" | "reject") => (
-                  <Suspense fallback={null}>
-                    <DesktopRegionShortcut
-                      shortcut={action === "approve" ? "A" : "R"}
-                      title={action === "approve"
-                        ? "Allow once"
-                        : "Reject once"}
-                      showWhenPane="conversation"
-                    />
-                  </Suspense>
-                ),
-              }
-              : {})}
+            {...(desktop ? { desktop: DESKTOP_APPROVAL_SLOTS } : {})}
           />
         )
-        : callApproval
+        : callApproval && !approvalDocked
         ? (
           <CallApprovalOverlay
             approval={callApproval}
             sessionId={sessionId}
-            {...(desktop
-              ? {
-                shortcutForAction: (action: "approve" | "reject") => (
-                  <Suspense fallback={null}>
-                    <DesktopRegionShortcut
-                      shortcut={action === "approve" ? "A" : "R"}
-                      title={action === "approve"
-                        ? "Allow once"
-                        : "Decline"}
-                      showWhenPane="conversation"
-                    />
-                  </Suspense>
-                ),
-              }
-              : {})}
+            {...(desktop ? { desktop: DESKTOP_APPROVAL_SLOTS } : {})}
           />
         )
         : !column

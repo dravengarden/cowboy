@@ -647,11 +647,9 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
   };
 }
 
-/// The latest UNRESOLVED tool-permission request, or null. A cheap single pass
-/// (mirrors latestPlan) so the composer's sticky PermissionOverlay can read it
-/// WITHOUT deriving the whole transcript — and, by living next to the turn-status
-/// overlay, the two coordinate (a pending permission outranks the status pill)
-/// instead of overlapping. A request stays pending until its matching
+/// An UNRESOLVED tool-permission request. A cheap single pass (mirrors
+/// latestPlan) so the approval surfaces can read it WITHOUT deriving the whole
+/// transcript. A request stays pending until its matching
 /// `permission_resolved` removes it.
 export interface PendingPermission {
   requestId: string;
@@ -659,7 +657,10 @@ export interface PendingPermission {
   title: string;
   options: PermissionOption[];
 }
-export function latestPendingPermission(timeline: Envelope[]): PendingPermission | null {
+/// Every unresolved request, oldest first: parallel tool calls each block on
+/// their own answer, so the surface answers them in arrival order and shows
+/// how many wait.
+export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
   const pending = new Map<string, PendingPermission>();
   for (const env of timeline) {
     if (env.kind === "permission_request") {
@@ -673,10 +674,11 @@ export function latestPendingPermission(timeline: Envelope[]): PendingPermission
       pending.delete(env.request_id);
     }
   }
-  // Map preserves insertion order → the last entry is the most recent request.
-  let last: PendingPermission | null = null;
-  for (const p of pending.values()) last = p;
-  return last;
+  // Map preserves insertion order.
+  return [...pending.values()];
+}
+export function latestPendingPermission(timeline: Envelope[]): PendingPermission | null {
+  return pendingPermissions(timeline).at(-1) ?? null;
 }
 
 /// Claude Code's auto-compaction notice: while it condenses history it streams a

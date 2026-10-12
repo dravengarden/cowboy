@@ -7,7 +7,7 @@
  * IME composition uses `Input.imeSetComposition`; it exercises the page's
  * composition path but is not a substitute for a real OS input method.
  *
- * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft]
+ * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft|approval]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
@@ -19,7 +19,9 @@ if (!output?.startsWith("/")) {
 }
 await mkdir(output, { recursive: true });
 const flow = process.argv.slice(2)[2] ?? "composer";
-if (flow !== "composer" && flow !== "draft") throw new Error("unknown flow");
+if (flow !== "composer" && flow !== "draft" && flow !== "approval") {
+  throw new Error("unknown flow");
+}
 
 const page = await openFixturePage(
   endpoint,
@@ -33,6 +35,8 @@ const fixture = await import("/fixture.js");
 await fixture.${
       flow === "draft"
         ? "mountDraftKeyboardAcceptance"
+        : flow === "approval"
+        ? "mountApprovalKeyboardAcceptance"
         : "mountDesktopKeyboardAcceptance"
     }();
 </script>`,
@@ -247,9 +251,201 @@ const draftFlow = async (): Promise<void> => {
   await shot("5-draft-page");
 };
 
+const approvalFlow = async (): Promise<void> => {
+  const choice = (n: number) =>
+    `document.querySelector('[data-desktop-approval-choice="${n}"]')`;
+  const chosen = (n: number) =>
+    page.evaluate<boolean>(
+      `${choice(n)}?.disabled === true && ${
+        choice(n)
+      }.querySelector('.MuiCircularProgress-root') !== null`,
+    );
+  const subject = () =>
+    page.evaluate<string>(
+      "document.querySelector('[data-desktop-approval-subject]')?.textContent ?? ''",
+    );
+  const resolve = async () => {
+    await page.evaluate("globalThis.__approval.resolve()");
+    await sleep(200);
+  };
+  await until(
+    "globalThis.__workspace && document.querySelector('[data-desktop-approval-dock]') && document.querySelector('.cm-content')",
+    "approval surface mounted",
+    20_000,
+  );
+  await sleep(500);
+
+  // 1. The dock numbers every choice and counts the queue.
+  check(
+    await page.evaluate<boolean>(
+      `[1, 2, 3].every((n) => document.querySelector('[data-desktop-approval-choice="' + n + '"] kbd')?.textContent === '␣' + n)`,
+    ),
+    "Every choice carries its ␣N slot",
+  );
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector('[data-desktop-approval-waiting]')?.textContent === '1 of 3 waiting'",
+    ),
+    "The header counts the waiting requests",
+  );
+  check(
+    (await subject()).includes("scripts/mp check"),
+    "The oldest request is first",
+  );
+  await shot("approval-dock");
+  results.push(
+    "The dock shows the oldest request, its numbered choices and the queue",
+  );
+
+  // 2. Reading history neither moves nor collapses the dock.
+  const top = () =>
+    page.evaluate<number>(
+      "document.querySelector('[data-desktop-approval-dock]').getBoundingClientRect().top",
+    );
+  const before = await top();
+  await page.evaluate(
+    "document.querySelector('[data-approval-transcript]').scrollTop = 0",
+  );
+  await sleep(150);
+  check(
+    await top() === before &&
+      await page.evaluate<boolean>(`${choice(1)} !== null`),
+    "Scrolling the transcript leaves the dock and its buttons in place",
+  );
+  results.push("Scrolling the transcript neither moves nor collapses the dock");
+
+  // 3. From the reader: Space arms the leader, which-key names the choices
+  // by the Provider's labels, and the digit answers.
+  await click("[data-approval-transcript]");
+  await key(" ");
+  await until(
+    "document.querySelector('[data-desktop-leader-menu=\"root\"]')",
+    "which-key opens",
+  );
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector('[data-desktop-leader-menu]').textContent.includes(\"Yes, and don't ask again\")",
+    ),
+    "which-key lists the choices by their own labels",
+  );
+  await shot("approval-leader");
+  await key("1");
+  await sleep(200);
+  check(await chosen(1), "␣1 answers with the first choice");
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector('[data-desktop-approval-dock] [role=\"alert\"]')?.textContent.startsWith('Not connected')",
+    ),
+    "An answer that cannot leave says so",
+  );
+  await shot("approval-answered");
+  results.push(
+    "Reader: ␣1 answers; the choice spins and reports the closed connection",
+  );
+
+  // 4. One answer per request: the other keys wait.
+  await key(" ");
+  await key("3");
+  await sleep(150);
+  check(
+    await chosen(1) && !(await chosen(3)),
+    "A second key cannot change an answer in flight",
+  );
+  results.push(
+    "A request takes one answer; later keys are ignored while it is in flight",
+  );
+
+  // 5. Resolution brings the next request, unanswered.
+  await resolve();
+  check(
+    (await subject()) === "git status --short",
+    "The next request follows",
+  );
+  check(
+    await page.evaluate<boolean>(
+      `${
+        choice(1)
+      }.disabled === false && document.querySelector('[data-desktop-approval-waiting]')?.textContent === '1 of 2 waiting'`,
+    ),
+    "The next request starts unanswered",
+  );
+
+  // 6. From Vim Insert: the platform prefix then the digit answers, and the
+  // digit never reaches the editor.
+  await click(".cm-content");
+  for (const value of ["i", "h", "i"]) await key(value);
+  await prefix();
+  await key("3");
+  await sleep(200);
+  check(await chosen(3), "The prefix then 3 answers from Insert");
+  const text = await page.evaluate<string>(
+    "globalThis.__approval.editor.current?.getValue() ?? ''",
+  );
+  check(
+    text === "hi",
+    `The digit stays out of the editor (got ${JSON.stringify(text)})`,
+  );
+  results.push(
+    `Insert: ${
+      mac ? "⌘K" : "Alt+K"
+    } then 3 rejects without leaving the editor or typing the digit`,
+  );
+
+  // 7. A pointer press on a choice answers too.
+  await resolve();
+  check((await subject()) === "ls -la", "The last request follows");
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector('[data-desktop-approval-waiting]') === null",
+    ),
+    "A single request shows no queue count",
+  );
+  await click('[data-desktop-approval-choice="2"]');
+  check(await chosen(2), "A click answers with that choice");
+  results.push("A pointer press on a choice answers it");
+
+  // 8. With nothing waiting the dock and its keys are gone.
+  await resolve();
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector('[data-desktop-approval-dock]') === null",
+    ),
+    "The dock leaves with the last request",
+  );
+  await key("Escape");
+  await key(" ");
+  await until(
+    "document.querySelector('[data-desktop-leader-menu=\"root\"]')",
+    "which-key opens without an approval",
+  );
+  check(
+    await page.evaluate<boolean>(
+      "!document.querySelector('[data-desktop-leader-menu]').textContent.includes('Yes')",
+    ),
+    "which-key no longer offers the choices",
+  );
+  await key("Escape");
+  results.push("Nothing waiting: the dock and its leader keys are gone");
+};
+
 try {
   if (flow === "draft") {
     await draftFlow();
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          browser: page.browser,
+          flow,
+          screenshots: output,
+          tests: results,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (flow === "approval") {
+    await approvalFlow();
     console.log(
       JSON.stringify(
         {

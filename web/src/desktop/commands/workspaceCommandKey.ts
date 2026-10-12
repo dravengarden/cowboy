@@ -15,6 +15,10 @@ export function workspaceCommandKey(event: {
     const key = match[1].toLowerCase();
     return event.shiftKey ? key.toUpperCase() : key;
   }
+  // Numbered choices (`␣1`) are positional too: a CJK source may report a
+  // full-width digit, and Shift keeps its own character.
+  const digit = /^(?:Digit|Numpad)(\d)$/.exec(event.code)?.[1];
+  if (digit !== undefined && !event.shiftKey) return digit;
   if (event.code === "Comma") return event.shiftKey ? "<" : ",";
   if (event.code === "Period") return event.shiftKey ? ">" : ".";
   if (event.code === "Semicolon") return event.shiftKey ? ":" : ";";
