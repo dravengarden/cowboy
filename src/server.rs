@@ -16,6 +16,7 @@ mod secure_transport;
 mod session_create_replay;
 mod session_provider_updates;
 mod session_reclaim;
+mod web_roots;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -281,6 +282,7 @@ struct AppState {
     convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
     desired_machine_plugins: Arc<crate::machine_convergence::PluginDesiredSource>,
     web_root: PathBuf,
+    web_roots: web_roots::WebRoots,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
     file_cursors: code_reads::file_pages::PageCursors,
@@ -1784,6 +1786,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             component_convergence,
             convergence_freeze,
             desired_machine_plugins,
+            web_roots: web_roots::WebRoots::new(args.web_root.clone()),
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -2873,6 +2876,11 @@ async fn run_purge_sweeper(store: Store) {
             Ok(n) => tracing::info!(purged = n, "swept soft-deleted sessions past retention"),
             Err(e) => tracing::warn!(error = %e, "purge sweep failed"),
         }
+        match store.reclaim_free_pages().await {
+            Ok(0) => {}
+            Ok(bytes) => tracing::info!(bytes, "returned free database pages to the filesystem"),
+            Err(e) => tracing::warn!(error = %e, "database page reclaim failed"),
+        }
         match store
             .purge_provider_usage(PROVIDER_USAGE_RETENTION_DAYS)
             .await
@@ -2930,6 +2938,7 @@ async fn run_generation_retention(state: Arc<AppState>) {
             // generations they no longer hold.
             dormant_pins::repin(&state).await;
             generation_retention_pass(&state, None).await;
+            catalog_retention_pass(&state).await;
         } else {
             let cooldown = state
                 .service_config
@@ -3016,6 +3025,85 @@ async fn retire_uninstalled_generations(
             %error,
             "uninstalled Plugin generation retention unavailable"
         ),
+    }
+}
+
+/// Retire Service Catalog releases nothing resolves any more; the keep set is
+/// every identity a session, a Device or an install operation still names.
+async fn catalog_retention_pass(state: &AppState) {
+    let keep_releases = state
+        .service_config
+        .get(&crate::config::schema::PLUGIN_CATALOG_KEEP_RELEASES);
+    if keep_releases <= 0 {
+        return;
+    }
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let mut keep = crate::plugin_catalog::CatalogKeepSet::default();
+    for session in state.hub.session_list() {
+        keep.insert(&session.provider_generation_digest);
+    }
+    match store.deleted_session_generations().await {
+        Ok(deleted) => {
+            for (_, _, digest) in deleted {
+                keep.insert(&digest);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skipping Plugin Catalog retention");
+            return;
+        }
+    }
+    match store.plugin_install_generation_digests().await {
+        Ok(digests) => {
+            for digest in digests {
+                keep.insert(&digest);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skipping Plugin Catalog retention");
+            return;
+        }
+    }
+    let Ok(machines) = state.machine_snapshots.load().await else {
+        return;
+    };
+    for machine in &machines {
+        for plugin in &machine.plugins {
+            keep.insert(&plugin.generation_digest);
+            if let Some(digest) = &plugin.rollback_generation_digest {
+                keep.insert(digest);
+            }
+        }
+    }
+    let referenced = keep.len();
+    match state
+        .plugin_catalog
+        .retire_unreferenced(keep, keep_releases)
+        .await
+    {
+        Ok(outcome) if outcome.retired.is_empty() && outcome.artifact_directories_removed == 0 => {}
+        Ok(outcome) => {
+            tracing::info!(
+                retired = ?outcome.retired,
+                retained = outcome.retained,
+                referenced,
+                artifact_directories_removed = outcome.artifact_directories_removed,
+                freed_bytes = outcome.freed_bytes,
+                "retired unreferenced Plugin Catalog releases"
+            );
+            if let Err(error) = state
+                .plugin_catalog
+                .refresh_with_runtime(&state.plugin_storage)
+                .await
+            {
+                tracing::warn!(%error, "Plugin Catalog refresh after retention failed");
+            } else if let Err(error) = state.provider_catalog.refresh_external() {
+                tracing::warn!(%error, "Provider Catalog refresh after retention failed");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "Plugin Catalog retention failed"),
     }
 }
 
@@ -18786,11 +18874,24 @@ async fn static_handler(
             return status.into_response();
         }
         Err(status) if requested.starts_with("assets/") => {
-            tracing::info!(
-                requested = %requested_path.display(),
-                "requested web asset is no longer deployed"
-            );
-            return status.into_response();
+            // A shell loaded before a Web release still imports its own hashed
+            // chunks; the previous root keeps them until the shell updates.
+            match web_roots::previous_release_asset(&state.web_roots, requested).await {
+                Some(content) => {
+                    tracing::info!(
+                        requested = %requested_path.display(),
+                        "served a web asset from the previous release"
+                    );
+                    (requested.to_owned(), content)
+                }
+                None => {
+                    tracing::info!(
+                        requested = %requested_path.display(),
+                        "requested web asset is no longer deployed"
+                    );
+                    return status.into_response();
+                }
+            }
         }
         Err(status) => {
             tracing::warn!(

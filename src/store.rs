@@ -1710,6 +1710,12 @@ impl Store {
         dispatch_storage!(self, purge_deleted(retention_days))
     }
 
+    /// Hand free database pages back to the filesystem after a purge. Only
+    /// SQLite owns its file; PostgreSQL reclaims through its own autovacuum.
+    pub async fn reclaim_free_pages(&self) -> Result<u64> {
+        dispatch_storage!(self, reclaim_free_pages())
+    }
+
     /// `(machine_id, provider, generation)` pinned by soft-deleted sessions
     /// that remain recoverable until the purge sweeper removes them.
     pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
@@ -1720,6 +1726,13 @@ impl Store {
     /// compensation may still reactivate the removed generation.
     pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
         dispatch_storage!(self, unfinished_plugin_uninstalls())
+    }
+
+    /// Generation digests Devices still target: every open install operation
+    /// and the newest operation of each (Machine, Plugin), whatever its phase,
+    /// so Catalog retention keeps what an installed Device resolves.
+    pub async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
+        dispatch_storage!(self, plugin_install_generation_digests())
     }
 
     pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
@@ -6127,6 +6140,22 @@ impl PostgresStorage {
     ///
     /// # Errors
     /// If the DELETE fails.
+    pub async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT intent::jsonb ->> 'generation_digest' \
+             FROM plugin_install_operations AS operation \
+             WHERE intent::jsonb ->> 'generation_digest' IS NOT NULL \
+             AND (operation.phase NOT IN ('completed', 'aborted') \
+                  OR operation.created_at_ms = ( \
+                      SELECT max(latest.created_at_ms) FROM plugin_install_operations AS latest \
+                      WHERE latest.machine_id = operation.machine_id \
+                      AND latest.plugin_id = operation.plugin_id))",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list targeted Plugin generations")
+    }
+
     pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
         sqlx::query_as(
             "SELECT DISTINCT machine_id, plugin_id FROM plugin_uninstall_operations \
@@ -6145,6 +6174,12 @@ impl PostgresStorage {
         .fetch_all(&self.pool)
         .await
         .context("list soft-deleted session generations")
+    }
+
+    // PostgreSQL reclaims through its own autovacuum; this backend owns no file.
+    #[allow(clippy::unused_self)]
+    pub fn reclaim_free_pages(&self) -> impl std::future::Future<Output = Result<u64>> {
+        std::future::ready(Ok(0))
     }
 
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
@@ -9080,6 +9115,58 @@ mod storage_contract_tests {
         assert!(
             fresh.exists(),
             "an unreferenced artifact inside the minimum age is kept"
+        );
+    }
+
+    /// A fresh SQLite store keeps its free pages reclaimable: after a purged
+    /// session leaves pages behind, the sweeper's bounded reclaim returns them
+    /// and a following pass has nothing left to return.
+    #[tokio::test]
+    async fn sqlite_reclaims_free_pages_after_a_purge() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}",
+            root.path().join("sessions.sqlite3").display()
+        );
+        let store = Store::connect(&url, root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let session_id = "sess-bulky";
+        store.insert_session(&session(session_id)).await.unwrap();
+        let padding = "x".repeat(16 * 1024);
+        let events: Vec<Envelope> = (0..800)
+            .map(|seq| Envelope {
+                session_id: session_id.to_owned(),
+                seq,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": padding},
+                    }),
+                },
+                cmid: None,
+            })
+            .collect();
+        store
+            .upsert_event_batch(&events, &HashMap::from([(session_id.to_owned(), 800)]))
+            .await
+            .unwrap();
+        store.delete_session(session_id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert_eq!(store.purge_deleted(0).await.unwrap(), 1);
+
+        let reclaimed = store.reclaim_free_pages().await.unwrap();
+        // 800 × 16 KiB of text leaves well over the 4 MiB headroom the
+        // reclaim keeps for the next inserts.
+        assert!(
+            reclaimed >= 6 * 1024 * 1024,
+            "a purged 12 MiB session leaves pages to reclaim, got {reclaimed}"
+        );
+        assert_eq!(
+            store.reclaim_free_pages().await.unwrap(),
+            0,
+            "a second pass finds only the retained headroom"
         );
     }
 

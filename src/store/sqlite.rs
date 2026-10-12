@@ -1654,6 +1654,10 @@ impl SqliteStorage {
             // The same database now journals intent before remote mutations.
             // NORMAL may lose an acknowledged WAL commit on power failure.
             .synchronous(SqliteSynchronous::Full)
+            // Keep free pages reclaimable in bounded steps (see
+            // `reclaim_free_pages`). A database created without it keeps its
+            // mode until an explicit VACUUM rebuilds it.
+            .pragma("auto_vacuum", "INCREMENTAL")
             .busy_timeout(Duration::from_secs(5));
         // A plain in-memory SQLite database belongs to one connection. File
         // databases retain a small read pool while WAL serializes writers.
@@ -5288,6 +5292,22 @@ impl SqliteStorage {
         .context("list soft-deleted SQLite session generations")
     }
 
+    pub(super) async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT json_extract(intent, '$.generation_digest') \
+             FROM plugin_install_operations AS operation \
+             WHERE json_extract(intent, '$.generation_digest') IS NOT NULL \
+             AND (operation.phase NOT IN ('completed', 'aborted') \
+                  OR operation.created_at_ms = ( \
+                      SELECT max(latest.created_at_ms) FROM plugin_install_operations AS latest \
+                      WHERE latest.machine_id = operation.machine_id \
+                      AND latest.plugin_id = operation.plugin_id))",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list targeted SQLite Plugin generations")
+    }
+
     pub(super) async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         let retention_ms = retention_days.saturating_mul(86_400_000);
         let result = sqlx::query(
@@ -5338,6 +5358,53 @@ impl SqliteStorage {
             );
         }
         Ok(result.rows_affected())
+    }
+
+    /// Return free pages to the filesystem in bounded steps. Each step is its
+    /// own write transaction, so Hub writers interleave with it instead of
+    /// waiting behind one long VACUUM. Reports the bytes handed back; a
+    /// database still in the default vacuum mode reports zero.
+    pub(super) async fn reclaim_free_pages(&self) -> Result<u64> {
+        // 8 MiB per step at the default page size, at most 512 MiB per sweep,
+        // and enough free pages kept for the next inserts.
+        const STEP_PAGES: i64 = 2048;
+        const MAX_STEPS: usize = 64;
+        const KEEP_FREE_PAGES: i64 = 1024;
+        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+            .fetch_one(&self.pool)
+            .await
+            .context("read SQLite auto_vacuum mode")?;
+        if mode != 2 {
+            return Ok(0);
+        }
+        let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+            .fetch_one(&self.pool)
+            .await
+            .context("read SQLite page size")?;
+        let mut reclaimed_pages = 0_i64;
+        for _ in 0..MAX_STEPS {
+            let free: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+                .fetch_one(&self.pool)
+                .await
+                .context("read SQLite freelist")?;
+            if free <= KEEP_FREE_PAGES {
+                break;
+            }
+            let step = (free - KEEP_FREE_PAGES).min(STEP_PAGES);
+            sqlx::query(&format!("PRAGMA incremental_vacuum({step})"))
+                .execute(&self.pool)
+                .await
+                .context("SQLite incremental vacuum")?;
+            let after: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+                .fetch_one(&self.pool)
+                .await
+                .context("read SQLite freelist")?;
+            if after >= free {
+                break;
+            }
+            reclaimed_pages = reclaimed_pages.saturating_add(free - after);
+        }
+        Ok(u64::try_from(reclaimed_pages.saturating_mul(page_size)).unwrap_or(0))
     }
 
     pub(super) async fn upsert_runtime_incident(
