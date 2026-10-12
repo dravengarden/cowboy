@@ -61,10 +61,16 @@ const REMOTE_CREATION_TIMEOUT: Duration = Duration::from_secs(
         + INITIAL_CONFIG_TIMEOUT.as_secs(),
 );
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
+// Deletion is acknowledged by the daemon's next session list, not by a command
+// reply. Bound the wait so a refused or lost deletion cannot hold the request.
+const DELETE_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const HISTORY_PAGE_LIMIT: usize = 10_000;
 const EVENT_CACHE_LIMIT: usize = 1_000;
+// History pages fetched for one session after a reconnect. An outage longer
+// than this is recovered by reloading the thread, not by an unbounded replay.
+const CATCH_UP_PAGE_LIMIT: usize = 50;
 const STATUS_EXTENSION_VERSION: u32 = 1;
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -113,6 +119,44 @@ struct HistoryResponse {
     reached_start: bool,
 }
 
+/// `GET /api/sessions/{id}/bootstrap`. Frames stay untyped until applied so a
+/// newer daemon's additional frame kinds never fail the hydration.
+#[derive(Debug, Deserialize)]
+struct SessionBootstrapResponse {
+    messages: Vec<serde_json::Value>,
+}
+
+/// The transcript tail and config options of one session, as hydrated on
+/// demand. The daemon WebSocket carries only the global session index.
+#[derive(Default)]
+struct SessionHydration {
+    snapshot: Option<(Vec<Envelope>, bool)>,
+    config_options: Option<Vec<SessionConfigOption>>,
+}
+
+impl SessionHydration {
+    fn from_messages(messages: Vec<serde_json::Value>) -> Self {
+        let mut hydration = Self::default();
+        for message in messages {
+            match serde_json::from_value::<Outbound>(message) {
+                Ok(Outbound::Snapshot {
+                    mut events,
+                    reached_start,
+                    ..
+                }) => {
+                    events.sort_unstable_by_key(|event| event.seq);
+                    hydration.snapshot = Some((events, reached_start));
+                }
+                Ok(Outbound::ConfigOptions { options, .. }) => {
+                    hydration.config_options = serde_json::from_value(options).ok();
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        hydration
+    }
+}
+
 #[derive(Default)]
 struct CachedSession {
     meta: Option<SessionMeta>,
@@ -121,8 +165,29 @@ struct CachedSession {
     attached: bool,
     replaying: bool,
     replay_buffer: Vec<Envelope>,
+    /// Set while a reconnected session catches up: the last event sequence the
+    /// client had received before the daemon connection was lost.
+    resume_after: Option<Option<u64>>,
     last_seq: Option<u64>,
     last_detail: Option<String>,
+}
+
+impl CachedSession {
+    fn apply_snapshot(&mut self, events: Vec<Envelope>, reached_start: bool) {
+        // Live events newer than the snapshot may already have been applied.
+        self.last_seq = self.last_seq.max(events.last().map(|event| event.seq));
+        if let Some(detail) = events.iter().rev().find_map(|envelope| {
+            if let Event::Lifecycle { detail, .. } = &envelope.event {
+                Some(detail.clone())
+            } else {
+                None
+            }
+        }) {
+            self.last_detail = detail;
+        }
+        self.events = events;
+        self.reached_start = reached_start;
+    }
 }
 
 struct PendingPrompt {
@@ -149,6 +214,37 @@ struct BridgeState {
     pending_prompts: HashMap<String, VecDeque<PendingPrompt>>,
     config_options: HashMap<String, Vec<SessionConfigOption>>,
     config_waiters: HashMap<String, Vec<oneshot::Sender<Vec<SessionConfigOption>>>>,
+    delete_waiters: HashMap<String, Vec<oneshot::Sender<Result<(), String>>>>,
+}
+
+/// What a reconnected, attached session missed, in transcript order.
+struct CatchUp {
+    events: Vec<Envelope>,
+    settled: Vec<(oneshot::Sender<PromptOutcome>, PromptOutcome)>,
+    config_options: Option<Vec<SessionConfigOption>>,
+    status: Option<CowboyStatus>,
+}
+
+/// What the client must be told after the daemon published a new session list.
+#[derive(Default)]
+struct SessionListChange {
+    /// Attached sessions whose title changed: `(session_id, title)`.
+    retitled: Vec<(String, String)>,
+    /// Prompts whose session no longer exists.
+    orphaned: Vec<(oneshot::Sender<PromptOutcome>, PromptOutcome)>,
+    deleted: Vec<oneshot::Sender<Result<(), String>>>,
+}
+
+impl SessionListChange {
+    fn settle(self) -> Vec<(String, String)> {
+        for (completion, outcome) in self.orphaned {
+            let _ = completion.send(outcome);
+        }
+        for waiter in self.deleted {
+            let _ = waiter.send(Ok(()));
+        }
+        self.retitled
+    }
 }
 
 impl BridgeState {
@@ -156,10 +252,254 @@ impl BridgeState {
         if let Some(cached) = self.sessions.get_mut(session_id) {
             cached.attached = false;
             cached.replaying = false;
+            cached.resume_after = None;
             cached.replay_buffer.clear();
         }
         self.config_waiters.remove(session_id);
     }
+
+    /// Adopt the daemon's authoritative session list. A session that left the
+    /// list, or that the daemon is already closing, was deleted: its cached
+    /// state is released and everything still waiting on it is settled.
+    fn apply_session_list(&mut self, sessions: Vec<SessionMeta>) -> SessionListChange {
+        let mut change = SessionListChange::default();
+        let live_ids = sessions
+            .iter()
+            .filter(|meta| !meta.closing)
+            .map(|meta| meta.id.clone())
+            .collect::<HashSet<_>>();
+        for meta in sessions {
+            let cached = self.sessions.entry(meta.id.clone()).or_default();
+            if cached.attached
+                && cached
+                    .meta
+                    .as_ref()
+                    .is_some_and(|previous| previous.title != meta.title)
+            {
+                change.retitled.push((meta.id.clone(), meta.title.clone()));
+            }
+            cached.meta = Some(meta);
+        }
+        let gone = self
+            .sessions
+            .keys()
+            .filter(|id| !live_ids.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for session_id in gone {
+            // A session created over HTTP is attached before the daemon lists
+            // it; only a session the daemon had listed can have been deleted.
+            let listed = self
+                .sessions
+                .get(&session_id)
+                .is_some_and(|cached| cached.meta.is_some());
+            let requested = self.delete_waiters.remove(&session_id);
+            if !listed && requested.is_none() {
+                continue;
+            }
+            let outcome = || {
+                if requested.is_some() {
+                    PromptOutcome::Stopped(StopReason::Cancelled)
+                } else {
+                    PromptOutcome::Failed("this session was deleted in Cowboy".to_owned())
+                }
+            };
+            for pending in self.pending_prompts.remove(&session_id).unwrap_or_default() {
+                change.orphaned.push((pending.completion, outcome()));
+            }
+            change.deleted.extend(requested.unwrap_or_default());
+            self.sessions.remove(&session_id);
+            self.config_options.remove(&session_id);
+            self.config_waiters.remove(&session_id);
+        }
+        self.sessions
+            .retain(|_, cached| cached.meta.is_some() || cached.attached);
+        change
+    }
+
+    /// Settle a prompt the daemon dispatched whose turn ended while no live
+    /// event could report it (the daemon connection was down).
+    fn settle_idle_prompt(
+        &mut self,
+        session_id: &str,
+    ) -> Option<(oneshot::Sender<PromptOutcome>, PromptOutcome)> {
+        let status = self.sessions.get(session_id)?.meta.as_ref()?.status;
+        let reason = idle_stop_reason(status)?;
+        let prompts = self.pending_prompts.get_mut(session_id)?;
+        let index = prompts.iter().position(|prompt| prompt.started)?;
+        let pending = prompts.remove(index)?;
+        Some((pending.completion, PromptOutcome::Stopped(reason)))
+    }
+
+    /// Close a reconnect catch-up: adopt the hydrated transcript tail and
+    /// return what the client missed. Hydrated events after `resume_after` come
+    /// first, then the live events buffered while the hydration ran. `None`
+    /// when the session was detached or reloaded by the client meanwhile.
+    fn complete_catch_up(
+        &mut self,
+        session_id: &str,
+        hydration: SessionHydration,
+    ) -> Option<CatchUp> {
+        let cached = self.sessions.get_mut(session_id)?;
+        let resume_after = cached.resume_after.take()?;
+        cached.replaying = false;
+        let buffered = std::mem::take(&mut cached.replay_buffer);
+        let live = buffered
+            .iter()
+            .map(|envelope| envelope.seq)
+            .collect::<HashSet<_>>();
+        let mut hydrated = Vec::new();
+        if let Some((events, reached_start)) = hydration.snapshot {
+            hydrated.extend(
+                events
+                    .iter()
+                    .filter(|envelope| {
+                        resume_after.is_none_or(|seq| envelope.seq > seq)
+                            && !live.contains(&envelope.seq)
+                    })
+                    .cloned(),
+            );
+            cached.apply_snapshot(events, reached_start);
+            cached.events.retain(|event| !live.contains(&event.seq));
+            cached.events.extend(buffered.iter().cloned());
+            cached.events.sort_unstable_by_key(|event| event.seq);
+        }
+        let attached = cached.attached;
+        let status = cached
+            .meta
+            .as_ref()
+            .map(|meta| Bridge::status_from_cached(meta, Some(cached)));
+        // Live events were correlated on arrival; hydrated ones were not.
+        let mut settled = Vec::new();
+        for envelope in &hydrated {
+            settled.extend(self.correlate_prompt(envelope).0);
+        }
+        settled.extend(self.settle_idle_prompt(session_id));
+        if let Some(options) = &hydration.config_options {
+            self.config_options
+                .insert(session_id.to_owned(), options.clone());
+        }
+        let mut events = hydrated;
+        events.extend(buffered);
+        events.sort_unstable_by_key(|event| event.seq);
+        // A request answered on another surface during the outage must not
+        // reappear as a prompt nobody is waiting for.
+        let unresolved = unresolved_permission_requests(&events)
+            .into_iter()
+            .map(|envelope| envelope.seq)
+            .collect::<HashSet<_>>();
+        events.retain(|envelope| {
+            !matches!(envelope.event, Event::PermissionRequest { .. })
+                || unresolved.contains(&envelope.seq)
+        });
+        Some(CatchUp {
+            events,
+            settled,
+            config_options: hydration.config_options.filter(|_| attached),
+            status,
+        })
+    }
+
+    /// Record the live echo of a prompt this bridge submitted: the daemon has
+    /// dispatched it. Returns whether its cancellation was requested earlier.
+    fn mark_dispatched(&mut self, envelope: &Envelope) -> bool {
+        let Some(cmid) = envelope.cmid.as_deref() else {
+            return false;
+        };
+        self.pending_prompts
+            .get_mut(&envelope.session_id)
+            .and_then(|prompts| prompts.iter_mut().find(|prompt| prompt.cmid == cmid))
+            .is_some_and(|prompt| {
+                prompt.started = true;
+                prompt.cancel_requested
+            })
+    }
+
+    /// Correlate one transcript event with the prompts this bridge submitted.
+    /// Returns the prompt it settles and whether a cancellation requested
+    /// before dispatch must now be routed to the active turn.
+    fn correlate_prompt(
+        &mut self,
+        envelope: &Envelope,
+    ) -> (
+        Option<(oneshot::Sender<PromptOutcome>, PromptOutcome)>,
+        bool,
+    ) {
+        let mut prompt_outcome = None;
+        let cancel_active = self.mark_dispatched(envelope);
+        let Some(prompts) = self.pending_prompts.get_mut(&envelope.session_id) else {
+            return (None, false);
+        };
+        if let Event::Update { update } = &envelope.event
+            && update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+                == Some("cowboy_prompt_cancelled")
+            && let Some(cmid) = update.get("cmid").and_then(serde_json::Value::as_str)
+            && let Some(index) = prompts.iter().position(|prompt| prompt.cmid == cmid)
+        {
+            let pending = prompts.remove(index).expect("index came from queue");
+            prompt_outcome = Some((
+                pending.completion,
+                PromptOutcome::Stopped(StopReason::Cancelled),
+            ));
+        }
+        if let Event::TurnEnd { stop_reason } = &envelope.event {
+            if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
+                let pending = prompts.remove(index).expect("index came from queue");
+                let outcome = parse_stop_reason(stop_reason).map_or_else(
+                    || PromptOutcome::Failed(stop_reason.clone()),
+                    PromptOutcome::Stopped,
+                );
+                prompt_outcome = Some((pending.completion, outcome));
+            }
+        } else if let Event::Lifecycle { status, .. } = &envelope.event {
+            // A daemon restart can terminate the downstream turn after its
+            // last streamed update but before persisting TurnEnd. Keep the
+            // ACP request alive across the socket outage, then close it
+            // normally once the revived session reports idle. Returning an
+            // internal error at disconnect time leaves a permanent red error
+            // in Zed even though the bridge reconnects successfully.
+            if let Some(reason) = idle_stop_reason(*status)
+                && let Some(index) = prompts.iter().position(|prompt| prompt.started)
+            {
+                let pending = prompts.remove(index).expect("index came from queue");
+                prompt_outcome = Some((pending.completion, PromptOutcome::Stopped(reason)));
+            }
+        }
+        (prompt_outcome, cancel_active)
+    }
+}
+
+/// How a dispatched prompt ended when the session is observed in `status`
+/// without its `TurnEnd`: `None` while the turn can still be running.
+fn idle_stop_reason(status: Status) -> Option<StopReason> {
+    match status {
+        Status::Running => Some(StopReason::EndTurn),
+        Status::Exited | Status::Crashed | Status::Interrupted => Some(StopReason::Cancelled),
+        Status::Starting | Status::Busy => None,
+    }
+}
+
+/// Permission requests still awaiting an answer at the end of `events`, in
+/// transcript order. A request ends with its resolution or with its turn.
+fn unresolved_permission_requests(events: &[Envelope]) -> Vec<&Envelope> {
+    let mut open: Vec<&Envelope> = Vec::new();
+    for envelope in events {
+        match &envelope.event {
+            Event::PermissionRequest { .. } => open.push(envelope),
+            Event::PermissionResolved { request_id, .. } => open.retain(|candidate| {
+                !matches!(
+                    &candidate.event,
+                    Event::PermissionRequest { request_id: asked, .. } if asked == request_id
+                )
+            }),
+            Event::TurnEnd { .. } => open.clear(),
+            Event::Lifecycle { status, .. } if *status != Status::Busy => open.clear(),
+            Event::Lifecycle { .. } | Event::Update { .. } => {}
+        }
+    }
+    open
 }
 
 #[derive(Clone)]
@@ -354,7 +694,7 @@ async fn run_acp_server(
                         )?;
                         return Ok(());
                     }
-                    bridge.attach(&session_id, true);
+                    let was_attached = bridge.attach(&session_id, true);
                     bridge.send_command(Inbound::OpenSession {
                         session_id: session_id.clone(),
                     })?;
@@ -367,6 +707,11 @@ async fn run_acp_server(
                             )?;
                         }
                         Err(error) => {
+                            // The client has no thread for a load it was
+                            // refused; do not keep streaming updates into it.
+                            if !was_attached {
+                                bridge.state.lock().detach_session(&session_id);
+                            }
                             responder.respond_with_error(
                                 agent_client_protocol::util::internal_error(error),
                             )?;
@@ -381,7 +726,12 @@ async fn run_acp_server(
         .on_receive_request(
             async move |request: CloseSessionRequest, responder, _cx: ConnectionTo<Client>| {
                 let session_id = request.session_id.0.to_string();
-                if let Err(error) = close_bridge.validate_session(&session_id, None) {
+                // Releasing a thread must succeed even when Cowboy already
+                // deleted its session; only another provider's session is
+                // refused.
+                if close_bridge.knows_session(&session_id)
+                    && let Err(error) = close_bridge.validate_session(&session_id, None)
+                {
                     return responder
                         .respond_with_error(agent_client_protocol::util::internal_error(error));
                 }
@@ -391,14 +741,40 @@ async fn run_acp_server(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: DeleteSessionRequest, responder, _cx: ConnectionTo<Client>| {
+            async move |request: DeleteSessionRequest, responder, cx: ConnectionTo<Client>| {
+                let bridge = delete_bridge.clone();
                 let session_id = request.session_id.0.to_string();
-                if let Err(error) = delete_bridge.validate_session(&session_id, None) {
+                if !bridge.knows_session(&session_id) {
+                    // Already deleted in Cowboy: the requested end state holds.
+                    bridge.detach(&session_id);
+                    return responder.respond(DeleteSessionResponse::new());
+                }
+                if let Err(error) = bridge.validate_session(&session_id, None) {
                     return responder
                         .respond_with_error(agent_client_protocol::util::internal_error(error));
                 }
-                delete_bridge.send_command(Inbound::DeleteSession { session_id })?;
-                responder.respond(DeleteSessionResponse::new())
+                let deleted = bridge.register_delete_waiter(&session_id);
+                bridge.send_command(Inbound::DeleteSession {
+                    session_id: session_id.clone(),
+                })?;
+                cx.spawn(async move {
+                    match tokio::time::timeout(DELETE_SESSION_TIMEOUT, deleted).await {
+                        Ok(Ok(Ok(()))) => responder.respond(DeleteSessionResponse::new())?,
+                        Ok(Ok(Err(error))) => responder.respond_with_error(
+                            agent_client_protocol::util::internal_error(error),
+                        )?,
+                        Ok(Err(_)) | Err(_) => {
+                            bridge.state.lock().delete_waiters.remove(&session_id);
+                            responder.respond_with_error(
+                                agent_client_protocol::util::internal_error(
+                                    "timed out waiting for Cowboy to delete the session",
+                                ),
+                            )?;
+                        }
+                    }
+                    Ok(())
+                })?;
+                Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -410,12 +786,20 @@ async fn run_acp_server(
                     return responder
                         .respond_with_error(agent_client_protocol::util::internal_error(error));
                 }
-                let (cmid, completion) = bridge.register_prompt(&session_id);
                 let content = request
                     .prompt
                     .into_iter()
                     .filter_map(|block| serde_json::to_value(block).ok())
-                    .collect();
+                    .collect::<Vec<_>>();
+                if content.is_empty() {
+                    // The daemon drops an empty submission without an event,
+                    // which would leave this request pending forever.
+                    return responder.respond_with_error(
+                        agent_client_protocol::Error::invalid_params()
+                            .data(serde_json::json!("prompt has no content blocks")),
+                    );
+                }
+                let (cmid, completion) = bridge.register_prompt(&session_id);
                 if let Err(error) = bridge.send_command(Inbound::Submit {
                     session_id: session_id.clone(),
                     text: String::new(),
@@ -659,12 +1043,34 @@ impl Bridge {
         Ok(())
     }
 
-    fn attach(&self, session_id: &str, replaying: bool) {
+    fn knows_session(&self, session_id: &str) -> bool {
+        self.state
+            .lock()
+            .sessions
+            .get(session_id)
+            .is_some_and(|cached| cached.meta.is_some())
+    }
+
+    fn register_delete_waiter(&self, session_id: &str) -> oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = oneshot::channel();
+        self.state
+            .lock()
+            .delete_waiters
+            .entry(session_id.to_owned())
+            .or_default()
+            .push(tx);
+        rx
+    }
+
+    /// Returns whether the client already held the session.
+    fn attach(&self, session_id: &str, replaying: bool) -> bool {
         let mut state = self.state.lock();
         let cached = state.sessions.entry(session_id.to_owned()).or_default();
-        cached.attached = true;
+        let was_attached = std::mem::replace(&mut cached.attached, true);
         cached.replaying = replaying;
+        cached.resume_after = None;
         cached.replay_buffer.clear();
+        was_attached
     }
 
     fn detach(&self, session_id: &str) {
@@ -910,6 +1316,17 @@ impl Bridge {
             Ok(Ok(options)) => Ok(Some(options)),
             Ok(Err(_)) => Ok(None),
             Err(_) => {
+                // The broadcast may have been published while the daemon
+                // connection was re-established; ask for the current value.
+                if let Ok(hydration) = self.fetch_hydration(session_id).await
+                    && let Some(options) = hydration.config_options
+                {
+                    self.state
+                        .lock()
+                        .config_options
+                        .insert(session_id.to_owned(), options.clone());
+                    return Ok(Some(options));
+                }
                 tracing::warn!(
                     session = %session_id,
                     timeout_s = INITIAL_CONFIG_TIMEOUT.as_secs(),
@@ -973,7 +1390,7 @@ impl Bridge {
         session_id: &str,
         cx: &ConnectionTo<Client>,
     ) -> Result<(), String> {
-        let history = self.fetch_history(session_id).await;
+        let history = self.load_history(session_id).await;
         let buffered = {
             let mut state = self.state.lock();
             let cached = state
@@ -1002,13 +1419,90 @@ impl Bridge {
         history.extend(buffered);
         history.sort_unstable_by_key(|event| event.seq);
         history.dedup_by_key(|event| event.seq);
-        for envelope in history {
-            Self::forward_replay_envelope(cx, &envelope)?;
+        for envelope in &history {
+            Self::forward_replay_envelope(cx, envelope)?;
         }
-        if let Some(status) = self.status(session_id) {
+        let status = self.status(session_id);
+        // A turn that is still waiting for an answer keeps waiting after the
+        // thread is reopened; without the request the client could only watch.
+        if status.as_ref().is_some_and(|status| status.turn_running) {
+            for envelope in unresolved_permission_requests(&history) {
+                self.forward_envelope(cx, envelope, None)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        if let Some(status) = status {
             send_status(cx, status).map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    /// Authorized `GET` returning JSON, retrying once with a fresh access token.
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: Url,
+        what: &str,
+    ) -> Result<T, String> {
+        let target = url_request_target(&url);
+        let mut rejected_access = None;
+        let mut attempts = 0_u8;
+        let response = loop {
+            attempts = attempts.saturating_add(1);
+            let authorization = self
+                .authentication
+                .authorize(&reqwest::Method::GET, &target, rejected_access.as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+            let request = authorization
+                .apply_reqwest(self.http.get(url.clone()))
+                .map_err(|error| error.to_string())?;
+            let response = request.send().await.map_err(|error| error.to_string())?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempts == 1 {
+                rejected_access = Some(authorization.bearer.unwrap_or_default());
+                continue;
+            }
+            break response;
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(format!("{what} request failed with {status}"));
+        }
+        response
+            .json::<T>()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Fetch one session's transcript tail and config options. The daemon
+    /// WebSocket is negotiated lazily and carries neither.
+    async fn fetch_hydration(&self, session_id: &str) -> Result<SessionHydration, String> {
+        let url = self
+            .base_url
+            .join(&format!("api/sessions/{session_id}/bootstrap"))
+            .map_err(|error| error.to_string())?;
+        let response = self
+            .get_json::<SessionBootstrapResponse>(url, "session bootstrap")
+            .await?;
+        Ok(SessionHydration::from_messages(response.messages))
+    }
+
+    /// Hydrate the session, then page back to the start of its transcript.
+    async fn load_history(&self, session_id: &str) -> Result<Vec<Envelope>, String> {
+        let hydration = self.fetch_hydration(session_id).await?;
+        {
+            let mut state = self.state.lock();
+            if let Some(options) = hydration.config_options {
+                state.config_options.insert(session_id.to_owned(), options);
+            }
+            if let Some((events, reached_start)) = hydration.snapshot {
+                state
+                    .sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| format!("session {session_id:?} disappeared during replay"))?
+                    .apply_snapshot(events, reached_start);
+            }
+        }
+        self.fetch_history(session_id).await
     }
 
     async fn fetch_history(&self, session_id: &str) -> Result<Vec<Envelope>, String> {
@@ -1035,34 +1529,7 @@ impl Bridge {
                 .map_err(|error| error.to_string())?;
             url.query_pairs_mut()
                 .append_pair("before_seq", &before_seq.to_string());
-            let target = url_request_target(&url);
-            let mut rejected_access = None;
-            let mut attempts = 0_u8;
-            let response = loop {
-                attempts = attempts.saturating_add(1);
-                let authorization = self
-                    .authentication
-                    .authorize(&reqwest::Method::GET, &target, rejected_access.as_deref())
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let request = authorization
-                    .apply_reqwest(self.http.get(url.clone()))
-                    .map_err(|error| error.to_string())?;
-                let response = request.send().await.map_err(|error| error.to_string())?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempts == 1 {
-                    rejected_access = Some(authorization.bearer.unwrap_or_default());
-                    continue;
-                }
-                break response;
-            };
-            if !response.status().is_success() {
-                let status = response.status();
-                return Err(format!("history request failed with {status}"));
-            }
-            let page = response
-                .json::<HistoryResponse>()
-                .await
-                .map_err(|error| error.to_string())?;
+            let page = self.get_json::<HistoryResponse>(url, "history").await?;
             reached_start = page.reached_start;
             let next = page.next_before_seq;
             events.extend(page.events);
@@ -1074,6 +1541,8 @@ impl Bridge {
                 _ => break,
             }
         }
+        events.sort_unstable_by_key(|event| event.seq);
+        events.dedup_by_key(|event| event.seq);
         Ok(events)
     }
 
@@ -1222,9 +1691,22 @@ impl Bridge {
         {
             return ConnectedExit::Disconnected(Some(command));
         }
+        let mut catch_ups = self
+            .begin_catch_up()
+            .into_iter()
+            .map(|(session_id, resume_after)| async move {
+                let missed = self.fetch_missed(&session_id, resume_after).await;
+                (session_id, missed)
+            })
+            .collect::<futures::stream::FuturesUnordered<_>>();
 
         loop {
             tokio::select! {
+                Some((session_id, missed)) = catch_ups.next(), if !catch_ups.is_empty() => {
+                    if let Err(error) = self.finish_catch_up(&session_id, missed, cx) {
+                        tracing::warn!(%error, "failed to forward a reconnect catch-up to ACP client");
+                    }
+                }
                 command = command_rx.recv() => {
                     let Some(command) = command else {
                         return ConnectedExit::CommandsClosed;
@@ -1375,7 +1857,7 @@ impl Bridge {
         cx: &ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
         match outbound {
-            Outbound::Sessions { sessions } => self.apply_sessions(sessions),
+            Outbound::Sessions { sessions } => self.apply_sessions(sessions, cx)?,
             Outbound::Snapshot {
                 session_id,
                 events,
@@ -1390,11 +1872,18 @@ impl Bridge {
                 session_id,
                 message,
             } => {
-                tracing::warn!(?session_id, %message, "cowboy daemon rejected ACP bridge command");
+                tracing::warn!(?session_id, %message, "cowboy daemon reported a command error");
                 if let Some(session_id) = session_id {
-                    self.fail_oldest_prompt(&session_id, message);
+                    self.fail_refused(&session_id, &message);
                 }
             }
+            // The addressed refusal of a prompt this bridge submitted.
+            Outbound::CommandResult {
+                session_id,
+                cmid,
+                message,
+                ..
+            } => self.fail_prompt(&session_id, &cmid, message),
             Outbound::BootstrapComplete
             | Outbound::AuthSession { .. }
             | Outbound::ClientCapacity { .. }
@@ -1402,43 +1891,39 @@ impl Bridge {
             | Outbound::Ping
             | Outbound::ConnectionProbe { .. }
             | Outbound::SyncPatch { .. }
-            // The bridge submits without a durable browser outbox; an addressed
-            // refusal belongs to the Web device that minted the cmid.
-            | Outbound::CommandResult { .. }
             | Outbound::Usage { .. }
-        | Outbound::CallApproval { .. }
+            | Outbound::CallApproval { .. }
             | Outbound::Settings { .. } => {}
         }
         Ok(())
     }
 
-    fn apply_sessions(&self, sessions: Vec<SessionMeta>) {
-        let mut state = self.state.lock();
-        let live_ids = sessions
-            .iter()
-            .map(|meta| meta.id.clone())
-            .collect::<HashSet<_>>();
-        for (id, cached) in &mut state.sessions {
-            if !live_ids.contains(id) {
-                cached.meta = None;
-            }
+    fn apply_sessions(
+        &self,
+        sessions: Vec<SessionMeta>,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let change = self.state.lock().apply_session_list(sessions);
+        for (session_id, title) in change.settle() {
+            // Cowboy titles a session from its first prompt and lets the user
+            // rename it; the open thread follows instead of keeping a stale name.
+            cx.send_notification(SessionNotification::new(
+                session_id,
+                SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)),
+            ))?;
         }
-        for meta in sessions {
-            let id = meta.id.clone();
-            state.sessions.entry(id).or_default().meta = Some(meta);
-        }
-        state.sessions.retain(|_, cached| {
-            cached.meta.is_some() || cached.attached || !cached.events.is_empty()
-        });
+        Ok(())
     }
 
-    fn apply_snapshot(&self, session_id: String, mut events: Vec<Envelope>, reached_start: bool) {
+    fn apply_snapshot(&self, session_id: String, events: Vec<Envelope>, reached_start: bool) {
+        let mut events = events;
         events.sort_unstable_by_key(|event| event.seq);
-        let mut state = self.state.lock();
-        let cached = state.sessions.entry(session_id).or_default();
-        cached.last_seq = events.last().map(|event| event.seq).or(cached.last_seq);
-        cached.events = events;
-        cached.reached_start = reached_start;
+        self.state
+            .lock()
+            .sessions
+            .entry(session_id)
+            .or_default()
+            .apply_snapshot(events, reached_start);
     }
 
     fn apply_config_options(
@@ -1477,17 +1962,32 @@ impl Bridge {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // One lock computes correlation and forwarding actions atomically.
     fn handle_live_envelope(
         &self,
         envelope: &Envelope,
         cx: &ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
         let session_id = envelope.session_id.clone();
-        let (attached, replaying, status, prompt_outcome, cancel_active) = {
+        let (forward, status, prompt_outcome, cancel_active) = {
             let mut state = self.state.lock();
             let cached = state.sessions.entry(session_id.clone()).or_default();
-            cached.last_seq = Some(envelope.seq);
+            // Hydration and the live stream overlap; a sequence is applied once.
+            // Only the live copy carries the prompt echo, so that still counts.
+            if cached.last_seq.is_some_and(|last| envelope.seq <= last)
+                && cached.events.iter().any(|seen| seen.seq == envelope.seq)
+            {
+                let cancel_active = state.mark_dispatched(envelope);
+                drop(state);
+                if cancel_active {
+                    self.send_command(Inbound::Cancel { session_id })?;
+                }
+                return Ok(());
+            }
+            cached.last_seq = Some(
+                cached
+                    .last_seq
+                    .map_or(envelope.seq, |last| last.max(envelope.seq)),
+            );
             if let Event::Lifecycle { status, detail } = &envelope.event {
                 if let Some(meta) = cached.meta.as_mut() {
                     meta.status = *status;
@@ -1503,68 +2003,13 @@ impl Bridge {
             if cached.replaying {
                 cached.replay_buffer.push(envelope.clone());
             }
-            let attached = cached.attached;
-            let replaying = cached.replaying;
+            let forward = cached.attached && !cached.replaying;
             let status = cached
                 .meta
                 .as_ref()
                 .map(|meta| Self::status_from_cached(meta, Some(cached)));
-
-            let mut prompt_outcome = None;
-            let mut cancel_active = false;
-            if let Some(prompts) = state.pending_prompts.get_mut(&session_id) {
-                if let Some(cmid) = envelope.cmid.as_deref()
-                    && let Some(prompt) = prompts.iter_mut().find(|prompt| prompt.cmid == cmid)
-                {
-                    prompt.started = true;
-                    cancel_active = prompt.cancel_requested;
-                }
-                if let Event::Update { update } = &envelope.event
-                    && update
-                        .get("sessionUpdate")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("cowboy_prompt_cancelled")
-                    && let Some(cmid) = update.get("cmid").and_then(serde_json::Value::as_str)
-                    && let Some(index) = prompts.iter().position(|prompt| prompt.cmid == cmid)
-                {
-                    let pending = prompts.remove(index).expect("index came from queue");
-                    prompt_outcome = Some((
-                        pending.completion,
-                        PromptOutcome::Stopped(StopReason::Cancelled),
-                    ));
-                }
-                if let Event::TurnEnd { stop_reason } = &envelope.event {
-                    if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
-                        let pending = prompts.remove(index).expect("index came from queue");
-                        let outcome = parse_stop_reason(stop_reason).map_or_else(
-                            || PromptOutcome::Failed(stop_reason.clone()),
-                            PromptOutcome::Stopped,
-                        );
-                        prompt_outcome = Some((pending.completion, outcome));
-                    }
-                } else if let Event::Lifecycle { status, .. } = &envelope.event {
-                    // A daemon restart can terminate the downstream turn after its
-                    // last streamed update but before persisting TurnEnd. Keep the
-                    // ACP request alive across the socket outage, then close it
-                    // normally once the revived session reports idle. Returning an
-                    // internal error at disconnect time leaves a permanent red error
-                    // in Zed even though the bridge reconnects successfully.
-                    let settled = match status {
-                        Status::Running => Some(StopReason::EndTurn),
-                        Status::Exited | Status::Crashed | Status::Interrupted => {
-                            Some(StopReason::Cancelled)
-                        }
-                        Status::Starting | Status::Busy => None,
-                    };
-                    if let Some(reason) = settled
-                        && let Some(index) = prompts.iter().position(|prompt| prompt.started)
-                    {
-                        let pending = prompts.remove(index).expect("index came from queue");
-                        prompt_outcome = Some((pending.completion, PromptOutcome::Stopped(reason)));
-                    }
-                }
-            }
-            (attached, replaying, status, prompt_outcome, cancel_active)
+            let (prompt_outcome, cancel_active) = state.correlate_prompt(envelope);
+            (forward, status, prompt_outcome, cancel_active)
         };
 
         if let Some((completion, outcome)) = prompt_outcome {
@@ -1575,14 +2020,26 @@ impl Bridge {
                 session_id: session_id.clone(),
             })?;
         }
-        if !attached || replaying {
+        if !forward {
             return Ok(());
         }
+        self.forward_envelope(cx, envelope, status)
+    }
 
+    /// Publish one transcript event to the ACP client.
+    fn forward_envelope(
+        &self,
+        cx: &ConnectionTo<Client>,
+        envelope: &Envelope,
+        status: Option<CowboyStatus>,
+    ) -> Result<(), agent_client_protocol::Error> {
         match &envelope.event {
             Event::Update { update } => {
                 if let Ok(update) = serde_json::from_value::<SessionUpdate>(update.clone()) {
-                    cx.send_notification(SessionNotification::new(session_id, update))?;
+                    cx.send_notification(SessionNotification::new(
+                        envelope.session_id.clone(),
+                        update,
+                    ))?;
                 }
             }
             Event::PermissionRequest {
@@ -1602,6 +2059,104 @@ impl Bridge {
                 }
             }
             Event::PermissionResolved { .. } | Event::TurnEnd { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// Mark every attached session as catching up and return the ones to
+    /// hydrate. Live events are buffered until [`Self::finish_catch_up`].
+    fn begin_catch_up(&self) -> Vec<(String, Option<u64>)> {
+        let mut state = self.state.lock();
+        state
+            .sessions
+            .iter_mut()
+            // A session the client is loading replays its own history. A
+            // catch-up cut short by another disconnect resumes from its
+            // original position and keeps what it buffered.
+            .filter(|(_, cached)| {
+                cached.attached
+                    && cached.meta.is_some()
+                    && (!cached.replaying || cached.resume_after.is_some())
+            })
+            .map(|(session_id, cached)| {
+                cached.replaying = true;
+                let resume_after = *cached.resume_after.get_or_insert(cached.last_seq);
+                (session_id.clone(), resume_after)
+            })
+            .collect()
+    }
+
+    /// Hydrate a reconnected session and, when the outage outlasted the
+    /// transcript tail, page back to the last event the client received.
+    async fn fetch_missed(
+        &self,
+        session_id: &str,
+        resume_after: Option<u64>,
+    ) -> Result<SessionHydration, String> {
+        let mut hydration = self.fetch_hydration(session_id).await?;
+        let (Some(resume_after), Some((events, reached_start))) =
+            (resume_after, hydration.snapshot.as_mut())
+        else {
+            return Ok(hydration);
+        };
+        let mut before_seq = events.first().map_or(0, |event| event.seq);
+        let mut pages = 0usize;
+        while !*reached_start && before_seq > resume_after.saturating_add(1) {
+            pages += 1;
+            if pages > CATCH_UP_PAGE_LIMIT {
+                tracing::warn!(session = %session_id, "reconnect gap exceeds the catch-up limit");
+                break;
+            }
+            let mut url = self
+                .base_url
+                .join(&format!("api/history/{session_id}"))
+                .map_err(|error| error.to_string())?;
+            url.query_pairs_mut()
+                .append_pair("before_seq", &before_seq.to_string());
+            let page = self.get_json::<HistoryResponse>(url, "history").await?;
+            *reached_start = page.reached_start;
+            events.extend(page.events);
+            match page.next_before_seq {
+                Some(next) if next < before_seq => before_seq = next,
+                _ => break,
+            }
+        }
+        events.sort_unstable_by_key(|event| event.seq);
+        events.dedup_by_key(|event| event.seq);
+        Ok(hydration)
+    }
+
+    /// Deliver what an attached session missed while the daemon connection was
+    /// down: the hydrated events after the last one the client received, then
+    /// the live events buffered meanwhile. Runs on the daemon loop so it can
+    /// never interleave with the live stream.
+    fn finish_catch_up(
+        &self,
+        session_id: &str,
+        hydration: Result<SessionHydration, String>,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let hydration = hydration.unwrap_or_else(|error| {
+            tracing::warn!(session = %session_id, %error, "could not catch up a reconnected session");
+            SessionHydration::default()
+        });
+        let Some(catch_up) = self.state.lock().complete_catch_up(session_id, hydration) else {
+            return Ok(());
+        };
+        for (completion, outcome) in catch_up.settled {
+            let _ = completion.send(outcome);
+        }
+        for envelope in &catch_up.events {
+            self.forward_envelope(cx, envelope, None)?;
+        }
+        if let Some(options) = catch_up.config_options {
+            cx.send_notification(SessionNotification::new(
+                session_id.to_owned(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+            ))?;
+        }
+        if let Some(status) = catch_up.status {
+            send_status(cx, status)?;
         }
         Ok(())
     }
@@ -1648,15 +2203,35 @@ impl Bridge {
         Ok(())
     }
 
-    fn fail_oldest_prompt(&self, session_id: &str, error: String) {
-        let pending = self
-            .state
-            .lock()
-            .pending_prompts
-            .get_mut(session_id)
-            .and_then(VecDeque::pop_front);
+    /// A session-scoped daemon error is broadcast to every surface and names no
+    /// command. It can only be this bridge's refusal for a deletion in flight or
+    /// for a prompt the daemon has not dispatched yet; a turn that is already
+    /// running ends through its own `TurnEnd`, never through another surface's
+    /// failed command.
+    fn fail_refused(&self, session_id: &str, error: &str) {
+        let (deletions, pending) = {
+            let mut state = self.state.lock();
+            let deletions = state.delete_waiters.remove(session_id).unwrap_or_default();
+            let pending = if deletions.is_empty() {
+                state
+                    .pending_prompts
+                    .get_mut(session_id)
+                    .and_then(|prompts| {
+                        let index = prompts.iter().position(|prompt| !prompt.started)?;
+                        prompts.remove(index)
+                    })
+            } else {
+                None
+            };
+            (deletions, pending)
+        };
+        for waiter in deletions {
+            let _ = waiter.send(Err(error.to_owned()));
+        }
         if let Some(pending) = pending {
-            let _ = pending.completion.send(PromptOutcome::Failed(error));
+            let _ = pending
+                .completion
+                .send(PromptOutcome::Failed(error.to_owned()));
         }
     }
 }
@@ -1684,7 +2259,12 @@ async fn wait_for_bootstrap(
             let Message::Text(text) = message else {
                 continue;
             };
-            let outbound: Outbound = serde_json::from_str(&text)?;
+            // A newer daemon may add frame kinds; skipping one must not turn
+            // every connection attempt into a bootstrap failure.
+            let Ok(outbound) = serde_json::from_str::<Outbound>(&text) else {
+                tracing::debug!("ignoring an unknown cowboy daemon bootstrap frame");
+                continue;
+            };
             let complete = matches!(outbound, Outbound::BootstrapComplete);
             apply_bootstrap_outbound(state, outbound);
             if complete {
@@ -1701,33 +2281,23 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
     let mut state = state.lock();
     match outbound {
         Outbound::Sessions { sessions } => {
-            let live_ids = sessions
-                .iter()
-                .map(|meta| meta.id.clone())
-                .collect::<HashSet<_>>();
-            for (session_id, cached) in &mut state.sessions {
-                if !live_ids.contains(session_id) {
-                    cached.meta = None;
-                }
-            }
-            for meta in sessions {
-                let id = meta.id.clone();
-                state.sessions.entry(id).or_default().meta = Some(meta);
-            }
-            state.sessions.retain(|_, cached| {
-                cached.meta.is_some() || cached.attached || !cached.events.is_empty()
-            });
+            // No client is reachable from here; title changes reach it with the
+            // next live list, deletions settle now.
+            state.apply_session_list(sessions).settle();
         }
+        // The connection is negotiated lazily; a daemon that still sends the
+        // complete bootstrap is accepted and its frames are applied.
         Outbound::Snapshot {
             session_id,
             mut events,
             reached_start,
         } => {
             events.sort_unstable_by_key(|event| event.seq);
-            let cached = state.sessions.entry(session_id).or_default();
-            cached.last_seq = events.last().map(|event| event.seq);
-            cached.events = events;
-            cached.reached_start = reached_start;
+            state
+                .sessions
+                .entry(session_id)
+                .or_default()
+                .apply_snapshot(events, reached_start);
         }
         Outbound::ConfigOptions {
             session_id,
@@ -1737,15 +2307,8 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
                 state.config_options.insert(session_id, options);
             }
         }
-        Outbound::Event { envelope } => {
-            let cached = state
-                .sessions
-                .entry(envelope.session_id.clone())
-                .or_default();
-            cached.last_seq = Some(envelope.seq);
-            cached.events.push(envelope);
-        }
-        Outbound::BootstrapComplete
+        Outbound::Event { .. }
+        | Outbound::BootstrapComplete
         | Outbound::AuthSession { .. }
         | Outbound::ClientCapacity { .. }
         | Outbound::Machines { .. }
@@ -1797,6 +2360,10 @@ fn websocket_url(base: &Url) -> anyhow::Result<Url> {
     };
     url.set_scheme(scheme)
         .map_err(|()| anyhow!("cannot convert daemon URL to WebSocket URL"))?;
+    // Only the global session index: with the complete bootstrap every
+    // connection downloaded every session's transcript tail and had to finish
+    // within BOOTSTRAP_TIMEOUT. One session is hydrated when it is loaded.
+    url.query_pairs_mut().append_pair("bootstrap", "lazy");
     Ok(url)
 }
 
@@ -2228,7 +2795,7 @@ mod tests {
             crate::client_auth_client::normalized_base_url("https://example.test/cowboy").unwrap();
         assert_eq!(
             websocket_url(&base).unwrap().as_str(),
-            "wss://example.test/cowboy/ws"
+            "wss://example.test/cowboy/ws?bootstrap=lazy"
         );
     }
 
@@ -2271,6 +2838,580 @@ mod tests {
         let status = Bridge::status_from_cached(&meta, None);
         assert!(status.turn_running);
         assert_eq!(status.background_running, None);
+    }
+
+    fn fixture_bridge() -> (Bridge, mpsc::UnboundedReceiver<Inbound>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let base_url = Url::parse("http://127.0.0.1:9/").unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let bridge = Bridge {
+            provider: Arc::from("codex"),
+            machine: Arc::from("local"),
+            runtime_machine: None,
+            workspace: None,
+            authentication: crate::client_auth_client::ClientAuthentication::fixture(
+                base_url.clone(),
+            ),
+            base_url,
+            http: reqwest::Client::new(),
+            state: Arc::new(Mutex::new(BridgeState::default())),
+            connected_notify: Arc::new(Notify::new()),
+            command_tx,
+            next_cmid: Arc::new(AtomicU64::new(1)),
+        };
+        (bridge, command_rx)
+    }
+
+    fn envelope(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            session_id: "sess-1".to_owned(),
+            seq,
+            cmid: None,
+            event,
+        }
+    }
+
+    fn text_update(text: &str) -> Event {
+        Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": text}
+            }),
+        }
+    }
+
+    fn permission_request(request_id: &str) -> Event {
+        Event::PermissionRequest {
+            request_id: request_id.to_owned(),
+            tool_call: serde_json::json!({"toolCallId": request_id}),
+            options: serde_json::json!([]),
+        }
+    }
+
+    fn listed(bridge: &Bridge, attached: bool) {
+        let mut state = bridge.state.lock();
+        state
+            .apply_session_list(vec![fixture_session_meta()])
+            .settle();
+        state.sessions.get_mut("sess-1").unwrap().attached = attached;
+    }
+
+    fn start_prompt(bridge: &Bridge) -> (String, oneshot::Receiver<PromptOutcome>) {
+        let (cmid, completion) = bridge.register_prompt("sess-1");
+        let mut echo = envelope(1, text_update("prompt"));
+        echo.cmid = Some(cmid.clone());
+        assert!(bridge.state.lock().correlate_prompt(&echo).0.is_none());
+        (cmid, completion)
+    }
+
+    #[test]
+    fn daemon_connection_negotiates_the_lazy_bootstrap() {
+        let base = crate::client_auth_client::normalized_base_url("http://127.0.0.1:3333").unwrap();
+        let url = websocket_url(&base).unwrap();
+        assert_eq!(url.as_str(), "ws://127.0.0.1:3333/ws?bootstrap=lazy");
+        assert_eq!(url_request_target(&url), "/ws?bootstrap=lazy");
+    }
+
+    /// A daemon that serves only the lazy protocol: the global session index
+    /// on the WebSocket and one session's transcript over HTTP.
+    #[tokio::test]
+    async fn lazy_daemon_connection_hydrates_a_session_on_load_and_after_a_reconnect() {
+        use axum::extract::ws::{Message as AxumMessage, WebSocketUpgrade};
+        use axum::extract::{Path, Query};
+        use axum::{Json, Router, routing::get};
+
+        let (bridge, _commands) = fixture_bridge();
+        let (history_requests, mut history_seen) = mpsc::unbounded_channel::<u64>();
+        let app = Router::new()
+            .route(
+                "/ws",
+                get(
+                    |Query(query): Query<HashMap<String, String>>, ws: WebSocketUpgrade| async move {
+                        assert_eq!(query.get("bootstrap").map(String::as_str), Some("lazy"));
+                        ws.on_upgrade(|mut socket| async move {
+                            for frame in [
+                                serde_json::to_string(&Outbound::Sessions {
+                                    sessions: vec![fixture_session_meta()],
+                                })
+                                .unwrap(),
+                                serde_json::json!({"type": "a_frame_from_a_newer_daemon"})
+                                    .to_string(),
+                                serde_json::to_string(&Outbound::BootstrapComplete).unwrap(),
+                            ] {
+                                socket.send(AxumMessage::Text(frame.into())).await.unwrap();
+                            }
+                            // Hold the socket open until the bridge drops it.
+                            while socket.recv().await.is_some() {}
+                        })
+                    },
+                ),
+            )
+            .route(
+                "/api/sessions/{id}/bootstrap",
+                get(|Path(id): Path<String>| async move {
+                    Json(serde_json::json!({"messages": [
+                        Outbound::Snapshot {
+                            session_id: id.clone(),
+                            events: vec![envelope(5, text_update("e")), envelope(6, text_update("f"))],
+                            reached_start: false,
+                        },
+                        Outbound::ConfigOptions { session_id: id, options: serde_json::json!([]) },
+                        {"type": "a_frame_from_a_newer_daemon"},
+                    ]}))
+                }),
+            )
+            .route(
+                "/api/history/{id}",
+                get(move |Query(query): Query<HashMap<String, String>>| {
+                    let history_requests = history_requests.clone();
+                    async move {
+                        let before_seq = query["before_seq"].parse::<u64>().unwrap();
+                        history_requests.send(before_seq).unwrap();
+                        let first = before_seq - 2;
+                        Json(serde_json::json!({
+                            "events": [
+                                envelope(first, text_update("older")),
+                                envelope(first + 1, text_update("older")),
+                            ],
+                            "next_before_seq": first,
+                            "reached_start": first == 1,
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let bridge = Bridge {
+            authentication: crate::client_auth_client::ClientAuthentication::fixture(
+                base_url.clone(),
+            ),
+            base_url,
+            ..bridge
+        };
+
+        // The unknown frame must not fail the bootstrap.
+        let socket = bridge.connect_daemon().await.unwrap();
+        assert!(bridge.knows_session("sess-1"));
+        assert!(
+            bridge.state.lock().sessions["sess-1"].events.is_empty(),
+            "the connection carries no transcript"
+        );
+
+        bridge.attach("sess-1", true);
+        let history = bridge.load_history("sess-1").await.unwrap();
+        assert_eq!(
+            history.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(bridge.config_options("sess-1"), Some(Vec::new()));
+        assert_eq!(history_seen.recv().await, Some(5));
+        assert_eq!(history_seen.recv().await, Some(3));
+        assert!(history_seen.try_recv().is_err());
+
+        // After a reconnect only the gap behind the transcript tail is paged.
+        let missed = bridge.fetch_missed("sess-1", Some(3)).await.unwrap();
+        let (events, _) = missed.snapshot.unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [3, 4, 5, 6]
+        );
+        assert_eq!(history_seen.recv().await, Some(5));
+        assert!(history_seen.try_recv().is_err());
+        let missed = bridge.fetch_missed("sess-1", Some(5)).await.unwrap();
+        assert_eq!(missed.snapshot.unwrap().0.len(), 2);
+        assert!(
+            history_seen.try_recv().is_err(),
+            "the tail already covers the gap"
+        );
+
+        drop(socket);
+        server.abort();
+    }
+
+    #[test]
+    fn hydration_reads_known_frames_and_skips_the_rest() {
+        let hydration = SessionHydration::from_messages(vec![
+            serde_json::json!({"type": "a_frame_from_a_newer_daemon", "value": 1}),
+            serde_json::to_value(Outbound::Snapshot {
+                session_id: "sess-1".to_owned(),
+                events: vec![envelope(8, text_update("b")), envelope(7, text_update("a"))],
+                reached_start: false,
+            })
+            .unwrap(),
+            serde_json::to_value(Outbound::ConfigOptions {
+                session_id: "sess-1".to_owned(),
+                options: serde_json::json!([]),
+            })
+            .unwrap(),
+        ]);
+        let (events, reached_start) = hydration.snapshot.unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [7, 8]
+        );
+        assert!(!reached_start);
+        assert_eq!(hydration.config_options, Some(Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn session_deleted_in_cowboy_releases_its_state_and_fails_its_prompts() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let (_cmid, completion) = bridge.register_prompt("sess-1");
+        bridge
+            .state
+            .lock()
+            .config_options
+            .insert("sess-1".to_owned(), Vec::new());
+
+        let change = bridge.state.lock().apply_session_list(Vec::new());
+        assert!(change.settle().is_empty());
+
+        assert!(matches!(
+            completion.await.unwrap(),
+            PromptOutcome::Failed(error) if error.contains("deleted in Cowboy")
+        ));
+        {
+            let state = bridge.state.lock();
+            assert!(state.sessions.is_empty());
+            assert!(state.config_options.is_empty());
+            assert!(state.pending_prompts.is_empty());
+        }
+        assert!(!bridge.knows_session("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn requested_deletion_is_acknowledged_by_the_session_list() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let deleted = bridge.register_delete_waiter("sess-1");
+        let (_cmid, completion) = bridge.register_prompt("sess-1");
+
+        // A list that still contains the session acknowledges nothing.
+        bridge
+            .state
+            .lock()
+            .apply_session_list(vec![fixture_session_meta()])
+            .settle();
+        assert!(bridge.state.lock().delete_waiters.contains_key("sess-1"));
+
+        // An accepted deletion that still waits for its execution environment
+        // is published as `closing`.
+        let mut closing = fixture_session_meta();
+        closing.closing = true;
+        bridge
+            .state
+            .lock()
+            .apply_session_list(vec![closing])
+            .settle();
+        deleted.await.unwrap().unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            PromptOutcome::Stopped(StopReason::Cancelled)
+        ));
+        assert!(bridge.list_sessions(None).is_empty());
+        assert!(bridge.validate_session("sess-1", None).is_err());
+    }
+
+    #[tokio::test]
+    async fn refused_deletion_reports_the_daemon_error() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let deleted = bridge.register_delete_waiter("sess-1");
+        let (_cmid, mut completion) = bridge.register_prompt("sess-1");
+
+        bridge.fail_refused("sess-1", "command failed: stop is unconfirmed");
+
+        assert_eq!(
+            deleted.await.unwrap().unwrap_err(),
+            "command failed: stop is unconfirmed"
+        );
+        assert!(
+            completion.try_recv().is_err(),
+            "the prompt is not the refused command"
+        );
+        assert!(bridge.knows_session("sess-1"));
+    }
+
+    #[test]
+    fn session_list_keeps_a_created_session_until_the_daemon_lists_it() {
+        let (bridge, _commands) = fixture_bridge();
+        bridge.attach("created", false);
+        bridge
+            .state
+            .lock()
+            .apply_session_list(vec![fixture_session_meta()])
+            .settle();
+        assert!(bridge.state.lock().sessions.contains_key("created"));
+    }
+
+    #[test]
+    fn retitled_session_is_reported_only_while_attached() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, false);
+        let mut renamed = fixture_session_meta();
+        renamed.title = "Fix the bridge".to_owned();
+        let change = bridge
+            .state
+            .lock()
+            .apply_session_list(vec![renamed.clone()]);
+        assert!(change.settle().is_empty());
+
+        bridge.attach("sess-1", false);
+        let change = bridge
+            .state
+            .lock()
+            .apply_session_list(vec![renamed.clone()]);
+        assert!(
+            change.settle().is_empty(),
+            "an unchanged title is not republished"
+        );
+        renamed.title = "Fix the Zed bridge".to_owned();
+        let change = bridge.state.lock().apply_session_list(vec![renamed]);
+        assert_eq!(
+            change.settle(),
+            [("sess-1".to_owned(), "Fix the Zed bridge".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn another_surface_error_never_fails_a_running_turn() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let (_running, mut running) = start_prompt(&bridge);
+        let (_queued, queued) = bridge.register_prompt("sess-1");
+
+        bridge.fail_refused("sess-1", "command failed: unknown permission request");
+
+        assert!(running.try_recv().is_err());
+        assert!(matches!(
+            queued.await.unwrap(),
+            PromptOutcome::Failed(error) if error.contains("unknown permission request")
+        ));
+        // With nothing left undispatched the running turn still stays pending.
+        bridge.fail_refused("sess-1", "command failed: again");
+        assert!(running.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn addressed_refusal_fails_exactly_the_named_prompt() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let (_first, mut first) = bridge.register_prompt("sess-1");
+        let (second_cmid, second) = bridge.register_prompt("sess-1");
+
+        bridge.fail_prompt("sess-1", "another-device-cmid", "ignored".to_owned());
+        bridge.fail_prompt(
+            "sess-1",
+            &second_cmid,
+            "this session no longer exists".to_owned(),
+        );
+
+        assert!(first.try_recv().is_err());
+        assert!(matches!(
+            second.await.unwrap(),
+            PromptOutcome::Failed(error) if error == "this session no longer exists"
+        ));
+    }
+
+    #[test]
+    fn unresolved_permission_requests_end_with_their_answer_or_turn() {
+        let resolved = |request_id: &str| Event::PermissionResolved {
+            request_id: request_id.to_owned(),
+            option_id: Some("allow".to_owned()),
+        };
+        let seqs = |events: &[Envelope]| {
+            unresolved_permission_requests(events)
+                .into_iter()
+                .map(|envelope| envelope.seq)
+                .collect::<Vec<_>>()
+        };
+        let mut events = vec![
+            envelope(1, permission_request("r-1")),
+            envelope(2, resolved("r-1")),
+            envelope(3, permission_request("r-2")),
+            envelope(4, text_update("still waiting")),
+        ];
+        assert_eq!(seqs(&events), [3]);
+        events.push(envelope(
+            5,
+            Event::TurnEnd {
+                stop_reason: "Cancelled".to_owned(),
+            },
+        ));
+        assert!(seqs(&events).is_empty());
+        events.push(envelope(6, permission_request("r-3")));
+        events.push(envelope(
+            7,
+            Event::Lifecycle {
+                status: Status::Interrupted,
+                detail: None,
+            },
+        ));
+        assert!(seqs(&events).is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconnect_catch_up_delivers_missed_events_once_and_settles_the_turn() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let (_cmid, completion) = start_prompt(&bridge);
+        {
+            let mut state = bridge.state.lock();
+            let cached = state.sessions.get_mut("sess-1").unwrap();
+            cached.events = vec![
+                envelope(1, text_update("prompt")),
+                envelope(2, text_update("a")),
+            ];
+            cached.last_seq = Some(2);
+        }
+
+        // The connection drops; the turn finishes while it is down.
+        assert_eq!(bridge.begin_catch_up(), [("sess-1".to_owned(), Some(2))]);
+        // A second drop before the hydration returns resumes the same gap.
+        assert_eq!(bridge.begin_catch_up(), [("sess-1".to_owned(), Some(2))]);
+        // A live event that overlaps the hydration is buffered, not forwarded.
+        {
+            let mut state = bridge.state.lock();
+            let cached = state.sessions.get_mut("sess-1").unwrap();
+            assert!(cached.replaying);
+            cached.replay_buffer.push(envelope(6, text_update("live")));
+            cached.events.push(envelope(6, text_update("live")));
+            cached.last_seq = Some(6);
+            cached.meta.as_mut().unwrap().status = Status::Running;
+        }
+        let hydration = SessionHydration {
+            snapshot: Some((
+                vec![
+                    envelope(2, text_update("a")),
+                    envelope(3, text_update("b")),
+                    envelope(4, permission_request("answered-on-the-phone")),
+                    envelope(
+                        5,
+                        Event::PermissionResolved {
+                            request_id: "answered-on-the-phone".to_owned(),
+                            option_id: Some("allow".to_owned()),
+                        },
+                    ),
+                    envelope(6, text_update("live")),
+                ],
+                false,
+            )),
+            config_options: Some(Vec::new()),
+        };
+
+        let catch_up = bridge
+            .state
+            .lock()
+            .complete_catch_up("sess-1", hydration)
+            .unwrap();
+
+        assert_eq!(
+            catch_up
+                .events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            [3, 5, 6],
+            "already delivered, answered and duplicated events are not replayed"
+        );
+        assert_eq!(catch_up.config_options, Some(Vec::new()));
+        assert_eq!(catch_up.status.unwrap().state, "running");
+        assert_eq!(catch_up.settled.len(), 1);
+        for (completion, outcome) in catch_up.settled {
+            let _ = completion.send(outcome);
+        }
+        assert!(matches!(
+            completion.await.unwrap(),
+            PromptOutcome::Stopped(StopReason::EndTurn)
+        ));
+        {
+            let state = bridge.state.lock();
+            let cached = state.sessions.get("sess-1").unwrap();
+            assert!(!cached.replaying);
+            assert_eq!(cached.last_seq, Some(6));
+            assert_eq!(
+                cached
+                    .events
+                    .iter()
+                    .map(|event| event.seq)
+                    .collect::<Vec<_>>(),
+                [2, 3, 4, 5, 6]
+            );
+        }
+        assert_eq!(
+            bridge.begin_catch_up(),
+            [("sess-1".to_owned(), Some(6))],
+            "a later reconnect catches up from the new position"
+        );
+    }
+
+    #[tokio::test]
+    async fn catch_up_reports_the_missed_turn_end_and_keeps_a_running_turn() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let (_cmid, completion) = start_prompt(&bridge);
+        bridge.begin_catch_up();
+        let hydration = SessionHydration {
+            snapshot: Some((
+                vec![envelope(
+                    9,
+                    Event::TurnEnd {
+                        stop_reason: "max_tokens".to_owned(),
+                    },
+                )],
+                true,
+            )),
+            config_options: None,
+        };
+        let catch_up = bridge
+            .state
+            .lock()
+            .complete_catch_up("sess-1", hydration)
+            .unwrap();
+        for (completion, outcome) in catch_up.settled {
+            let _ = completion.send(outcome);
+        }
+        assert!(matches!(
+            completion.await.unwrap(),
+            PromptOutcome::Stopped(StopReason::MaxTokens)
+        ));
+
+        // The session is still busy with a turn this bridge dispatched: a
+        // failed hydration must not end it.
+        let (_cmid, mut running) = start_prompt(&bridge);
+        bridge.begin_catch_up();
+        let catch_up = bridge
+            .state
+            .lock()
+            .complete_catch_up("sess-1", SessionHydration::default())
+            .unwrap();
+        assert!(catch_up.settled.is_empty());
+        assert!(running.try_recv().is_err());
+    }
+
+    #[test]
+    fn catch_up_yields_to_a_detach_or_a_client_reload() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        bridge.begin_catch_up();
+        bridge.attach("sess-1", true);
+        assert!(
+            bridge
+                .state
+                .lock()
+                .complete_catch_up("sess-1", SessionHydration::default())
+                .is_none()
+        );
+        assert!(
+            bridge.state.lock().sessions["sess-1"].replaying,
+            "the reload still owns the replay"
+        );
+        assert!(bridge.begin_catch_up().is_empty());
+
+        bridge.state.lock().detach_session("sess-1");
+        assert!(bridge.begin_catch_up().is_empty());
     }
 
     #[test]

@@ -87,22 +87,50 @@ The bridge supports:
 
 - `initialize`, `session/new`, `session/list`, `session/load`, `session/close`,
   and `session/delete`; `session/close` detaches released Zed threads so the
-  bridge stops publishing updates to dead thread entities;
-- complete retained-history replay on `session/load`;
+  bridge stops publishing updates to dead thread entities, and succeeds for a
+  session Cowboy already deleted;
+- `session/delete` answers only after the Controller acknowledged the deletion
+  (the session left its list, or is published as `closing`). A refusal or a
+  30-second silence is returned as an error instead of a false success;
+- complete retained-history replay on `session/load`, followed by any
+  permission request the running turn is still waiting on, so a reopened
+  thread can answer it;
+- title changes: a session Cowboy titles from its first prompt, or that is
+  renamed on another surface, updates the open Zed thread through
+  `session_info_update`;
 - prompt streaming, permission requests, cancellation, and session config
   options. Either `session/cancel` or JSON-RPC request cancellation stops an
   in-flight bridge prompt;
 - daemon WebSocket recovery without terminating Zed's stdio ACP process:
   disconnects publish `reconnecting`, commands wait in the bridge, and a fresh
-  bootstrap restores attached sessions, statuses, and config options. In-flight
-  prompts remain pending through the outage and settle normally after the
-  revived daemon reports the session idle;
+  bootstrap restores attached sessions, statuses, and config options. Each
+  attached session then catches up: the transcript events, turn end and
+  unanswered permission requests published during the outage are delivered
+  once, in order, ahead of the resumed live stream. In-flight prompts remain
+  pending through the outage and settle from the missed turn end, or from the
+  session being idle again, even when no further live event arrives;
 - provider-filtered import/load, preventing a thread from acquiring the wrong
   provider identity;
 - `_cowboy/session/status` snapshots and
   `_cowboy/session/status_changed` notifications. `turnRunning` is derived from
   the Hub's authoritative `Busy` lifecycle and the original `session/prompt`
   remains pending through the matching `TurnEnd`.
+
+The bridge negotiates the lazy WebSocket bootstrap (`/ws?bootstrap=lazy`): a
+connection carries the session index only, and one session's transcript tail
+and config options are fetched from `/api/sessions/{id}/bootstrap` when it is
+loaded or caught up. The size of other sessions' transcripts therefore never
+decides whether a connection completes within the bootstrap deadline. An
+unknown frame from a newer Controller is skipped instead of failing the
+connection.
+
+Prompt failures are attributed narrowly. The Controller's addressed
+`command_result` fails exactly the prompt it names. Its session-wide `error`
+frame is broadcast to every surface without naming a command, so it fails only
+a prompt the Controller has not dispatched yet; a running turn ends through
+its own turn end and is never failed by another surface's rejected command. A
+session deleted in Cowboy fails its pending prompts with that reason and
+leaves `session/list`.
 
 On a fresh bridge, session listing and loading wait for the Controller's
 WebSocket bootstrap before consulting the local session cache, using the same
