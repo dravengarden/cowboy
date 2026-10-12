@@ -356,8 +356,11 @@ async fn deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first
         let mut invocation = scope.host(request);
         // One HTTP attempt is acknowledged only after this deadline. The
         // subsequent retry must use the original budget, not renew 15 seconds.
-        invocation.telemetry.as_mut().unwrap().deadline =
-            Instant::now() + Duration::from_millis(100);
+        // The budget must outlast admission and the plugin process's start,
+        // which precede the attempt and fail closed once it is spent: 100 ms
+        // expired before the first attempt on a loaded host, so the fixture
+        // never saw a request however long it waited.
+        invocation.telemetry.as_mut().unwrap().deadline = Instant::now() + Duration::from_secs(3);
         let deadline = invocation.telemetry.as_ref().unwrap().deadline;
         let store = Arc::clone(&fixture.store);
         let task = tokio::spawn(async move { store.invoke_host(invocation).await });
