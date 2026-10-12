@@ -3065,7 +3065,16 @@ impl Hub {
             owner_user_id,
             owner_username,
         } = registration;
-        let config_preferences = default_config_preferences(&provider, provider_behavior.as_ref());
+        // A managed child takes only its parent's preset; its worker refuses
+        // every other option, so interactive defaults would never apply.
+        let config_preferences = if execution_binding
+            .as_ref()
+            .is_some_and(|binding| binding.managed().is_some())
+        {
+            serde_json::json!({})
+        } else {
+            default_config_preferences(&provider, provider_behavior.as_ref())
+        };
         let meta = SessionMeta {
             id: id.clone(),
             provider,
