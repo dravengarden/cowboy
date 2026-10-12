@@ -33,6 +33,12 @@ schema = 1
 # longest Provider prompt-cache lifetime so the next prompt costs nothing extra.
 # duration string such as "6h", from 5m to 7d; applies live.
 # auto_update_idle_after = "1h"
+# Idle time after which the fleet policy stops restarting a session's worker
+# for each new release. The session then adopts the installed release when it
+# is next opened, so one nobody is using does not resume its native session on
+# every release. Workerless sessions are still re-pinned.
+# duration string such as "6h", from 1h to 30d; applies live.
+# auto_update_idle_limit = "12h"
 
 [sessions]
 # When a new session targets a Device whose session slots are full, hibernate

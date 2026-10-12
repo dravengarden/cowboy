@@ -24,6 +24,8 @@ pub const PLUGIN_AUTO_UPDATE_IDLE_SESSIONS: Key<bool> =
     Key::new(Scope::Service, "plugins.auto_update_idle_sessions");
 pub const PLUGIN_AUTO_UPDATE_IDLE_AFTER: Key<Duration> =
     Key::new(Scope::Service, "plugins.auto_update_idle_after");
+pub const PLUGIN_AUTO_UPDATE_IDLE_LIMIT: Key<Duration> =
+    Key::new(Scope::Service, "plugins.auto_update_idle_limit");
 pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
     Key::new(Scope::Service, "sessions.reclaim_on_capacity");
 pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
@@ -83,6 +85,16 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
         doc: "Idle time before the fleet policy updates a session. Keep it at or above the\nlongest Provider prompt-cache lifetime so the next prompt costs nothing extra.",
+    },
+    Field {
+        key: "plugins.auto_update_idle_limit",
+        kind: Kind::Duration {
+            min: Duration::from_hours(1),
+            max: Duration::from_hours(30 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(12)),
+        reload: Reload::Live,
+        doc: "Idle time after which the fleet policy stops restarting a session's worker\nfor each new release. The session then adopts the installed release when it\nis next opened, so one nobody is using does not resume its native session on\nevery release. Workerless sessions are still re-pinned.",
     },
     Field {
         key: "sessions.reclaim_on_capacity",

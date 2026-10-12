@@ -138,6 +138,9 @@ export interface ProviderUpdateAvailable {
   when_idle?: boolean;
   /** Estimated Controller epoch ms when the idle policy updates it. */
   automatic_at_ms?: number;
+  /** Long unused: the idle policy applies it when the session is next
+   *  opened rather than restarting the worker for every release. */
+  on_open?: boolean;
 }
 
 export interface SessionMeta {

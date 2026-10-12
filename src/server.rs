@@ -12839,11 +12839,22 @@ async fn current_machine_plugin(
         .store
         .as_ref()
         .ok_or_else(|| "Provider lifecycle requires persistence".to_owned())?;
-    let machine = store
+    let machines = store
         .list_machines()
         .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
+        .map_err(|error| error.to_string())?;
+    active_machine_plugin(&machines, machine_id, provider_id)
+}
+
+/// The active installation of `provider_id` among already loaded Machine
+/// records, so one pass over many sessions reads the Machines once.
+fn active_machine_plugin(
+    machines: &[crate::store::MachineRecord],
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<crate::machine_protocol::PluginInventory, String> {
+    let machine = machines
+        .iter()
         .find(|machine| machine.id == machine_id && !machine.revoked)
         .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
     let providers: Vec<crate::machine_protocol::PluginInventory> = machine
@@ -15420,6 +15431,17 @@ async fn installed_upgrade_target(
     digest: &str,
 ) -> Result<ResolvedProviderGeneration, String> {
     let installed = current_machine_plugin(state, machine_id, provider).await?;
+    installed_upgrade_target_from(state, installed, provider, version, digest)
+}
+
+/// [`installed_upgrade_target`] for an installation the caller already read.
+fn installed_upgrade_target_from(
+    state: &AppState,
+    installed: crate::machine_protocol::PluginInventory,
+    provider: &str,
+    version: &str,
+    digest: &str,
+) -> Result<ResolvedProviderGeneration, String> {
     let auth = state.provider_auth.status(provider);
     let generation = resolve_provider_generation(
         &state.provider_catalog,
@@ -20406,6 +20428,8 @@ fn handle_command(
                                 Arc::clone(state),
                                 session_id.clone(),
                             ));
+                        } else if let Some(meta) = meta.as_ref() {
+                            session_provider_updates::request_on_open(state, meta);
                         }
                         Ok(())
                     }

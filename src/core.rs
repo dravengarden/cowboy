@@ -415,6 +415,10 @@ pub struct ProviderUpdateAvailable {
     /// session unattended. Absent when no automatic policy applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automatic_at_ms: Option<i64>,
+    /// The idle policy no longer restarts this long-unused session for new
+    /// releases; it adopts the installed one when next opened.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_open: bool,
 }
 
 /// Controller-held offer behind [`SessionMeta::provider_update_available`].
@@ -425,6 +429,8 @@ pub struct ProviderUpdateOffer {
     pub when_idle: bool,
     /// Idle period after which a policy updates the session unattended.
     pub automatic_after: Option<std::time::Duration>,
+    /// See [`ProviderUpdateAvailable::on_open`].
+    pub on_open: bool,
 }
 
 /// Session metadata for the list view (no event log).
@@ -1721,6 +1727,9 @@ struct HubInner {
     /// When an unattended Provider update last left a session crashed, by
     /// (Machine, Provider, generation digest). Never held with `sessions`.
     automatic_update_failures: Mutex<HashMap<(String, String, String), std::time::Instant>>,
+    /// When an unattended Provider update last left each session crashed.
+    /// Never held with `sessions`.
+    automatic_update_failed_sessions: Mutex<HashMap<String, std::time::Instant>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
@@ -1921,6 +1930,7 @@ impl Hub {
                 config_in_flight: Mutex::new(HashMap::new()),
                 provider_update_offers: Mutex::new(HashMap::new()),
                 automatic_update_failures: Mutex::new(HashMap::new()),
+                automatic_update_failed_sessions: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
@@ -2668,6 +2678,7 @@ impl Hub {
                                 version: offer.version.clone(),
                                 digest: offer.digest.clone(),
                                 when_idle: offer.when_idle,
+                                on_open: offer.on_open,
                                 automatic_at_ms: offer.automatic_after.map(|after| {
                                     let remaining = after.saturating_sub(s.last_activity.elapsed());
                                     now.saturating_add(
@@ -2764,6 +2775,24 @@ impl Hub {
                 digest.to_owned(),
             ))
             .is_some_and(|failed| failed.elapsed() < window)
+    }
+
+    /// Whether this session's last unattended Provider update left it crashed
+    /// and nothing has happened in it since. The idle policy leaves such a
+    /// session alone until it is used or opened, instead of retrying the same
+    /// resume on every release while nobody is there to see it fail.
+    #[must_use]
+    pub fn automatic_update_failed_since_activity(&self, session_id: &str) -> bool {
+        let failed_at = self
+            .inner
+            .automatic_update_failed_sessions
+            .lock()
+            .get(session_id)
+            .copied();
+        failed_at.is_some_and(|failed_at| {
+            self.session_idle_for(session_id)
+                .is_some_and(|idle| failed_at.elapsed() <= idle)
+        })
     }
 
     /// Whether the user asked this session to adopt the installed Provider
@@ -4566,10 +4595,15 @@ impl Hub {
                     "Provider update left the session crashed"
                 );
                 if update.automatic {
+                    let now = std::time::Instant::now();
                     self.inner
                         .automatic_update_failures
                         .lock()
-                        .insert((machine, provider, digest), std::time::Instant::now());
+                        .insert((machine, provider, digest), now);
+                    self.inner
+                        .automatic_update_failed_sessions
+                        .lock()
+                        .insert(session_id.to_owned(), now);
                 }
             } else {
                 tracing::info!(
@@ -4577,6 +4611,10 @@ impl Hub {
                     automatic = update.automatic, elapsed_ms, ?status,
                     "Provider update finished"
                 );
+                self.inner
+                    .automatic_update_failed_sessions
+                    .lock()
+                    .remove(session_id);
             }
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -9498,6 +9536,36 @@ mod core_tests {
         }
     }
 
+    #[test]
+    fn a_crashed_unattended_update_holds_its_session_until_it_is_used() {
+        let behavior = crate::provider::legacy_behavior("codex");
+        let (hub, before) = provider_reload_fixture();
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+            .expect("reload");
+        hub.set_status(&before.id, Status::Crashed, None);
+        assert!(hub.automatic_update_failed_since_activity(&before.id));
+        // Anything the user does in the session lifts the hold.
+        hub.push(
+            &before.id,
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "back"}}),
+            },
+        );
+        assert!(!hub.automatic_update_failed_since_activity(&before.id));
+        // So does an update that finishes, however it was started.
+        let (hub, before) = provider_reload_fixture();
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+            .expect("reload");
+        hub.set_status(&before.id, Status::Crashed, None);
+        hub.set_status(&before.id, Status::Running, None);
+        let crashed = hub.session_info(&before.id).expect("session").meta;
+        hub.begin_provider_reload(&crashed, "newer", "newer-digest", &behavior, false)
+            .expect("explicit reload");
+        hub.set_status(&before.id, Status::Running, None);
+        assert!(!hub.automatic_update_failed_since_activity(&before.id));
+        assert!(!hub.automatic_update_failed_since_activity("unknown"));
+    }
+
     #[tokio::test]
     async fn provider_reload_rejects_a_prompt_that_won_the_race() {
         let (hub, before) = provider_reload_fixture();
@@ -9631,6 +9699,7 @@ mod core_tests {
             digest: "new-digest".to_owned(),
             when_idle,
             automatic_after: Some(std::time::Duration::from_hours(1)),
+            on_open: false,
         };
         let listed = |hub: &Hub| {
             hub.session_list()

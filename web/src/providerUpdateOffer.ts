@@ -46,6 +46,7 @@ export function providerUpdateScheduleText(
   if (offer.when_idle) {
     return waitsForTurn ? "after this turn" : "starting shortly";
   }
+  if (offer.on_open) return "auto on next open";
   if (offer.automatic_at_ms === undefined) return null;
   const remaining = offer.automatic_at_ms - nowMs;
   if (remaining <= 60_000) return "auto when idle";
