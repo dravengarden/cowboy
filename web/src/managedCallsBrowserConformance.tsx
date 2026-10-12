@@ -370,6 +370,13 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "runtime and execution placement missing",
     );
     check(text().includes("PR 7961 review"), "caller group label missing");
+    check(
+      Array.from(rows).every((row) =>
+        /\d{2}:\d{2} · \d+(m \d+)?s/.test(row.textContent ?? "") &&
+        row.querySelector("[title^='Started ']")
+      ),
+      "every row must show when its call started and how long it ran",
+    );
     tests.push("desktop-list-shows-placement-and-group");
 
     (rows[1] as HTMLElement).click();

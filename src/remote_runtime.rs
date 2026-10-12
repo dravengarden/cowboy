@@ -1919,6 +1919,10 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
 }
 
 fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    // Settle the release first: the acceptance fence below refuses a bound
+    // session's owner whose release differs from the recorded one, which is
+    // exactly the divergence this reconciliation repairs.
+    shared.hub.reconcile_provider_release(worker);
     if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
     }
@@ -1926,7 +1930,6 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     shared
         .hub
         .set_machine_lineage(&worker.session_id, worker.incarnation.as_deref());
-    shared.hub.reconcile_provider_release(worker);
     if matches!(worker.state, WorkerState::Crashed | WorkerState::Exited) {
         fail_config_startup(
             shared,

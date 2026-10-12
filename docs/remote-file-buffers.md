@@ -56,7 +56,7 @@ read again, exactly as native Claude refuses it.
 4. **On the target** the helper:
    1. resolves symlinks, so the target of a link is written as a native write
       would write it;
-   2. creates missing parent directories;
+   2. creates missing parent directories, for a new file only;
    3. takes an exclusive `flock` on the parent directory, which serializes
       concurrent Cowboy writers;
    4. reads the file and refuses anything but a regular file of at most
@@ -74,8 +74,12 @@ read again, exactly as native Claude refuses it.
       publishing. Any change discards the temporary file and returns
       `conflict`;
    10. publishes. A new file is published by hard link, which never replaces
-       a file another writer created meanwhile. An existing file is published
-       by rename. The directory is then fsynced;
+       a file another writer created meanwhile. An existing file is swapped
+       with the temporary file atomically (`renameat2` with `RENAME_EXCHANGE`);
+       the inode that comes out must be the one that was compared (device,
+       inode, size, mtime), otherwise it is swapped straight back and the
+       apply returns `conflict`. A filesystem without exchange gets a plain
+       rename after the check. The directory is then fsynced;
    11. reads the published file back and returns its digest.
 5. **The session** records the published digest as the new read stamp and
    stores the result in its cache, so it is the base for the next edit.
@@ -124,7 +128,8 @@ each file is 0600, and each copy is named by its digest.
   directory. It removes copies unused for `file_buffers.cache_max_age`, then
   the least recently used copies beyond `file_buffers.cache_max_bytes`, and
   the temporary files of writers that have exited.
-- Disabling buffers removes every copy at the next sweep.
+- Disabling buffers removes every copy at the next file operation (sweeps
+  stay throttled to one per 30 seconds).
 - Deleting the session removes the directory with it.
 
 **On the target**, each apply removes the helper's own leftovers older than
@@ -157,8 +162,8 @@ A named file that is missing or invalid disables buffers rather than guessing.
 
 A pattern without `/` matches the file name. A pattern with `/` matches the
 absolute target path. `**` spans directories, while `*` and `?` stay within
-one. ASCII case is ignored. Setting the list replaces the defaults, so keep
-any defaults you still want.
+one; a pattern may hold at most eight `**`. ASCII case is ignored. Setting
+the list replaces the defaults, so keep any defaults you still want.
 
 ## Corner cases
 
@@ -166,6 +171,10 @@ any defaults you still want.
 | --- | --- |
 | External write between Read and Edit | `conflict`, file untouched, native error |
 | External write during the apply | Just-in-time stamp check discards the temporary file; `conflict` |
+| External write between the check and the publish | The exchange brings out a different inode or mtime; it is swapped back untouched; `conflict` |
+| File deleted since it was read | Edit reports "File does not exist"; Write creates it again by a second compare-and-swap against its absence, as natively |
+| Directory deleted since the read | The helper cannot lock it and changes nothing; the same two outcomes follow from the target's state |
+| Write of identical bytes | Nothing is rewritten; the mtime moves, as a native write moves it |
 | Another Cowboy session editing the same file | Serialized by the directory lock; the second sees `conflict` |
 | File created by someone else while creating it | Hard-link publish fails; `conflict`, their file kept |
 | Lost reply, retried or recovered | Target digest decides; never applied twice |
@@ -173,7 +182,7 @@ any defaults you still want.
 | Symlink | The link's target is replaced; the link stays |
 | Hard link | Replaced by a new inode, as native's write replaces it; other names keep the old bytes |
 | Mode bits | Preserved, including setuid/setgid/sticky |
-| Owner differs (for example a file of another user writable by group) | Owner kept by `fchown`. If that is not permitted, the file is rewritten in place after a stamp check. |
+| Owner differs (for example a file of another user writable by group) | Owner kept by `fchown`. If that is not permitted (`EPERM`, after the bytes were written once already), the file is rewritten in place after a stamp check. Any other failure leaves it untouched. |
 | Path is now a directory, FIFO or device | Helper refuses; the whole-file path reports native's error |
 | Parent directory missing | Created, as native creates it |
 | `flock` unsupported (some network filesystems) | Helper error; whole-file path |

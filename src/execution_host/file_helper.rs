@@ -364,8 +364,10 @@ fn held(path: &Path) -> Result<Value> {
 }
 
 /// Compare-and-swap one file against the caller's buffered digest under a
-/// directory lock, publish it by rename, and read back what was published.
-fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<Value> {
+/// directory lock, publish it atomically, and read back what was published.
+/// `hook` is called with `"before_check"` and `"before_publish"`; tests use
+/// it to interleave a competing writer.
+fn apply_with(request: &ApplyRequest, mut hook: impl FnMut(&str)) -> Result<Value> {
     ensure!(request.schema == 1, "unsupported apply schema");
     ensure!(
         (request.base == ABSENT || valid_digest(&request.base)) && valid_digest(&request.expect),
@@ -391,8 +393,11 @@ fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<V
         .filter(|_| path.file_name().is_some())
         .ok_or_else(|| anyhow::anyhow!("file path has no parent"))?
         .to_path_buf();
-    // As natively, writing a file creates its missing parent directories.
-    std::fs::create_dir_all(&directory)?;
+    // As natively, creating a file creates its missing parent directories;
+    // an edit of a file whose directory is gone changes nothing.
+    if request.base == ABSENT {
+        std::fs::create_dir_all(&directory)?;
+    }
     let _lock = lock_directory(&directory)?;
     sweep(
         &directory,
@@ -406,6 +411,15 @@ fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<V
         .map_or_else(|| ABSENT.to_owned(), |(data, _)| digest(data));
     // A retried apply whose first attempt published finds its own result.
     if held_digest == request.expect {
+        // A write of identical bytes still writes natively: the mtime moves.
+        if request.base == request.expect
+            && let Ok(file) = OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&path)
+        {
+            let _ = file.set_modified(std::time::SystemTime::now());
+        }
         let size = held_now.as_ref().map_or(0, |(data, _)| data.len());
         return Ok(outcome("applied", &held_digest, size));
     }
@@ -422,43 +436,48 @@ fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<V
         "splices do not produce the expected digest"
     );
     let metadata = held_now.as_ref().map(|(_, metadata)| metadata);
-    let (uid, gid) = (
-        rustix::process::getuid().as_raw(),
-        rustix::process::getgid().as_raw(),
-    );
-    let foreign = metadata.is_some_and(|m| m.uid() != uid || m.gid() != gid);
     let temporary = directory.join(format!(
         "{TEMP_PREFIX}{:032x}{TEMP_SUFFIX}",
         rand::random::<u128>()
     ));
-    let prepared = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            // A new file gets the process umask, as a native create does.
-            .mode(if metadata.is_some() { 0o600 } else { 0o666 })
-            .open(&temporary)?;
-        file.write_all(&result)?;
-        if let Some(metadata) = metadata {
-            if foreign {
-                std::os::unix::fs::fchown(&file, Some(metadata.uid()), Some(metadata.gid()))?;
-            }
-            file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(
-                metadata.mode() & 0o7777,
-            ))?;
-        }
-        file.sync_all()?;
-        Ok(())
-    })();
-    if let Err(error) = prepared {
+    let discard = |error: anyhow::Error| {
         let _ = std::fs::remove_file(&temporary);
-        // An owner this user cannot reproduce must not change: the file is
-        // rewritten in place instead, as the executor's own write does.
-        ensure!(foreign, "{error}");
-        return in_place(&path, &result, metadata, &request.expect);
+        error
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        // A new file gets the process umask, as a native create does.
+        .mode(if metadata.is_some() { 0o600 } else { 0o666 })
+        .open(&temporary)?;
+    file.write_all(&result)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| discard(error.into()))?;
+    if let Some(metadata) = metadata {
+        let (uid, gid) = (
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+        );
+        if (metadata.uid() != uid || metadata.gid() != gid)
+            && let Err(error) =
+                std::os::unix::fs::fchown(&file, Some(metadata.uid()), Some(metadata.gid()))
+        {
+            let _ = std::fs::remove_file(&temporary);
+            // An owner this user cannot reproduce must not change: the file is
+            // rewritten in place instead, as the executor's own write does.
+            // The bytes were written once already, so space is not the issue.
+            ensure!(error.raw_os_error() == Some(libc::EPERM), "{error}");
+            return in_place(&path, &result, metadata, &request.expect);
+        }
+        file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(
+            metadata.mode() & 0o7777,
+        ))
+        .and_then(|()| file.sync_all())
+        .map_err(|error| discard(error.into()))?;
     }
-    before_publish();
+    drop(file);
+    hook("before_check");
     // Just in time: the target must still be exactly what was compared.
     let unchanged = match (std::fs::symlink_metadata(&path), metadata) {
         (Err(error), None) => error.kind() == std::io::ErrorKind::NotFound,
@@ -469,9 +488,10 @@ fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<V
         let _ = std::fs::remove_file(&temporary);
         return held(&path);
     }
-    let published = if metadata.is_none() {
+    hook("before_publish");
+    let published = match metadata {
         // A link never replaces a file another writer created meanwhile.
-        match std::fs::hard_link(&temporary, &path) {
+        None => match std::fs::hard_link(&temporary, &path) {
             Ok(()) => std::fs::remove_file(&temporary).map_err(anyhow::Error::from),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let _ = std::fs::remove_file(&temporary);
@@ -479,21 +499,62 @@ fn apply_with(request: &ApplyRequest, before_publish: impl FnOnce()) -> Result<V
             }
             // Filesystems without hard links fall back to the checked rename.
             Err(_) => std::fs::rename(&temporary, &path).map_err(anyhow::Error::from),
-        }
-    } else {
-        std::fs::rename(&temporary, &path).map_err(anyhow::Error::from)
+        },
+        Some(then) => match exchange(&temporary, &path, then) {
+            Ok(Some(true)) => Ok(()),
+            Ok(Some(false)) => {
+                let _ = std::fs::remove_file(&temporary);
+                return held(&path);
+            }
+            // No atomic exchange here: the checked rename is the best left.
+            Ok(None) => std::fs::rename(&temporary, &path).map_err(anyhow::Error::from),
+            Err(error) => Err(error),
+        },
     };
-    if let Err(error) = published {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
+    published.map_err(discard)?;
     File::open(&directory)?.sync_all()?;
     verify(&path, &request.expect, result.len())
 }
 
-fn in_place(path: &Path, data: &[u8], metadata: Option<&Metadata>, expect: &str) -> Result<Value> {
-    let metadata =
-        metadata.ok_or_else(|| anyhow::anyhow!("an in-place write needs an existing file"))?;
+/// Swap the temporary file and the target atomically, then confirm the inode
+/// that came out is the one that was compared. A writer that slipped in
+/// between the check and the swap is swapped back untouched. `Some(true)`
+/// published, `Some(false)` restored the competing write, `None` when the
+/// filesystem offers no exchange.
+#[cfg(target_os = "linux")]
+fn exchange(temporary: &Path, path: &Path, then: &Metadata) -> Result<Option<bool>> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    match renameat_with(CWD, temporary, CWD, path, RenameFlags::EXCHANGE) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS | rustix::io::Errno::OPNOTSUPP) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // The compared inode is now at the temporary name. A rename changes its
+    // ctime, so identity, size and mtime decide.
+    let swapped = std::fs::symlink_metadata(temporary)?;
+    let same = swapped.is_file()
+        && swapped.dev() == then.dev()
+        && swapped.ino() == then.ino()
+        && swapped.len() == then.len()
+        && swapped.mtime() == then.mtime()
+        && swapped.mtime_nsec() == then.mtime_nsec();
+    if same {
+        let _ = std::fs::remove_file(temporary);
+        return Ok(Some(true));
+    }
+    renameat_with(CWD, temporary, CWD, path, RenameFlags::EXCHANGE)
+        .map_err(|error| anyhow::anyhow!("restoring a competing write failed: {error}"))?;
+    Ok(Some(false))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn exchange(_temporary: &Path, _path: &Path, _then: &Metadata) -> Result<Option<bool>> {
+    Ok(None)
+}
+
+fn in_place(path: &Path, data: &[u8], metadata: &Metadata, expect: &str) -> Result<Value> {
     let mut file = OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -568,7 +629,7 @@ pub fn run(command: Command) -> Result<i32> {
             // Every failure leaves the target either unchanged or exactly at
             // the expected digest; the caller re-reads to tell which.
             let value = apply_request(request, request_file)
-                .and_then(|request| apply_with(&request, || {}))
+                .and_then(|request| apply_with(&request, |_| {}))
                 .unwrap_or_else(
                     |error| json!({"schema": 1, "status": "error", "error": error.to_string()}),
                 );
@@ -690,7 +751,7 @@ mod tests {
             b"hello there world\n",
             vec![insert(6, 0, b"there ")],
         );
-        let value = apply_with(&edit, || {}).unwrap();
+        let value = apply_with(&edit, |_| {}).unwrap();
         assert_eq!(value["status"], "applied");
         assert_eq!(value["sha256"], digest(b"hello there world\n"));
         assert_eq!(std::fs::read(&path).unwrap(), b"hello there world\n");
@@ -700,11 +761,27 @@ mod tests {
         );
         // A lost reply's retry finds its own result and changes nothing.
         let inode = std::fs::metadata(&path).unwrap().ino();
-        assert_eq!(apply_with(&edit, || {}).unwrap()["status"], "applied");
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(apply_with(&edit, |_| {}).unwrap()["status"], "applied");
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        // A write of the same bytes is not a retry: it touches, as a write does.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let same = request(
+            &path,
+            b"hello there world\n",
+            b"hello there world\n",
+            vec![],
+        );
+        assert_eq!(apply_with(&same, |_| {}).unwrap()["status"], "applied");
+        assert!(std::fs::metadata(&path).unwrap().modified().unwrap() > modified);
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello there world\n");
         // A stale buffer is refused with the digest the target holds.
         let stale = request(&path, b"hello world\n", b"bye", vec![insert(0, 12, b"bye")]);
-        let value = apply_with(&stale, || {}).unwrap();
+        let value = apply_with(&stale, |_| {}).unwrap();
         assert_eq!(value["status"], "conflict");
         assert_eq!(value["sha256"], digest(b"hello there world\n"));
         assert_eq!(std::fs::read(&path).unwrap(), b"hello there world\n");
@@ -717,7 +794,12 @@ mod tests {
         let path = dir.path().join("file");
         std::fs::write(&path, b"one").unwrap();
         let edit = request(&path, b"one", b"two", vec![insert(0, 3, b"two")]);
-        let value = apply_with(&edit, || std::fs::write(&path, b"other").unwrap()).unwrap();
+        let value = apply_with(&edit, |stage| {
+            if stage == "before_check" {
+                std::fs::write(&path, b"other").unwrap();
+            }
+        })
+        .unwrap();
         assert_eq!(value["status"], "conflict");
         assert_eq!(value["sha256"], digest(b"other"));
         assert_eq!(std::fs::read(&path).unwrap(), b"other");
@@ -726,9 +808,52 @@ mod tests {
         let fresh = dir.path().join("fresh");
         let mut create = request(&fresh, b"", b"mine", vec![insert(0, 0, b"mine")]);
         create.base = ABSENT.to_owned();
-        let value = apply_with(&create, || std::fs::write(&fresh, b"theirs").unwrap()).unwrap();
+        let value = apply_with(&create, |stage| {
+            if stage == "before_check" {
+                std::fs::write(&fresh, b"theirs").unwrap();
+            }
+        })
+        .unwrap();
         assert_eq!(value["status"], "conflict");
         assert_eq!(std::fs::read(&fresh).unwrap(), b"theirs");
+        assert_eq!(temps(dir.path()), 0);
+    }
+
+    #[test]
+    fn apply_restores_a_write_that_slips_in_after_the_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file");
+        std::fs::write(&path, b"one").unwrap();
+        let edit = request(&path, b"one", b"two", vec![insert(0, 3, b"two")]);
+        // Rewritten in place (same inode) and replaced (new inode): both are
+        // caught by the exchange and left as the competing writer left them.
+        for (competing, replace) in [(&b"edited in place"[..], false), (&b"replaced"[..], true)] {
+            std::fs::write(&path, b"one").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let value = apply_with(&edit, |stage| {
+                if stage != "before_publish" {
+                    return;
+                }
+                if replace {
+                    let other = dir.path().join("other");
+                    std::fs::write(&other, competing).unwrap();
+                    std::fs::rename(&other, &path).unwrap();
+                } else {
+                    std::fs::write(&path, competing).unwrap();
+                }
+            })
+            .unwrap();
+            assert_eq!(value["status"], "conflict", "{replace}");
+            assert_eq!(value["sha256"], digest(competing));
+            assert_eq!(std::fs::read(&path).unwrap(), competing);
+            assert_eq!(temps(dir.path()), 0);
+        }
+        // Without a competitor the exchange publishes a new inode.
+        let inode = std::fs::metadata(&path).unwrap().ino();
+        std::fs::write(&path, b"one").unwrap();
+        assert_eq!(apply_with(&edit, |_| {}).unwrap()["status"], "applied");
+        assert_ne!(std::fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
         assert_eq!(temps(dir.path()), 0);
     }
 
@@ -736,6 +861,10 @@ mod tests {
     fn apply_creates_parents_and_writes_through_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("a/b/new.rs");
+        // An edit never creates the directory of a file that is gone.
+        let gone = request(&nested, b"old", b"new", vec![insert(0, 3, b"new")]);
+        assert!(apply_with(&gone, |_| {}).is_err());
+        assert!(!dir.path().join("a").exists());
         let mut create = request(
             &nested,
             b"",
@@ -743,19 +872,19 @@ mod tests {
             vec![insert(0, 0, b"fn main() {}\n")],
         );
         create.base = ABSENT.to_owned();
-        assert_eq!(apply_with(&create, || {}).unwrap()["status"], "applied");
+        assert_eq!(apply_with(&create, |_| {}).unwrap()["status"], "applied");
         assert_eq!(std::fs::read(&nested).unwrap(), b"fn main() {}\n");
         // Creating over an existing file with an absent base is a conflict.
         let mut again = request(&nested, b"", b"x", vec![insert(0, 0, b"x")]);
         again.base = ABSENT.to_owned();
-        let value = apply_with(&again, || {}).unwrap();
+        let value = apply_with(&again, |_| {}).unwrap();
         assert_eq!(value["status"], "conflict");
         let target = dir.path().join("target");
         std::fs::write(&target, b"abc").unwrap();
         let link = dir.path().join("link");
         symlink(&target, &link).unwrap();
         let edit = request(&link, b"abc", b"abXc", vec![insert(2, 0, b"X")]);
-        assert_eq!(apply_with(&edit, || {}).unwrap()["status"], "applied");
+        assert_eq!(apply_with(&edit, |_| {}).unwrap()["status"], "applied");
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -772,7 +901,7 @@ mod tests {
         std::fs::write(&path, b"abcdef").unwrap();
         // Splices that do not produce the promised digest.
         let wrong = request(&path, b"abcdef", b"zzz", vec![insert(0, 1, b"Q")]);
-        assert!(apply_with(&wrong, || {}).is_err());
+        assert!(apply_with(&wrong, |_| {}).is_err());
         // Overlapping and out-of-range splices.
         let overlap = request(
             &path,
@@ -780,14 +909,14 @@ mod tests {
             b"x",
             vec![insert(2, 2, b""), insert(1, 0, b"")],
         );
-        assert!(apply_with(&overlap, || {}).is_err());
+        assert!(apply_with(&overlap, |_| {}).is_err());
         let outside = request(&path, b"abcdef", b"x", vec![insert(5, 9, b"")]);
-        assert!(apply_with(&outside, || {}).is_err());
+        assert!(apply_with(&outside, |_| {}).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
         // A directory or a FIFO is never a buffered file.
         let directory = dir.path().join("dir");
         std::fs::create_dir(&directory).unwrap();
-        assert!(apply_with(&request(&directory, b"", b"x", vec![]), || {}).is_err());
+        assert!(apply_with(&request(&directory, b"", b"x", vec![]), |_| {}).is_err());
         let fifo = dir.path().join("fifo");
         rustix::fs::mknodat(
             rustix::fs::CWD,
@@ -797,11 +926,11 @@ mod tests {
             0,
         )
         .unwrap();
-        assert!(apply_with(&request(&fifo, b"", b"x", vec![]), || {}).is_err());
+        assert!(apply_with(&request(&fifo, b"", b"x", vec![]), |_| {}).is_err());
         assert_eq!(temps(dir.path()), 0);
         let mut relative = request(&path, b"abcdef", b"abcdef", vec![]);
         relative.path = PathBuf::from("file");
-        assert!(apply_with(&relative, || {}).is_err());
+        assert!(apply_with(&relative, |_| {}).is_err());
     }
 
     #[test]
@@ -838,7 +967,7 @@ mod tests {
         let mut create = request(&path, b"", b"x", vec![insert(0, 0, b"x")]);
         create.base = ABSENT.to_owned();
         create.payload_directory = Some(payloads.clone());
-        assert_eq!(apply_with(&create, || {}).unwrap()["status"], "applied");
+        assert_eq!(apply_with(&create, |_| {}).unwrap()["status"], "applied");
         assert!(!stale.exists() && !payload.exists());
         assert!(young.exists() && foreign.exists());
     }

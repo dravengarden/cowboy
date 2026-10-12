@@ -370,8 +370,8 @@ impl Endpoint {
             "endpoint": format!("ws://{address}"), "bearer_token": token});
         // The Machine's file-buffer settings; absent on older Machines.
         if let Some(policy) = std::env::var_os(crate::config::file_buffers::POLICY_ENV)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
+            .and_then(|path| path.into_string().ok())
+            .filter(|path| Path::new(path).is_absolute())
         {
             descriptor_value["file_buffers"] = json!(policy);
         }

@@ -100,6 +100,16 @@ fn wants_update(
     opted_in || (fleet_policy && !system && idle_for.is_some_and(|idle| idle >= idle_after))
 }
 
+/// How long an exited session must stay quiet before it counts as dormant.
+/// A worker generation cutover exits the old worker at the end of a turn and
+/// the Machine starts its replacement on the same release seconds later;
+/// re-pinning in that gap would leave the record ahead of the live worker.
+const DORMANT_SETTLE: Duration = Duration::from_secs(60);
+
+fn dormant_settled(idle_for: Option<Duration>) -> bool {
+    idle_for.is_some_and(|idle| idle >= DORMANT_SETTLE)
+}
+
 /// Idle period after which policy applies the update unattended, if any.
 fn automatic_after(
     opted_in: bool,
@@ -329,6 +339,7 @@ async fn pass(
             }
             Status::Exited
                 if !live_worker
+                    && dormant_settled(state.hub.session_idle_for(&meta.id))
                     && !holds_worker_slot(&state.runtime_router, &meta)
                     && !state.hub.session_has_in_flight_prompt(&meta.id) =>
             {
@@ -418,6 +429,13 @@ fn repin_dormant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_that_just_exited_is_not_yet_dormant() {
+        assert!(!dormant_settled(None));
+        assert!(!dormant_settled(Some(Duration::from_secs(10))));
+        assert!(dormant_settled(Some(DORMANT_SETTLE)));
+    }
 
     #[test]
     fn one_machine_updates_one_session_at_a_time() {

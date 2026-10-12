@@ -278,6 +278,99 @@ test("a lost apply reply is resolved by the target's bytes, never reapplied", as
   assert.equal(await readFile(file, "utf8"), "theirs\n");
 });
 
+test("a file deleted since its read is recreated by Write and refused by Edit", async (t) => {
+  const { tools, target, calls } = await fixture(t, { policy: POLICY });
+  const file = join(target, "gone.txt");
+  await writeFile(file, "first\n");
+  await tools.call("read", { file_path: "gone.txt" });
+  await rm(file);
+  let result = await tools.call("edit", {
+    file_path: "gone.txt",
+    old_string: "first",
+    new_string: "second",
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /File does not exist/);
+  assert.equal(await stat(file).catch((error) => error.code), "ENOENT");
+  calls.length = 0;
+  result = await tools.call("write", {
+    file_path: "gone.txt",
+    content: "again\n",
+  });
+  assert.equal(result.isError, false, result.content[0].text);
+  assert.equal(await readFile(file, "utf8"), "again\n");
+  // The target refused the splice over an absent file; a second
+  // compare-and-swap against its absence created it, as natively.
+  assert.deepEqual(calls, ["command:apply", "command:apply"]);
+  const edited = await tools.call("edit", {
+    file_path: "gone.txt",
+    old_string: "again",
+    new_string: "edited",
+  });
+  assert.equal(edited.isError, false);
+  assert.equal(await readFile(file, "utf8"), "edited\n");
+  // The whole directory gone: the helper cannot lock it, and the target's
+  // own state settles it the same way.
+  const nested = join(target, "deep", "nested.txt");
+  await mkdir(join(target, "deep"));
+  await writeFile(nested, "n\n");
+  await tools.call("read", { file_path: "deep/nested.txt" });
+  await rm(join(target, "deep"), { recursive: true });
+  result = await tools.call("edit", {
+    file_path: "deep/nested.txt",
+    old_string: "n",
+    new_string: "m",
+  });
+  assert.match(result.content[0].text, /File does not exist/);
+  assert.equal(await stat(join(target, "deep")).catch((e) => e.code), "ENOENT");
+  result = await tools.call("write", {
+    file_path: "deep/nested.txt",
+    content: "m\n",
+  });
+  assert.equal(result.isError, false, result.content[0].text);
+  assert.equal(await readFile(nested, "utf8"), "m\n");
+});
+
+test("a Write of identical content still touches the file, as natively", async (t) => {
+  const { tools, target, calls } = await fixture(t, { policy: POLICY });
+  const file = join(target, "same.txt");
+  await writeFile(file, "same\n");
+  await tools.call("read", { file_path: "same.txt" });
+  const before = (await stat(file)).mtimeMs;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  calls.length = 0;
+  const result = await tools.call("write", {
+    file_path: "same.txt",
+    content: "same\n",
+  });
+  assert.equal(result.isError, false);
+  assert.deepEqual(calls, ["command:apply"]);
+  assert.ok((await stat(file)).mtimeMs > before);
+  assert.equal(await readFile(file, "utf8"), "same\n");
+});
+
+test("switching buffers off deletes the copies at the next file operation", async (t) => {
+  const { tools, target, buffers, policyPath } = await fixture(t, {
+    policy: POLICY,
+  });
+  await writeFile(join(target, "a.txt"), "a\n");
+  await tools.call("read", { file_path: "a.txt" });
+  assert.equal((await buffers()).length, 1);
+  await writeFile(policyPath, JSON.stringify({ ...POLICY, enabled: false }));
+  await utimes(policyPath, new Date(), new Date(Date.now() + 1000));
+  tools.fileBufferSweptAt = 0;
+  await tools.call("read", { file_path: "a.txt" });
+  assert.deepEqual(await buffers(), []);
+  // A pattern with too many `**` spans disables buffers rather than running
+  // an unbounded search per file.
+  await writeFile(
+    policyPath,
+    JSON.stringify({ ...POLICY, excluded: ["**/".repeat(9) + "x"] }),
+  );
+  await utimes(policyPath, new Date(), new Date(Date.now() + 2000));
+  assert.equal((await tools.fileBufferPolicy()).enabled, false);
+});
+
 test("a helper without apply falls back once and stays on whole files", async (t) => {
   const { tools, target, calls } = await fixture(t, { policy: POLICY });
   let refused = 0;
