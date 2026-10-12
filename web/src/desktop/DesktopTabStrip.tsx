@@ -346,20 +346,33 @@ export function DesktopTabStrip({
       }}
       sx={{
         display: "flex",
-        alignItems: "center",
-        gap: "0.25rem",
+        alignItems: "stretch",
+        flexShrink: 0,
+        height: "2.375rem",
         minWidth: 0,
         overflowX: "auto",
         overflowY: "hidden",
         scrollbarWidth: "none",
         "&::-webkit-scrollbar": { display: "none" },
+        // A recessed rail: the selected tab rises out of it into the page.
+        borderBottom: 1,
+        borderColor: "divider",
+        bgcolor: (t: Theme) =>
+          alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.28 : 0.045),
         ...sx,
       }}
     >
       <Box
         component="span"
         title="Tabs: then 1–9 open a tab, D close, P pin. ␣[ and ␣] step"
-        sx={{ display: "inline-flex", flexShrink: 0, pr: "0.125rem" }}
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          flexShrink: 0,
+          px: "0.625rem",
+          borderRight: 1,
+          borderColor: "divider",
+        }}
       >
         <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
       </Box>
@@ -433,28 +446,28 @@ export function DesktopTabStrip({
               display: "flex",
               alignItems: "center",
               gap: "0.375rem",
-              flex: item.pinned ? "0 0 auto" : "0 1 11rem",
-              minWidth: item.pinned ? 0 : "5.5rem",
-              maxWidth: item.pinned ? "8rem" : "11rem",
-              height: "2rem",
-              pl: "0.375rem",
-              pr: "0.125rem",
-              border: 1,
-              borderColor: "transparent",
-              borderRadius: "0.5rem",
+              flex: item.pinned ? "0 0 auto" : "0 1 13rem",
+              minWidth: item.pinned ? 0 : "7.5rem",
+              maxWidth: item.pinned ? "9rem" : "13rem",
+              pl: "0.625rem",
+              pr: "0.375rem",
+              borderRight: 1,
+              borderColor: "divider",
               cursor: "pointer",
               userSelect: "none",
               fontSize: "0.8125rem",
               color: selected ? "text.primary" : "text.secondary",
-              "&:hover": { bgcolor: "action.hover" },
-              // The selected tab carries the same material as the selected
-              // Sessions row.
+              transition: "background-color 120ms ease, color 120ms ease",
+              "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+              // The selected tab is the page's own surface: it covers the
+              // rail's bottom edge and carries the accent on top.
               ...(selected && {
-                borderColor: (t: Theme) => alpha(t.palette.primary.main, 0.38),
-                bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.13),
-                "&:hover": {
-                  bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.13),
-                },
+                bgcolor: "background.default",
+                mb: "-1px",
+                fontWeight: 500,
+                boxShadow: (t: Theme) =>
+                  `inset 0 2px 0 ${t.palette.primary.main}`,
+                "&:hover": { bgcolor: "background.default" },
               }),
               "&:hover [data-desktop-tab-close], &[aria-selected='true'] [data-desktop-tab-close]":
                 { opacity: 1 },
@@ -466,9 +479,7 @@ export function DesktopTabStrip({
                   bottom: "0.25rem",
                   width: "2px",
                   bgcolor: "primary.main",
-                  ...(drop.after
-                    ? { right: "-0.1875rem" }
-                    : { left: "-0.1875rem" }),
+                  ...(drop.after ? { right: "-1px" } : { left: "-1px" }),
                 },
               }),
             }}

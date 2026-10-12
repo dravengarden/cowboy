@@ -4989,6 +4989,36 @@ export function App({
                     }}
                 />
                 )}
+                {surface === "desktop" && (
+                    <Suspense fallback={null}>
+                        <DesktopTabStrip
+                            items={desktopTabItems}
+                            currentKey={workspaceItemKey}
+                            visits={desktopVisitKeys}
+                            exists={workspaceItemExists}
+                            onOpen={pick}
+                            onRename={(key): void => {
+                                const session = sessions.find((candidate) => candidate.id === key);
+                                if (session) setPendingRename(session);
+                            }}
+                            // The window's top row beside the Sessions sidebar:
+                            // installed-PWA window controls overlay its left
+                            // whenever the sidebar is not next to it.
+                            sx={{
+                                ...(sessionsInDrawer && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(env(titlebar-area-x, 0px) + 12px)",
+                                    },
+                                }),
+                                ...(sessionsCollapsed && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
+                                    },
+                                }),
+                            }}
+                        />
+                    </Suspense>
+                )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
@@ -5094,14 +5124,15 @@ export function App({
                             // past them only in that mode — when the sidebar is
                             // visible the controls sit over it instead (see
                             // sidebarHeader), and this bar must stay flush.
-                            ...(sessionsInDrawer && {
+                            // (On Desktop the tab bar above is that top row.)
+                            ...(sessionsInDrawer && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
                             // The collapsed Sessions rail is narrower than the
                             // window controls, so they overhang this bar too.
-                            ...(sessionsCollapsed && {
+                            ...(sessionsCollapsed && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
                                 },
@@ -5153,35 +5184,16 @@ export function App({
                                 {drawerOpen ? <CloseIcon /> : <MenuIcon />}
                             </IconButton>
                         )}
-                        {/* On Desktop the tabs take the title's place: the
-                            selected one names the page, and the session
-                            controls keep the rest of the bar. */}
-                        {surface === "desktop" && (
-                            <Suspense fallback={null}>
-                                <DesktopTabStrip
-                                    items={desktopTabItems}
-                                    currentKey={workspaceItemKey}
-                                    visits={desktopVisitKeys}
-                                    exists={workspaceItemExists}
-                                    onOpen={pick}
-                                    onRename={(key): void => {
-                                        const session = sessions.find((candidate) => candidate.id === key);
-                                        if (session) setPendingRename(session);
-                                    }}
-                                    // Beside session controls the tabs get at
-                                    // most half the bar and scroll past that;
-                                    // a Draft page has no controls to share with.
-                                    sx={{ flex: active ? "0 1 auto" : 1, maxWidth: active ? "50%" : "none" }}
-                                />
-                            </Suspense>
-                        )}
-                        {active && surface !== "desktop" ? (
+                        {active ? (
                             // Status is a leading dot (color = state); the
                             // ProviderIcon already names the agent, so the title
                             // drops the redundant "provider · " prefix the
                             // daemon stores and shows just the cwd (or the
                             // user's custom rename). Full string in the tooltip.
                             <Stack
+                                data-desktop-active-session={
+                                    surface === "desktop" ? "true" : undefined
+                                }
                                 direction="row"
                                 alignItems="center"
                                 spacing={0.75}
@@ -5190,7 +5202,26 @@ export function App({
                                     // A long title must end in an ellipsis inside
                                     // this cap, never run under the controls.
                                     overflow: "hidden",
-                                    flex: 1,
+                                    // Desktop gives the title only the width its
+                                    // text needs (up to the cap). The old 280px
+                                    // flex basis left a large dead zone after a
+                                    // short title while squeezing the controls.
+                                    flex: surface === "desktop" ? "0 1 auto" : 1,
+                                    maxWidth: surface === "desktop" ? 320 : "none",
+                                    ...(surface === "desktop" && sessionsInDrawer && !drawerOpen && {
+                                        // When the Sessions rail is collapsed,
+                                        // this is the only visible session tab.
+                                        // Transfer the selected material here;
+                                        // the drawer row owns it again when open.
+                                        minHeight: 34,
+                                        px: 0.75,
+                                        border: 1,
+                                        borderColor: (t) => alpha(t.palette.primary.main, 0.38),
+                                        borderRadius: 1.5,
+                                        bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
+                                        boxShadow: (t) =>
+                                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
+                                    }),
                                 }}
                             >
                                 <StatusDot status={active.status} backgroundTasks={active.background_tasks} providerUpdate={active.provider_update} />

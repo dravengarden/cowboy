@@ -186,12 +186,12 @@ Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
 
 #### Tabs
 
-The tabs lead the top bar, where the session title used to be, and hold the
-Sessions and Drafts kept open on this device (`workspaceTabs.ts`; per
-device, never synced, absent on Mobile). The selected tab names the page
-and carries the selected Sessions row's material. Beside session controls
-the tabs take at most half the bar and scroll past that; a Draft page gives
-them the whole bar. The item on screen always has a tab.
+The tab bar is the top row of the main area, above the top bar, and holds
+the Sessions and Drafts kept open on this device (`workspaceTabs.ts`; per
+device, never synced, absent on Mobile). It is a recessed rail: the
+selected tab has the page's own surface and an accent on top, so it reads
+as the page rising out of the rail. The top bar below keeps the session's
+title and controls. The item on screen always has a tab.
 
 Like VS Code and Zed, browsing does not pile tabs up. An item opened from
 the sidebar, `␣␣`, Recent or a link takes the one *preview* tab (italic
@@ -224,8 +224,8 @@ Keep Open, Reopen Closed Tab and (a Session) Rename. The menu acts on the
 tab it was opened on and shows the `␣B` slots when that is the current one.
 
 No direct chord is bound: `Ctrl+Tab`, `Ctrl/Cmd+W`, `Cmd+Shift+[`/`]` and
-`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The tabs
-are not top-bar items; their `␣B` slot covers every tab.
+`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The tab
+bar is not a focus region; its `␣B` slot covers every tab.
 
 #### Move pick
 
