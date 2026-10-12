@@ -650,7 +650,15 @@ function CallConversation({
   return (
     <Box
       data-call-conversation={call.call_id}
-      sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+      // minWidth: an unbreakable transcript line must scroll in its block,
+      // not widen the column past the modal beside the details panel.
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
     >
       {
         /* Desktop: one line of state above the transcript. A phone shows the

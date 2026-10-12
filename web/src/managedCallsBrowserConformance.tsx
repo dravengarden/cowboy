@@ -116,6 +116,9 @@ function childBootstrap(url: string): Response | null {
           "The retry path in `charge.go` resubmits after the provider accepted " +
             "the request, so a charge can be **duplicated**.\n\n" +
             "The outbound client also has no deadline.\n\n" +
+            // One unbreakable line: it must scroll inside its block, never
+            // widen the modal's conversation column.
+            "```text\n" + "node-heredoc-".repeat(120) + "\n```\n\n" +
             Array.from(
               { length: 40 },
               (_, line) => `Checked step ${line + 1} of the retry path.`,
@@ -385,6 +388,23 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => text().includes("Retry duplicates the charge") ? true : null,
       "full result not loaded",
     );
+    await until(
+      () => modal.textContent?.includes("node-heredoc-") ? true : null,
+      "the child transcript did not render",
+    );
+    const bounds = modal.getBoundingClientRect();
+    for (
+      const part of [
+        "[data-call-conversation='call-correctness']",
+        "[data-call-details-panel]",
+      ]
+    ) {
+      const edge = modal.querySelector(part)?.getBoundingClientRect().right;
+      check(
+        edge !== undefined && edge <= bounds.right + 0.5,
+        `${part} overflows the modal (${edge} > ${bounds.right})`,
+      );
+    }
     modal.dispatchEvent(
       new KeyboardEvent("keydown", { key: "i", bubbles: true }),
     );
