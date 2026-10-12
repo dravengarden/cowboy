@@ -3638,11 +3638,17 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 .and_then(|b| b.decode().ok())
                 .is_some_and(|b| intent.accepts(&b));
             let previous = broker.sessions.lock().get(&session.session_id).cloned();
-            let worker = broker
-                .workers
-                .lock()
-                .get(&session.session_id)
-                .and_then(|w| w.snapshot.launch.clone());
+            let (worker, worker_live) =
+                broker
+                    .workers
+                    .lock()
+                    .get(&session.session_id)
+                    .map_or((None, false), |w| {
+                        (
+                            w.snapshot.launch.clone(),
+                            !matches!(w.snapshot.state, WorkerState::Exited | WorkerState::Crashed),
+                        )
+                    });
             // Placement must be the recovered one everywhere; Provider identity
             // only matters for a running worker. A dormant session's retained
             // declaration may predate later Provider and auth generations.
@@ -3666,13 +3672,18 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                                     && b.managed == intent.previous.managed)
                         })
             };
+            // An exited agent keeps its worker process (and its launch) until
+            // drained; only a live agent's Provider identity must match.
             let compatible = previous.iter().all(placed)
                 && worker.iter().all(|old| {
                     placed(old)
-                        && old.provider == session.provider
-                        && old.provider_version == session.provider_version
-                        && old.provider_generation_digest == session.provider_generation_digest
-                        && old.provider_auth_generation == session.provider_auth_generation
+                        && (!worker_live
+                            || (old.provider == session.provider
+                                && old.provider_version == session.provider_version
+                                && old.provider_generation_digest
+                                    == session.provider_generation_digest
+                                && old.provider_auth_generation
+                                    == session.provider_auth_generation))
                 });
             if !valid || !compatible {
                 broker.command_rejected(
@@ -5671,6 +5682,76 @@ mod tests {
                 .lock()
                 .contains(&launch.session_id)
         );
+    }
+
+    #[tokio::test]
+    async fn execution_recovery_ignores_the_provider_identity_of_an_exited_worker() {
+        let (broker, mut launch, _) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut previous = crate::execution_environment::fixture().decode().unwrap();
+        previous.runtime.cwd.clone_from(&launch.cwd);
+        previous
+            .workspace
+            .worktree_id
+            .clone_from(&launch.session_id);
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-exited".into(),
+            previous: previous.clone(),
+        };
+        let record = |b: &crate::execution_environment::BindingV1| {
+            crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(b).unwrap(),
+            )
+        };
+        // The worker process survives with an exited agent launched by an
+        // older Provider generation.
+        launch.execution_binding = Some(record(&previous));
+        launch.provider_version = "3.19.1".into();
+        launch.provider_auth_generation = Some(1);
+        {
+            let mut workers = broker.workers.lock();
+            let worker = workers.get_mut(&launch.session_id).unwrap();
+            worker.snapshot.state = WorkerState::Exited;
+            worker.snapshot.launch = Some(launch.clone());
+        }
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), launch.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let mut next = previous.clone();
+        next.revision += 1;
+        next.environment.id = "replacement".into();
+        next.environment.incarnation = "replacement".into();
+        let mut candidate = launch;
+        candidate.execution_binding = Some(record(&next));
+        candidate.provider_version = "3.19.25".into();
+        candidate.provider_auth_generation = Some(9);
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(candidate),
+                intent: Box::new(intent),
+                command_id: "exited-recovery".into(),
+            },
+        )
+        .await;
+        let mut acked = false;
+        while let Ok(frame) = rx.try_recv() {
+            acked |= matches!(frame, Frame::CommandAck { .. });
+            assert!(
+                !matches!(
+                    &frame,
+                    Frame::CommandAck { accepted: false, reason: Some(reason), .. }
+                        if reason == "execution recovery identity changed"
+                ),
+                "an exited worker's stale identity must not refuse recovery"
+            );
+        }
+        assert!(acked);
     }
 
     #[tokio::test]
