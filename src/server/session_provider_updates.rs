@@ -21,6 +21,9 @@ const REQUEST_POLL: Duration = Duration::from_secs(5);
 /// How long unattended updates to a release pause on a Machine after one of
 /// them left a session crashed. An explicit request still goes through.
 const FAILURE_HOLD: Duration = Duration::from_mins(30);
+/// A session starting for longer than this no longer paces its Machine. Every
+/// start phase gives up well inside it (the longest, a native resume, at 240s).
+const STARTING_STALL: Duration = Duration::from_mins(10);
 
 fn key(session: &str) -> String {
     format!(
@@ -132,6 +135,37 @@ fn machines_ready_for_update<'a>(
     ready
 }
 
+/// Sessions that have been starting since before `now - STARTING_STALL`. A
+/// worker start is bounded by the Machine's own timeouts, so one that never
+/// settles is wedged rather than loading the Machine, and must not keep every
+/// other session on its Machine from updating. Reports each once.
+fn stalled_starts<'a>(
+    starting_since: &mut HashMap<String, (Instant, bool)>,
+    sessions: impl IntoIterator<Item = (&'a str, Status)>,
+    now: Instant,
+) -> HashSet<String> {
+    let starting: HashSet<&str> = sessions
+        .into_iter()
+        .filter_map(|(id, status)| (status == Status::Starting).then_some(id))
+        .collect();
+    starting_since.retain(|id, _| starting.contains(id.as_str()));
+    let mut stalled = HashSet::new();
+    for id in starting {
+        let (since, reported) = starting_since.entry(id.to_owned()).or_insert((now, false));
+        if now.saturating_duration_since(*since) < STARTING_STALL {
+            continue;
+        }
+        if !std::mem::replace(reported, true) {
+            tracing::warn!(
+                session = %id,
+                "session has not finished starting; automatic Provider updates no longer wait for it"
+            );
+        }
+        stalled.insert(id.to_owned());
+    }
+    stalled
+}
+
 /// A requested update whose session just became idle should not wait for the
 /// next full pass.
 fn requested_update_ready(state: &AppState) -> bool {
@@ -150,6 +184,7 @@ pub(super) async fn run(state: Arc<AppState>) {
     let mut tick = tokio::time::interval(REQUEST_POLL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pass: Option<Instant> = None;
+    let mut starting_since = HashMap::new();
     loop {
         tokio::select! {
             _ = shutdown.changed() => break,
@@ -161,17 +196,27 @@ pub(super) async fn run(state: Arc<AppState>) {
             continue;
         }
         last_pass = Some(Instant::now());
-        pass(&state, &shutdown).await;
+        pass(&state, &shutdown, &mut starting_since).await;
     }
 }
 
 type TargetKey = (String, String, String, String);
 
-async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<bool>) {
+async fn pass(
+    state: &Arc<AppState>,
+    shutdown: &tokio::sync::watch::Receiver<bool>,
+    starting_since: &mut HashMap<String, (Instant, bool)>,
+) {
     let sessions = state.hub.session_list();
+    let stalled = stalled_starts(
+        starting_since,
+        sessions.iter().map(|meta| (meta.id.as_str(), meta.status)),
+        Instant::now(),
+    );
     let mut ready = machines_ready_for_update(
         sessions
             .iter()
+            .filter(|meta| !stalled.contains(&meta.id))
             .map(|meta| (meta.machine_id.as_str(), meta.status)),
     );
     let fleet_policy = state
@@ -384,6 +429,25 @@ mod tests {
             ("falcon", Status::Starting),
         ]);
         assert_eq!(ready, HashSet::from(["hawk".to_owned()]));
+    }
+
+    #[test]
+    fn a_wedged_start_stops_pacing_its_machine() {
+        let start = Instant::now();
+        let mut since = HashMap::new();
+        let sessions = [("wedged", Status::Starting), ("idle", Status::Running)];
+        assert!(stalled_starts(&mut since, sessions, start).is_empty());
+        let late = start + STARTING_STALL;
+        // A session that began starting later has its own clock.
+        let later = [("wedged", Status::Starting), ("fresh", Status::Starting)];
+        assert_eq!(
+            stalled_starts(&mut since, later, late),
+            HashSet::from(["wedged".to_owned()])
+        );
+        // Settling forgets the clock, so the next start is measured afresh.
+        assert!(stalled_starts(&mut since, [("wedged", Status::Running)], late).is_empty());
+        assert!(stalled_starts(&mut since, [("wedged", Status::Starting)], late).is_empty());
+        assert_eq!(since.len(), 1);
     }
 
     #[test]
