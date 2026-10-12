@@ -13,6 +13,7 @@
 mod agent_tools;
 mod dormant_pins;
 mod secure_transport;
+mod session_create_replay;
 mod session_provider_updates;
 mod session_reclaim;
 
@@ -274,6 +275,7 @@ struct AppState {
     telemetry_writer_admission:
         Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
     plugin_lifecycle_fences: PluginLifecycleFences,
+    session_create_replays: Arc<session_create_replay::Replays>,
     desired_machine_components: Arc<crate::machine_convergence::DesiredComponentSource>,
     component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
     convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
@@ -1777,6 +1779,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             telemetry_binding_fence,
             telemetry_writer_admission,
             plugin_lifecycle_fences,
+            session_create_replays: Arc::default(),
             desired_machine_components,
             component_convergence,
             convergence_freeze,
@@ -10290,7 +10293,13 @@ async fn serve_axum(
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
         .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
-        .route("/api/sessions", post(api_new_session))
+        .route(
+            "/api/sessions",
+            post(api_new_session).layer(middleware::from_fn_with_state(
+                Arc::clone(&state.session_create_replays),
+                session_create_replay::replay,
+            )),
+        )
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
         .route(
             "/api/sessions/{id}/calls/approval",
@@ -10307,7 +10316,13 @@ async fn serve_axum(
             "/api/sessions/{id}/calls/{call_id}/cancel",
             post(managed_calls::cancel),
         )
-        .route("/api/execution-sessions", post(execution::sessions::create))
+        .route(
+            "/api/execution-sessions",
+            post(execution::sessions::create).layer(middleware::from_fn_with_state(
+                Arc::clone(&state.session_create_replays),
+                session_create_replay::replay,
+            )),
+        )
         .route("/api/execution-environments", get(execution::sessions::availability))
         .route(
             "/api/sessions/reconcile-project",

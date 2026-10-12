@@ -339,6 +339,7 @@ import {
 } from "./controlPlane";
 import { resolveActiveSession } from "./sessionSelection";
 import { useBootPresentation } from "./useBootPresentation";
+import { newUuid } from "./uuid";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
 import {
@@ -2816,6 +2817,9 @@ export function CreateDialog({
     const [draftTitle, setDraftTitle] = useState("");
     const selectDraftTitleOnFocus = useRef(true);
     const creatingRef = useRef(false);
+    // One key per opened sheet: a repeated submit of the same Create names the
+    // same session to the daemon instead of creating a second one.
+    const createKeyRef = useRef("");
     const machines = useStoreSelector((snapshot) => snapshot.machines);
     const placement = useProjectPlacement(open, machines);
     const fullInstallation = placement.installations.find((installation) => installation.full);
@@ -2870,6 +2874,7 @@ export function CreateDialog({
         setDraftTitle(defaultDraftTitle());
         selectDraftTitleOnFocus.current = true;
         creatingRef.current = false;
+        createKeyRef.current = newUuid();
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setDirectory(initialFolder ?? "");
         setFolderName("");
@@ -2929,8 +2934,6 @@ export function CreateDialog({
                 })
                 .catch((error: unknown): void => {
                     setCreateError(error instanceof Error ? error.message : "Draft creation failed");
-                })
-                .finally((): void => {
                     creatingRef.current = false;
                     setCreating(false);
                 });
@@ -2948,10 +2951,14 @@ export function CreateDialog({
         setCreating(true);
         setCreateError("");
         void (async (): Promise<void> => {
+            let created = false;
             try {
                 const response = await fetch(placement.separate ? "/api/execution-sessions" : "/api/sessions", {
                     method: "POST",
-                    headers: { "content-type": "application/json" },
+                    headers: {
+                        "content-type": "application/json",
+                        "idempotency-key": createKeyRef.current,
+                    },
                     body: JSON.stringify({
                         provider,
                         machine_id: machineId,
@@ -3020,6 +3027,7 @@ export function CreateDialog({
                         }
                         : {}),
                 }, directory || null);
+                created = true;
                 onClose();
             } catch (error) {
                 // Creating a session is live-only (docs/offline-first-sync.md,
@@ -3035,8 +3043,13 @@ export function CreateDialog({
                         : "Session creation failed",
                 );
             } finally {
-                creatingRef.current = false;
-                setCreating(false);
+                // A created session keeps the sheet submitted while it closes;
+                // the next open resets it. Releasing here would let a second
+                // activation during the close animation create a duplicate.
+                if (!created) {
+                    creatingRef.current = false;
+                    setCreating(false);
+                }
             }
         })();
     };
