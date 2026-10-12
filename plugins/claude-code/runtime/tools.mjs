@@ -219,37 +219,39 @@ const MODIFIED_SINCE_READ =
 // Remote file buffers (docs/remote-file-buffers.md). The Machine's Device
 // configuration is projected into a JSON file the worker names in the
 // execution descriptor; an older Machine names none and the defaults apply.
+const FILE_BUFFER_EXCLUDED = Object.freeze([
+  ".env",
+  ".env.*",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
+  "*.kdbx",
+  "id_rsa*",
+  "id_ecdsa*",
+  "id_ed25519*",
+  "**/.ssh/**",
+  "**/.gnupg/**",
+  "*.png",
+  "*.jpg",
+  "*.jpeg",
+  "*.gif",
+  "*.webp",
+  "*.pdf",
+  "*.ipynb",
+  "*.db",
+  "*.sqlite",
+  "*.sqlite3",
+]);
 const FILE_BUFFER_DEFAULTS = Object.freeze({
   schema: 1,
   enabled: true,
   max_file_size: 2 * 1024 * 1024,
-  excluded: Object.freeze([
-    ".env",
-    ".env.*",
-    "*.pem",
-    "*.key",
-    "*.p12",
-    "*.pfx",
-    "*.kdbx",
-    "id_rsa*",
-    "id_ecdsa*",
-    "id_ed25519*",
-    "**/.ssh/**",
-    "**/.gnupg/**",
-    "*.png",
-    "*.jpg",
-    "*.jpeg",
-    "*.gif",
-    "*.webp",
-    "*.pdf",
-    "*.ipynb",
-    "*.db",
-    "*.sqlite",
-    "*.sqlite3",
-  ]),
+  excluded: FILE_BUFFER_EXCLUDED,
   cache_max_bytes: 64 * 1024 * 1024,
   cache_max_age_seconds: 24 * 3600,
   target_temp_max_age_seconds: 3600,
+  matches: fileBufferMatcher(FILE_BUFFER_EXCLUDED),
 });
 const FILE_BUFFERS_DISABLED = Object.freeze({
   ...FILE_BUFFER_DEFAULTS,
@@ -298,7 +300,9 @@ function validFileBufferPolicy(value) {
     Array.isArray(value.excluded) && value.excluded.length <= 256 &&
     value.excluded.every((pattern) =>
       typeof pattern === "string" && pattern.length > 0 &&
-      pattern.length <= 256
+      pattern.length <= 256 &&
+      // Each `**` is an unanchored search; the Device bounds them too.
+      pattern.split("**").length <= 9
     ) &&
     size(value.cache_max_bytes, 1024 ** 3) &&
     size(value.cache_max_age_seconds, 366 * 24 * 3600) &&
@@ -1667,7 +1671,13 @@ export class WorkspaceTools {
       return undefined;
     }
     const policy = await this.fileBufferPolicy();
-    if (!policy.enabled) return undefined;
+    if (!policy.enabled) {
+      // Copies kept before buffers were switched off go now.
+      if (Date.now() - (this.fileBufferSweptAt ?? 0) >= BUFFER_SWEEP_INTERVAL) {
+        await this.fileBufferSweep(policy).catch(() => {});
+      }
+      return undefined;
+    }
     const matches = policy.matches ?? fileBufferMatcher(policy.excluded);
     return matches(path) ? undefined : policy;
   }
@@ -1790,6 +1800,8 @@ export class WorkspaceTools {
   // the file still hashes to `base`, and reports what the file then holds.
   // Undefined when the outcome is unknown.
   async fileBufferApply(path, base, written, policy, call) {
+    let payload;
+    let consumed = false;
     const request = JSON.stringify({
       schema: 1,
       path,
@@ -1801,7 +1813,6 @@ export class WorkspaceTools {
         ? { payloadDirectory: this.fileBufferPayloadDirectory() }
         : {}),
     });
-    let payload;
     try {
       let args;
       if (Buffer.byteLength(request) <= INLINE_APPLY) {
@@ -1843,6 +1854,8 @@ export class WorkspaceTools {
         (outcome.status !== "error" &&
           outcome.sha256 !== "absent" && !BUFFER_NAME.test(outcome.sha256))
       ) return undefined;
+      // The helper deletes a request file as it reads it.
+      consumed = true;
       this.fileBufferStats.applies++;
       this.fileBufferStats.sentBytes += Buffer.byteLength(request);
       return outcome;
@@ -1850,8 +1863,8 @@ export class WorkspaceTools {
       if (call?.id && this.calls.get(call.id)?.cancelled) throw error;
       return undefined;
     } finally {
-      if (payload) {
-        // Consumed by the helper; removed here too after an uncertain start.
+      if (payload && !consumed) {
+        // Never read by the helper, or not known to have been.
         await this.connection.call("fs/remove", {
           path: pathToFileURL(payload).href,
           force: true,
@@ -3576,6 +3589,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (known === undefined) {
       await this.rememberRead(path, bytes ? hash(bytes) : "absent");
     }
+    const expect = hash(written);
     let committed = false;
     if (
       buffers && written.length <= buffers.max_file_size &&
@@ -3583,18 +3597,30 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     ) {
       // Replaced as native replaces it (a new inode), and only if the target
       // still holds exactly the bytes this edit started from.
-      const outcome = await this.fileBufferApply(
-        path,
-        bytes,
-        written,
-        buffers,
-        call,
-      );
-      if (outcome?.status === "applied" && outcome.sha256 === hash(written)) {
-        committed = true;
-      } else if (outcome?.status === "conflict") {
-        throw new Error(MODIFIED_SINCE_READ);
-      } else {
+      let base = bytes;
+      for (;;) {
+        const outcome = await this.fileBufferApply(
+          path,
+          base,
+          written,
+          buffers,
+          call,
+        );
+        if (outcome?.status === "applied" && outcome.sha256 === expect) {
+          committed = true;
+          break;
+        }
+        if (outcome?.status === "conflict") {
+          if (outcome.sha256 !== "absent" || base === undefined) {
+            throw new Error(MODIFIED_SINCE_READ);
+          }
+          // Deleted since it was read: natively an Edit cannot read it and
+          // a Write creates it again, here by one more compare-and-swap,
+          // against its absence.
+          if (name === "edit") throw new Error(`File does not exist: ${shown}`);
+          base = undefined;
+          continue;
+        }
         // Failed or unknown: the helper never leaves the file between the
         // two states, so the target's own bytes decide.
         let now;
@@ -3604,11 +3630,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           await failed(error);
         }
         const held = now ? hash(now) : "absent";
-        if (held === hash(written)) committed = true;
-        else if (held !== (bytes ? hash(bytes) : "absent")) {
-          throw new Error(MODIFIED_SINCE_READ);
+        if (held === expect) committed = true;
+        else if (held !== (base ? hash(base) : "absent")) {
+          if (held !== "absent") throw new Error(MODIFIED_SINCE_READ);
+          if (name === "edit") throw new Error(`File does not exist: ${shown}`);
+          // A Write of a file deleted since its read: created below.
         }
         this.live(call);
+        break;
       }
     }
     if (!committed) {
@@ -3625,7 +3654,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         dataBase64: written.toString("base64"),
       });
     }
-    await this.rememberRead(path, hash(written));
+    await this.rememberRead(path, expect);
     await this.fileBufferPut(written, buffers);
     const native = name === "write"
       ? {

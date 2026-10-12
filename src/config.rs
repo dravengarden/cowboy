@@ -111,6 +111,8 @@ pub enum Kind {
 
 /// The longest accepted glob pattern.
 pub const MAX_PATTERN_LEN: usize = 256;
+/// `**` segments per pattern; each one is an unanchored search when matching.
+pub const MAX_PATTERN_SPANS: usize = 8;
 
 impl Kind {
     fn describe(&self) -> String {
@@ -871,12 +873,13 @@ fn parse_value(kind: &Kind, value: &toml::de::DeValue<'_>) -> Result<Value, Prob
                     DeValue::String(text)
                         if !text.is_empty()
                             && text.chars().count() <= MAX_PATTERN_LEN
-                            && !text.chars().any(char::is_control) =>
+                            && !text.chars().any(char::is_control)
+                            && text.matches("**").count() <= MAX_PATTERN_SPANS =>
                     {
                         Ok(std::borrow::Cow::Owned(text.to_string()))
                     }
                     DeValue::String(text) => Err(Problem::Syntax(format!(
-                        "{:?} must be a non-empty pattern of at most {MAX_PATTERN_LEN} printable characters",
+                        "{:?} must be a non-empty pattern of at most {MAX_PATTERN_LEN} printable characters with at most {MAX_PATTERN_SPANS} `**`",
                         text.as_ref()
                     ))),
                     _ => Err(Problem::Type),

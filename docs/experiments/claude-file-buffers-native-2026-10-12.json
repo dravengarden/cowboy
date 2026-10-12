@@ -8,7 +8,7 @@
   "measurements": [
     {
       "mode": "whole_file",
-      "elapsed_ms": 16.487796000000003,
+      "elapsed_ms": 13.807138000000009,
       "rpc_count": 2,
       "methods": [
         "fs/getMetadata",
@@ -18,7 +18,7 @@
     },
     {
       "mode": "target_range",
-      "elapsed_ms": 26.490683999999987,
+      "elapsed_ms": 24.046823999999987,
       "rpc_count": 4,
       "methods": [
         "fs/getMetadata",
@@ -30,14 +30,14 @@
     }
   ],
   "quiet_command_process_reads": 3,
-  "cancel_while_collecting_ms": 957.0382420000001,
+  "cancel_while_collecting_ms": 954.3234029999999,
   "quiet_command_reads": 6,
-  "quiet_command_ms": 9011.72097,
-  "cancel_while_quiet_ms": 9.711107000002812,
+  "quiet_command_ms": 9009.185512,
+  "cancel_while_quiet_ms": 5.947800000001735,
   "file_buffer_edits": [
     {
       "mode": "whole_file",
-      "elapsed_ms": 6.075812999999471,
+      "elapsed_ms": 3.2654339999971853,
       "rpc_count": 4,
       "methods": [
         "fs/getMetadata",
@@ -49,7 +49,7 @@
     },
     {
       "mode": "file_buffer",
-      "elapsed_ms": 13.581248999998934,
+      "elapsed_ms": 13.346626000002288,
       "rpc_count": 2,
       "methods": [
         "process/start",

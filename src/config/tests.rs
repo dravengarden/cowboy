@@ -74,7 +74,14 @@ fn pattern_lists_replace_defaults_and_reject_bad_entries() {
             .get(&schema::DEVICE_FILE_BUFFERS_EXCLUDED)
             .is_empty()
     );
-    for bad in ["[\"\"]", "[1]", "\"*.bin\"", "[\"a\\u0001\"]"] {
+    let spans = format!("[\"{}\"]", "**/".repeat(9));
+    for bad in [
+        "[\"\"]",
+        "[1]",
+        "\"*.bin\"",
+        "[\"a\\u0001\"]",
+        spans.as_str(),
+    ] {
         let text = format!("schema = 1\n[file_buffers]\nexcluded = {bad}\n");
         assert!(!check_text(Scope::Device, &text, None).is_valid(), "{bad}");
     }
