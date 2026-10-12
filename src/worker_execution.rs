@@ -366,11 +366,16 @@ impl Endpoint {
             .write(true)
             .mode(0o600)
             .open(&descriptor)?;
-        serde_json::to_writer(
-            &file,
-            &json!({"schema": 1, "binding": client.binding,
-            "endpoint": format!("ws://{address}"), "bearer_token": token}),
-        )?;
+        let mut descriptor_value = json!({"schema": 1, "binding": client.binding,
+            "endpoint": format!("ws://{address}"), "bearer_token": token});
+        // The Machine's file-buffer settings; absent on older Machines.
+        if let Some(policy) = std::env::var_os(crate::config::file_buffers::POLICY_ENV)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+        {
+            descriptor_value["file_buffers"] = json!(policy);
+        }
+        serde_json::to_writer(&file, &descriptor_value)?;
         file.sync_all()?;
         let endpoint_client = Arc::clone(&client);
         let listener = tokio::spawn(async move {

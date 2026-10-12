@@ -451,6 +451,9 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     )?);
     let _device_config_watch =
         device_config.watch(crate::config::Scope::Device, device_config_path);
+    let file_buffers_policy = crate::config::file_buffers::path(&args.state_dir);
+    let _file_buffers_policy =
+        crate::config::file_buffers::start(device_config.clone(), file_buffers_policy.clone())?;
     let runtime_socket = args.socket.clone();
     let bootstrap_acp_generation = if args.desired_generation.is_empty() {
         env!("CARGO_PKG_VERSION").to_owned()
@@ -497,6 +500,10 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     worker_environment.insert(
         "COWBOY_LOGS_DIR".into(),
         log_directory.display().to_string(),
+    );
+    worker_environment.insert(
+        crate::config::file_buffers::POLICY_ENV.into(),
+        file_buffers_policy.display().to_string(),
     );
     let worktree_roots = machine_worktree_roots(args.worktree_root.clone(), &args.state_dir);
     let execution_env = validate_execution_env(args.execution_env.clone())?;

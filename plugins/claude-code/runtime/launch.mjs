@@ -1070,6 +1070,7 @@ async function native(args) {
       descriptor.binding,
       join(root, "state.json"),
     );
+    tools.useFileBuffers(descriptor.file_buffers);
     await tools.load();
     // The binding, the launch profile and the target's keeper must agree.
     let managed;

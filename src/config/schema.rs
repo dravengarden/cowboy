@@ -114,6 +114,44 @@ pub const DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER: Key<Duration> =
 pub const DEVICE_CONTROLLER_PROBE_TIMEOUT: Key<Duration> =
     Key::new(Scope::Device, "connection.controller_probe_timeout");
 
+pub const DEVICE_FILE_BUFFERS_ENABLED: Key<bool> = Key::new(Scope::Device, "file_buffers.enabled");
+pub const DEVICE_FILE_BUFFERS_MAX_FILE_SIZE: Key<u64> =
+    Key::new(Scope::Device, "file_buffers.max_file_size");
+pub const DEVICE_FILE_BUFFERS_EXCLUDED: Key<Vec<String>> =
+    Key::new(Scope::Device, "file_buffers.excluded");
+pub const DEVICE_FILE_BUFFERS_CACHE_MAX_BYTES: Key<u64> =
+    Key::new(Scope::Device, "file_buffers.cache_max_bytes");
+pub const DEVICE_FILE_BUFFERS_CACHE_MAX_AGE: Key<Duration> =
+    Key::new(Scope::Device, "file_buffers.cache_max_age");
+pub const DEVICE_FILE_BUFFERS_TARGET_TEMP_MAX_AGE: Key<Duration> =
+    Key::new(Scope::Device, "file_buffers.target_temp_max_age");
+
+/// Secrets, binary media and live databases never get a local buffer copy.
+const FILE_BUFFERS_EXCLUDED: &[std::borrow::Cow<'static, str>] = &[
+    std::borrow::Cow::Borrowed(".env"),
+    std::borrow::Cow::Borrowed(".env.*"),
+    std::borrow::Cow::Borrowed("*.pem"),
+    std::borrow::Cow::Borrowed("*.key"),
+    std::borrow::Cow::Borrowed("*.p12"),
+    std::borrow::Cow::Borrowed("*.pfx"),
+    std::borrow::Cow::Borrowed("*.kdbx"),
+    std::borrow::Cow::Borrowed("id_rsa*"),
+    std::borrow::Cow::Borrowed("id_ecdsa*"),
+    std::borrow::Cow::Borrowed("id_ed25519*"),
+    std::borrow::Cow::Borrowed("**/.ssh/**"),
+    std::borrow::Cow::Borrowed("**/.gnupg/**"),
+    std::borrow::Cow::Borrowed("*.png"),
+    std::borrow::Cow::Borrowed("*.jpg"),
+    std::borrow::Cow::Borrowed("*.jpeg"),
+    std::borrow::Cow::Borrowed("*.gif"),
+    std::borrow::Cow::Borrowed("*.webp"),
+    std::borrow::Cow::Borrowed("*.pdf"),
+    std::borrow::Cow::Borrowed("*.ipynb"),
+    std::borrow::Cow::Borrowed("*.db"),
+    std::borrow::Cow::Borrowed("*.sqlite"),
+    std::borrow::Cow::Borrowed("*.sqlite3"),
+];
+
 pub static DEVICE_FIELDS: &[Field] = &[
     Field {
         key: "connection.controller_probe_timeout",
@@ -158,5 +196,59 @@ pub static DEVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(7 * 24)),
         reload: Reload::Live,
         doc: "Remove a cached runtime artifact once no retained Plugin generation\nreferences it and it has not been written for this long.",
+    },
+    Field {
+        key: "file_buffers.enabled",
+        kind: Kind::Bool,
+        default: Value::Bool(true),
+        reload: Reload::Live,
+        doc: "Remote sessions keep a verified copy of each file they read and edit it\nwith a hash-checked splice on the target instead of resending the file.\nfalse returns every file to whole-file reads and writes.",
+    },
+    Field {
+        key: "file_buffers.max_file_size",
+        kind: Kind::Bytes {
+            min: 1024,
+            max: 4 << 20,
+        },
+        default: Value::Bytes(2 << 20),
+        reload: Reload::Live,
+        doc: "Larger files are read and written whole, without a buffered copy.",
+    },
+    Field {
+        key: "file_buffers.excluded",
+        kind: Kind::Patterns { max_items: 256 },
+        default: Value::Patterns(std::borrow::Cow::Borrowed(FILE_BUFFERS_EXCLUDED)),
+        reload: Reload::Live,
+        doc: "Files matching any glob are read and written whole and never copied to\nthis Device. A pattern without `/` matches the file name; one with `/`\nmatches the absolute target path, where `**` spans directories. Matching\nignores ASCII case. Replacing the list drops the defaults.",
+    },
+    Field {
+        key: "file_buffers.cache_max_bytes",
+        kind: Kind::Bytes {
+            min: 0,
+            max: 1 << 30,
+        },
+        default: Value::Bytes(64 << 20),
+        reload: Reload::Live,
+        doc: "Each session keeps at most this many bytes of buffered copies, evicting\nthe least recently used first. \"0B\" keeps none.",
+    },
+    Field {
+        key: "file_buffers.cache_max_age",
+        kind: Kind::Duration {
+            min: Duration::from_mins(1),
+            max: Duration::from_hours(30 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(24)),
+        reload: Reload::Live,
+        doc: "A buffered copy unused for this long is deleted from this Device.",
+    },
+    Field {
+        key: "file_buffers.target_temp_max_age",
+        kind: Kind::Duration {
+            min: Duration::from_mins(10),
+            max: Duration::from_hours(7 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(1)),
+        reload: Reload::Live,
+        doc: "On the target, a temporary or request file an interrupted write left\nbehind is deleted by the next write in its directory once it is this old.",
     },
 ];
