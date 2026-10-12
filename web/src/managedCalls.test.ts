@@ -8,6 +8,7 @@ import {
   type ManagedCallSummary,
   managedChildParent,
   reviewFindings,
+  startedLabel,
 } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
 
@@ -113,4 +114,21 @@ test("review findings use the common structured shape only", () => {
   }]);
   assert.equal(reviewFindings({ answer: 42 }), null);
   assert.equal(reviewFindings("plain text"), null);
+});
+
+test("a call's start is as short as it stays unambiguous", () => {
+  const now = new Date(2026, 9, 12, 21, 56).getTime();
+  assert.equal(startedLabel(new Date(2026, 9, 12, 9, 5).getTime(), now), "09:05");
+  assert.equal(
+    startedLabel(new Date(2026, 9, 11, 22, 32).getTime(), now),
+    "Yesterday 22:32",
+  );
+  assert.equal(
+    startedLabel(new Date(2026, 9, 9, 22, 32).getTime(), now),
+    "Oct 9 22:32",
+  );
+  assert.equal(
+    startedLabel(new Date(2025, 11, 30, 8, 0).getTime(), now),
+    "Dec 30, 2025 08:00",
+  );
 });

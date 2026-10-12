@@ -54,12 +54,14 @@ import {
   callTitle,
   callTone,
   cancelCall,
+  callTimesTitle,
   elapsedLabel,
   machineName,
   type ManagedCallDetail,
   type ManagedCallSummary,
   providerLabel,
   reviewFindings,
+  startedLabel,
   reviewSummary,
   reviewVerdict,
   shortRevision,
@@ -184,13 +186,23 @@ function CallRow({
           >
             {callTitle(call)}
           </Typography>
+          {
+            /* The icon names the agent; the start and duration place the
+              call in time. */
+          }
           <Typography
             variant="caption"
             color="text.secondary"
             noWrap
             component="div"
+            title={callTimesTitle(call)}
+            aria-label={`${providerLabel(call.provider)} · ${
+              placementLabel(call)
+            } · started ${startedLabel(call.created_at_ms)} · ${
+              elapsedLabel(call.created_at_ms, end)
+            }`}
           >
-            {providerLabel(call.provider)} · {placementLabel(call)} ·{" "}
+            {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
             {elapsedLabel(call.created_at_ms, end)}
           </Typography>
         </Box>
@@ -603,9 +615,14 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           textOverflow: "ellipsis",
           minWidth: 0,
         }}
+        title={callTimesTitle(call)}
       >
-        {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
-        {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
+        {
+          /* The icon names the agent and Details its version; a phone
+            keeps where and when. */
+        }
+        {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
+        {elapsedLabel(call.created_at_ms, end)}
       </Box>
       {
         /* A finished review's findings already say it completed. */
@@ -685,9 +702,11 @@ function CallConversation({
           color="text.secondary"
           noWrap
           sx={{ flex: 1, minWidth: 0 }}
+          title={callTimesTitle(call)}
         >
           {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
-          {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
+          {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
+          {elapsedLabel(call.created_at_ms, end)}
         </Typography>
         {
           /* A verdict already says the review finished. */
