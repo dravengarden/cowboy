@@ -44,6 +44,14 @@ uses 10-minute sender-constrained access tokens, and rotates its refresh token o
 one year from approval. The Service stores only the public key and refresh-token
 hash. Account → Authorized devices lists and revokes these clients.
 
+Zed hides the bridge's stderr, so while the approval is pending every
+`session/new`, `session/list` and `session/load` fails at once with the
+approval link and the client fingerprint instead of a readiness timeout. Open
+the link on any signed-in device, approve, and start the thread again. The
+link is also always written to stderr: a headless host starts its browser
+opener successfully and shows nothing. A denied approval ends the bridge; an
+expired one is requested again.
+
 On a headless host the ACP bridge may keep its API connection on loopback. The
 Controller then advertises `COWBOY_PUBLIC_ORIGIN` as the HTTPS browser approval
 page, so the link opens on another device without exposing the API port. A
