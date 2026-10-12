@@ -16,6 +16,8 @@ pub const PLUGIN_GENERATION_RETENTION_INTERVAL: Key<Duration> =
     Key::new(Scope::Service, "plugins.generation_retention_interval");
 pub const PLUGIN_URGENT_RETENTION_COOLDOWN: Key<Duration> =
     Key::new(Scope::Service, "plugins.urgent_retention_cooldown");
+pub const PLUGIN_CATALOG_KEEP_RELEASES: Key<i64> =
+    Key::new(Scope::Service, "plugins.catalog_keep_releases");
 pub const PLUGIN_REPIN_DORMANT_SESSIONS: Key<bool> =
     Key::new(Scope::Service, "plugins.repin_dormant_sessions");
 pub const PLUGIN_REPIN_DORMANT_AFTER: Key<Duration> =
@@ -51,6 +53,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
         doc: "Minimum time between extra retention passes for one Device whose\navailable disk is below its declared `disk.low_watermark`.",
+    },
+    Field {
+        key: "plugins.catalog_keep_releases",
+        kind: Kind::Integer { min: 0, max: 64 },
+        default: Value::Integer(3),
+        reload: Reload::Live,
+        doc: "Newest releases of each Plugin the Service Catalog keeps beyond the ones a\nrecoverable session pins, a Device reports installed or targets in an install\noperation, or the host policy selects. Each scheduled retention pass retires\nthe other releases once they are a day old, with the artifacts only they used.\n`0` keeps every published release.",
     },
     Field {
         key: "plugins.repin_dormant_sessions",

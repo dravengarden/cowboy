@@ -122,6 +122,7 @@ as a deprecated override for one release.
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
+| Service | `plugins.catalog_keep_releases` | `3` | live |
 | Service | `plugins.repin_dormant_sessions` | `false` | live |
 | Service | `plugins.repin_dormant_after` | `"7d"` | live |
 | Service | `plugins.auto_update_idle_sessions` | `false` | live |
@@ -246,6 +247,15 @@ Disk growth from Plugin releases is retired automatically:
   pass for that Device at once, then waits `plugins.urgent_retention_cooldown`
   before another. A Device without the setting (older release) or with
   `"0B"` never triggers one.
+
+- In the same scheduled pass the Service retires its own Catalog releases
+  that nothing resolves any more: no recoverable session pins them, no Device
+  reports them installed or targets them in an install operation, the host
+  policy does not select them, and they are not among the newest
+  `plugins.catalog_keep_releases` versions of their Plugin. A release or
+  artifact directory younger than a day is never retired. Every Catalog read
+  root is swept, and an artifact directory goes only when no retained release
+  in any root still names it. `0` keeps every published release.
 
 The budget is the Device's; the decision is the Service's, because only the
 Service knows which generations sessions still pin.

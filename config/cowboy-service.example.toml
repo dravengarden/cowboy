@@ -12,6 +12,13 @@ schema = 1
 # available disk is below its declared `disk.low_watermark`.
 # duration string such as "6h", from 5m to 7d; applies live.
 # urgent_retention_cooldown = "1h"
+# Newest releases of each Plugin the Service Catalog keeps beyond the ones a
+# recoverable session pins, a Device reports installed or targets in an install
+# operation, or the host policy selects. Each scheduled retention pass retires
+# the other releases once they are a day old, with the artifacts only they used.
+# `0` keeps every published release.
+# integer from 0 to 64; applies live.
+# catalog_keep_releases = 3
 # Move sessions that have been exited without a worker for
 # `plugins.repin_dormant_after` to their Device's installed Provider release,
 # when its native session contract is unchanged, so their old generation can be

@@ -298,6 +298,11 @@ impl HostActivationPolicy {
 
     /// Pure preflight: selects defaults and rejects incomplete candidates before
     /// staging, authority-marker writes, or any storage migration can run.
+    /// Exact release digests this policy selects; Catalog retention keeps them.
+    pub(crate) fn pinned_artifact_digests(&self) -> impl Iterator<Item = &str> {
+        self.pins.values().map(|pin| pin.artifact_digest.as_str())
+    }
+
     pub(crate) fn select(&self, releases: &mut [CatalogHostRelease]) -> Result<()> {
         for pin in self.pins.values() {
             ensure!(
