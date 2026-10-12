@@ -3958,7 +3958,7 @@ export function App({
                     ...tab,
                     kind: "draft",
                     title: draft.title || "Untitled draft",
-                    leading: <DescriptionOutlined />,
+                    leading: <DescriptionOutlined data-desktop-tab-icon />,
                 }];
             }
             const session = sessionsForView.find((candidate) => candidate.id === tab.key);
@@ -3977,6 +3977,7 @@ export function App({
                             providerVersion={session.provider_version}
                             providerDigest={session.provider_generation_digest}
                             fontSize="small"
+                            data-desktop-tab-icon
                         />
                     </>
                 ),

@@ -17,6 +17,8 @@ import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
 import { DesktopCommandHost } from "./commands/DesktopCommandHost";
 import { WorkspaceDraftPane } from "../documents/WorkspaceDraft";
 import { DesktopTabStrip } from "./DesktopTabStrip";
+import { DescriptionOutlined } from "@mui/icons-material";
+import { StatusDot } from "../SessionStatusDot";
 import {
   updateDesktopTabs,
   useDesktopTabs,
@@ -454,7 +456,13 @@ export function mountTabsKeyboardAcceptance(): void {
               ...tab,
               kind: tab.key.startsWith("draft:") ? "draft" : "session",
               title: titles.find((title) => keyOf(title) === tab.key) ?? tab.key,
-              leading: null,
+              // The App's own leading content: a status dot and a glyph.
+              leading: (
+                <>
+                  <StatusDot status="running" />
+                  <DescriptionOutlined data-desktop-tab-icon />
+                </>
+              ),
             }))}
             currentKey={current}
             visits={visits}

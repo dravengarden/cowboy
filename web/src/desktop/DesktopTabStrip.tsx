@@ -481,7 +481,9 @@ export function DesktopTabStrip({
                 alignItems: "center",
                 gap: "0.25rem",
                 flexShrink: 0,
-                "& .MuiSvgIcon-root": { fontSize: "1rem" },
+                // The Provider or Draft glyph only: the status dot keeps
+                // its own, smaller size.
+                "& [data-desktop-tab-icon]": { fontSize: "1rem" },
               }}
             >
               {item.leading}

@@ -499,6 +499,15 @@ const tabsFlow = async (): Promise<void> => {
     20_000,
   );
   await expect("alpha?*", "The item on screen has a preview tab");
+  const sizes = await page.evaluate<number[]>(
+    `[...document.querySelectorAll('[data-desktop-tab] svg')].slice(0, 2).map((icon) => Math.round(icon.getBoundingClientRect().width))`,
+  );
+  check(
+    sizes[0] === 10 && sizes[1] === 16,
+    `The status dot keeps its own size beside the 16px glyph: ${
+      sizes.join(", ")
+    }`,
+  );
   await browse("beta");
   await expect("beta?*", "Browsing reuses the preview tab");
   await pointer(tab("beta"), "left");
