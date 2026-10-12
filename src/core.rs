@@ -1698,6 +1698,9 @@ struct HubInner {
     /// Newer installed Provider releases sessions may adopt, republished by
     /// the Provider update pass. Never held together with `sessions`.
     provider_update_offers: Mutex<HashMap<String, ProviderUpdateOffer>>,
+    /// When an unattended Provider update last left a session crashed, by
+    /// (Machine, Provider, generation digest). Never held with `sessions`.
+    automatic_update_failures: Mutex<HashMap<(String, String, String), std::time::Instant>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
@@ -1897,6 +1900,7 @@ impl Hub {
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 config_in_flight: Mutex::new(HashMap::new()),
                 provider_update_offers: Mutex::new(HashMap::new()),
+                automatic_update_failures: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
@@ -2707,6 +2711,29 @@ impl Hub {
     pub fn settle_provider_update_offer(&self, session_id: &str) {
         self.inner.provider_update_offers.lock().remove(session_id);
         self.set_provider_update_when_idle(session_id, false);
+    }
+
+    /// Whether an unattended update to this exact release left a session on
+    /// the Machine crashed within `window`. The update pass holds further
+    /// unattended updates to it meanwhile, so one bad release cannot crash
+    /// every idle session in turn.
+    #[must_use]
+    pub fn automatic_update_failed_within(
+        &self,
+        machine_id: &str,
+        provider: &str,
+        digest: &str,
+        window: std::time::Duration,
+    ) -> bool {
+        self.inner
+            .automatic_update_failures
+            .lock()
+            .get(&(
+                machine_id.to_owned(),
+                provider.to_owned(),
+                digest.to_owned(),
+            ))
+            .is_some_and(|failed| failed.elapsed() < window)
     }
 
     /// Whether the user asked this session to adopt the installed Provider
@@ -4135,6 +4162,11 @@ impl Hub {
                         .to_owned(),
                 );
             }
+            // Background work lives in the worker an unattended update would
+            // replace; an explicit Reload is the user's own decision.
+            if automatic && session.meta.background_tasks > 0 {
+                return Err("session has background work in progress".to_owned());
+            }
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -4428,7 +4460,7 @@ impl Hub {
         status: Status,
         detail: Option<String>,
     ) -> bool {
-        {
+        let settled_update = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
@@ -4468,10 +4500,42 @@ impl Hub {
             ) {
                 s.meta.background_tasks = 0;
             }
-            if status != Status::Starting {
-                s.meta.provider_update = None;
-            }
+            let settled_update = (status != Status::Starting)
+                .then(|| s.meta.provider_update.take())
+                .flatten()
+                .map(|update| {
+                    (
+                        update,
+                        s.meta.machine_id.clone(),
+                        s.meta.provider.clone(),
+                        s.meta.provider_generation_digest.clone(),
+                    )
+                });
             s.meta.status = status;
+            settled_update
+        };
+        if let Some((update, machine, provider, digest)) = settled_update {
+            let elapsed_ms = now_ms().saturating_sub(update.started_at_ms);
+            if status == Status::Crashed {
+                tracing::warn!(
+                    session = %session_id, %machine, from = %update.from, to = %update.to,
+                    automatic = update.automatic, elapsed_ms,
+                    detail = detail.as_deref().unwrap_or_default(),
+                    "Provider update left the session crashed"
+                );
+                if update.automatic {
+                    self.inner
+                        .automatic_update_failures
+                        .lock()
+                        .insert((machine, provider, digest), std::time::Instant::now());
+                }
+            } else {
+                tracing::info!(
+                    session = %session_id, %machine, from = %update.from, to = %update.to,
+                    automatic = update.automatic, elapsed_ms, ?status,
+                    "Provider update finished"
+                );
+            }
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateStatus {
@@ -9213,6 +9277,56 @@ mod core_tests {
                 .get("provider_update")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn unattended_provider_reload_waits_for_background_work() {
+        let (hub, _) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.set_background_tasks("provider-reload", 1);
+        let working = hub.session_info("provider-reload").expect("session").meta;
+        assert_eq!(
+            hub.begin_provider_reload(&working, "new-version", "new-digest", &behavior, true),
+            Err("session has background work in progress".to_owned())
+        );
+        assert_eq!(
+            hub.session_info(&working.id).unwrap().meta.status,
+            Status::Running
+        );
+        // An explicit Reload stays the user's decision.
+        hub.begin_provider_reload(&working, "new-version", "new-digest", &behavior, false)
+            .expect("explicit reload");
+    }
+
+    #[test]
+    fn only_a_crashed_unattended_update_holds_its_release_back() {
+        let hour = std::time::Duration::from_hours(1);
+        let behavior = crate::provider::legacy_behavior("codex");
+        let failed = |hub: &Hub, meta: &SessionMeta| {
+            hub.automatic_update_failed_within(&meta.machine_id, &meta.provider, "new-digest", hour)
+        };
+        for (automatic, outcome, held) in [
+            (true, Status::Running, false),
+            (false, Status::Crashed, false),
+            (true, Status::Crashed, true),
+        ] {
+            let (hub, before) = provider_reload_fixture();
+            hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, automatic)
+                .expect("reload");
+            assert!(!failed(&hub, &before));
+            hub.set_status(&before.id, outcome, None);
+            assert_eq!(failed(&hub, &before), held, "{automatic} {outcome:?}");
+            assert!(!hub.automatic_update_failed_within(
+                &before.machine_id,
+                &before.provider,
+                "new-digest",
+                std::time::Duration::ZERO
+            ));
+            // A later crash of the settled session is not the update's.
+            hub.set_status(&before.id, Status::Running, None);
+            hub.set_status(&before.id, Status::Crashed, None);
+            assert_eq!(failed(&hub, &before), held);
+        }
     }
 
     #[tokio::test]
