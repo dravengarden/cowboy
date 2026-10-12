@@ -51,6 +51,9 @@ pub(crate) struct Client {
     event_cursor: Mutex<Option<u64>>,
 }
 
+/// Wire calls at least this slow are logged individually.
+const SLOW_CALL: Duration = Duration::from_secs(5);
+
 impl Client {
     pub(crate) fn new(
         session: String,
@@ -183,8 +186,11 @@ impl Client {
                     ) || matches!(&response, Response::Operation { outcome: Outcome::Completed { reply } } if reply.get("error").is_some());
                     if failed {
                         tracing::warn!(event_name = "cowboy.execution.call_failed", session = %self.session, environment_id = %self.binding.environment.id, %operation, reason = "native_or_keeper_refusal", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution call failed");
-                    } else {
-                        tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution invocation observed");
+                    } else if started.elapsed() >= SLOW_CALL {
+                        // Every completed tool call already records its total
+                        // and backend time (tool_overhead); a wire call is
+                        // kept only when slow, for tail diagnosis.
+                        tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "slow execution invocation observed");
                     }
                 }
                 Ok(response)

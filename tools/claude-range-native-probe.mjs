@@ -43,10 +43,15 @@ const child = spawn(binary, ["exec-server", "--listen", "stdio"], {
 let next = 0;
 const pending = new Map();
 const calls = [];
+// Executor notifications reach quiet readers as they do through the worker.
+const listeners = new Set();
 const lines = createInterface({ input: child.stdout });
 lines.on("line", (line) => {
   const message = JSON.parse(line);
-  if (message.id === undefined) return;
+  if (message.id === undefined) {
+    for (const listener of listeners) listener(message);
+    return;
+  }
   const request = pending.get(message.id);
   assert.ok(request);
   pending.delete(message.id);
@@ -66,6 +71,7 @@ child.on("exit", () => {
   pending.clear();
 });
 const connection = {
+  listeners,
   async call(method, params) {
     const id = ++next;
     const frame = JSON.stringify({ id, method, params });
@@ -192,6 +198,37 @@ try {
     `Cancellation took ${cancelMs.toFixed(2)} ms; fixed budget is 5000 ms`,
   );
   assert.equal(tools.state.jobs[job].closed, true);
+  // A quiet command stops polling after three one-second reads and waits on
+  // the executor's notifications: its later output and exit still arrive.
+  const idleStart = calls.length;
+  const idleStarted = performance.now();
+  const idle = await tools.command(["bash", "-c", "sleep 9; printf idle"]);
+  const idleMs = performance.now() - idleStarted;
+  assert.equal(idle.output, "idle");
+  const idleReads = calls.slice(idleStart).filter((call) =>
+    call.method === "process/read"
+  ).length;
+  assert.ok(idleReads <= 8, `quiet command used ${idleReads} reads`);
+  assert.ok(idleMs < 10500, `quiet output arrived after ${idleMs} ms`);
+  // TaskStop during the notification wait: no read is in flight, and the
+  // exit notification ends the wait well inside the fixed budget.
+  const quietJob = await tools.start(["bash", "-c", "sleep 60"]);
+  const quietCollecting = tools.collect(quietJob, 120000);
+  await new Promise((resolve) => setTimeout(resolve, 4500));
+  const quietCancelStart = performance.now();
+  const quietCancelled = await tools.nativeCall("TaskStop", {
+    task_id: quietJob,
+    timeout: 5000,
+  });
+  assert.equal(quietCancelled.deny, undefined);
+  await quietCollecting;
+  const quietCancelMs = performance.now() - quietCancelStart;
+  assert.ok(
+    quietCancelMs < 5000,
+    `Quiet cancellation took ${
+      quietCancelMs.toFixed(2)
+    } ms; fixed budget is 5000 ms`,
+  );
   const result = {
     schema_version: 1,
     acceptance: "pinned_native_executor_and_adapter_not_production_wan",
@@ -202,6 +239,9 @@ try {
     measurements,
     quiet_command_process_reads: quietReads,
     cancel_while_collecting_ms: cancelMs,
+    quiet_command_reads: idleReads,
+    quiet_command_ms: idleMs,
+    cancel_while_quiet_ms: quietCancelMs,
     checks: [
       "identical_selected_bytes",
       "external_change_outside_range_refused",

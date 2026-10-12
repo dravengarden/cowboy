@@ -652,6 +652,11 @@ fn field_name(name: &str) -> Option<&'static str> {
         "retained_events" => "cowboy.retained_events",
         "operation" => "cowboy.operation",
         "generation" => "cowboy.generation",
+        // Per tool call: which executor method, and how its duration splits
+        // between the backend and Cowboy.
+        "method" => "rpc.method",
+        "total_ms" => "cowboy.total_ms",
+        "executed_ms" => "cowboy.executed_ms",
         _ => return None,
     })
 }

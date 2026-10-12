@@ -31,6 +31,13 @@ const COLLECT_LIMIT = MAX_PERSISTED - 1024 * 1024;
 // round trip to the target (~0.2 s across the Machine link), so 32 KiB reads
 // held a large output to ~150 KB/s however fast the link was.
 const BULK_READ = 1024 * 1024;
+// A command that stays quiet for this many one-second reads stops polling:
+// it waits for the executor's notification naming the process (output, exit
+// or close) and reads once more. No read is in flight while it waits, so
+// TaskStop's terminate is never queued behind a long read, and its exit
+// notification ends the wait. A lost notification costs at most this bound.
+const QUIET_READS = 3;
+const QUIET_WAIT_MS = 15000;
 const MAX_READ_STATE = 512 * 1024;
 // Startup reads kept in flight ahead of an order-dependent walk. Startup also
 // runs git status (7 commands), the shell snapshot and the other walks at
@@ -1753,16 +1760,28 @@ export class WorkspaceTools {
     const pending = job.utf8Pending ??= {};
     let size = 0;
     const deadline = Date.now() + timeout;
+    let quiet = 0;
     do {
-      const result = await this.connection.call("process/read", {
-        processId,
-        afterSeq: job.afterSeq,
-        maxBytes: Math.min(
-          limit > MAX_OUTPUT ? BULK_READ : 32768,
-          limit - size,
-        ),
-        waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
-      });
+      const read = (waitMs) =>
+        this.connection.call("process/read", {
+          processId,
+          afterSeq: job.afterSeq,
+          maxBytes: Math.min(
+            limit > MAX_OUTPUT ? BULK_READ : 32768,
+            limit - size,
+          ),
+          waitMs,
+        });
+      const remaining = deadline - Date.now();
+      const result = quiet >= QUIET_READS && this.connection.listeners &&
+          remaining > 1000
+        ? await this.notifiedRead(
+          processId,
+          Math.min(QUIET_WAIT_MS, remaining),
+          () => read(0),
+        )
+        : await read(Math.max(1, Math.min(1000, remaining)));
+      quiet = result.chunks.length ? 0 : quiet + 1;
       for (const chunk of result.chunks) {
         if (job.afterSeq !== null && chunk.seq <= job.afterSeq) {
           throw new Error("Repeated process output");

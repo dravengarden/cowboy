@@ -50,8 +50,15 @@ startup for short files. The metadata response is reused only within that one
 Read, never between reads. Large-file projection pays another native process
 round trip in exchange for bounded transfer; both costs are measured.
 
-Process output reads retain the one-second bound. An experimental ten-second
-wait failed the fixed five-second native cancellation budget and is not shipped.
+Process output reads retain the one-second bound while a command produces
+output. An experimental ten-second wait failed the fixed five-second native
+cancellation budget and is not shipped. Since 2026-10-12 a command quiet for
+three such reads stops polling: it waits for the executor's notification
+naming the process, bounded by 15 seconds, and reads once more. No read is in
+flight during that wait, so TaskStop is unaffected; the
+[native probe](experiments/claude-quiet-reads-native-2026-10-12.json) measured
+6 reads for a 9-second quiet command, output on time, and 2.6 ms to stop a
+command in that wait.
 The native probe checks quiet output and TaskStop while collection is pending;
 mocked event wakeups alone are insufficient acceptance for a longer wait.
 

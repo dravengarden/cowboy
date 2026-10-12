@@ -289,6 +289,46 @@ test("quiet output retains the cancellation-compatible one-second wait bound", a
   assert.deepEqual(waits, Array(60).fill(1000));
 });
 
+test("a quiet command waits on notifications instead of polling every second", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const listeners = new Set();
+  connection.listeners = listeners;
+  tools.state.jobs.quiet = { afterSeq: null, exited: false };
+  const waits = [];
+  let reads = 0;
+  let exited = false;
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    waits.push(params.waitMs);
+    reads++;
+    if (params.waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // The process exits while the reader waits after its fourth (quiet)
+    // read; the exit notification wakes it at once.
+    if (reads === 4) {
+      setTimeout(() => {
+        exited = true;
+        for (const listener of listeners) {
+          listener({
+            method: "process/exited",
+            params: { processId: "quiet" },
+          });
+        }
+      }, 50);
+    }
+    return { chunks: [], exited, closed: exited, exitCode: exited ? 0 : null };
+  };
+  const started = Date.now();
+  assert.equal((await tools.collectOutput("quiet", 120000)).exitCode, 0);
+  assert.ok(
+    Date.now() - started < 5000,
+    "the exit notification did not end the wait",
+  );
+  // Three bounded reads, then two notification-driven reads that never wait.
+  assert.deepEqual(waits, [1000, 1000, 1000, 0, 0]);
+});
+
 test("hook transcripts send only appended bytes to an executor without the file helper", async (t) => {
   const { tools } = await fixture(t);
   const directory = await mkdtemp(join(tmpdir(), "cowboy-hook-snapshot-"));
