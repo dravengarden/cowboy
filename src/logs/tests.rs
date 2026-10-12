@@ -156,7 +156,21 @@ fn concurrent_process_style_writers_keep_all_committed_events() {
             let store = store.clone();
             std::thread::spawn(move || {
                 for n in 0..20 {
-                    store.append(&[entry(1000, owner * 20 + n)], 1000).unwrap();
+                    // The capture writer retries a lock refusal for up to five
+                    // seconds; a loaded host must not fail the contract here.
+                    let started = std::time::Instant::now();
+                    loop {
+                        match store.append(&[entry(1000, owner * 20 + n)], 1000) {
+                            Ok(()) => break,
+                            Err(error)
+                                if error.is::<super::storage::Busy>()
+                                    && started.elapsed() < std::time::Duration::from_secs(5) =>
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            Err(error) => panic!("append failed: {error}"),
+                        }
+                    }
                 }
             })
         })
