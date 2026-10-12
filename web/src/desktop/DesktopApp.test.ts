@@ -42,8 +42,8 @@ test("the open session owns selected material in rail and collapsed layouts", ()
     ),
     false,
   );
-  // On Desktop the selected tab names the session; the top bar repeats no
-  // title, so a hidden Sessions rail still leaves one selected identity.
+  // On Desktop the tabs take the title's place in the top bar: the selected
+  // one names the session, also while the Sessions rail is hidden.
   assertEquals(appSource.includes("data-desktop-active-session"), false);
   assertEquals(appSource.includes("<DesktopTabStrip"), true);
   assertEquals(

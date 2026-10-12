@@ -4989,36 +4989,6 @@ export function App({
                     }}
                 />
                 )}
-                {surface === "desktop" && (
-                    <Suspense fallback={null}>
-                        <DesktopTabStrip
-                            items={desktopTabItems}
-                            currentKey={workspaceItemKey}
-                            visits={desktopVisitKeys}
-                            exists={workspaceItemExists}
-                            onOpen={pick}
-                            onRename={(key): void => {
-                                const session = sessions.find((candidate) => candidate.id === key);
-                                if (session) setPendingRename(session);
-                            }}
-                            // The strip is the window's top row here: installed-PWA
-                            // window controls overlay its left whenever the Sessions
-                            // sidebar is not beside it (see the Toolbar below).
-                            sx={{
-                                ...(sessionsInDrawer && {
-                                    "@media (display-mode: window-controls-overlay)": {
-                                        pl: "calc(env(titlebar-area-x, 0px) + 12px)",
-                                    },
-                                }),
-                                ...(sessionsCollapsed && {
-                                    "@media (display-mode: window-controls-overlay)": {
-                                        pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
-                                    },
-                                }),
-                            }}
-                        />
-                    </Suspense>
-                )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
@@ -5124,15 +5094,14 @@ export function App({
                             // past them only in that mode — when the sidebar is
                             // visible the controls sit over it instead (see
                             // sidebarHeader), and this bar must stay flush.
-                            // (On Desktop the tab strip above is that top row.)
-                            ...(sessionsInDrawer && surface !== "desktop" && {
+                            ...(sessionsInDrawer && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
                             // The collapsed Sessions rail is narrower than the
                             // window controls, so they overhang this bar too.
-                            ...(sessionsCollapsed && surface !== "desktop" && {
+                            ...(sessionsCollapsed && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
                                 },
@@ -5184,7 +5153,28 @@ export function App({
                                 {drawerOpen ? <CloseIcon /> : <MenuIcon />}
                             </IconButton>
                         )}
-                        {/* On Desktop the selected tab above names the session. */}
+                        {/* On Desktop the tabs take the title's place: the
+                            selected one names the page, and the session
+                            controls keep the rest of the bar. */}
+                        {surface === "desktop" && (
+                            <Suspense fallback={null}>
+                                <DesktopTabStrip
+                                    items={desktopTabItems}
+                                    currentKey={workspaceItemKey}
+                                    visits={desktopVisitKeys}
+                                    exists={workspaceItemExists}
+                                    onOpen={pick}
+                                    onRename={(key): void => {
+                                        const session = sessions.find((candidate) => candidate.id === key);
+                                        if (session) setPendingRename(session);
+                                    }}
+                                    // Beside session controls the tabs get at
+                                    // most half the bar and scroll past that;
+                                    // a Draft page has no controls to share with.
+                                    sx={{ flex: active ? "0 1 auto" : 1, maxWidth: active ? "50%" : "none" }}
+                                />
+                            </Suspense>
+                        )}
                         {active && surface !== "desktop" ? (
                             // Status is a leading dot (color = state); the
                             // ProviderIcon already names the agent, so the title

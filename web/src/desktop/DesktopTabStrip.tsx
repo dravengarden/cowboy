@@ -1,6 +1,6 @@
 import { Box, Divider, ListItemText, Menu, MenuItem } from "@mui/material";
 import { Close, PushPin } from "@mui/icons-material";
-import { alpha } from "@mui/material/styles";
+import { alpha, type Theme } from "@mui/material/styles";
 import {
   type ReactNode,
   useEffect,
@@ -336,8 +336,8 @@ export function DesktopTabStrip({
       role="tablist"
       aria-label="Open Sessions and Drafts"
       data-desktop-tabs
-      // The `␣B` slot at the end drives every tab (the group's digits and
-      // close keys), so tabs carry no keycap of their own at rest.
+      // The group slot that leads the strip drives every tab: the digit on
+      // each tab is its second key.
       data-desktop-shortcut-owner
       onWheel={(event): void => {
         if (event.deltaY !== 0 && event.deltaX === 0) {
@@ -346,20 +346,23 @@ export function DesktopTabStrip({
       }}
       sx={{
         display: "flex",
-        alignItems: "stretch",
-        flexShrink: 0,
-        height: "2.125rem",
+        alignItems: "center",
+        gap: "0.25rem",
         minWidth: 0,
         overflowX: "auto",
         overflowY: "hidden",
         scrollbarWidth: "none",
         "&::-webkit-scrollbar": { display: "none" },
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: (t) => alpha(t.palette.text.primary, 0.03),
         ...sx,
       }}
     >
+      <Box
+        component="span"
+        title="Tabs: then 1–9 open a tab, D close, P pin. ␣[ and ␣] step"
+        sx={{ display: "inline-flex", flexShrink: 0, pr: "0.125rem" }}
+      >
+        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
+      </Box>
       {items.map((item, index) => {
         const selected = item.key === currentKey;
         return (
@@ -430,25 +433,29 @@ export function DesktopTabStrip({
               display: "flex",
               alignItems: "center",
               gap: "0.375rem",
-              flex: item.pinned ? "0 0 auto" : "0 1 12.5rem",
-              minWidth: item.pinned ? 0 : "6.5rem",
-              maxWidth: item.pinned ? "9rem" : "12.5rem",
-              pl: "0.625rem",
-              pr: "0.25rem",
-              borderRight: 1,
-              borderColor: "divider",
+              flex: item.pinned ? "0 0 auto" : "0 1 11rem",
+              minWidth: item.pinned ? 0 : "5.5rem",
+              maxWidth: item.pinned ? "8rem" : "11rem",
+              height: "2rem",
+              pl: "0.375rem",
+              pr: "0.125rem",
+              border: 1,
+              borderColor: "transparent",
+              borderRadius: "0.5rem",
               cursor: "pointer",
               userSelect: "none",
               fontSize: "0.8125rem",
               color: selected ? "text.primary" : "text.secondary",
-              bgcolor: selected ? "background.default" : "transparent",
-              // The selected tab joins the page below it.
-              mb: selected ? "-1px" : 0,
-              boxShadow: (t) =>
-                selected ? `inset 0 2px 0 ${t.palette.primary.main}` : "none",
-              "&:hover": {
-                bgcolor: selected ? "background.default" : "action.hover",
-              },
+              "&:hover": { bgcolor: "action.hover" },
+              // The selected tab carries the same material as the selected
+              // Sessions row.
+              ...(selected && {
+                borderColor: (t: Theme) => alpha(t.palette.primary.main, 0.38),
+                bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.13),
+                "&:hover": {
+                  bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.13),
+                },
+              }),
               "&:hover [data-desktop-tab-close], &[aria-selected='true'] [data-desktop-tab-close]":
                 { opacity: 1 },
               ...(drop?.key === item.key && {
@@ -459,17 +466,20 @@ export function DesktopTabStrip({
                   bottom: "0.25rem",
                   width: "2px",
                   bgcolor: "primary.main",
-                  ...(drop.after ? { right: "-1px" } : { left: "-1px" }),
+                  ...(drop.after
+                    ? { right: "-0.1875rem" }
+                    : { left: "-0.1875rem" }),
                 },
               }),
             }}
           >
-            {numbered && index < 9 && (
+            {index < 9 && (
+              // After the leading group slot this reads as its second key.
               <ShortcutKeycap
                 keyLabel={String(index + 1)}
                 variant="context"
-                accent
-                availability="active"
+                accent={numbered}
+                availability={numbered ? "active" : "available"}
               />
             )}
             <Box
@@ -536,22 +546,6 @@ export function DesktopTabStrip({
           </Box>
         );
       })}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.375rem",
-          ml: "auto",
-          px: "0.5rem",
-          flexShrink: 0,
-          position: "sticky",
-          right: 0,
-        }}
-      >
-        <LeaderKeycap leaderKey={DESKTOP_WORKSPACE_KEYS.previousTab} />
-        <LeaderKeycap leaderKey={DESKTOP_WORKSPACE_KEYS.nextTab} />
-        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
-      </Box>
       <Menu
         open={menu !== null && menuItem !== undefined}
         onClose={(): void => setMenu(null)}

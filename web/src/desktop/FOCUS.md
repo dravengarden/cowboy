@@ -186,10 +186,12 @@ Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
 
 #### Tabs
 
-The tab strip above the top bar holds the Sessions and Drafts kept open on
-this device (`workspaceTabs.ts`; per device, never synced, absent on
-Mobile). The selected tab names the page, so the top bar repeats no title.
-The item on screen always has a tab.
+The tabs lead the top bar, where the session title used to be, and hold the
+Sessions and Drafts kept open on this device (`workspaceTabs.ts`; per
+device, never synced, absent on Mobile). The selected tab names the page
+and carries the selected Sessions row's material. Beside session controls
+the tabs take at most half the bar and scroll past that; a Draft page gives
+them the whole bar. The item on screen always has a tab.
 
 Like VS Code and Zed, browsing does not pile tabs up. An item opened from
 the sidebar, `␣␣`, Recent or a link takes the one *preview* tab (italic
@@ -200,8 +202,12 @@ are narrower, show a pin instead of a close button and survive every bulk
 close; only closing that one tab removes it.
 
 Keys follow LazyVim's buffers. `␣[` and `␣]` step to the previous and next
-tab and wrap (`[b` / `]b`). `␣B` opens the Tabs group, and while it is
-armed every tab shows its number: `1`–`9` open that tab, `D` closes the
+tab and wrap (`[b` / `]b`). `␣B` opens the Tabs group. Its slot leads the
+tabs and each of the first nine tabs shows its digit, so the strip reads as
+the keys to press (`␣B` `3`); the digits light while the group is armed.
+The digits are not root keys: `␣1`…`␣9` answer a pending approval, and a
+tab switch must never be one keystroke away from answering one. `1`–`9`
+open that tab, `D` closes the
 current one (delete buffer), `O` the others, `R`/`L` those to its right or
 left, `A` all of them, `P` pins or unpins, `K` keeps the preview tab, `U`
 reopens the last closed tab (undo), `<`/`>` move the tab. Closing the
@@ -218,8 +224,8 @@ Keep Open, Reopen Closed Tab and (a Session) Rename. The menu acts on the
 tab it was opened on and shows the `␣B` slots when that is the current one.
 
 No direct chord is bound: `Ctrl+Tab`, `Ctrl/Cmd+W`, `Cmd+Shift+[`/`]` and
-`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The strip
-is not a focus region; its `␣B` slot covers every tab.
+`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The tabs
+are not top-bar items; their `␣B` slot covers every tab.
 
 #### Move pick
 
