@@ -482,6 +482,7 @@ impl Broker {
             .collect();
         let sessions = self.sessions.lock().clone();
         let states = self.session_states.lock().clone();
+        let failures = self.startup_failures.lock().clone();
         let commands = self.generation_commands.lock().clone();
         let mut snapshots: Vec<_> = self
             .workers
@@ -507,6 +508,16 @@ impl Broker {
             if live.contains(&session_id) {
                 continue;
             }
+            let state = states
+                .get(&session_id)
+                .copied()
+                .unwrap_or(WorkerState::Starting);
+            // A launch that never produced a worker still has a reason; the
+            // Controller classifies the crash from it instead of reporting a
+            // crash without a diagnostic detail.
+            let exit_detail = (state == WorkerState::Crashed)
+                .then(|| failures.get(&session_id).cloned())
+                .flatten();
             snapshots.push(WorkerSnapshot {
                 session_id: session_id.clone(),
                 worker_epoch: format!("broker-{session_id}"),
@@ -515,10 +526,7 @@ impl Broker {
                     .get(&session.generation)
                     .map(|path| path.display().to_string()),
                 launch: Some(session.clone()),
-                state: states
-                    .get(&session_id)
-                    .copied()
-                    .unwrap_or(WorkerState::Starting),
+                state,
                 agent_session_id: session.agent_session_id,
                 native_thread_materialized: None,
                 current_turn_id: None,
@@ -529,7 +537,7 @@ impl Broker {
                 context_size: None,
                 pending_prompt_count: pending_prompts.get(&session_id).copied().unwrap_or(0),
                 drain_requested: false,
-                exit_detail: None,
+                exit_detail,
                 background_tasks: None,
                 incarnation: None,
             });
@@ -1774,6 +1782,10 @@ impl Broker {
                     return;
                 }
                 tracing::error!(session = %session.session_id, error = %error, "worker launch failed");
+                broker
+                    .startup_failures
+                    .lock()
+                    .insert(session.session_id.clone(), error.to_string());
                 broker.publish_session_state(&session.session_id, WorkerState::Crashed);
                 broker.command_rejected(
                     &session.session_id,
@@ -2507,6 +2519,10 @@ impl Broker {
                         return;
                     }
                     tracing::error!(session = %session_id, %old_generation, %error, "worker cutover and fallback failed");
+                    broker
+                        .startup_failures
+                        .lock()
+                        .insert(session_id.clone(), error.to_string());
                     broker.publish_session_state(&session_id, WorkerState::Crashed);
                     broker.command_rejected(
                         &session_id,
@@ -5060,6 +5076,69 @@ mod tests {
             1,
         );
         (broker, launch, rx)
+    }
+
+    #[test]
+    fn a_crashed_placeholder_snapshot_carries_the_recorded_launch_failure() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: String::new(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
+        });
+        let launch = StartSession {
+            session_id: "sess-launch".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/work".to_owned(),
+            agent_session_id: None,
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+            execution_binding: None,
+        };
+        broker
+            .sessions
+            .lock()
+            .insert("sess-launch".to_owned(), launch);
+        broker.startup_failures.lock().insert(
+            "sess-launch".to_owned(),
+            "Plugin requires install attempt reconciliation".to_owned(),
+        );
+
+        broker
+            .session_states
+            .lock()
+            .insert("sess-launch".to_owned(), WorkerState::Starting);
+        let starting = broker.snapshots().into_iter().next().expect("placeholder");
+        assert_eq!(starting.state, WorkerState::Starting);
+        assert!(
+            starting.exit_detail.is_none(),
+            "a launch still in progress reports no exit detail"
+        );
+
+        broker
+            .session_states
+            .lock()
+            .insert("sess-launch".to_owned(), WorkerState::Crashed);
+        let crashed = broker.snapshots().into_iter().next().expect("placeholder");
+        assert_eq!(crashed.state, WorkerState::Crashed);
+        assert_eq!(
+            crashed.exit_detail.as_deref(),
+            Some("Plugin requires install attempt reconciliation")
+        );
     }
 
     #[tokio::test]
