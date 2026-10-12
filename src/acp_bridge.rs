@@ -482,21 +482,58 @@ fn idle_stop_reason(status: Status) -> Option<StopReason> {
 }
 
 /// Permission requests still awaiting an answer at the end of `events`, in
-/// transcript order. A request ends with its resolution or with its turn.
+/// transcript order. This is the Web client's `pendingPermissions` rule:
+/// besides its `PermissionResolved`, a request has ended when its id is asked
+/// again (ids restart with every agent process), when its tool call reached a
+/// terminal status, when the turn ended or when the worker stopped.
 fn unresolved_permission_requests(events: &[Envelope]) -> Vec<&Envelope> {
+    fn asked(envelope: &Envelope) -> Option<(&str, Option<&str>)> {
+        match &envelope.event {
+            Event::PermissionRequest {
+                request_id,
+                tool_call,
+                ..
+            } => Some((
+                request_id,
+                tool_call
+                    .get("toolCallId")
+                    .and_then(serde_json::Value::as_str),
+            )),
+            _ => None,
+        }
+    }
     let mut open: Vec<&Envelope> = Vec::new();
     for envelope in events {
         match &envelope.event {
-            Event::PermissionRequest { .. } => open.push(envelope),
-            Event::PermissionResolved { request_id, .. } => open.retain(|candidate| {
-                !matches!(
-                    &candidate.event,
-                    Event::PermissionRequest { request_id: asked, .. } if asked == request_id
-                )
-            }),
+            Event::PermissionRequest { request_id, .. }
+            | Event::PermissionResolved { request_id, .. } => {
+                open.retain(|candidate| {
+                    asked(candidate).is_none_or(|(id, _)| id != request_id.as_str())
+                });
+                if matches!(envelope.event, Event::PermissionRequest { .. }) {
+                    open.push(envelope);
+                }
+            }
             Event::TurnEnd { .. } => open.clear(),
-            Event::Lifecycle { status, .. } if *status != Status::Busy => open.clear(),
-            Event::Lifecycle { .. } | Event::Update { .. } => {}
+            Event::Lifecycle { status, .. } => {
+                if matches!(
+                    status,
+                    Status::Crashed | Status::Interrupted | Status::Exited
+                ) {
+                    open.clear();
+                }
+            }
+            Event::Update { update } => {
+                let field = |name: &str| update.get(name).and_then(serde_json::Value::as_str);
+                if field("sessionUpdate") == Some("tool_call_update")
+                    && matches!(field("status"), Some("completed" | "failed"))
+                    && let Some(finished) = field("toolCallId")
+                {
+                    open.retain(|candidate| {
+                        asked(candidate).is_none_or(|(_, tool)| tool != Some(finished))
+                    });
+                }
+            }
         }
     }
     open
@@ -3216,10 +3253,21 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_permission_requests_end_with_their_answer_or_turn() {
+    fn unresolved_permission_requests_follow_the_web_pending_rule() {
         let resolved = |request_id: &str| Event::PermissionResolved {
             request_id: request_id.to_owned(),
             option_id: Some("allow".to_owned()),
+        };
+        let tool_update = |tool: &str, status: &str| Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool,
+                "status": status
+            }),
+        };
+        let lifecycle = |status: Status| Event::Lifecycle {
+            status,
+            detail: None,
         };
         let seqs = |events: &[Envelope]| {
             unresolved_permission_requests(events)
@@ -3232,23 +3280,34 @@ mod tests {
             envelope(2, resolved("r-1")),
             envelope(3, permission_request("r-2")),
             envelope(4, text_update("still waiting")),
+            envelope(5, lifecycle(Status::Busy)),
         ];
         assert_eq!(seqs(&events), [3]);
+
+        // The agent restarted: its request ids start over, and the earlier
+        // asker of a reused id is gone.
+        events.push(envelope(6, permission_request("r-2")));
+        events.push(envelope(7, permission_request("r-3")));
+        assert_eq!(seqs(&events), [6, 7]);
+
+        // A tool call that ran is no longer asking, even without its
+        // resolution row; one that is still in progress is.
+        events.push(envelope(8, tool_update("r-3", "in_progress")));
+        assert_eq!(seqs(&events), [6, 7]);
+        events.push(envelope(9, tool_update("r-3", "completed")));
+        assert_eq!(seqs(&events), [6]);
+
         events.push(envelope(
-            5,
+            10,
             Event::TurnEnd {
                 stop_reason: "Cancelled".to_owned(),
             },
         ));
         assert!(seqs(&events).is_empty());
-        events.push(envelope(6, permission_request("r-3")));
-        events.push(envelope(
-            7,
-            Event::Lifecycle {
-                status: Status::Interrupted,
-                detail: None,
-            },
-        ));
+        events.push(envelope(11, permission_request("r-4")));
+        events.push(envelope(12, lifecycle(Status::Running)));
+        assert_eq!(seqs(&events), [11]);
+        events.push(envelope(13, lifecycle(Status::Interrupted)));
         assert!(seqs(&events).is_empty());
     }
 
