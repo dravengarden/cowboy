@@ -2500,6 +2500,16 @@ impl Hub {
         if status == Status::Running && self.status(session_id) == Some(Status::Interrupted) {
             return;
         }
+        // A reconnect restates the level of a worker that already crashed.
+        // Appending it again would report the recorded crash as a new one.
+        if status == Status::Crashed
+            && self.status(session_id) == Some(Status::Crashed)
+            && detail.as_deref().is_none_or(|detail| {
+                self.latest_crash_detail(session_id).as_deref() == Some(detail)
+            })
+        {
+            return;
+        }
         self.set_status(session_id, status, detail);
     }
 
@@ -3055,7 +3065,16 @@ impl Hub {
             owner_user_id,
             owner_username,
         } = registration;
-        let config_preferences = default_config_preferences(&provider, provider_behavior.as_ref());
+        // A managed child takes only its parent's preset; its worker refuses
+        // every other option, so interactive defaults would never apply.
+        let config_preferences = if execution_binding
+            .as_ref()
+            .is_some_and(|binding| binding.managed().is_some())
+        {
+            serde_json::json!({})
+        } else {
+            default_config_preferences(&provider, provider_behavior.as_ref())
+        };
         let meta = SessionMeta {
             id: id.clone(),
             provider,
@@ -7197,6 +7216,35 @@ mod core_tests {
             Some("watchdog".to_owned()),
         ));
         assert_eq!(hub.status("status-cas"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn a_restated_crash_is_not_appended_as_a_new_one() {
+        let hub = hub_with_session("crashed-once");
+        let crashes = |hub: &Hub| {
+            let (log, _) = hub.snapshot("crashed-once").expect("snapshot");
+            log.iter()
+                .filter(|envelope| {
+                    matches!(
+                        envelope.event,
+                        Event::Lifecycle {
+                            status: Status::Crashed,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("first".to_owned()));
+        hub.project_runtime_status("crashed-once", Status::Crashed, None);
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("first".to_owned()));
+        assert_eq!(crashes(&hub), 1);
+        // A different failure, or a crash after a restart, is a new fact.
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("second".to_owned()));
+        assert_eq!(crashes(&hub), 2);
+        hub.set_status("crashed-once", Status::Starting, None);
+        hub.project_runtime_status("crashed-once", Status::Crashed, None);
+        assert_eq!(crashes(&hub), 3);
     }
 
     #[test]
