@@ -423,6 +423,12 @@ choices disable and the chosen one spins. A closed socket retries the answer
 until it leaves; an answer the session has not confirmed after ten seconds is
 offered again (`permissionResponse.ts`).
 
+A request is on screen only while something is waiting for it. Besides its
+`permission_resolved` row it has ended when its id is asked again, when its
+tool call reached a terminal status, when the turn ended or when the worker
+stopped (`pendingPermissions` in `derive.ts`). An answer nobody is waiting for
+does nothing, so such a request must never be drawn as answerable.
+
 ## Navigation
 
 Every list (Sessions, the rail, Queue, Drafts) has Vim's view motions:
