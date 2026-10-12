@@ -19,7 +19,10 @@ if (!output?.startsWith("/")) {
 }
 await mkdir(output, { recursive: true });
 const flow = process.argv.slice(2)[2] ?? "composer";
-if (flow !== "composer" && flow !== "draft" && flow !== "approval") {
+if (
+  flow !== "composer" && flow !== "draft" && flow !== "approval" &&
+  flow !== "tabs"
+) {
   throw new Error("unknown flow");
 }
 
@@ -29,6 +32,7 @@ const page = await openFixturePage(
   () =>
     `<!doctype html><script type="module">
 addEventListener("error", (e) => (globalThis.__errors ??= []).push(String(e.message)));
+{ const report = console.error; console.error = (...a) => { (globalThis.__errors ??= []).push(a.map(String).join(" ").slice(0, 600)); report(...a); }; }
 addEventListener("unhandledrejection", (e) => (globalThis.__errors ??= []).push(String(e.reason?.stack ?? e.reason)));
 ${flow === "draft" ? 'localStorage.setItem("cowboy:vim", "1");' : ""}
 const fixture = await import("/fixture.js");
@@ -37,6 +41,8 @@ await fixture.${
         ? "mountDraftKeyboardAcceptance"
         : flow === "approval"
         ? "mountApprovalKeyboardAcceptance"
+        : flow === "tabs"
+        ? "mountTabsKeyboardAcceptance"
         : "mountDesktopKeyboardAcceptance"
     }();
 </script>`,
@@ -63,6 +69,10 @@ const KEYS: Readonly<Record<string, [string, number]>> = {
   "Enter": ["Enter", 13],
   "'": ["Quote", 222],
   "ArrowUp": ["ArrowUp", 38],
+  "[": ["BracketLeft", 219],
+  "]": ["BracketRight", 221],
+  "<": ["Comma", 188],
+  ">": ["Period", 190],
 };
 const key = async (value: string, modifiers = 0, extra: CdpParams = {}) => {
   const [code, keyCode] = KEYS[value] ??
@@ -428,8 +438,197 @@ const approvalFlow = async (): Promise<void> => {
   results.push("Nothing waiting: the dock and its leader keys are gone");
 };
 
+const tabsFlow = async (): Promise<void> => {
+  // `^` pinned, `?` preview, `*` selected, in strip order.
+  const strip = () =>
+    page.evaluate<string>(`[...document.querySelectorAll('[data-desktop-tab]')]
+      .map((tab) => (tab.dataset.desktopTabState === 'pinned' ? '^' : '') +
+        tab.dataset.desktopTab +
+        (tab.dataset.desktopTabState === 'preview' ? '?' : '') +
+        (tab.getAttribute('aria-selected') === 'true' ? '*' : ''))
+      .join(' ')`);
+  const expect = async (expected: string, message: string) => {
+    await sleep(120);
+    const actual = await strip();
+    check(
+      actual === expected,
+      `${message}: expected "${expected}", got "${actual}"`,
+    );
+  };
+  const tab = (id: string) => `[data-desktop-tab="${id}"]`;
+  const browse = (id: string) => click(`[data-acceptance-open="${id}"]`);
+  const body = async () => {
+    await page.evaluate(
+      "document.querySelector('[data-acceptance-body]').focus()",
+    );
+    await sleep(80);
+  };
+  const leader = async (...keys: string[]) => {
+    await body();
+    await key(" ");
+    for (const value of keys) {
+      await key(value, value === "<" || value === ">" ? 8 : 0);
+    }
+  };
+  const pointer = async (
+    selector: string,
+    button: "left" | "middle" | "right",
+    clickCount = 1,
+  ) => {
+    const box = await page.evaluate<{ x: number; y: number } | null>(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 30, y: rect.top + rect.height / 2 };
+    })()`);
+    check(box, `Missing ${selector}`);
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: box.x,
+        y: box.y,
+        button,
+        clickCount,
+      });
+    }
+    await sleep(150);
+  };
+  await until(
+    "document.querySelector('[data-desktop-tabs]')",
+    "tab strip mounts",
+    20_000,
+  );
+  await expect("alpha?*", "The item on screen has a preview tab");
+  const sizes = await page.evaluate<number[]>(
+    `[...document.querySelectorAll('[data-desktop-tab] svg')].slice(0, 2).map((icon) => Math.round(icon.getBoundingClientRect().width))`,
+  );
+  check(
+    sizes[0] === 10 && sizes[1] === 16,
+    `The status dot keeps its own size beside the 16px glyph: ${
+      sizes.join(", ")
+    }`,
+  );
+  await browse("beta");
+  await expect("beta?*", "Browsing reuses the preview tab");
+  await pointer(tab("beta"), "left");
+  await pointer(tab("beta"), "left", 2);
+  await expect("beta*", "A double click keeps the tab");
+  await browse("gamma");
+  await expect("beta gamma?*", "The next item opens right of the current tab");
+  await page.evaluate(
+    "document.querySelector('[data-acceptance-input]').focus()",
+  );
+  await page.send("Input.insertText", { text: "typed" });
+  await expect("beta gamma*", "Typing in the item keeps its tab");
+  await browse("delta");
+  await leader("b", "k");
+  await expect("beta gamma delta*", "␣BK keeps the preview tab");
+  await browse("draft:notes");
+  await expect(
+    "beta gamma delta draft:notes?*",
+    "A Draft takes a tab like a Session",
+  );
+  results.push(
+    "Preview tab: browsing reuses it; double click, typing and ␣BK keep it; Sessions and Drafts share the strip",
+  );
+
+  await leader("[");
+  await expect("beta gamma delta* draft:notes?", "␣[ opens the previous tab");
+  await leader("]");
+  await leader("]");
+  await expect("beta* gamma delta draft:notes?", "␣] wraps to the first tab");
+  check(
+    await page.evaluate<boolean>(
+      `document.querySelector('${
+        tab("gamma")
+      } kbd')?.textContent?.trim() === "␣2"`,
+    ),
+    "Every tab shows its leader digit",
+  );
+  await body();
+  await key(" ");
+  await sleep(350);
+  await shot("6-tabs-leader");
+  await key("3");
+  await expect("beta gamma delta* draft:notes?", "␣3 opens the third tab");
+  results.push(
+    "␣[ ␣] step and wrap; every tab shows its digit and ␣3 opens the third",
+  );
+
+  await leader("b", "p");
+  await expect("^delta* beta gamma draft:notes?", "␣BP pins to the front");
+  await leader("2");
+  await leader("b", "r");
+  await expect("^delta beta*", "␣BR closes the tabs to the right");
+  await leader("b", "u");
+  await expect("^delta beta draft:notes*", "␣BU reopens the last closed tab");
+  await leader("b", "u");
+  await expect(
+    "^delta beta draft:notes gamma*",
+    "␣BU again reopens the one before it",
+  );
+  await leader("b", "<");
+  await expect("^delta beta gamma* draft:notes", "␣B< moves the tab left");
+  await leader("b", "d");
+  await expect(
+    "^delta beta draft:notes*",
+    "␣BD closes the tab and returns to the last visited one",
+  );
+  await leader("b", "o");
+  await expect("^delta draft:notes*", "␣BO spares pinned tabs");
+  results.push(
+    "␣BP pins; ␣BR ␣BD ␣BO close (pinned tabs stay); ␣BU reopens; ␣B< moves",
+  );
+
+  await browse("alpha");
+  await browse("beta");
+  await expect("^delta draft:notes beta?*", "The preview tab is reused again");
+  await pointer(tab("draft:notes"), "middle");
+  await expect("^delta beta?*", "A middle click closes a tab");
+  await pointer(tab("delta"), "right");
+  await until("document.querySelector('[role=menu]')", "context menu opens");
+  const menu = await page.evaluate<string>(
+    "[...document.querySelectorAll('[role=menuitem]')].map((item) => item.textContent.trim().split('␣')[0] + (item.getAttribute('aria-disabled') === 'true' ? ' (off)' : '')).join(' | ')",
+  );
+  check(
+    menu ===
+      "Close | Close Others | Close to the Right | Close to the Left (off) | Close All | Unpin | Reopen Closed Tab | Rename…",
+    `Context menu of a pinned Session tab: ${menu}`,
+  );
+  await shot("7-tabs-menu");
+  await page.evaluate(
+    "[...document.querySelectorAll('[role=menuitem]')].find((item) => item.textContent.startsWith('Unpin')).click()",
+  );
+  await expect("delta beta?*", "The menu unpins the tab it was opened on");
+  await pointer(tab("delta"), "right");
+  await until("document.querySelector('[role=menu]')", "context menu opens");
+  await page.evaluate(
+    "[...document.querySelectorAll('[role=menuitem]')].find((item) => item.textContent.startsWith('Close All')).click()",
+  );
+  await expect("beta?*", "Close All leaves the item on screen its tab");
+  results.push(
+    "Pointer: middle click closes; the context menu acts on its own tab; Close All keeps the current item",
+  );
+  await shot("8-tabs");
+};
+
 try {
-  if (flow === "draft") {
+  if (flow === "tabs") {
+    await tabsFlow();
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          browser: page.browser,
+          flow,
+          screenshots: output,
+          tests: results,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (flow === "draft") {
     await draftFlow();
     console.log(
       JSON.stringify(

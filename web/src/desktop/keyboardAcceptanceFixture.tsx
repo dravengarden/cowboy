@@ -1,4 +1,4 @@
-import { createRef, StrictMode, useState } from "react";
+import { createRef, StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Box, ButtonBase, CssBaseline, Typography } from "@mui/material";
 import { BrowserProductTheme } from "../browserProductTheme";
@@ -16,6 +16,14 @@ import {
 import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
 import { DesktopCommandHost } from "./commands/DesktopCommandHost";
 import { WorkspaceDraftPane } from "../documents/WorkspaceDraft";
+import { DesktopTabStrip } from "./DesktopTabStrip";
+import { DescriptionOutlined } from "@mui/icons-material";
+import { StatusDot } from "../SessionStatusDot";
+import {
+  updateDesktopTabs,
+  useDesktopTabs,
+  withDesktopTab,
+} from "./workspaceTabs";
 import type { DraftFlush } from "../documents/DraftEditor";
 import { draftRepository } from "../documents/store";
 import { bindProductSyncPrincipal } from "../productSyncIdentity";
@@ -364,6 +372,113 @@ export async function mountDraftKeyboardAcceptance(): Promise<void> {
             beforeLeave={beforeLeave}
             onAction={(action) => actions.push(action.action)}
           />
+        </Box>
+      </>
+    );
+  }
+  createRoot(container).render(
+    <StrictMode>
+      <SurfaceProvider>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DesktopWorkspaceProvider>
+            <DesktopCommandProvider>
+              <Surface />
+            </DesktopCommandProvider>
+          </DesktopWorkspaceProvider>
+        </BrowserProductTheme>
+      </SurfaceProvider>
+    </StrictMode>,
+  );
+}
+
+/**
+ * The real tab strip and its commands over six fictitious items. The list on
+ * the left opens an item the way the Sessions sidebar does (browsing), so the
+ * preview tab, the leader keys and the context menu run as in the App.
+ */
+export function mountTabsKeyboardAcceptance(): void {
+  desktopPointer();
+  const container = document.createElement("div");
+  container.style.cssText = "height:100vh;display:flex";
+  document.body.append(container);
+  const titles = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Notes"];
+  const keyOf = (title: string): string =>
+    title === "Notes" ? "draft:notes" : title.toLowerCase();
+  const probe = globalThis as unknown as Record<string, unknown>;
+  const renamed: string[] = [];
+  probe.__acceptance = { renamed };
+  function Surface(): React.JSX.Element {
+    probe.__workspace = useDesktopWorkspace();
+    const tabs = useDesktopTabs();
+    const [current, setCurrent] = useState("alpha");
+    const [visits, setVisits] = useState<string[]>(["alpha"]);
+    const from = useRef<string | null>(null);
+    useEffect(() => {
+      const previous = from.current;
+      from.current = current;
+      updateDesktopTabs((state) => withDesktopTab(state, current, previous));
+      setVisits((keys) => [current, ...keys.filter((key) => key !== current)]);
+    }, [current]);
+    return (
+      <>
+        <DesktopCommandHost
+          onNewSession={() => {}}
+          onOpenSettings={() => {}}
+        />
+        <Box
+          data-desktop-pane="sessions"
+          data-desktop-region="sessions.list"
+          tabIndex={-1}
+          sx={{ width: 220, borderRight: 1, borderColor: "divider", p: 1 }}
+        >
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {titles.map((title) => (
+              <li key={title}>
+                <ButtonBase
+                  data-desktop-item={keyOf(title)}
+                  data-acceptance-open={keyOf(title)}
+                  onClick={() => setCurrent(keyOf(title))}
+                  sx={{ width: "100%", justifyContent: "flex-start", px: 2, py: 1 }}
+                >
+                  {title}
+                </ButtonBase>
+              </li>
+            ))}
+          </ul>
+        </Box>
+        <Box
+          data-desktop-pane="prompt"
+          sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}
+        >
+          <DesktopTabStrip
+            items={tabs.tabs.map((tab) => ({
+              ...tab,
+              kind: tab.key.startsWith("draft:") ? "draft" : "session",
+              title: titles.find((title) => keyOf(title) === tab.key) ?? tab.key,
+              // The App's own leading content: a status dot and a glyph.
+              leading: (
+                <>
+                  <StatusDot status="running" />
+                  <DescriptionOutlined data-desktop-tab-icon />
+                </>
+              ),
+            }))}
+            currentKey={current}
+            visits={visits}
+            exists={(key) => titles.some((title) => keyOf(title) === key)}
+            onOpen={setCurrent}
+            onRename={(key) => renamed.push(key)}
+          />
+          <Box
+            data-desktop-region="prompt.composer"
+            data-acceptance-body
+            tabIndex={-1}
+            sx={{ flex: 1, p: 2, outline: "none" }}
+          >
+            <Typography data-acceptance-current>{current}</Typography>
+            <textarea data-acceptance-input aria-label="Prompt" />
+          </Box>
         </Box>
       </>
     );

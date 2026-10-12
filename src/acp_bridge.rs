@@ -61,6 +61,7 @@ const REMOTE_CREATION_TIMEOUT: Duration = Duration::from_secs(
         + INITIAL_CONFIG_TIMEOUT.as_secs(),
 );
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(200);
 // Deletion is acknowledged by the daemon's next session list, not by a command
 // reply. Bound the wait so a refused or lost deletion cannot hold the request.
 const DELETE_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1124,14 +1125,21 @@ impl Bridge {
             loop {
                 let notified = self.connected_notify.notified();
                 if self.state.lock().connected {
-                    return;
+                    return Ok(());
                 }
-                notified.await;
+                // The first connection waits for a person to approve this
+                // computer in a browser. The ACP client hides stderr, so the
+                // request is the only place the link can reach them; answer
+                // at once instead of a timeout that names no cause.
+                if let Some(pending) = self.authentication.pending_approval() {
+                    return Err(approval_required_message(&pending));
+                }
+                let _ = tokio::time::timeout(APPROVAL_POLL_INTERVAL, notified).await;
             }
         };
         tokio::time::timeout(DAEMON_READY_TIMEOUT, wait)
             .await
-            .map_err(|_| "timed out waiting for the cowboy daemon to reconnect".to_owned())
+            .map_err(|_| "timed out waiting for the cowboy daemon to reconnect".to_owned())?
     }
 
     async fn create_session(&self, cwd: PathBuf) -> Result<String, String> {
@@ -2360,6 +2368,14 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
     }
 }
 
+fn approval_required_message(pending: &crate::client_auth_client::PendingApproval) -> String {
+    format!(
+        "Cowboy is waiting for you to approve this computer. Open {} in a browser, check that \
+         the client fingerprint is {}, approve it, then try again.",
+        pending.url, pending.fingerprint
+    )
+}
+
 fn is_fatal_auth_status(status: u16) -> bool {
     status == 401 || status == 403
 }
@@ -2385,6 +2401,9 @@ fn daemon_auth_rejected(error: &anyhow::Error) -> bool {
             .downcast_ref::<WsError>()
             .is_some_and(websocket_auth_rejected)
             || cause.to_string().contains("rejected this computer login")
+            // A person refused this computer. Retrying would file a new
+            // approval request every few seconds for them to refuse again.
+            || cause.to_string().contains("device authorization was denied")
     })
 }
 
@@ -2824,6 +2843,12 @@ mod tests {
         ));
         assert!(daemon_auth_rejected(&error));
         assert!(!daemon_auth_rejected(&anyhow!("connection refused")));
+        assert!(daemon_auth_rejected(&anyhow!(
+            "Cowboy device authorization was denied"
+        )));
+        assert!(!daemon_auth_rejected(&anyhow!(
+            "Cowboy device authorization timed out"
+        )));
     }
 
     #[test]
@@ -2939,6 +2964,34 @@ mod tests {
         echo.cmid = Some(cmid.clone());
         assert!(bridge.state.lock().correlate_prompt(&echo).0.is_none());
         (cmid, completion)
+    }
+
+    #[tokio::test]
+    async fn a_pending_browser_approval_answers_requests_with_its_link() {
+        let (bridge, _commands) = fixture_bridge();
+        let waiting = bridge.clone();
+        let listing = tokio::spawn(async move { waiting.ready_sessions(None).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!listing.is_finished(), "a connecting daemon is waited for");
+
+        bridge.authentication.set_pending_approval(Some(
+            crate::client_auth_client::PendingApproval {
+                url: "https://cowboy.example/auth/device#request".to_owned(),
+                fingerprint: "SHA256:fixture".to_owned(),
+            },
+        ));
+        let error = tokio::time::timeout(Duration::from_secs(2), listing)
+            .await
+            .expect("the approval link is reported without the readiness timeout")
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("https://cowboy.example/auth/device#request"));
+        assert!(error.contains("SHA256:fixture"));
+
+        // Once approved and connected the same request succeeds.
+        bridge.authentication.set_pending_approval(None);
+        bridge.set_connected(true);
+        assert!(bridge.ready_sessions(None).await.unwrap().is_empty());
     }
 
     #[test]

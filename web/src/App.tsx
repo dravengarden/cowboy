@@ -98,6 +98,7 @@ import {
     Schedule,
     Settings as SettingsIcon,
     SystemUpdateAlt,
+    DescriptionOutlined,
 } from "@mui/icons-material";
 import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
@@ -306,6 +307,8 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { useDesktopLeaderOptional } from "./desktop/commands/leaderContext";
 import { desktopRecentItems, recordDesktopVisit, useDesktopVisits } from "./desktop/sessionVisits";
+import { pruneDesktopTabs, updateDesktopTabs, useDesktopTabs, withDesktopTab } from "./desktop/workspaceTabs";
+import type { DesktopTabItem } from "./desktop/DesktopTabStrip";
 import {
     DESKTOP_MOVE_PICK_EVENT,
     DESKTOP_SESSION_JUMP_EVENT,
@@ -381,6 +384,10 @@ const DesktopCommandHost = lazy(async () => {
 const DesktopStatusLine = lazy(async () => {
     const module = await import("./desktop/DesktopStatusLine");
     return { default: module.DesktopStatusLine };
+});
+const DesktopTabStrip = lazy(async () => {
+    const module = await import("./desktop/DesktopTabStrip");
+    return { default: module.DesktopTabStrip };
 });
 const DesktopTopBarControls = lazy(async () => {
     const module = await import("./desktop/DesktopTopBarControls");
@@ -1593,7 +1600,9 @@ function SessionList({
                 Add to {copyTarget.session.title} · Original kept
             </Box>}
             {movePicking && movePick && <SessionsSpotlight anchor={listRef} />}
-            {!mobileDrawer && <Box sx={{ p: 1 }}>
+            {/* Desktop keeps this row as low as the top bar's controls: the
+                list below is what the sidebar is for. */}
+            {!mobileDrawer && <Box sx={{ p: 1, ...(desktop && { py: 0.5 }) }}>
                 {movePicking && movePick && (
                     <Box
                         role="status"
@@ -1645,7 +1654,8 @@ function SessionList({
                     onClick={onNew}
                     sx={desktop ? {
                         ...desktopEmbeddedControlSx(),
-                        minHeight: "3rem",
+                        minHeight: "2.25rem",
+                        py: 0,
                         fontSize: "0.875rem",
                         minWidth: 0,
                         flexWrap: "wrap",
@@ -1666,10 +1676,14 @@ function SessionList({
                             ...(desktop && desktopEmbeddedControlSx()),
                             // Desktop carries its `␣SZ` slot beside the glyph.
                             width: desktop ? "auto" : 48,
-                            minWidth: desktop ? "3rem" : undefined,
-                            px: desktop ? "0.625rem" : undefined,
+                            minWidth: desktop ? "2.25rem" : undefined,
+                            px: desktop ? "0.5rem" : undefined,
+                            py: desktop ? 0 : undefined,
                             gap: desktop ? "0.375rem" : undefined,
-                            minHeight: desktop ? "3rem" : 48,
+                            minHeight: desktop ? "2.25rem" : 48,
+                            // The theme sizes every icon button as a 44px
+                            // target; this one sets the row's height.
+                            height: desktop ? "2.25rem" : undefined,
                             borderRadius: 1.25,
                             flexShrink: 0,
                             fontSize: "1.1rem",
@@ -3919,6 +3933,65 @@ export function App({
             : [],
         [desktopVisits, draftLibrary.entries, sessionsForView, surface, workspaceItemKey],
     );
+    // Desktop tabs (desktop/workspaceTabs.ts): the item on screen always has
+    // one, opened right of the tab it was reached from.
+    const desktopTabState = useDesktopTabs();
+    const tabOpenedFrom = useRef<string | null>(null);
+    useEffect(() => {
+        if (surface !== "desktop" || !workspaceItemKey) return;
+        const from = tabOpenedFrom.current;
+        tabOpenedFrom.current = workspaceItemKey;
+        updateDesktopTabs((state) => withDesktopTab(state, workspaceItemKey, from));
+    }, [surface, workspaceItemKey]);
+    const workspaceItemExists = useCallback((key: string): boolean =>
+        key.startsWith("draft:")
+            ? draftLibrary.entries.some((entry) =>
+                entry.id === key.slice("draft:".length) && entry.kind === "document" && !entry.deleted)
+            : sessionsForView.some((session) => session.id === key),
+    [draftLibrary.entries, sessionsForView]);
+    useEffect(() => {
+        // Only a complete, current picture may drop a tab as deleted.
+        if (surface !== "desktop" || !sessionsLoaded || !draftLibrary.loaded || draftLibrary.error) return;
+        updateDesktopTabs((state) =>
+            pruneDesktopTabs(state, (key) => key === workspaceItemKey || workspaceItemExists(key)));
+    }, [surface, sessionsLoaded, draftLibrary.loaded, draftLibrary.error, workspaceItemExists, workspaceItemKey]);
+    const desktopTabItems = useMemo((): DesktopTabItem[] => {
+        if (surface !== "desktop") return [];
+        return desktopTabState.tabs.flatMap((tab): DesktopTabItem[] => {
+            if (tab.key.startsWith("draft:")) {
+                const draft = draftLibrary.entries.find((entry) => entry.id === tab.key.slice("draft:".length));
+                if (!draft || draft.deleted) return [];
+                return [{
+                    ...tab,
+                    kind: "draft",
+                    title: draft.title || "Untitled draft",
+                    leading: <DescriptionOutlined data-desktop-tab-icon />,
+                }];
+            }
+            const session = sessionsForView.find((candidate) => candidate.id === tab.key);
+            if (!session) return [];
+            return [{
+                ...tab,
+                kind: "session",
+                title: session.title.startsWith(`${session.provider} · `)
+                    ? session.title.slice(session.provider.length + 3)
+                    : session.title,
+                leading: (
+                    <>
+                        <StatusDot status={session.status} backgroundTasks={session.background_tasks} providerUpdate={session.provider_update} />
+                        <ProviderIcon
+                            provider={session.provider}
+                            providerVersion={session.provider_version}
+                            providerDigest={session.provider_generation_digest}
+                            fontSize="small"
+                            data-desktop-tab-icon
+                        />
+                    </>
+                ),
+            }];
+        });
+    }, [desktopTabState.tabs, draftLibrary.entries, sessionsForView, surface]);
+    const desktopVisitKeys = useMemo(() => desktopVisits.map((visit) => visit.key), [desktopVisits]);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
     // presentation). A cached tail counts: it is what the user came to read.
@@ -4924,6 +4997,36 @@ export function App({
                     }}
                 />
                 )}
+                {surface === "desktop" && (
+                    <Suspense fallback={null}>
+                        <DesktopTabStrip
+                            items={desktopTabItems}
+                            currentKey={workspaceItemKey}
+                            visits={desktopVisitKeys}
+                            exists={workspaceItemExists}
+                            onOpen={pick}
+                            onRename={(key): void => {
+                                const session = sessions.find((candidate) => candidate.id === key);
+                                if (session) setPendingRename(session);
+                            }}
+                            // The window's top row beside the Sessions sidebar:
+                            // installed-PWA window controls overlay its left
+                            // whenever the sidebar is not next to it.
+                            sx={{
+                                ...(sessionsInDrawer && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(env(titlebar-area-x, 0px) + 12px)",
+                                    },
+                                }),
+                                ...(sessionsCollapsed && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
+                                    },
+                                }),
+                            }}
+                        />
+                    </Suspense>
+                )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
@@ -5029,14 +5132,15 @@ export function App({
                             // past them only in that mode — when the sidebar is
                             // visible the controls sit over it instead (see
                             // sidebarHeader), and this bar must stay flush.
-                            ...(sessionsInDrawer && {
+                            // (On Desktop the tab bar above is that top row.)
+                            ...(sessionsInDrawer && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
                             // The collapsed Sessions rail is narrower than the
                             // window controls, so they overhang this bar too.
-                            ...(sessionsCollapsed && {
+                            ...(sessionsCollapsed && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
                                 },

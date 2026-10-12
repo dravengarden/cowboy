@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
 import { useOptionalDesktopCommands } from "./commands/DesktopCommandProvider";
+import { useDesktopLeaderOptional } from "./commands/leaderContext";
 import { desktopLeaderSequence } from "./commands/workspaceShortcuts";
 
 /** A blocking approval offers at most this many numbered choices. */
@@ -39,12 +40,22 @@ export function DesktopApprovalCommands({
   latest.current = choices;
   const open = useRef(available);
   open.current = available;
+  // The digits also open tabs. A leader armed before this approval appeared
+  // was aimed at a tab, so only a leader armed afterwards may answer it.
+  const leaderArmed = useDesktopLeaderOptional()?.armed === true;
+  const armed = useRef(leaderArmed);
+  armed.current = leaderArmed;
+  const seen = useRef(true);
+  useEffect(() => {
+    if (!leaderArmed) seen.current = true;
+  }, [leaderArmed]);
   const labels = choices.slice(0, DESKTOP_APPROVAL_CHOICE_LIMIT)
     .map((choice) => choice.label);
   // Re-register only when the wording changes, not on every render.
   const signature = JSON.stringify(labels);
   useEffect(() => {
     if (!register) return undefined;
+    seen.current = !armed.current;
     const names = JSON.parse(signature) as string[];
     const releases = names.map((label, index) =>
       register({
@@ -54,7 +65,7 @@ export function DesktopApprovalCommands({
         group: "Approval",
         sequence: desktopLeaderSequence(String(index + 1)),
         contextual: true,
-        when: () => open.current,
+        when: () => open.current && seen.current,
         disabledReason: "Your answer is being sent",
         run: () => latest.current[index]?.run(),
       })

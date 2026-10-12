@@ -826,9 +826,22 @@ mod tests {
             ])
             .is_err()
         );
+        // A wait longer than one gateway exchange is sliced by the client,
+        // still within one hour.
         assert!(
-            Cli::try_parse_from(["cowboy", "call", "wait", "call-1", "--timeout-ms", "60001"])
-                .is_err()
+            Cli::try_parse_from(["cowboy", "call", "wait", "call-1", "--wait-ms", "900000"])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "call",
+                "wait",
+                "call-1",
+                "--timeout-ms",
+                "3600001"
+            ])
+            .is_err()
         );
     }
 

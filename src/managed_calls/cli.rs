@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 
-use super::protocol::{Action, LocalRequest, valid_capability};
+use super::protocol::{Action, LocalRequest, MAX_WAIT_MS, valid_capability};
 use super::{MAX_REQUEST_BYTES, Request, valid_id};
 
 #[derive(Args)]
@@ -58,9 +58,10 @@ enum CallCommand {
     /// Observe an accepted call without submitting another prompt.
     Inspect { call_id: String },
     /// Wait for the same accepted call; a deadline does not cancel it.
+    /// Waits longer than one gateway exchange are split into slices here.
     Wait {
         call_id: String,
-        #[arg(long, default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(0..=60_000))]
+        #[arg(long, visible_alias = "wait-ms", default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(0..=3_600_000))]
         timeout_ms: u64,
     },
     /// Read the final result of an accepted call.
@@ -270,27 +271,90 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
         );
     }
     if value.pointer("/error/admission").and_then(Value::as_str) == Some("unknown") {
+        // Observing never submits, so resolving a lost response here is
+        // safe; only an unresolved outcome is left to the caller.
+        if let Some(observed) = observe(&context, &request_id).await {
+            return emit(&observed);
+        }
         value["request_id"] = json!(request_id);
         value["next"] = json!({"argv":["cowboy","call","observe",request_id]});
     }
     emit(&value)
 }
 
+/// Resolve a start whose response was lost by its request identity.
+async fn observe(context: &Wiring, request_id: &str) -> Option<Value> {
+    for attempt in 0..4 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        let value = exchange(
+            context.clone(),
+            Action::Observe {
+                request_id: request_id.to_owned(),
+            },
+            0,
+        )
+        .await;
+        if value.get("call_id").and_then(Value::as_str).is_some() {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Wait in gateway-sized slices until the call is terminal, the caller's
+/// deadline passes, or an exchange fails.
+async fn wait(context: Wiring, call_id: String, timeout_ms: u64) -> Value {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let slice = u64::try_from(left.as_millis())
+            .unwrap_or(u64::MAX)
+            .min(MAX_WAIT_MS);
+        let value = exchange(
+            context.clone(),
+            Action::Wait {
+                call_id: call_id.clone(),
+                timeout_ms: slice,
+            },
+            slice,
+        )
+        .await;
+        let open = value
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| {
+                !matches!(
+                    state,
+                    "completed" | "failed" | "cancelled" | "waiting_input" | "error"
+                )
+            });
+        if refused(&value) || !open || std::time::Instant::now() >= deadline {
+            return value;
+        }
+    }
+}
+
 pub async fn call(args: CallArgs) -> anyhow::Result<()> {
+    if let CallCommand::Wait {
+        call_id,
+        timeout_ms,
+    } = args.command
+    {
+        if !valid_id(&call_id) {
+            return emit(&error("invalid_identity", "not_submitted"));
+        }
+        return match wiring() {
+            Ok(context) => emit(&wait(context, call_id, timeout_ms).await),
+            Err(code) => emit(&error(code, "not_submitted")),
+        };
+    }
     let (action, wait_ms) = match args.command {
         CallCommand::Start { provider, request } => return start(&provider, request).await,
         CallCommand::Capabilities => (Action::Capabilities {}, 0),
         CallCommand::Inspect { call_id } => (Action::Inspect { call_id }, 0),
-        CallCommand::Wait {
-            call_id,
-            timeout_ms,
-        } => (
-            Action::Wait {
-                call_id,
-                timeout_ms,
-            },
-            timeout_ms,
-        ),
+        CallCommand::Wait { .. } => unreachable!("handled above"),
         CallCommand::Result { call_id } => (Action::Result { call_id }, 0),
         CallCommand::Cancel { call_id } => (Action::Cancel { call_id }, 0),
         CallCommand::Observe { request_id } => (Action::Observe { request_id }, 0),
@@ -316,6 +380,86 @@ pub async fn call(args: CallArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fake gateway answering each exchange from `reply` and recording the
+    /// actions it received.
+    fn gateway(
+        reply: impl Fn(&Value) -> Value + Send + Sync + 'static,
+    ) -> (
+        tempfile::TempDir,
+        Wiring,
+        std::sync::Arc<parking_lot::Mutex<Vec<Value>>>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("gateway.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let seen = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let frame: Value = serde_json::from_str(&line).unwrap();
+                log.lock().push(frame["action"].clone());
+                let mut bytes = serde_json::to_vec(&reply(&frame["action"])).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+        });
+        let wiring = Wiring {
+            schema: 1,
+            socket,
+            capability: "a".repeat(64),
+        };
+        (dir, wiring, seen)
+    }
+
+    #[tokio::test]
+    async fn a_long_wait_is_split_into_gateway_sized_slices() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let (_dir, wiring, seen) = gateway(move |_| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let state = if n < 2 { "running" } else { "completed" };
+            json!({"schema":1,"state":state,"call_id":"call-1","error":null})
+        });
+        let value = wait(wiring, "call-1".into(), 600_000).await;
+        assert_eq!(value["state"], "completed");
+        let seen = seen.lock();
+        assert_eq!(seen.len(), 3);
+        assert!(
+            seen.iter().all(|action| action["kind"] == "wait"
+                && action["timeout_ms"].as_u64() == Some(MAX_WAIT_MS))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wait_returns_when_the_call_needs_input_or_is_refused() {
+        let (_dir, wiring, seen) = gateway(
+            |_| json!({"schema":1,"state":"waiting_input","call_id":"call-1","error":null}),
+        );
+        assert_eq!(
+            wait(wiring, "call-1".into(), 600_000).await["state"],
+            "waiting_input"
+        );
+        assert_eq!(seen.lock().len(), 1);
+        let (_dir, wiring, seen) = gateway(|_| error("not_found", "not_submitted"));
+        assert!(refused(&wait(wiring, "call-1".into(), 600_000).await));
+        assert_eq!(seen.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_lost_start_response_resolves_by_observing_its_request() {
+        let (_dir, wiring, seen) = gateway(|action| {
+            assert_eq!(action["kind"], "observe", "observing must never resubmit");
+            json!({"schema":1,"state":"running","call_id":"call-1","error":null})
+        });
+        let observed = observe(&wiring, "request-1").await.unwrap();
+        assert_eq!(observed["call_id"], "call-1");
+        assert_eq!(seen.lock()[0]["request_id"], "request-1");
+        let (_dir, wiring, _) = gateway(|_| error("not_found", "not_submitted"));
+        assert!(observe(&wiring, "request-1").await.is_none());
+    }
 
     #[test]
     fn only_a_present_error_code_is_a_refusal() {

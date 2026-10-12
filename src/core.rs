@@ -2500,6 +2500,16 @@ impl Hub {
         if status == Status::Running && self.status(session_id) == Some(Status::Interrupted) {
             return;
         }
+        // A reconnect restates the level of a worker that already crashed.
+        // Appending it again would report the recorded crash as a new one.
+        if status == Status::Crashed
+            && self.status(session_id) == Some(Status::Crashed)
+            && detail.as_deref().is_none_or(|detail| {
+                self.latest_crash_detail(session_id).as_deref() == Some(detail)
+            })
+        {
+            return;
+        }
         self.set_status(session_id, status, detail);
     }
 
@@ -3055,7 +3065,16 @@ impl Hub {
             owner_user_id,
             owner_username,
         } = registration;
-        let config_preferences = default_config_preferences(&provider, provider_behavior.as_ref());
+        // A managed child takes only its parent's preset; its worker refuses
+        // every other option, so interactive defaults would never apply.
+        let config_preferences = if execution_binding
+            .as_ref()
+            .is_some_and(|binding| binding.managed().is_some())
+        {
+            serde_json::json!({})
+        } else {
+            default_config_preferences(&provider, provider_behavior.as_ref())
+        };
         let meta = SessionMeta {
             id: id.clone(),
             provider,
@@ -4239,6 +4258,8 @@ impl Hub {
     /// worker. The reset and write-behind persistence travel independently;
     /// after reconnect the actual owner, not an unacknowledged intent, defines
     /// the running release. Never use this to migrate native identity or home.
+    /// Runs before the snapshot acceptance fence, so it applies its own
+    /// placement check: a different execution binding is never adopted.
     pub fn reconcile_provider_release(&self, worker: &WorkerSnapshot) {
         let Some(launch) = worker.launch.as_ref().filter(|launch| {
             worker.has_connected_owner() && !launch.provider_generation_digest.is_empty()
@@ -4253,6 +4274,7 @@ impl Hub {
             if session.meta.provider != launch.provider
                 || session.meta.require_runtime_launch().is_err()
                 || session.meta.cwd != launch.cwd
+                || session.meta.execution_binding != launch.execution_binding
                 || session.meta.provider_auth_generation != launch.provider_auth_generation
                 || session.meta.agent_session_id.is_none()
                 || session.meta.agent_session_id != worker.agent_session_id
@@ -6336,6 +6358,53 @@ mod managed_call_tests {
     }
 
     #[test]
+    fn a_bound_session_settles_on_its_surviving_workers_release_before_acceptance() {
+        let hub = Hub::new();
+        let registration = child("bound");
+        let binding = registration.execution_binding.clone();
+        hub.create_session(registration);
+        hub.set_agent_session_id("bound", "native-thread".to_owned());
+        let meta = hub.session_info("bound").unwrap().meta;
+        let mut worker = super::runtime_reconciliation_tests::worker_snapshot("bound", "epoch-1");
+        worker.agent_session_id.clone_from(&meta.agent_session_id);
+        worker.launch = Some(crate::runtime_wire::StartSession {
+            session_id: meta.id.clone(),
+            provider: meta.provider.clone(),
+            provider_version: "3.3.0".to_owned(),
+            provider_generation_digest: "older-generation".to_owned(),
+            provider_auth_generation: meta.provider_auth_generation,
+            provider_behavior: None,
+            cwd: meta.cwd.clone(),
+            agent_session_id: meta.agent_session_id.clone(),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "worker-generation".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+            execution_binding: None,
+        });
+        // An owner on another placement is neither adopted nor reconciled.
+        hub.reconcile_provider_release(&worker);
+        assert_eq!(
+            hub.session_info("bound").unwrap().meta.provider_version,
+            "3.4.0"
+        );
+        assert!(!hub.accept_runtime_snapshot(&worker));
+
+        // The record ran ahead of the live worker; its owner defines the
+        // release, and only then does the acceptance fence admit it.
+        worker.launch.as_mut().unwrap().execution_binding = binding;
+        assert!(!hub.accept_runtime_snapshot(&worker));
+        hub.reconcile_provider_release(&worker);
+        let settled = hub.session_info("bound").unwrap().meta;
+        assert_eq!(settled.provider_version, "3.3.0");
+        assert_eq!(settled.provider_generation_digest, "older-generation");
+        assert!(hub.accept_runtime_snapshot(&worker));
+    }
+
+    #[test]
     fn client_entry_points_cannot_prompt_a_managed_child() {
         let hub = Hub::new();
         hub.create_session(child("child"));
@@ -7197,6 +7266,35 @@ mod core_tests {
             Some("watchdog".to_owned()),
         ));
         assert_eq!(hub.status("status-cas"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn a_restated_crash_is_not_appended_as_a_new_one() {
+        let hub = hub_with_session("crashed-once");
+        let crashes = |hub: &Hub| {
+            let (log, _) = hub.snapshot("crashed-once").expect("snapshot");
+            log.iter()
+                .filter(|envelope| {
+                    matches!(
+                        envelope.event,
+                        Event::Lifecycle {
+                            status: Status::Crashed,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("first".to_owned()));
+        hub.project_runtime_status("crashed-once", Status::Crashed, None);
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("first".to_owned()));
+        assert_eq!(crashes(&hub), 1);
+        // A different failure, or a crash after a restart, is a new fact.
+        hub.project_runtime_status("crashed-once", Status::Crashed, Some("second".to_owned()));
+        assert_eq!(crashes(&hub), 2);
+        hub.set_status("crashed-once", Status::Starting, None);
+        hub.project_runtime_status("crashed-once", Status::Crashed, None);
+        assert_eq!(crashes(&hub), 3);
     }
 
     #[test]

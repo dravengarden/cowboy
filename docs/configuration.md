@@ -175,7 +175,8 @@ is idle. A dormant (exited, workerless) session under the same policy is only
 re-pinned after the idle period, exactly like `plugins.repin_dormant_sessions`
 but without its longer wait, so its next open starts the new release and no
 Device slot is spent. Updates are paced: each 30-second pass starts at most one per Device,
-and none while another session on that Device is still starting, so a whole
+and none while another session on that Device is still starting (one that has
+been starting for over 10 minutes is logged and no longer waited for), so a whole
 idle fleet never relaunches at once. An unattended update never replaces a
 worker that reports background work, and when one leaves a session crashed,
 further unattended updates to that release pause on the Device for 30 minutes

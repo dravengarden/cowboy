@@ -174,6 +174,39 @@ export function elapsedLabel(fromMs: number, toMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/** When a call started, as compactly as it stays unambiguous: the time
+ * today, "Yesterday" or the date before that, and the year only when it
+ * differs. Paired with its duration, it also places the call's end. */
+export function startedLabel(atMs: number, nowMs: number = Date.now()): string {
+  const at = new Date(atMs);
+  const now = new Date(nowMs);
+  const time = at.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const day = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((day(now) - day(at)) / 86_400_000);
+  if (days === 0) return time;
+  if (days === 1) return `Yesterday ${time}`;
+  const date = at.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(at.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+  return `${date} ${time}`;
+}
+
+/** Exact start and end for a hover or long-press title. */
+export function callTimesTitle(
+  call: Pick<ManagedCallSummary, "created_at_ms" | "updated_at_ms" | "state">,
+): string {
+  const started = `Started ${new Date(call.created_at_ms).toLocaleString()}`;
+  return callActive(call.state)
+    ? started
+    : `${started} · Finished ${new Date(call.updated_at_ms).toLocaleString()}`;
+}
+
 export function shortRevision(revision: string | null | undefined): string {
   if (!revision) return "—";
   return revision.replace(/^sha256:/, "").slice(0, 12);

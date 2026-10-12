@@ -974,7 +974,9 @@ fn handle_command(
                 config_id,
                 value,
             } => {
-                if shared.managed_read_only() {
+                // The parent's preset is the one configuration a managed child
+                // takes; the ACP command loop applies the same allowlist.
+                if shared.managed_read_only() && !shared.preset_options.contains(&config_id) {
                     return command_ack(
                         shared,
                         command_id,
@@ -1125,6 +1127,55 @@ mod tests {
         );
         assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
         assert!(matches!(rx.try_recv(), Ok(AgentCommand::Cancel)));
+    }
+
+    #[test]
+    fn managed_read_only_admits_only_the_preset_options() {
+        let (mut shared, _notify) = shared();
+        Arc::get_mut(&mut shared)
+            .unwrap()
+            .preset_options
+            .insert("model".to_owned());
+        shared.snapshot.lock().launch = Some(
+            serde_json::from_value(serde_json::json!({
+                "session_id":"sess-1", "provider":"codex", "cwd":"/snapshot", "generation":"gen-1",
+                "execution_binding":{
+                    "schema":1,"phase":"managed_child","session_id":"sess-1",
+                    "parent_session_id":"parent-1","machine_id":"hawk","workspace_id":"cowboy",
+                    "cwd":"/snapshot","profile":"read_only_v1"
+                }
+            }))
+            .unwrap(),
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tx = Some(tx);
+        let mut set = |command_id: &str, config_id: &str| {
+            handle_command(
+                &shared,
+                &mut tx,
+                WorkerCommand::SetConfigOption {
+                    command_id: command_id.into(),
+                    config_id: config_id.into(),
+                    value: serde_json::json!("value"),
+                },
+            )
+        };
+        assert!(matches!(
+            set("preset-model", "model"),
+            Frame::CommandAck { accepted: true, .. }
+        ));
+        assert!(matches!(
+            set("widen-permissions", "approval_policy"),
+            Frame::CommandAck {
+                accepted: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AgentCommand::SetConfigOption { config_id, .. }) if config_id == "model"
+        ));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -97,6 +97,9 @@ and in a queued-message editor), and the focused one runs.
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
+| `␣[` `␣]` | Previous, next tab (see "Tabs") |
+| `␣1`…`␣9` | Open the nth tab (a pending approval takes the digits; see "Tabs") |
+| `␣B` + `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: close this, others, right, left, all; pin, keep, reopen; move |
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
@@ -108,7 +111,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
-| `␣1`…`␣9` | Answer a pending approval with that choice (only while one waits; see "Approvals") |
+| `␣1`…`␣9` | While an approval waits: answer it with that choice (see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
@@ -117,14 +120,14 @@ and in a queued-message editor), and the focused one runs.
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`.
+style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`, Tabs `␣B`.
 A surface group doubles its key to focus the surface (`␣SS`, `␣TT`) and
 holds the surface's own buttons, so a header control is reachable without
 first moving focus there.
 A group opens only when one of its commands can run in the current focus
 (Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
 from anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `B G I V X`.
+become groups instead of taking root letters. Free root letters: `I V X`.
 
 #### Vim in text fields
 
@@ -181,6 +184,50 @@ top row or keypad) open a row at once; `J/K`, arrows and `Tab` move, `gg`/
 Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
 `Alt+K`/`Cmd+K` prefix, release the modifier before `⇥`: `Alt+Tab` and
 `Cmd+Tab` belong to the operating system.
+
+#### Tabs
+
+The tab bar is the top row of the main area, above the top bar, and holds
+the Sessions and Drafts kept open on this device (`workspaceTabs.ts`; per
+device, never synced, absent on Mobile). It is a recessed rail: the
+selected tab has the page's own surface and an accent on top, so it reads
+as the page rising out of the rail. The top bar below keeps the session's
+title and controls. The item on screen always has a tab.
+
+Like VS Code and Zed, browsing does not pile tabs up. An item opened from
+the sidebar, `␣␣`, Recent or a link takes the one *preview* tab (italic
+title), and the next item opened replaces it. Typing in the item, a double
+click on the tab, `␣BK`, pinning or moving it keeps the tab. A new tab
+opens right of the tab it was reached from. Pinned tabs lead the strip,
+are narrower, show a pin instead of a close button and survive every bulk
+close; only closing that one tab removes it.
+
+Keys follow LazyVim's buffers. `␣[` and `␣]` step to the previous and next
+tab and wrap (`[b` / `]b`). `␣1`…`␣9` open the nth tab, and each of the
+first nine tabs shows that slot. The digits are the tabs' resting meaning
+(`fallback` commands): while an approval waits they answer it instead, as
+before, and the tabs then show no digit, so every digit on screen does what
+it says. A leader armed before an approval appeared was aimed at a tab and
+cannot answer it; arm the leader again. `␣[` `␣]` still step meanwhile.
+`␣B` opens the Tabs group, whose slot ends the rail: `D` closes the
+current one (delete buffer), `O` the others, `R`/`L` those to its right or
+left, `A` all of them, `P` pins or unpins, `K` keeps the preview tab, `U`
+reopens the last closed tab (undo), `<`/`>` move the tab. Closing the
+current tab returns to the most recently visited tab that remains, else its
+neighbour; the last tab does not close. Closing a tab never stops, deletes
+or hibernates its Session or Draft. `␣⇥` and `␣O` keep working across tabs
+and closed items alike.
+
+The pointer has the same commands: click selects, middle click closes,
+double click keeps, drag reorders inside the pinned or the unpinned group,
+the wheel scrolls an overflowing strip, and the context menu offers Close,
+Close Others, Close to the Right, Close to the Left, Close All, Pin/Unpin,
+Keep Open, Reopen Closed Tab and (a Session) Rename. The menu acts on the
+tab it was opened on and shows the `␣B` slots when that is the current one.
+
+No direct chord is bound: `Ctrl+Tab`, `Ctrl/Cmd+W`, `Cmd+Shift+[`/`]` and
+`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The tab
+bar is not a focus region; its `␣B` slot covers every tab.
 
 #### Move pick
 
