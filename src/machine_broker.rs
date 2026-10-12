@@ -3643,12 +3643,11 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 .lock()
                 .get(&session.session_id)
                 .and_then(|w| w.snapshot.launch.clone());
-            let compatible = previous.iter().chain(worker.iter()).all(|old| {
+            // Placement must be the recovered one everywhere; Provider identity
+            // only matters for a running worker. A dormant session's retained
+            // declaration may predate later Provider and auth generations.
+            let placed = |old: &StartSession| {
                 old.cwd == session.cwd
-                    && old.provider == session.provider
-                    && old.provider_version == session.provider_version
-                    && old.provider_generation_digest == session.provider_generation_digest
-                    && old.provider_auth_generation == session.provider_auth_generation
                     && old
                         .execution_binding
                         .as_ref()
@@ -3657,7 +3656,15 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                             b == intent.previous
                                 || old.execution_binding == session.execution_binding
                         })
-            });
+            };
+            let compatible = previous.iter().all(placed)
+                && worker.iter().all(|old| {
+                    placed(old)
+                        && old.provider == session.provider
+                        && old.provider_version == session.provider_version
+                        && old.provider_generation_digest == session.provider_generation_digest
+                        && old.provider_auth_generation == session.provider_auth_generation
+                });
             if !valid || !compatible {
                 broker.command_rejected(
                     &session.session_id,
@@ -5655,6 +5662,95 @@ mod tests {
                 .lock()
                 .contains(&launch.session_id)
         );
+    }
+
+    #[tokio::test]
+    async fn execution_recovery_of_a_dormant_session_ignores_its_stale_provider_identity() {
+        let (broker, mut launch, _) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut previous = crate::execution_environment::fixture().decode().unwrap();
+        previous.runtime.cwd.clone_from(&launch.cwd);
+        previous
+            .workspace
+            .worktree_id
+            .clone_from(&launch.session_id);
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-dormant".into(),
+            previous: previous.clone(),
+        };
+        let record = |b: &crate::execution_environment::BindingV1| {
+            crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(b).unwrap(),
+            )
+        };
+        // Dormant: no worker, and the retained declaration predates later
+        // Provider and auth generations.
+        broker.workers.lock().remove(&launch.session_id);
+        launch.execution_binding = Some(record(&previous));
+        launch.provider_version = "3.19.1".into();
+        launch.provider_auth_generation = Some(1);
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), launch.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let mut next = previous.clone();
+        next.revision += 1;
+        next.environment.id = "replacement".into();
+        next.environment.incarnation = "replacement".into();
+        let mut candidate = launch.clone();
+        candidate.execution_binding = Some(record(&next));
+        candidate.provider_version = "3.19.25".into();
+        candidate.provider_auth_generation = Some(9);
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(candidate.clone()),
+                intent: Box::new(intent.clone()),
+                command_id: "dormant-recovery".into(),
+            },
+        )
+        .await;
+        while let Ok(frame) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    &frame,
+                    Frame::CommandAck { accepted: false, reason: Some(reason), .. }
+                        if reason == "execution recovery identity changed"
+                ),
+                "a dormant session's recovery must not be refused for a stale identity"
+            );
+        }
+        // Relocation stays refused for a dormant session too.
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), launch.clone());
+        let mut relocated = candidate;
+        relocated.cwd = "/another-workspace".into();
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(relocated),
+                intent: Box::new(intent),
+                command_id: "dormant-relocation".into(),
+            },
+        )
+        .await;
+        let mut refused = false;
+        while let Ok(frame) = rx.try_recv() {
+            refused |= matches!(
+                frame,
+                Frame::CommandAck {
+                    accepted: false,
+                    ..
+                }
+            );
+        }
+        assert!(refused, "relocation must stay refused");
     }
 
     #[test]
