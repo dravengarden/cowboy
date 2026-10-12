@@ -1692,6 +1692,12 @@ fn queue_persisted_config(
     options: Option<&serde_json::Value>,
     force_replay: bool,
 ) {
+    // A managed child takes only the preset its worker applies at launch; its
+    // worker refuses every other option, so replaying a legacy interactive
+    // preference would only record a session error on each reconnect.
+    if shared.hub.is_managed_child(session_id) {
+        return;
+    }
     let Some(preferences) = shared.hub.config_preferences(session_id) else {
         return;
     };
@@ -3865,6 +3871,67 @@ mod tests {
         assert_eq!(
             config_values,
             vec![("model".to_owned(), serde_json::json!("gpt-5.3-codex-spark"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_managed_child_never_replays_persisted_preferences() {
+        let hub = Hub::new();
+        let binding = crate::execution_environment::ManagedChildV1 {
+            schema: 1,
+            phase: "managed_child".into(),
+            session_id: "child".into(),
+            parent_session_id: "parent".into(),
+            machine_id: "hawk".into(),
+            workspace_id: "cowboy".into(),
+            cwd: "/owned/managed/child/workspace".into(),
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        };
+        hub.create_session(crate::core::SessionRegistration {
+            id: "child".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: "3.4.0".to_owned(),
+            provider_generation_digest: "generation".to_owned(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: Some(crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(binding).unwrap(),
+            )),
+            cwd: "/owned/managed/child/workspace".to_owned(),
+            title: "child".to_owned(),
+            origin: crate::core::SessionOrigin::Api,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        // A child registered before managed children stopped receiving
+        // interactive defaults still carries them durably.
+        hub.set_config_preference(
+            "child",
+            "model".to_owned(),
+            serde_json::json!("gpt-6.1-sol"),
+        )
+        .expect("model preference");
+        hub.set_config_preference(
+            "child",
+            "reasoning_effort".to_owned(),
+            serde_json::json!("medium"),
+        )
+        .expect("reasoning preference");
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+
+        queue_persisted_config_for_session(&runtime.shared, "child", true);
+
+        assert!(
+            runtime
+                .pending_for_test()
+                .iter()
+                .all(|command| !matches!(command, CoreCommand::SetConfigOption { .. })),
+            "the worker applies the parent preset itself; a replay is only refused"
         );
     }
 

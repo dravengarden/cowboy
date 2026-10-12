@@ -2617,7 +2617,7 @@ impl Hub {
         );
     }
 
-    fn is_managed_child(&self, session_id: &str) -> bool {
+    pub(crate) fn is_managed_child(&self, session_id: &str) -> bool {
         self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.meta
                 .execution_binding
