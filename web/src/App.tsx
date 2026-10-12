@@ -98,6 +98,7 @@ import {
     Schedule,
     Settings as SettingsIcon,
     SystemUpdateAlt,
+    DescriptionOutlined,
 } from "@mui/icons-material";
 import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
@@ -306,6 +307,8 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { useDesktopLeaderOptional } from "./desktop/commands/leaderContext";
 import { desktopRecentItems, recordDesktopVisit, useDesktopVisits } from "./desktop/sessionVisits";
+import { pruneDesktopTabs, updateDesktopTabs, useDesktopTabs, withDesktopTab } from "./desktop/workspaceTabs";
+import type { DesktopTabItem } from "./desktop/DesktopTabStrip";
 import {
     DESKTOP_MOVE_PICK_EVENT,
     DESKTOP_SESSION_JUMP_EVENT,
@@ -381,6 +384,10 @@ const DesktopCommandHost = lazy(async () => {
 const DesktopStatusLine = lazy(async () => {
     const module = await import("./desktop/DesktopStatusLine");
     return { default: module.DesktopStatusLine };
+});
+const DesktopTabStrip = lazy(async () => {
+    const module = await import("./desktop/DesktopTabStrip");
+    return { default: module.DesktopTabStrip };
 });
 const DesktopTopBarControls = lazy(async () => {
     const module = await import("./desktop/DesktopTopBarControls");
@@ -3919,6 +3926,64 @@ export function App({
             : [],
         [desktopVisits, draftLibrary.entries, sessionsForView, surface, workspaceItemKey],
     );
+    // Desktop tabs (desktop/workspaceTabs.ts): the item on screen always has
+    // one, opened right of the tab it was reached from.
+    const desktopTabState = useDesktopTabs();
+    const tabOpenedFrom = useRef<string | null>(null);
+    useEffect(() => {
+        if (surface !== "desktop" || !workspaceItemKey) return;
+        const from = tabOpenedFrom.current;
+        tabOpenedFrom.current = workspaceItemKey;
+        updateDesktopTabs((state) => withDesktopTab(state, workspaceItemKey, from));
+    }, [surface, workspaceItemKey]);
+    const workspaceItemExists = useCallback((key: string): boolean =>
+        key.startsWith("draft:")
+            ? draftLibrary.entries.some((entry) =>
+                entry.id === key.slice("draft:".length) && entry.kind === "document" && !entry.deleted)
+            : sessionsForView.some((session) => session.id === key),
+    [draftLibrary.entries, sessionsForView]);
+    useEffect(() => {
+        // Only a complete, current picture may drop a tab as deleted.
+        if (surface !== "desktop" || !sessionsLoaded || !draftLibrary.loaded || draftLibrary.error) return;
+        updateDesktopTabs((state) =>
+            pruneDesktopTabs(state, (key) => key === workspaceItemKey || workspaceItemExists(key)));
+    }, [surface, sessionsLoaded, draftLibrary.loaded, draftLibrary.error, workspaceItemExists, workspaceItemKey]);
+    const desktopTabItems = useMemo((): DesktopTabItem[] => {
+        if (surface !== "desktop") return [];
+        return desktopTabState.tabs.flatMap((tab): DesktopTabItem[] => {
+            if (tab.key.startsWith("draft:")) {
+                const draft = draftLibrary.entries.find((entry) => entry.id === tab.key.slice("draft:".length));
+                if (!draft || draft.deleted) return [];
+                return [{
+                    ...tab,
+                    kind: "draft",
+                    title: draft.title || "Untitled draft",
+                    leading: <DescriptionOutlined />,
+                }];
+            }
+            const session = sessionsForView.find((candidate) => candidate.id === tab.key);
+            if (!session) return [];
+            return [{
+                ...tab,
+                kind: "session",
+                title: session.title.startsWith(`${session.provider} · `)
+                    ? session.title.slice(session.provider.length + 3)
+                    : session.title,
+                leading: (
+                    <>
+                        <StatusDot status={session.status} backgroundTasks={session.background_tasks} providerUpdate={session.provider_update} />
+                        <ProviderIcon
+                            provider={session.provider}
+                            providerVersion={session.provider_version}
+                            providerDigest={session.provider_generation_digest}
+                            fontSize="small"
+                        />
+                    </>
+                ),
+            }];
+        });
+    }, [desktopTabState.tabs, draftLibrary.entries, sessionsForView, surface]);
+    const desktopVisitKeys = useMemo(() => desktopVisits.map((visit) => visit.key), [desktopVisits]);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
     // presentation). A cached tail counts: it is what the user came to read.
@@ -4924,6 +4989,36 @@ export function App({
                     }}
                 />
                 )}
+                {surface === "desktop" && (
+                    <Suspense fallback={null}>
+                        <DesktopTabStrip
+                            items={desktopTabItems}
+                            currentKey={workspaceItemKey}
+                            visits={desktopVisitKeys}
+                            exists={workspaceItemExists}
+                            onOpen={pick}
+                            onRename={(key): void => {
+                                const session = sessions.find((candidate) => candidate.id === key);
+                                if (session) setPendingRename(session);
+                            }}
+                            // The strip is the window's top row here: installed-PWA
+                            // window controls overlay its left whenever the Sessions
+                            // sidebar is not beside it (see the Toolbar below).
+                            sx={{
+                                ...(sessionsInDrawer && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(env(titlebar-area-x, 0px) + 12px)",
+                                    },
+                                }),
+                                ...(sessionsCollapsed && {
+                                    "@media (display-mode: window-controls-overlay)": {
+                                        pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
+                                    },
+                                }),
+                            }}
+                        />
+                    </Suspense>
+                )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
@@ -5029,14 +5124,15 @@ export function App({
                             // past them only in that mode — when the sidebar is
                             // visible the controls sit over it instead (see
                             // sidebarHeader), and this bar must stay flush.
-                            ...(sessionsInDrawer && {
+                            // (On Desktop the tab strip above is that top row.)
+                            ...(sessionsInDrawer && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
                             // The collapsed Sessions rail is narrower than the
                             // window controls, so they overhang this bar too.
-                            ...(sessionsCollapsed && {
+                            ...(sessionsCollapsed && surface !== "desktop" && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
                                 },
@@ -5088,16 +5184,14 @@ export function App({
                                 {drawerOpen ? <CloseIcon /> : <MenuIcon />}
                             </IconButton>
                         )}
-                        {active ? (
+                        {/* On Desktop the selected tab above names the session. */}
+                        {active && surface !== "desktop" ? (
                             // Status is a leading dot (color = state); the
                             // ProviderIcon already names the agent, so the title
                             // drops the redundant "provider · " prefix the
                             // daemon stores and shows just the cwd (or the
                             // user's custom rename). Full string in the tooltip.
                             <Stack
-                                data-desktop-active-session={
-                                    surface === "desktop" ? "true" : undefined
-                                }
                                 direction="row"
                                 alignItems="center"
                                 spacing={0.75}
@@ -5106,26 +5200,7 @@ export function App({
                                     // A long title must end in an ellipsis inside
                                     // this cap, never run under the controls.
                                     overflow: "hidden",
-                                    // Desktop gives the title only the width its
-                                    // text needs (up to the cap). The old 280px
-                                    // flex basis left a large dead zone after a
-                                    // short title while squeezing the controls.
-                                    flex: surface === "desktop" ? "0 1 auto" : 1,
-                                    maxWidth: surface === "desktop" ? 320 : "none",
-                                    ...(surface === "desktop" && sessionsInDrawer && !drawerOpen && {
-                                        // When the Sessions rail is collapsed,
-                                        // this is the only visible session tab.
-                                        // Transfer the selected material here;
-                                        // the drawer row owns it again when open.
-                                        minHeight: 34,
-                                        px: 0.75,
-                                        border: 1,
-                                        borderColor: (t) => alpha(t.palette.primary.main, 0.38),
-                                        borderRadius: 1.5,
-                                        bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
-                                        boxShadow: (t) =>
-                                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
-                                    }),
+                                    flex: 1,
                                 }}
                             >
                                 <StatusDot status={active.status} backgroundTasks={active.background_tasks} providerUpdate={active.provider_update} />

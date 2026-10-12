@@ -97,6 +97,8 @@ and in a queued-message editor), and the focused one runs.
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
+| `␣[` `␣]` | Previous, next tab (see "Tabs") |
+| `␣B` + `1`–`9` `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: open the nth tab; close this, others, right, left, all; pin, keep, reopen; move |
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
@@ -117,14 +119,14 @@ and in a queued-message editor), and the focused one runs.
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`.
+style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`, Tabs `␣B`.
 A surface group doubles its key to focus the surface (`␣SS`, `␣TT`) and
 holds the surface's own buttons, so a header control is reachable without
 first moving focus there.
 A group opens only when one of its commands can run in the current focus
 (Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
 from anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `B G I V X`.
+become groups instead of taking root letters. Free root letters: `I V X`.
 
 #### Vim in text fields
 
@@ -181,6 +183,43 @@ top row or keypad) open a row at once; `J/K`, arrows and `Tab` move, `gg`/
 Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
 `Alt+K`/`Cmd+K` prefix, release the modifier before `⇥`: `Alt+Tab` and
 `Cmd+Tab` belong to the operating system.
+
+#### Tabs
+
+The tab strip above the top bar holds the Sessions and Drafts kept open on
+this device (`workspaceTabs.ts`; per device, never synced, absent on
+Mobile). The selected tab names the page, so the top bar repeats no title.
+The item on screen always has a tab.
+
+Like VS Code and Zed, browsing does not pile tabs up. An item opened from
+the sidebar, `␣␣`, Recent or a link takes the one *preview* tab (italic
+title), and the next item opened replaces it. Typing in the item, a double
+click on the tab, `␣BK`, pinning or moving it keeps the tab. A new tab
+opens right of the tab it was reached from. Pinned tabs lead the strip,
+are narrower, show a pin instead of a close button and survive every bulk
+close; only closing that one tab removes it.
+
+Keys follow LazyVim's buffers. `␣[` and `␣]` step to the previous and next
+tab and wrap (`[b` / `]b`). `␣B` opens the Tabs group, and while it is
+armed every tab shows its number: `1`–`9` open that tab, `D` closes the
+current one (delete buffer), `O` the others, `R`/`L` those to its right or
+left, `A` all of them, `P` pins or unpins, `K` keeps the preview tab, `U`
+reopens the last closed tab (undo), `<`/`>` move the tab. Closing the
+current tab returns to the most recently visited tab that remains, else its
+neighbour; the last tab does not close. Closing a tab never stops, deletes
+or hibernates its Session or Draft. `␣⇥` and `␣O` keep working across tabs
+and closed items alike.
+
+The pointer has the same commands: click selects, middle click closes,
+double click keeps, drag reorders inside the pinned or the unpinned group,
+the wheel scrolls an overflowing strip, and the context menu offers Close,
+Close Others, Close to the Right, Close to the Left, Close All, Pin/Unpin,
+Keep Open, Reopen Closed Tab and (a Session) Rename. The menu acts on the
+tab it was opened on and shows the `␣B` slots when that is the current one.
+
+No direct chord is bound: `Ctrl+Tab`, `Ctrl/Cmd+W`, `Cmd+Shift+[`/`]` and
+`Ctrl/Cmd+1…9` all belong to Chrome (see the collision policy). The strip
+is not a focus region; its `␣B` slot covers every tab.
 
 #### Move pick
 

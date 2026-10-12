@@ -42,11 +42,12 @@ test("the open session owns selected material in rail and collapsed layouts", ()
     ),
     false,
   );
-  assertEquals(appSource.includes("data-desktop-active-session"), true);
+  // On Desktop the selected tab names the session; the top bar repeats no
+  // title, so a hidden Sessions rail still leaves one selected identity.
+  assertEquals(appSource.includes("data-desktop-active-session"), false);
+  assertEquals(appSource.includes("<DesktopTabStrip"), true);
   assertEquals(
-    /surface === "desktop" && sessionsInDrawer &&\s*!drawerOpen &&/u.test(
-      appSource,
-    ),
+    appSource.includes('{active && surface !== "desktop" ? ('),
     true,
   );
 });

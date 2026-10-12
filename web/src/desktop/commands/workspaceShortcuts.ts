@@ -45,7 +45,24 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   w: "Window",
   // Presentation toggles.
   u: "Interface",
+  // The tab strip, on LazyVim's buffer keys.
+  b: "Tabs",
 };
+
+/** The Tabs group (FOCUS.md "Tabs"): LazyVim's `<leader>b` buffer keys. */
+export const DESKTOP_TAB_GROUP = "B";
+export const DESKTOP_TAB_KEYS = {
+  close: "D",
+  closeOthers: "O",
+  closeRight: "R",
+  closeLeft: "L",
+  closeAll: "A",
+  pin: "P",
+  keep: "K",
+  reopen: "U",
+  moveLeft: "<",
+  moveRight: ">",
+} as const;
 
 /**
  * The open Draft's own actions (FOCUS.md "Draft document"). While a Draft is
@@ -85,6 +102,9 @@ export const DESKTOP_WORKSPACE_KEYS = {
   alternateSession: DESKTOP_LEADER_TAB,
   // Open recent, Vim's jump list (`Ctrl-O`): the last Sessions and Drafts.
   recentSessions: "O",
+  // Step through the tab strip (Vim's `[b` / `]b`).
+  previousTab: "[",
+  nextTab: "]",
   // Rename the current Session (a Draft's name is its title, `␣T`).
   rename: "R",
   commandPalette: "K",
@@ -211,6 +231,8 @@ export const DESKTOP_SHORTCUTS = {
   alternateSession: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.alternateSession,
   ),
+  previousTab: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.previousTab),
+  nextTab: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.nextTab),
   recentSessions: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.recentSessions,
   ),
@@ -245,6 +267,9 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // Groups, not commands: their layers hold layout and toggles.
   w: "group:w",
   u: "group:u",
+  b: "group:b",
+  "[": "tabs.previous",
+  "]": "tabs.next",
   "/": "composer.slash",
   f: "composer.reference",
   a: "composer.attach",
