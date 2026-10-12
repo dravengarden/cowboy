@@ -996,7 +996,15 @@ const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5
 /// link and costs far more than the cancellation it replaces.
 const EXECUTION_FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 const QUEUE_EDIT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
-const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
+/// How long a dropped Machine stays `reconnecting` before the sweeper marks it
+/// offline and clients surface "not connected". A remote Machine reaches the
+/// Controller over pooled cross-border streams: after a reset it backs off up
+/// to `CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS`, then needs a fresh stream
+/// (one dial of up to 10 s, or an overlay fallback of the same budget) and the
+/// TLS/auth handshake over a lossy path. 15 s expired on most of OVH's
+/// reconnects (11 expiries for 14 resets in one day) although the Machine was
+/// back within a minute; cover one full backoff plus one stream dial.
+const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 60;
 /// A connected Machine still needs time to replay its authoritative worker
 /// snapshots. Cover the Machine's entire outbound reconnect backoff plus a
 /// bounded settlement window before declaring persisted Busy turns dead.
