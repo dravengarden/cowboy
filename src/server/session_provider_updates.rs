@@ -7,7 +7,9 @@
 //! workerless) session is only re-pinned so its next open starts the new
 //! release. Nothing is ever interrupted: a session with background work waits,
 //! and a release whose unattended update just crashed a session is held back
-//! on that Machine for [`FAILURE_HOLD`].
+//! on that Machine for [`FAILURE_HOLD`]. A worker nobody has used for
+//! `plugins.auto_update_idle_limit` is not restarted for every release; it
+//! adopts the installed release when its session is next opened.
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -126,6 +128,72 @@ fn automatic_after(
     }
 }
 
+/// Whether the fleet policy still restarts this session's worker for new
+/// releases. Past `idle_limit` nobody is using the session, so it is updated
+/// when next opened instead of resuming its native session on every release.
+fn keeps_current(idle_for: Option<Duration>, idle_limit: Duration) -> bool {
+    idle_for.is_none_or(|idle| idle < idle_limit)
+}
+
+/// Whether opening a session should adopt its offered release now: its worker
+/// is idle past the prompt-cache window, nothing is running or requested, and
+/// it is not a view-only system session.
+fn opens_into_update(
+    system: bool,
+    status: Status,
+    in_flight: bool,
+    background_tasks: u32,
+    offer_requested: Option<bool>,
+    idle_for: Option<Duration>,
+    idle_after: Duration,
+) -> bool {
+    !system
+        && status == Status::Running
+        && !in_flight
+        && background_tasks == 0
+        && offer_requested == Some(false)
+        && idle_for.is_some_and(|idle| idle >= idle_after)
+}
+
+/// A client selected `meta`'s session. Under the fleet policy an idle session
+/// with a newer release waiting records the same one-shot request as "update
+/// when idle", so it is current within seconds, before the first prompt.
+pub(super) fn request_on_open(state: &AppState, meta: &crate::core::SessionMeta) {
+    if !state
+        .service_config
+        .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS)
+    {
+        return;
+    }
+    let Some(offer) = meta.provider_update_available.as_ref() else {
+        return;
+    };
+    if !opens_into_update(
+        meta.system,
+        meta.status,
+        state.hub.session_has_in_flight_prompt(&meta.id),
+        meta.background_tasks,
+        Some(offer.when_idle),
+        state.hub.session_idle_for(&meta.id),
+        state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_AFTER),
+    ) || state.hub.automatic_update_failed_within(
+        &meta.machine_id,
+        &meta.provider,
+        &offer.digest,
+        FAILURE_HOLD,
+    ) {
+        return;
+    }
+    state.hub.set_provider_update_when_idle(&meta.id, true);
+    tracing::info!(
+        session = %meta.id,
+        version = %offer.version,
+        "idle session opened; adopting the installed Provider release"
+    );
+}
+
 /// Machines that may start one automatic update in this pass: none of their
 /// sessions is still starting. Updating a whole idle fleet at once relaunches
 /// every worker together and can overrun the Machine's command queue.
@@ -235,6 +303,14 @@ async fn pass(
     let idle_after = state
         .service_config
         .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_AFTER);
+    let idle_limit = state
+        .service_config
+        .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_LIMIT);
+    // One read of the Machines serves every session's target resolution.
+    let machines = match state.store.as_ref() {
+        Some(store) => store.list_machines().await.ok(),
+        None => None,
+    };
     let mut targets: HashMap<TargetKey, Option<ResolvedProviderGeneration>> = HashMap::new();
     let mut offers = HashMap::new();
     for meta in sessions {
@@ -255,15 +331,21 @@ async fn pass(
         let target = match targets.get(&target_key) {
             Some(target) => target.clone(),
             None => {
-                let target = installed_upgrade_target(
-                    state,
-                    &meta.machine_id,
-                    &meta.provider,
-                    &meta.provider_version,
-                    &meta.provider_generation_digest,
-                )
-                .await
-                .ok();
+                let target = machines
+                    .as_deref()
+                    .and_then(|machines| {
+                        active_machine_plugin(machines, &meta.machine_id, &meta.provider).ok()
+                    })
+                    .and_then(|installed| {
+                        installed_upgrade_target_from(
+                            state,
+                            installed,
+                            &meta.provider,
+                            &meta.provider_version,
+                            &meta.provider_generation_digest,
+                        )
+                        .ok()
+                    });
                 targets.insert(target_key, target.clone());
                 target
             }
@@ -280,6 +362,24 @@ async fn pass(
             continue;
         }
         let opted_in = enabled(&state.hub, &meta.id);
+        // A surviving worker makes an exited session not dormant: re-pinning
+        // would be reconciled back to the worker's release on every snapshot.
+        // Reload it like a running session so the Machine replaces the worker.
+        let live_worker = state
+            .runtime_router
+            .runtime(&meta.machine_id)
+            .is_some_and(|runtime| runtime.has_worker(&meta.id));
+        let has_worker = meta.status == Status::Running || live_worker;
+        // Only the fleet policy's restart of a live worker waits for the next
+        // open: past the idle limit, or after its own unattended update
+        // crashed. A request, an opt-in and a free re-pin do not.
+        let unattended = !(opted_in || when_idle);
+        let on_open = unattended
+            && fleet_policy
+            && !meta.system
+            && has_worker
+            && (!keeps_current(state.hub.session_idle_for(&meta.id), idle_limit)
+                || state.hub.automatic_update_failed_since_activity(&meta.id));
         if !meta.system {
             offers.insert(
                 meta.id.clone(),
@@ -287,12 +387,12 @@ async fn pass(
                     version: target.version.clone(),
                     digest: target.digest.clone(),
                     when_idle,
-                    automatic_after: automatic_after(
-                        opted_in,
-                        fleet_policy,
-                        meta.system,
-                        idle_after,
-                    ),
+                    automatic_after: if on_open {
+                        None
+                    } else {
+                        automatic_after(opted_in, fleet_policy, meta.system, idle_after)
+                    },
+                    on_open,
                 },
             );
         }
@@ -319,23 +419,17 @@ async fn pass(
         {
             continue;
         }
-        // A surviving worker makes an exited session not dormant: re-pinning
-        // would be reconciled back to the worker's release on every snapshot.
-        // Reload it like a running session so the Machine replaces the worker.
-        let live_worker = state
-            .runtime_router
-            .runtime(&meta.machine_id)
-            .is_some_and(|runtime| runtime.has_worker(&meta.id));
         let applied = match meta.status {
-            Status::Running | Status::Exited
-                if (meta.status == Status::Running || live_worker)
-                    && ready.contains(&meta.machine_id) =>
-            {
-                let applied = update_running(state, &meta, &still_wanted).await;
-                if applied {
-                    ready.remove(&meta.machine_id);
+            Status::Running | Status::Exited if has_worker && ready.contains(&meta.machine_id) => {
+                if on_open {
+                    false
+                } else {
+                    let applied = update_running(state, &meta, &still_wanted).await;
+                    if applied {
+                        ready.remove(&meta.machine_id);
+                    }
+                    applied
                 }
-                applied
             }
             Status::Exited
                 if !live_worker
@@ -511,6 +605,46 @@ mod tests {
             serde_json::from_value(serde_json::json!({"when_idle": true})).unwrap();
         assert_eq!((policy.enabled, policy.when_idle), (None, Some(true)));
         assert!(serde_json::from_value::<Policy>(serde_json::json!({"when_idle": 1})).is_err());
+    }
+
+    #[test]
+    fn a_worker_nobody_uses_waits_for_its_next_open() {
+        let limit = Duration::from_hours(12);
+        assert!(keeps_current(Some(Duration::from_hours(11)), limit));
+        assert!(!keeps_current(Some(limit), limit));
+        assert!(keeps_current(None, limit));
+        let hour = Duration::from_hours(1);
+        let opens = |status, in_flight, background, requested, idle| {
+            opens_into_update(false, status, in_flight, background, requested, idle, hour)
+        };
+        let day = Some(Duration::from_hours(24));
+        assert!(opens(Status::Running, false, 0, Some(false), day));
+        assert!(opens(Status::Running, false, 0, Some(false), Some(hour)));
+        // Inside the prompt-cache window, busy, working, already requested,
+        // unoffered, or not a live worker: nothing to do on open.
+        assert!(!opens(
+            Status::Running,
+            false,
+            0,
+            Some(false),
+            Some(Duration::from_mins(59))
+        ));
+        assert!(!opens(Status::Running, true, 0, Some(false), day));
+        assert!(!opens(Status::Busy, false, 0, Some(false), day));
+        assert!(!opens(Status::Running, false, 1, Some(false), day));
+        assert!(!opens(Status::Running, false, 0, Some(true), day));
+        assert!(!opens(Status::Running, false, 0, None, day));
+        assert!(!opens(Status::Exited, false, 0, Some(false), day));
+        assert!(!opens(Status::Crashed, false, 0, Some(false), day));
+        assert!(!opens_into_update(
+            true,
+            Status::Running,
+            false,
+            0,
+            Some(false),
+            day,
+            hour
+        ));
     }
 
     #[test]

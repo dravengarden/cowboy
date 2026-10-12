@@ -126,6 +126,7 @@ as a deprecated override for one release.
 | Service | `plugins.repin_dormant_after` | `"7d"` | live |
 | Service | `plugins.auto_update_idle_sessions` | `false` | live |
 | Service | `plugins.auto_update_idle_after` | `"1h"` | live |
+| Service | `plugins.auto_update_idle_limit` | `"12h"` | live |
 | Service | `sessions.reclaim_on_capacity` | `false` | live |
 | Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
@@ -180,10 +181,19 @@ been starting for over 10 minutes is logged and no longer waited for), so a whol
 idle fleet never relaunches at once. An unattended update never replaces a
 worker that reports background work, and when one leaves a session crashed,
 further unattended updates to that release pause on the Device for 30 minutes
-(an explicit Reload or update request still applies). Every update logs
-`Provider update finished` or `Provider update left the session crashed` with
-its duration. Together with re-pinning, a generation is
-retained only while a recently active session uses it.
+(an explicit Reload or update request still applies), and a session whose own
+unattended update crashed is left alone until it is used or opened. Every
+update logs `Provider update finished` or `Provider update left the session
+crashed` with its duration.
+
+A session nobody has used for `plugins.auto_update_idle_limit` is not kept
+current in the background: restarting its worker on every release would resume
+the native session many times for nobody. Its offer reports `on_open`, and
+opening it (any client selecting the session, including after a reconnect)
+records the same one-shot request as "update when idle", so it adopts the
+installed release within seconds, before the first prompt. Workerless sessions
+are still re-pinned regardless of the limit. Together with re-pinning, a
+generation is retained only while a recently active session uses it.
 
 Each pass also publishes, per session, the newer compatible release it could
 adopt (`provider_update_available` on the session list) even while a turn is

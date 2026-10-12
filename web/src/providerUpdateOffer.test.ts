@@ -68,6 +68,18 @@ test("schedule text explains what happens without action", () => {
     providerUpdateScheduleText({ ...offer, automatic_at_ms: now }, false, now),
     "auto when idle",
   );
+  assertEquals(
+    providerUpdateScheduleText({ ...offer, on_open: true }, false, now),
+    "auto on next open",
+  );
+  assertEquals(
+    providerUpdateScheduleText(
+      { ...offer, on_open: true, when_idle: true },
+      false,
+      now,
+    ),
+    "starting shortly",
+  );
 });
 
 test("the one-shot request is a session policy write", async () => {

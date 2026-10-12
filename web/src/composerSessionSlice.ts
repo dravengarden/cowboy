@@ -103,5 +103,6 @@ function sameProviderUpdateOffer(a: SessionMeta, b: SessionMeta): boolean {
         x.version === y.version &&
         x.digest === y.digest &&
         x.when_idle === y.when_idle &&
+        x.on_open === y.on_open &&
         minute(x.automatic_at_ms) === minute(y.automatic_at_ms)));
 }
