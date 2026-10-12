@@ -8,6 +8,9 @@ export interface RegisteredShortcut {
   regions?: readonly string[];
   /** Session and Draft pages are never mounted together. */
   surface?: "session" | "document";
+  /** A leader key's resting meaning. It may share its sequence with one
+   *  ordinary command, which takes the key whenever it can run. */
+  fallback?: boolean;
 }
 
 function canonicalShortcut(shortcut: string): string {
@@ -83,6 +86,8 @@ export function shortcutRegistrationConflict(
         canonicalShortcut(stroke) ===
           canonicalShortcut(existing.sequence?.[index] ?? "")
       ) &&
+      // A fallback and the command it yields to share the key by design.
+      (command.fallback === true) === (existing.fallback === true) &&
       scopesOverlap(command, existing)
     ) {
       return `${

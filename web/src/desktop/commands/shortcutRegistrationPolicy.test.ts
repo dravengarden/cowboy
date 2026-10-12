@@ -153,3 +153,20 @@ test("Session and Draft surfaces may reuse a leader key", () => {
     "already belongs to composer.schedule",
   );
 });
+
+test("a fallback shares its leader key with exactly one ordinary command", () => {
+  const tab = { id: "tabs.open.1", sequence: ["Mod+K", "1"], fallback: true };
+  const approval = { id: "approval.choice.1", sequence: ["Mod+K", "1"] };
+  assertEquals(shortcutRegistrationConflict(approval, [tab]), null);
+  assertEquals(shortcutRegistrationConflict(tab, [approval]), null);
+  // Two ordinary commands, or two fallbacks, still collide.
+  assertStringIncludes(
+    shortcutRegistrationConflict({ ...approval, id: "other" }, [tab, approval]) ??
+      "",
+    "already belongs to approval.choice.1",
+  );
+  assertStringIncludes(
+    shortcutRegistrationConflict({ ...tab, id: "tabs.other" }, [tab]) ?? "",
+    "already belongs to tabs.open.1",
+  );
+});

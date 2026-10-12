@@ -111,6 +111,9 @@ export interface DesktopCommand {
   surface?: "session" | "document";
   /** which-key lists the current item's own actions first, under "Here". */
   contextual?: boolean;
+  /** The key's resting meaning (`␣1` opens tab 1). Another command may claim
+   *  the same sequence and wins whenever it can run (a pending approval). */
+  fallback?: boolean;
   /** Reserve a shortcut even while its target is temporarily unavailable. */
   consumeWhenDisabled?: boolean;
   run: () => void;
@@ -747,8 +750,11 @@ export function DesktopCommandProvider(
           );
           const fallbackId = DESKTOP_WORKSPACE_COMMANDS[leader];
           const fallback = fallbackId ? commands.current.get(fallbackId) : undefined;
+          const runnable = registered.filter((c) =>
+            scoped(c) && c.when?.() !== false
+          );
           const command =
-            registered.find((c) => scoped(c) && c.when?.() !== false) ??
+            runnable.find((c) => c.fallback !== true) ?? runnable[0] ??
               registered.find(scoped) ??
               (fallback && scoped(fallback) ? fallback : undefined);
           if (command && command.when?.() !== false) {

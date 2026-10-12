@@ -98,7 +98,8 @@ and in a queued-message editor), and the focused one runs.
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
 | `␣[` `␣]` | Previous, next tab (see "Tabs") |
-| `␣B` + `1`–`9` `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: open the nth tab; close this, others, right, left, all; pin, keep, reopen; move |
+| `␣1`…`␣9` | Open the nth tab (a pending approval takes the digits; see "Tabs") |
+| `␣B` + `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: close this, others, right, left, all; pin, keep, reopen; move |
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
@@ -110,7 +111,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
-| `␣1`…`␣9` | Answer a pending approval with that choice (only while one waits; see "Approvals") |
+| `␣1`…`␣9` | While an approval waits: answer it with that choice (see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
@@ -202,12 +203,13 @@ are narrower, show a pin instead of a close button and survive every bulk
 close; only closing that one tab removes it.
 
 Keys follow LazyVim's buffers. `␣[` and `␣]` step to the previous and next
-tab and wrap (`[b` / `]b`). `␣B` opens the Tabs group. Its slot leads the
-tabs and each of the first nine tabs shows its digit, so the strip reads as
-the keys to press (`␣B` `3`); the digits light while the group is armed.
-The digits are not root keys: `␣1`…`␣9` answer a pending approval, and a
-tab switch must never be one keystroke away from answering one. `1`–`9`
-open that tab, `D` closes the
+tab and wrap (`[b` / `]b`). `␣1`…`␣9` open the nth tab, and each of the
+first nine tabs shows that slot. The digits are the tabs' resting meaning
+(`fallback` commands): while an approval waits they answer it instead, as
+before, and the tabs then show no digit, so every digit on screen does what
+it says. A leader armed before an approval appeared was aimed at a tab and
+cannot answer it; arm the leader again. `␣[` `␣]` still step meanwhile.
+`␣B` opens the Tabs group, whose slot ends the rail: `D` closes the
 current one (delete buffer), `O` the others, `R`/`L` those to its right or
 left, `A` all of them, `P` pins or unpins, `K` keeps the preview tab, `U`
 reopens the last closed tab (undo), `<`/`>` move the tab. Closing the

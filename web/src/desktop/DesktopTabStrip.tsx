@@ -15,7 +15,6 @@ import {
   useDesktopCommands,
 } from "./commands/DesktopCommandProvider";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
-import { useDesktopLeaderOptional } from "./commands/leaderContext";
 import {
   DESKTOP_TAB_GROUP,
   DESKTOP_TAB_KEYS,
@@ -81,9 +80,11 @@ export function DesktopTabStrip({
   sx?: object;
 }): React.JSX.Element {
   const registry = useDesktopCommands();
-  const leader = useDesktopLeaderOptional();
-  const numbered = leader?.armed === true &&
-    leader.layer === `group:${DESKTOP_TAB_GROUP.toLowerCase()}`;
+  // A pending approval takes the digits (FOCUS.md "Approvals"); the tabs
+  // then show none, so every digit on screen does what it says.
+  const digits = !registry.commands.some((command) =>
+    command.id.startsWith("approval.choice.")
+  );
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const [drop, setDrop] = useState<{ key: string; after: boolean } | null>(
     null,
@@ -270,7 +271,8 @@ export function DesktopTabStrip({
         ...base,
         id: `tabs.open.${String(index + 1)}`,
         title: `Open Tab ${String(index + 1)}`,
-        sequence: group(String(index + 1)),
+        sequence: desktopLeaderSequence(String(index + 1)),
+        fallback: true,
         when: () => index < count(),
         run: () => actions.openAt(index),
       })),
@@ -336,8 +338,7 @@ export function DesktopTabStrip({
       role="tablist"
       aria-label="Open Sessions and Drafts"
       data-desktop-tabs
-      // The group slot that leads the strip drives every tab: the digit on
-      // each tab is its second key.
+      // Every tab is reached by its digit slot or the group slot at the end.
       data-desktop-shortcut-owner
       onWheel={(event): void => {
         if (event.deltaY !== 0 && event.deltaX === 0) {
@@ -362,20 +363,6 @@ export function DesktopTabStrip({
         ...sx,
       }}
     >
-      <Box
-        component="span"
-        title="Tabs: then 1–9 open a tab, D close, P pin. ␣[ and ␣] step"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          flexShrink: 0,
-          px: "0.625rem",
-          borderRight: 1,
-          borderColor: "divider",
-        }}
-      >
-        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
-      </Box>
       {items.map((item, index) => {
         const selected = item.key === currentKey;
         return (
@@ -484,14 +471,8 @@ export function DesktopTabStrip({
               }),
             }}
           >
-            {index < 9 && (
-              // After the leading group slot this reads as its second key.
-              <ShortcutKeycap
-                keyLabel={String(index + 1)}
-                variant="context"
-                accent={numbered}
-                availability={numbered ? "active" : "available"}
-              />
+            {index < 9 && digits && (
+              <LeaderKeycap leaderKey={String(index + 1)} />
             )}
             <Box
               component="span"
@@ -557,6 +538,18 @@ export function DesktopTabStrip({
           </Box>
         );
       })}
+      <Box
+        component="span"
+        title="Tab actions: D close, O others, P pin, U reopen. ␣[ and ␣] step"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          flexShrink: 0,
+          px: "0.625rem",
+        }}
+      >
+        <LeaderKeycap leaderKey={DESKTOP_TAB_GROUP} />
+      </Box>
       <Menu
         open={menu !== null && menuItem !== undefined}
         onClose={(): void => setMenu(null)}

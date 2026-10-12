@@ -146,12 +146,17 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
     title: "Rename the current Session",
   },
   {
-    keys: [DESKTOP_SHORTCUTS.previousTab, DESKTOP_SHORTCUTS.nextTab],
-    title: "Previous / next tab",
+    keys: [
+      DESKTOP_SHORTCUTS.previousTab,
+      DESKTOP_SHORTCUTS.nextTab,
+      desktopWorkspaceSequence("1"),
+    ],
+    title: "Previous / next tab; a digit opens that tab",
+    description: "While an approval waits, the digits answer it instead",
   },
   {
     keys: [desktopWorkspaceSequence("B")],
-    title: "Tabs: 1–9 open a tab; D close, O others, R right, L left, A all",
+    title: "Tabs: D close, O others, R right, L left, A all",
     description: "P pin, K keep the preview tab, U reopen the last closed, < > move",
   },
   {
