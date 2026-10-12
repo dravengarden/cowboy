@@ -3655,6 +3655,15 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                         .is_some_and(|b| {
                             b == intent.previous
                                 || old.execution_binding == session.execution_binding
+                                // An earlier lifetime of the same binding that a
+                                // previous recovery could not reset: same place,
+                                // older revision.
+                                || (b.id == intent.previous.id
+                                    && b.revision < intent.previous.revision
+                                    && b.runtime == intent.previous.runtime
+                                    && b.workspace == intent.previous.workspace
+                                    && b.access == intent.previous.access
+                                    && b.managed == intent.previous.managed)
                         })
             };
             let compatible = previous.iter().all(placed)
@@ -5751,6 +5760,104 @@ mod tests {
             );
         }
         assert!(refused, "relocation must stay refused");
+    }
+
+    #[tokio::test]
+    async fn execution_recovery_replaces_a_worker_left_on_an_earlier_lifetime() {
+        let (broker, mut launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut previous = crate::execution_environment::fixture().decode().unwrap();
+        previous.runtime.cwd.clone_from(&launch.cwd);
+        previous
+            .workspace
+            .worktree_id
+            .clone_from(&launch.session_id);
+        previous.revision = 2;
+        let record = |b: &crate::execution_environment::BindingV1| {
+            crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(b).unwrap(),
+            )
+        };
+        // The worker still runs revision 1: an earlier recovery never reset it.
+        let mut stale = previous.clone();
+        stale.revision = 1;
+        stale.environment.id = "first-lifetime".into();
+        launch.execution_binding = Some(record(&stale));
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), launch.clone());
+        broker
+            .workers
+            .lock()
+            .get_mut(&launch.session_id)
+            .unwrap()
+            .snapshot
+            .launch = Some(launch.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let mut next = previous.clone();
+        next.revision = 3;
+        next.environment.id = "third-lifetime".into();
+        next.environment.incarnation = "third-incarnation".into();
+        let mut candidate = launch.clone();
+        candidate.execution_binding = Some(record(&next));
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-stale".into(),
+            previous: previous.clone(),
+        };
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(candidate.clone()),
+                intent: Box::new(intent.clone()),
+                command_id: "stale-recovery".into(),
+            },
+        )
+        .await;
+        while let Ok(frame) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    &frame,
+                    Frame::CommandAck { accepted: false, reason: Some(reason), .. }
+                        if reason == "execution recovery identity changed"
+                ),
+                "an earlier lifetime of the same binding must be replaceable"
+            );
+        }
+        // A worker in another workspace is not an earlier lifetime of this one.
+        let (broker, mut launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut elsewhere = stale.clone();
+        elsewhere.workspace.cwd = "/another-workspace".into();
+        launch.execution_binding = Some(record(&elsewhere));
+        broker
+            .workers
+            .lock()
+            .get_mut(&launch.session_id)
+            .unwrap()
+            .snapshot
+            .launch = Some(launch.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(candidate),
+                intent: Box::new(intent),
+                command_id: "relocated-recovery".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
     }
 
     #[test]
