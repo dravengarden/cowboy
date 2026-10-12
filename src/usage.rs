@@ -833,6 +833,12 @@ fn classify_usage_failure(detail: &str) -> UsageFailureKind {
         "timed out",
         "timeout",
         "temporarily unavailable",
+        // The Plugin host fence refuses an observation that straddled an
+        // installation or authentication change, including the credential
+        // refresh a collector performs itself; the next attempt observes the
+        // settled generation.
+        "changed during host observation",
+        "changed before host invocation",
         "service unavailable",
         "connection refused",
         "connection reset",
@@ -1628,6 +1634,19 @@ mod tests {
         assert_eq!(
             classify_usage_failure(
                 "account/rateLimits/read: 503 Service Unavailable; Unable to check usage"
+            ),
+            UsageFailureKind::Transient
+        );
+        assert_eq!(
+            classify_usage_failure(
+                "Plugin installation or authentication changed during host observation"
+            ),
+            UsageFailureKind::Transient,
+            "a collector's own credential refresh must keep the cached value"
+        );
+        assert_eq!(
+            classify_usage_failure(
+                "active Plugin or authentication generation changed before host invocation"
             ),
             UsageFailureKind::Transient
         );
