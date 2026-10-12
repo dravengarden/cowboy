@@ -1600,7 +1600,9 @@ function SessionList({
                 Add to {copyTarget.session.title} · Original kept
             </Box>}
             {movePicking && movePick && <SessionsSpotlight anchor={listRef} />}
-            {!mobileDrawer && <Box sx={{ p: 1 }}>
+            {/* Desktop keeps this row as low as the top bar's controls: the
+                list below is what the sidebar is for. */}
+            {!mobileDrawer && <Box sx={{ p: 1, ...(desktop && { py: 0.5 }) }}>
                 {movePicking && movePick && (
                     <Box
                         role="status"
@@ -1652,7 +1654,8 @@ function SessionList({
                     onClick={onNew}
                     sx={desktop ? {
                         ...desktopEmbeddedControlSx(),
-                        minHeight: "3rem",
+                        minHeight: "2.25rem",
+                        py: 0,
                         fontSize: "0.875rem",
                         minWidth: 0,
                         flexWrap: "wrap",
@@ -1673,10 +1676,14 @@ function SessionList({
                             ...(desktop && desktopEmbeddedControlSx()),
                             // Desktop carries its `␣SZ` slot beside the glyph.
                             width: desktop ? "auto" : 48,
-                            minWidth: desktop ? "3rem" : undefined,
-                            px: desktop ? "0.625rem" : undefined,
+                            minWidth: desktop ? "2.25rem" : undefined,
+                            px: desktop ? "0.5rem" : undefined,
+                            py: desktop ? 0 : undefined,
                             gap: desktop ? "0.375rem" : undefined,
-                            minHeight: desktop ? "3rem" : 48,
+                            minHeight: desktop ? "2.25rem" : 48,
+                            // The theme sizes every icon button as a 44px
+                            // target; this one sets the row's height.
+                            height: desktop ? "2.25rem" : undefined,
                             borderRadius: 1.25,
                             flexShrink: 0,
                             fontSize: "1.1rem",
