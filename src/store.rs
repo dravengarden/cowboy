@@ -9014,6 +9014,75 @@ mod storage_contract_tests {
         assert!(no_grant.require_runtime_launch().is_err());
     }
 
+    /// The sweeper's reference scan must find every `/api/artifacts/` URL a
+    /// retained event carries, and prune only unreferenced files past the
+    /// minimum age.
+    #[tokio::test]
+    async fn sqlite_purge_prunes_only_unreferenced_aged_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}",
+            root.path().join("sessions.sqlite3").display()
+        );
+        let artifacts = root.path().join("artifacts");
+        let store = Store::connect(&url, artifacts.clone()).await.unwrap();
+        store.migrate().await.unwrap();
+        let session_id = "sess-artifacts";
+        store.insert_session(&session(session_id)).await.unwrap();
+        let image = vec![9_u8; 40_000];
+        let referenced = format!("{}.png", hex_sha256(&image));
+        let event = Envelope {
+            session_id: session_id.to_owned(),
+            seq: 0,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "data": base64::engine::general_purpose::STANDARD.encode(&image),
+                        "mimeType": "image/png",
+                    },
+                }),
+            },
+            cmid: None,
+        };
+        store
+            .upsert_event_batch(&[event], &HashMap::from([(session_id.to_owned(), 1)]))
+            .await
+            .unwrap();
+        let referenced_path = store
+            .artifact_path(&referenced)
+            .expect("externalized image");
+        let aged = artifacts.join(format!("{}.png", "b".repeat(64)));
+        let fresh = artifacts.join(format!("{}.png", "c".repeat(64)));
+        std::fs::write(&aged, b"stale").unwrap();
+        std::fs::write(&fresh, b"recent").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - Duration::from_hours(48);
+        for path in [&referenced_path, &aged] {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(two_days_ago)
+                .unwrap();
+        }
+
+        store.purge_deleted(0).await.unwrap();
+
+        assert!(
+            referenced_path.exists(),
+            "a referenced artifact survives regardless of age"
+        );
+        assert!(
+            !aged.exists(),
+            "an unreferenced artifact past the minimum age is pruned"
+        );
+        assert!(
+            fresh.exists(),
+            "an unreferenced artifact inside the minimum age is kept"
+        );
+    }
+
     #[tokio::test]
     async fn sqlite_execution_environment_binding_survives_restore() {
         let root = tempfile::tempdir().unwrap();
