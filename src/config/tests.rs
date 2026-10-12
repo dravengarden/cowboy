@@ -38,6 +38,46 @@ fn every_typed_key_matches_a_declared_field_of_its_kind() {
     assert_key(&schema::DEVICE_CONTROLLER_PROBE_TIMEOUT);
     assert_key(&schema::DEVICE_DISK_LOW_WATERMARK);
     assert_key(&schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_ENABLED);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_MAX_FILE_SIZE);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_EXCLUDED);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_CACHE_MAX_BYTES);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_CACHE_MAX_AGE);
+    assert_key(&schema::DEVICE_FILE_BUFFERS_TARGET_TEMP_MAX_AGE);
+}
+
+#[test]
+fn pattern_lists_replace_defaults_and_reject_bad_entries() {
+    let defaults = Config::defaults(Scope::Device).get(&schema::DEVICE_FILE_BUFFERS_EXCLUDED);
+    assert!(defaults.iter().any(|pattern| pattern == "*.pem"));
+    let report = check_text(
+        Scope::Device,
+        "schema = 1\n[file_buffers]\nexcluded = [\"*.bin\", \"/srv/data/**\"]\n",
+        None,
+    );
+    assert_eq!(
+        report
+            .config
+            .unwrap()
+            .get(&schema::DEVICE_FILE_BUFFERS_EXCLUDED),
+        ["*.bin", "/srv/data/**"]
+    );
+    let empty = check_text(
+        Scope::Device,
+        "schema = 1\n[file_buffers]\nexcluded = []\n",
+        None,
+    );
+    assert!(
+        empty
+            .config
+            .unwrap()
+            .get(&schema::DEVICE_FILE_BUFFERS_EXCLUDED)
+            .is_empty()
+    );
+    for bad in ["[\"\"]", "[1]", "\"*.bin\"", "[\"a\\u0001\"]"] {
+        let text = format!("schema = 1\n[file_buffers]\nexcluded = {bad}\n");
+        assert!(!check_text(Scope::Device, &text, None).is_valid(), "{bad}");
+    }
 }
 
 #[test]

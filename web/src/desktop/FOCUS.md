@@ -108,6 +108,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
+| `␣1`…`␣9` | Answer a pending approval with that choice (only while one waits; see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
@@ -397,6 +398,37 @@ out, and it never escapes an IME composition, modal, menu, or other exclusive
 shortcut scope. Releasing the `Cmd/Alt` prefix modifier before the
 continuation is optional.
 
+### Approvals
+
+A tool permission, a Provider question or an agent-call approval blocks the
+agent, so it is answered where its output is read: the approval dock at the
+bottom of the Conversation pane (`DesktopApprovalDock`). The dock is outside
+the scroller. It does not scroll away, collapse while reading history, or move
+while output streams, and the subject (a shell command in monospace) is shown
+in full. While the Conversation pane is folded the Composer draws the same
+choices instead (`approvalDockStore`); exactly one surface owns the answer.
+
+The choices keep the Provider's order and wording and are numbered: `␣1`…`␣9`
+answers from any focus, the Composer's Insert mode included (`Cmd/Alt+K` then
+the digit). Each button carries its slot, which-key lists the choices by their
+own labels, and the status line shows `␣1 Answer` while an approval waits. A
+bare letter is deliberately not bound: the leader needs two keys, so a key
+already on its way down when the request arrives cannot approve it, and
+approval never depends on which pane has focus. Digits resolve from the
+physical key.
+
+Requests are answered oldest first; the header counts the rest (`1 of 3
+waiting`). An answer is shown as taken until the session confirms it: the
+choices disable and the chosen one spins. A closed socket retries the answer
+until it leaves; an answer the session has not confirmed after ten seconds is
+offered again (`permissionResponse.ts`).
+
+A request is on screen only while something is waiting for it. Besides its
+`permission_resolved` row it has ended when its id is asked again, when its
+tool call reached a terminal status, when the turn ended or when the worker
+stopped (`pendingPermissions` in `derive.ts`). An answer nobody is waiting for
+does nothing, so such a request must never be drawn as answerable.
+
 ## Navigation
 
 Every list (Sessions, the rail, Queue, Drafts) has Vim's view motions:
@@ -522,8 +554,6 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;
-- `a/r` allows/rejects a pending tool permission. Cowboy chooses the least
-  persistent matching provider option, preferring `once` over `always`.
 
 Any navigation away from the latest output pauses following. `G`, or enabling
 Following again, returns to the latest output. The status line exposes this

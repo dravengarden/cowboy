@@ -2889,11 +2889,11 @@ function PermissionCard({
 }: {
   item: Extract<RenderItem, { kind: "permission" }>;
 }): React.JSX.Element {
-  // The timeline keeps only a compact RECORD marker — the actual decision is taken
-  // in the sticky PermissionOverlay floating above the composer (always reachable,
-  // auto-collapses on scroll). Pending = an amber "Permission requested · cmd"
-  // line; resolved = a subtle italic "Allowed/Rejected · cmd" so a glaring card
-  // doesn't sit in the log forever.
+  // The timeline keeps only a compact RECORD marker. The decision is taken in
+  // the Conversation pane's approval dock on Desktop and in the Composer's
+  // sticky PermissionOverlay on Mobile. Pending = an amber "Permission
+  // requested · cmd" line; resolved = a subtle italic "Allowed/Rejected · cmd"
+  // so a glaring card doesn't sit in the log forever.
   if (item.resolved) {
     const rejected = item.chosen?.toLowerCase().startsWith("reject") ?? false;
     return (
@@ -3648,9 +3648,10 @@ export function Transcript({
   // reflow on the next pass, so live adjustments apply without a
   // reload.
   const { padding, lineHeight } = useReadingSettings();
-  // A pending tool-permission is surfaced by the sticky PermissionOverlay, which
-  // lives in the COMPOSER (sharing the floating slot + mutual-exclusivity with the
-  // turn-status pill). The timeline here keeps only a record marker (PermissionCard).
+  // A pending tool-permission is answered outside this scroller: Desktop docks
+  // it under the Conversation pane (DesktopApprovalDock), Mobile floats the
+  // PermissionOverlay in the Composer. The timeline here keeps only a record
+  // marker (PermissionCard).
   const busy = status === "busy";
   // "Working" == the ACP turn in flight (`busy`) — the SAME predicate the composer
   // and the status dot use, mirroring Zed's `Generating == running_turn.is_some()`.
@@ -5942,7 +5943,8 @@ export function Transcript({
       {
         /* The scroll-to-latest affordance is the persistent sticky/auto-scroll
           toggle in the composer (stickyStore + Composer), not a pill here. A
-          pending permission is surfaced by the PermissionOverlay in the composer. */
+          pending permission is answered in the Desktop approval dock or the
+          Composer's PermissionOverlay. */
       }
     </Box>
   );

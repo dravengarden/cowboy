@@ -31,3 +31,30 @@ schema = 1
 # references it and it has not been written for this long.
 # duration string such as "6h", from 1h to 365d; applies live.
 # artifact_cache_unreferenced_after = "7d"
+
+[file_buffers]
+# Remote sessions keep a verified copy of each file they read and edit it
+# with a hash-checked splice on the target instead of resending the file.
+# false returns every file to whole-file reads and writes.
+# boolean (true or false); applies live.
+# enabled = true
+# Larger files are read and written whole, without a buffered copy.
+# size string such as "1.5GiB", from 1KiB to 4MiB; applies live.
+# max_file_size = "2MiB"
+# Files matching any glob are read and written whole and never copied to
+# this Device. A pattern without `/` matches the file name; one with `/`
+# matches the absolute target path, where `**` spans directories. Matching
+# ignores ASCII case. Replacing the list drops the defaults.
+# array of at most 256 glob strings (`*`, `**`, `?`), each up to 256 characters; applies live.
+# excluded = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx", "id_rsa*", "id_ecdsa*", "id_ed25519*", "**/.ssh/**", "**/.gnupg/**", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.pdf", "*.ipynb", "*.db", "*.sqlite", "*.sqlite3"]
+# Each session keeps at most this many bytes of buffered copies, evicting
+# the least recently used first. "0B" keeps none.
+# size string such as "1.5GiB", from 0B to 1GiB; applies live.
+# cache_max_bytes = "64MiB"
+# A buffered copy unused for this long is deleted from this Device.
+# duration string such as "6h", from 1m to 30d; applies live.
+# cache_max_age = "1d"
+# On the target, a temporary or request file an interrupted write left
+# behind is deleted by the next write in its directory once it is this old.
+# duration string such as "6h", from 10m to 7d; applies live.
+# target_temp_max_age = "1h"

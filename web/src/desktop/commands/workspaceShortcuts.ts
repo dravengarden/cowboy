@@ -217,6 +217,10 @@ export const DESKTOP_SHORTCUTS = {
   rename: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.rename),
 } as const;
 
+/** A pending approval numbers its choices `␣1`…`␣9` (FOCUS.md "Approvals");
+ *  hints name the first, the surface itself draws every slot. */
+export const DESKTOP_APPROVAL_SHORTCUT = desktopWorkspaceSequence("1");
+
 export const DESKTOP_FOCUS_PROMPT_SHORTCUT = DESKTOP_SHORTCUTS.focusPrompt;
 export const DESKTOP_FOCUS_PLAN_SHORTCUT = DESKTOP_SHORTCUTS.focusPlan;
 export const DESKTOP_FOCUS_CALLS_SHORTCUT = DESKTOP_SHORTCUTS.focusCalls;

@@ -82,6 +82,7 @@ cdp-browser-conformance ENDPOINT SUITE THEME="light":
 desktop-keyboard-acceptance ENDPOINT OUT:
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" draft
+    bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" approval
     bun tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
 idb-browser-conformance BROWSER:

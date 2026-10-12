@@ -11,6 +11,7 @@ import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
 import {
+  DESKTOP_APPROVAL_SHORTCUT,
   DESKTOP_FOCUS_CALLS_SHORTCUT,
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
@@ -168,9 +169,9 @@ const CONVERSATION: ShortcutRow[] = [
   { keys: ["H/L"], title: "Close / open the selected widget" },
   { keys: ["Enter"], title: "Toggle the selected widget" },
   {
-    keys: ["A/R"],
-    title: "Allow / reject a pending permission",
-    description: "Uses the least persistent matching option, preferring once",
+    keys: [DESKTOP_APPROVAL_SHORTCUT],
+    title: "Answer a pending approval with its first choice (1–9 pick the others)",
+    description: "Choices are numbered in the Provider's order; works from any focus",
   },
 ];
 

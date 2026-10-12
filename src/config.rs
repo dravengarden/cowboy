@@ -13,6 +13,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod cli;
+pub mod file_buffers;
 pub mod schema;
 
 use std::collections::BTreeMap;
@@ -102,7 +103,14 @@ pub enum Kind {
         max: u64,
     },
     Choice(&'static [&'static str]),
+    /// A TOML array of glob strings such as `["*.png", "*.pem"]`.
+    Patterns {
+        max_items: usize,
+    },
 }
+
+/// The longest accepted glob pattern.
+pub const MAX_PATTERN_LEN: usize = 256;
 
 impl Kind {
     fn describe(&self) -> String {
@@ -120,6 +128,9 @@ impl Kind {
                 format_bytes(*max)
             ),
             Self::Choice(options) => format!("one of {}", quoted_list(options)),
+            Self::Patterns { max_items } => format!(
+                "array of at most {max_items} glob strings (`*`, `**`, `?`), each up to {MAX_PATTERN_LEN} characters"
+            ),
         }
     }
 
@@ -128,6 +139,7 @@ impl Kind {
             Self::Bool => "boolean",
             Self::Integer { .. } => "integer",
             Self::Duration { .. } | Self::Bytes { .. } | Self::Choice(_) => "string",
+            Self::Patterns { .. } => "array",
         }
     }
 }
@@ -140,7 +152,11 @@ pub enum Value {
     Duration(Duration),
     Bytes(u64),
     Choice(&'static str),
+    Patterns(Patterns),
 }
+
+/// A pattern list whose defaults can live in a `static` field table.
+pub type Patterns = std::borrow::Cow<'static, [std::borrow::Cow<'static, str>]>;
 
 impl Value {
     /// The TOML spelling, used by `show`, `explain` and the generated examples.
@@ -152,6 +168,14 @@ impl Value {
             Self::Duration(value) => format!("\"{}\"", format_duration(*value)),
             Self::Bytes(value) => format!("\"{}\"", format_bytes(*value)),
             Self::Choice(value) => format!("\"{value}\""),
+            Self::Patterns(values) => format!(
+                "[{}]",
+                values
+                    .iter()
+                    .map(|value| serde_json::Value::from(value.as_ref()).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 
@@ -162,6 +186,7 @@ impl Value {
             Self::Duration(value) => format_duration(*value).into(),
             Self::Bytes(value) => format_bytes(*value).into(),
             Self::Choice(value) => (*value).into(),
+            Self::Patterns(values) => values.iter().map(AsRef::as_ref).collect(),
         }
     }
 }
@@ -233,6 +258,15 @@ impl FromValue for u64 {
         match value {
             Value::Bytes(value) => Some(*value),
             Value::Integer(value) => u64::try_from(*value).ok(),
+            _ => None,
+        }
+    }
+}
+
+impl FromValue for Vec<String> {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Patterns(values) => Some(values.iter().map(ToString::to_string).collect()),
             _ => None,
         }
     }
@@ -827,6 +861,29 @@ fn parse_value(kind: &Kind, value: &toml::de::DeValue<'_>) -> Result<Value, Prob
                     quoted_list(options)
                 ))
             }),
+        (Kind::Patterns { max_items }, DeValue::Array(items)) => {
+            if items.len() > *max_items {
+                return Err(Problem::Range);
+            }
+            items
+                .iter()
+                .map(|item| match item.get_ref() {
+                    DeValue::String(text)
+                        if !text.is_empty()
+                            && text.chars().count() <= MAX_PATTERN_LEN
+                            && !text.chars().any(char::is_control) =>
+                    {
+                        Ok(std::borrow::Cow::Owned(text.to_string()))
+                    }
+                    DeValue::String(text) => Err(Problem::Syntax(format!(
+                        "{:?} must be a non-empty pattern of at most {MAX_PATTERN_LEN} printable characters",
+                        text.as_ref()
+                    ))),
+                    _ => Err(Problem::Type),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|values| Value::Patterns(std::borrow::Cow::Owned(values)))
+        }
         _ => Err(Problem::Type),
     }
 }

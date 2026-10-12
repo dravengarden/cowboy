@@ -7,6 +7,7 @@ import {
 import { DesktopConnectionNotice } from "./DesktopConnectionNotice";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
+import { DesktopApprovalDock } from "./DesktopApprovalDock";
 import { HintTooltip } from "../HintTooltip";
 import type { TranscriptProjection } from "../explore/exploreStore";
 import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
@@ -375,6 +376,11 @@ export function DesktopWorkspace({
           sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           {conversation}
+          {
+            /* A folded pane shows nothing, so the Composer keeps the answer
+              (approvalDockStore). */
+          }
+          {!conversationCollapsed && <DesktopApprovalDock sessionId={sessionId} />}
         </Box>
       </Box>
       {conversationCollapsed && (

@@ -934,7 +934,11 @@ Phase 3 shipped in part with the same release (service worker
   the Hub appends no second `permission_resolved` row for a request already
   resolved in the session log, so an answer given on two devices at once
   resolves once; the first broadcast already clears the other device's card,
-  so no addressed `already_resolved` result is needed. Creating a session
+  so no addressed `already_resolved` result is needed. "Already resolved"
+  means a resolution newer than that id's latest `permission_request`: the id
+  is the agent's JSON-RPC request id and starts over with every agent
+  process, so an older resolution under the same number is a different
+  request and must not swallow this one. Creating a session
   while Cowboy is unreachable now says "Needs a connection" in place instead
   of the browser's fetch error, and Stop while unreachable says so too
   instead of dropping the tap (`cancelTurn`, class C; service worker

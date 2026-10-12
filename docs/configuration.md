@@ -132,6 +132,12 @@ as a deprecated override for one release.
 | Device | `capacity.draining` | `false` | restart |
 | Device | `disk.low_watermark` | `"15GiB"` | live |
 | Device | `retention.artifact_cache_unreferenced_after` | `"7d"` | live |
+| Device | `file_buffers.enabled` | `true` | live |
+| Device | `file_buffers.max_file_size` | `"2MiB"` | live |
+| Device | `file_buffers.excluded` | secrets, media, notebooks, databases | live |
+| Device | `file_buffers.cache_max_bytes` | `"64MiB"` | live |
+| Device | `file_buffers.cache_max_age` | `"1d"` | live |
+| Device | `file_buffers.target_temp_max_age` | `"1h"` | live |
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience.
@@ -232,3 +238,12 @@ Disk growth from Plugin releases is retired automatically:
 
 The budget is the Device's; the decision is the Service's, because only the
 Service knows which generations sessions still pin.
+
+## Remote file buffers
+
+The `file_buffers.*` settings decide which files a remote session keeps a
+verified local copy of, so an Edit or Write sends only a hash-checked splice
+to the target. They also bound how long and how much of those copies, and of
+the target's leftover temporary files, is kept. The Machine projects them to
+`<state>/file-buffers.json` for running sessions. See
+[`remote-file-buffers.md`](remote-file-buffers.md).

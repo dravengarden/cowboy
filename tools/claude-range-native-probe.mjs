@@ -7,8 +7,10 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -229,6 +231,61 @@ try {
       quietCancelMs.toFixed(2)
     } ms; fixed budget is 5000 ms`,
   );
+  // File buffers: the same Edit over a 40 KiB source file, first with whole
+  // files, then as a hash-checked splice from the verified local copy.
+  const source = join(target, "source.rs");
+  const sourceText = "fn main() {\n" + "    step();\n".repeat(3000) + "}\n";
+  const buffers = [];
+  for (const mode of ["whole_file", "file_buffer"]) {
+    await writeFile(source, sourceText, { mode: 0o640 });
+    await chmod(source, 0o640);
+    tools.fileHelper = helper;
+    tools.fileBufferUnsupported = mode === "whole_file";
+    await tools.nativeCall("Read", { file_path: "source.rs" });
+    const before = calls.length;
+    const start = performance.now();
+    const edited = await tools.nativeCall("Edit", {
+      file_path: "source.rs",
+      old_string: "fn main()",
+      new_string: "fn start()",
+    });
+    assert.equal(edited.deny, undefined);
+    const records = calls.slice(before);
+    buffers.push({
+      mode,
+      elapsed_ms: performance.now() - start,
+      rpc_count: records.length,
+      methods: records.map((record) => record.method),
+      rpc_json_bytes: records.reduce(
+        (sum, record) => sum + record.request_bytes + record.response_bytes,
+        0,
+      ),
+    });
+    assert.equal(
+      await readFile(source, "utf8"),
+      sourceText.replace("fn main()", "fn start()"),
+    );
+    // Mode bits survive the buffered replacement.
+    assert.equal((await stat(source)).mode & 0o777, 0o640);
+  }
+  tools.fileBufferUnsupported = false;
+  assert.ok(!buffers[1].methods.includes("fs/readFile"));
+  assert.ok(!buffers[1].methods.includes("fs/writeFile"));
+  assert.ok(buffers[1].rpc_json_bytes < buffers[0].rpc_json_bytes / 10);
+  // A change behind the copy is refused by the target, untouched.
+  await tools.nativeCall("Read", { file_path: "source.rs" });
+  await writeFile(source, "external\n");
+  const stale = await tools.nativeCall("Edit", {
+    file_path: "source.rs",
+    old_string: "fn start()",
+    new_string: "fn again()",
+  });
+  assert.match(stale.deny, /modified since read/);
+  assert.equal(await readFile(source, "utf8"), "external\n");
+  assert.deepEqual(
+    (await readdir(target)).filter((name) => name.startsWith(".cowboy-")),
+    [],
+  );
   const result = {
     schema_version: 1,
     acceptance: "pinned_native_executor_and_adapter_not_production_wan",
@@ -242,6 +299,7 @@ try {
     quiet_command_reads: idleReads,
     quiet_command_ms: idleMs,
     cancel_while_quiet_ms: quietCancelMs,
+    file_buffer_edits: buffers,
     checks: [
       "identical_selected_bytes",
       "external_change_outside_range_refused",
@@ -250,6 +308,10 @@ try {
       "closed_private_jobs_reaped",
       "quiet_output_completed",
       "taskstop_wakes_pending_read_and_retains_handle",
+      "buffered_edit_sends_only_a_splice",
+      "buffered_edit_preserves_mode",
+      "buffered_edit_refuses_a_changed_target",
+      "no_target_temporaries_left",
     ],
   };
   await writeFile(resolve(receipt), JSON.stringify(result, null, 2) + "\n", {

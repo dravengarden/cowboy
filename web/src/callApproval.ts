@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { agentLabel } from "./agentTools";
 
 // Agent calls a session's agent is waiting for a person to approve. The
@@ -127,4 +127,27 @@ export async function decideCallApproval(
     throw new Error(`Could not answer the call request (${response.status})`);
   }
   receiveCallApproval(sessionId, null);
+}
+
+export interface CallApprovalAnswer {
+  busy: CallApprovalDecision | null;
+  failure: string | null;
+  answer: (decision: CallApprovalDecision) => void;
+}
+
+/** One answer at a time, with the refusal kept for the surface to show. */
+export function useCallApprovalAnswer(sessionId: string): CallApprovalAnswer {
+  const [busy, setBusy] = useState<CallApprovalDecision | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const answer = useCallback((decision: CallApprovalDecision): void => {
+    if (busy) return;
+    setBusy(decision);
+    setFailure(null);
+    decideCallApproval(sessionId, decision).catch((reason: unknown) => {
+      setFailure(
+        reason instanceof Error ? reason.message : "Could not answer",
+      );
+    }).finally(() => setBusy(null));
+  }, [busy, sessionId]);
+  return { busy, failure, answer };
 }

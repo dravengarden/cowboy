@@ -103,6 +103,17 @@ impl ClientAuthentication {
             .await
     }
 
+    /// The browser approval this computer is waiting for, if any. A caller
+    /// without a terminal (an editor that hides stderr) shows it to the user.
+    pub(crate) fn pending_approval(&self) -> Option<PendingApproval> {
+        self.0.pending_approval.lock().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_pending_approval(&self, pending: Option<PendingApproval>) {
+        *self.0.pending_approval.lock() = pending;
+    }
+
     pub(crate) async fn ensure_login(&self) -> Result<()> {
         self.0.ensure_login().await
     }
@@ -170,6 +181,13 @@ struct StoredDeviceCredential {
     cardea_profile: Option<String>,
 }
 
+/// A device authorization waiting for the signed-in user's approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingApproval {
+    pub(crate) url: String,
+    pub(crate) fingerprint: String,
+}
+
 #[derive(Debug)]
 pub(crate) struct DeviceCredentialManager {
     base_url: Url,
@@ -179,6 +197,7 @@ pub(crate) struct DeviceCredentialManager {
     http: reqwest::Client,
     cardea_binary: PathBuf,
     cached: RwLock<Option<StoredDeviceCredential>>,
+    pending_approval: parking_lot::Mutex<Option<PendingApproval>>,
 }
 
 impl DeviceCredentialManager {
@@ -203,6 +222,7 @@ impl DeviceCredentialManager {
                 .build()
                 .context("building Cowboy device-auth HTTP client")?,
             cached: RwLock::new(None),
+            pending_approval: parking_lot::Mutex::new(None),
         })
     }
 
@@ -547,16 +567,24 @@ impl DeviceCredentialManager {
             "Cowboy needs your approval. Opening the sign-in page for {}.",
             self.base_url.origin().ascii_serialization()
         );
-        eprintln!(
-            "Verify this client fingerprint before approving: {}",
-            crate::client_auth::device_fingerprint(signing_key.verifying_key().as_bytes())
-        );
+        let fingerprint =
+            crate::client_auth::device_fingerprint(signing_key.verifying_key().as_bytes());
+        eprintln!("Verify this client fingerprint before approving: {fingerprint}");
         if let Err(error) = open_browser(&verification_url) {
             eprintln!("Could not open a browser automatically: {error}");
-            eprintln!("Open this URL to continue: {verification_url}");
         }
-        self.wait_for_approval(&started.request_id, &code_verifier, started.expires_at_ms)
-            .await?;
+        // A headless host starts its opener successfully and shows nothing,
+        // so the link is always printed, not only when the opener fails.
+        eprintln!("Open this URL to continue: {verification_url}");
+        *self.pending_approval.lock() = Some(PendingApproval {
+            url: verification_url.to_string(),
+            fingerprint,
+        });
+        let approval = self
+            .wait_for_approval(&started.request_id, &code_verifier, started.expires_at_ms)
+            .await;
+        *self.pending_approval.lock() = None;
+        approval?;
         let exchange = crate::client_auth::signed_exchange_request(
             &signing_key,
             started.request_id,

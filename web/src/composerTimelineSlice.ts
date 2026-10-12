@@ -3,9 +3,9 @@ import {
   type CurrentPlan,
   isCompactingTail,
   latestCompactionCompletionSeq,
-  latestPendingPermission,
   latestPlan,
   type PendingPermission,
+  pendingPermissions,
 } from "./derive";
 import type {
   AvailableCommand,
@@ -19,7 +19,10 @@ import type {
  * those frames, while rerendering the editor tree for them only burns CPU. */
 export interface ComposerTimelineSlice {
   plan: CurrentPlan | null;
+  /** The oldest unresolved request: the one answered next. */
   pendingPermission: PendingPermission | null;
+  /** How many requests wait, this one included. */
+  pendingPermissionCount: number;
   availableCommands: AvailableCommand[];
   compactingTail: boolean;
   completionSeq: number;
@@ -30,6 +33,7 @@ const EMPTY_COMMANDS: AvailableCommand[] = [];
 const EMPTY_SLICE: ComposerTimelineSlice = {
   plan: null,
   pendingPermission: null,
+  pendingPermissionCount: 0,
   availableCommands: EMPTY_COMMANDS,
   compactingTail: false,
   completionSeq: 0,
@@ -44,9 +48,11 @@ export function composerTimelineSlice(
   const cached = CACHE.get(timeline);
   if (cached) return cached;
   const commands = latestAvailableCommands(timeline);
+  const pending = pendingPermissions(timeline);
   const slice: ComposerTimelineSlice = {
     plan: latestPlan(timeline),
-    pendingPermission: latestPendingPermission(timeline),
+    pendingPermission: pending[0] ?? null,
+    pendingPermissionCount: pending.length,
     availableCommands: commands.length === 0 ? EMPTY_COMMANDS : commands,
     compactingTail: isCompactingTail(timeline),
     completionSeq: latestCompactionCompletionSeq(timeline),
@@ -111,6 +117,7 @@ export function sameComposerTimelineSlice(
       a.completionSeq === b.completionSeq &&
       a.contextClearedSeq === b.contextClearedSeq &&
       samePlan(a.plan, b.plan) &&
+      a.pendingPermissionCount === b.pendingPermissionCount &&
       samePendingPermission(a.pendingPermission, b.pendingPermission) &&
       sameArray(a.availableCommands, b.availableCommands, sameCommand));
 }

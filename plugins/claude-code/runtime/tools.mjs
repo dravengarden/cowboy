@@ -10,6 +10,7 @@ import {
   rename,
   rm,
   unlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, posix } from "node:path";
@@ -212,6 +213,118 @@ const text = (value, native) => ({
   isError: false,
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const MODIFIED_SINCE_READ =
+  "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
+
+// Remote file buffers (docs/remote-file-buffers.md). The Machine's Device
+// configuration is projected into a JSON file the worker names in the
+// execution descriptor; an older Machine names none and the defaults apply.
+const FILE_BUFFER_DEFAULTS = Object.freeze({
+  schema: 1,
+  enabled: true,
+  max_file_size: 2 * 1024 * 1024,
+  excluded: Object.freeze([
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.kdbx",
+    "id_rsa*",
+    "id_ecdsa*",
+    "id_ed25519*",
+    "**/.ssh/**",
+    "**/.gnupg/**",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.webp",
+    "*.pdf",
+    "*.ipynb",
+    "*.db",
+    "*.sqlite",
+    "*.sqlite3",
+  ]),
+  cache_max_bytes: 64 * 1024 * 1024,
+  cache_max_age_seconds: 24 * 3600,
+  target_temp_max_age_seconds: 3600,
+});
+const FILE_BUFFERS_DISABLED = Object.freeze({
+  ...FILE_BUFFER_DEFAULTS,
+  enabled: false,
+});
+// An apply request up to this size travels in argv (well below the 128 KiB
+// single-argument limit once base64 encoded); a larger one in a payload file.
+const INLINE_APPLY = 48 * 1024;
+const APPLY_TIMEOUT = 15000;
+const BUFFER_NAME = /^[a-f0-9]{64}$/;
+// Stores sweep at most this often; session start always sweeps.
+const BUFFER_SWEEP_INTERVAL = 30000;
+const BUFFER_TEMPORARY = /^[a-f0-9]{64}\.(\d+)\.[a-f0-9-]{36}$/;
+
+// A pattern without `/` matches the file name; one with `/` the absolute
+// path. `**` spans directories, `*` and `?` stay within one. ASCII case is
+// ignored, as on the case-insensitive filesystems a pattern may target.
+export function fileBufferMatcher(patterns) {
+  const compiled = patterns.map((pattern) => {
+    let source = "";
+    for (let index = 0; index < pattern.length; index++) {
+      const char = pattern[index];
+      if (char === "*" && pattern[index + 1] === "*") {
+        source += ".*";
+        index++;
+      } else if (char === "*") source += "[^/]*";
+      else if (char === "?") source += "[^/]";
+      else source += char.replace(/[\\^$.|+()[\]{}]/g, "\\$&");
+    }
+    return {
+      path: pattern.includes("/"),
+      regex: new RegExp(`^${source}$`, "i"),
+    };
+  });
+  return (path) =>
+    compiled.some(({ path: whole, regex }) =>
+      regex.test(whole ? path : posix.basename(path))
+    );
+}
+
+function validFileBufferPolicy(value) {
+  const size = (number, max) =>
+    Number.isSafeInteger(number) && number >= 0 && number <= max;
+  return value?.schema === 1 && typeof value.enabled === "boolean" &&
+    size(value.max_file_size, MAX_FILE) &&
+    Array.isArray(value.excluded) && value.excluded.length <= 256 &&
+    value.excluded.every((pattern) =>
+      typeof pattern === "string" && pattern.length > 0 &&
+      pattern.length <= 256
+    ) &&
+    size(value.cache_max_bytes, 1024 ** 3) &&
+    size(value.cache_max_age_seconds, 366 * 24 * 3600) &&
+    size(value.target_temp_max_age_seconds, 8 * 24 * 3600);
+}
+
+// The single replacement that turns `base` into `written`: their common
+// prefix and suffix stay on the target and only the middle is sent.
+export function bufferSplice(base, written) {
+  const limit = Math.min(base.length, written.length);
+  let prefix = 0;
+  while (prefix < limit && base[prefix] === written[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < limit - prefix &&
+    base[base.length - 1 - suffix] === written[written.length - 1 - suffix]
+  ) suffix++;
+  if (prefix === base.length && prefix === written.length) return [];
+  return [{
+    offset: prefix,
+    delete: base.length - prefix - suffix,
+    insert: written.subarray(prefix, written.length - suffix).toString(
+      "base64",
+    ),
+  }];
+}
 
 // The executor's completed-operation retention (15 minutes), well past any
 // request still in transport after its call settled.
@@ -600,6 +713,20 @@ export function splitEnd(buffer, end) {
 // streams, so `exit`, `exec` and traps in the command cannot skip the end
 // lines. That one exits with the same status, and its own notices (a killed
 // child) are not output.
+// A private utility's one-line result and its end line leave in a single
+// write on stdout (its stderr is not output), so the read that returns the
+// result also completes it.
+export function endedUtility(argv, end) {
+  return [
+    "bash",
+    "-c",
+    `e=$1; shift; o=$("$@" 2>/dev/null); s=$?; printf '%s\\n\\036%s:%d\\n' "$o" "$e" "$s"; exit "$s"`,
+    "bash",
+    end,
+    ...argv,
+  ];
+}
+
 export function endedCommand(shell, script, end) {
   return [
     shell,
@@ -783,6 +910,7 @@ export class WorkspaceTools {
     this.calls = new Map();
     this.completedCalls = new Map();
     this.saves = Promise.resolve();
+    this.fileBufferStats = { hits: 0, misses: 0, applies: 0, sentBytes: 0 };
     this.connection.listeners?.add((frame) => {
       if (frame.method === "connected") this.scheduleCancellations();
     });
@@ -811,6 +939,8 @@ export class WorkspaceTools {
       if (error.code !== "ENOENT") throw error;
     }
     await this.cleanupTemporaryStates();
+    // Buffered copies outlive the process, within the configured limits.
+    await this.fileBufferSweep(await this.fileBufferPolicy()).catch(() => {});
     // Local copies belong to the process that made them.
     await rm(this.localDirectory(), { recursive: true, force: true });
     await this.reconcileCancellations();
@@ -1488,6 +1618,255 @@ export class WorkspaceTools {
     return join(dirname(this.statePath), "local-reads");
   }
 
+  // The worker's descriptor names the Machine's projected policy file.
+  useFileBuffers(path) {
+    this.fileBufferPolicyPath =
+      typeof path === "string" && posix.isAbsolute(path) ? path : undefined;
+    this.fileBufferPolicyRead = undefined;
+  }
+
+  // Re-read only when the projection file changed. A named file that is
+  // missing or invalid disables buffers rather than guessing settings.
+  async fileBufferPolicy() {
+    const path = this.fileBufferPolicyPath;
+    if (!path) return FILE_BUFFER_DEFAULTS;
+    let stat;
+    try {
+      stat = await lstat(path);
+    } catch {
+      return FILE_BUFFERS_DISABLED;
+    }
+    const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    if (this.fileBufferPolicyRead?.stamp === stamp) {
+      return this.fileBufferPolicyRead.policy;
+    }
+    let policy = FILE_BUFFERS_DISABLED;
+    try {
+      if (
+        stat.isFile() && stat.size <= 65536 && stat.uid === process.getuid()
+      ) {
+        const value = JSON.parse(await readFile(path, "utf8"));
+        if (validFileBufferPolicy(value)) {
+          policy = Object.freeze({
+            ...value,
+            matches: fileBufferMatcher(value.excluded),
+          });
+        }
+      }
+    } catch {
+      // Disabled, as below.
+    }
+    this.fileBufferPolicyRead = { stamp, policy };
+    return policy;
+  }
+
+  // Buffers serve writes, so a read-only session keeps none; a target
+  // without Cowboy's helper, or with one too old to apply, keeps none either.
+  async fileBuffersFor(path) {
+    if (this.readOnly || !this.fileHelper || this.fileBufferUnsupported) {
+      return undefined;
+    }
+    const policy = await this.fileBufferPolicy();
+    if (!policy.enabled) return undefined;
+    const matches = policy.matches ?? fileBufferMatcher(policy.excluded);
+    return matches(path) ? undefined : policy;
+  }
+
+  fileBufferDirectory() {
+    return join(dirname(this.statePath), "file-buffers");
+  }
+
+  // A buffered copy is used only if it still hashes to its name.
+  async fileBufferGet(digest) {
+    if (!BUFFER_NAME.test(digest)) return undefined;
+    const file = join(this.fileBufferDirectory(), digest);
+    try {
+      const bytes = await readFile(file);
+      if (hash(bytes) !== digest) {
+        await rm(file, { force: true });
+        return undefined;
+      }
+      const now = new Date();
+      await utimes(file, now, now).catch(() => {});
+      this.fileBufferStats.hits++;
+      return bytes;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      this.fileBufferStats.misses++;
+      return undefined;
+    }
+  }
+
+  async fileBufferPut(bytes, policy) {
+    if (
+      !policy || bytes.length > policy.max_file_size ||
+      bytes.length > policy.cache_max_bytes
+    ) return;
+    const directory = this.fileBufferDirectory();
+    const digest = hash(bytes);
+    const file = join(directory, digest);
+    try {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const owner = await lstat(directory);
+      if (
+        !owner.isDirectory() || (owner.mode & 0o077) ||
+        owner.uid !== process.getuid()
+      ) return;
+      const now = new Date();
+      try {
+        // Content-addressed: an existing copy only needs its use recorded.
+        await utimes(file, now, now);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        const temporary = `${file}.${process.pid}.${randomUUID()}`;
+        try {
+          await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
+          await rename(temporary, file);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      }
+      if (Date.now() - (this.fileBufferSweptAt ?? 0) >= BUFFER_SWEEP_INTERVAL) {
+        await this.fileBufferSweep(policy);
+      }
+    } catch {
+      // A copy that cannot be kept only costs a later whole-file read.
+    }
+  }
+
+  // Least recently used copies go first once the session's budget is
+  // exceeded; any copy unused for the configured age goes regardless, as do
+  // temporary files whose writer has exited.
+  async fileBufferSweep(policy) {
+    this.fileBufferSweptAt = Date.now();
+    const directory = this.fileBufferDirectory();
+    let names;
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    const cutoff = Date.now() - policy.cache_max_age_seconds * 1000;
+    const kept = [];
+    for (const name of names) {
+      const file = join(directory, name);
+      let stat;
+      try {
+        stat = await lstat(file);
+      } catch {
+        continue;
+      }
+      const temporary = BUFFER_TEMPORARY.exec(name);
+      if (temporary) {
+        let alive = Number(temporary[1]) === process.pid;
+        if (!alive) {
+          try {
+            process.kill(Number(temporary[1]), 0);
+            alive = true;
+          } catch (error) {
+            alive = error.code !== "ESRCH";
+          }
+        }
+        if (!alive && stat.isFile()) await rm(file, { force: true });
+        continue;
+      }
+      if (!BUFFER_NAME.test(name) || !stat.isFile()) continue;
+      if (!policy.enabled || stat.mtimeMs < cutoff) {
+        await rm(file, { force: true });
+        continue;
+      }
+      kept.push({ file, size: stat.size, used: stat.mtimeMs });
+    }
+    kept.sort((a, b) => b.used - a.used);
+    let total = 0;
+    for (const entry of kept) {
+      total += entry.size;
+      if (total > policy.cache_max_bytes) await rm(entry.file, { force: true });
+    }
+  }
+
+  // Compare-and-swap on the target: the helper publishes `written` only if
+  // the file still hashes to `base`, and reports what the file then holds.
+  // Undefined when the outcome is unknown.
+  async fileBufferApply(path, base, written, policy, call) {
+    const request = JSON.stringify({
+      schema: 1,
+      path,
+      base: base ? hash(base) : "absent",
+      expect: hash(written),
+      splices: bufferSplice(base ?? Buffer.alloc(0), written),
+      staleTempSeconds: policy.target_temp_max_age_seconds,
+      ...(this.home()
+        ? { payloadDirectory: this.fileBufferPayloadDirectory() }
+        : {}),
+    });
+    let payload;
+    try {
+      let args;
+      if (Buffer.byteLength(request) <= INLINE_APPLY) {
+        args = ["apply", "--request", Buffer.from(request).toString("base64")];
+      } else {
+        const directory = this.fileBufferPayloadDirectory();
+        if (!directory) return undefined;
+        await this.privateDirectory(directory);
+        payload = posix.join(
+          directory,
+          `payload-${randomUUID().replaceAll("-", "")}.json`,
+        );
+        this.live(call);
+        await this.connection.call("fs/writeFile", {
+          path: pathToFileURL(payload).href,
+          dataBase64: Buffer.from(request).toString("base64"),
+        });
+        args = ["apply", "--request-file", payload];
+      }
+      this.live(call);
+      // End lines complete the result in the read that returns the output,
+      // without one more read to observe the exit.
+      const end = randomUUID().replaceAll("-", "");
+      const result = await this.command(
+        endedUtility([this.fileHelper, ...args], end),
+        APPLY_TIMEOUT,
+        call,
+        { end, stdoutEnd: true },
+      );
+      if (result.exitCode !== 0 || result.output_limit) {
+        // A helper without `apply` refuses the subcommand before acting.
+        if (result.exitCode === 2) this.fileBufferUnsupported = true;
+        return undefined;
+      }
+      const outcome = JSON.parse(result.output);
+      if (
+        outcome?.schema !== 1 ||
+        !["applied", "conflict", "error"].includes(outcome.status) ||
+        (outcome.status !== "error" &&
+          outcome.sha256 !== "absent" && !BUFFER_NAME.test(outcome.sha256))
+      ) return undefined;
+      this.fileBufferStats.applies++;
+      this.fileBufferStats.sentBytes += Buffer.byteLength(request);
+      return outcome;
+    } catch (error) {
+      if (call?.id && this.calls.get(call.id)?.cancelled) throw error;
+      return undefined;
+    } finally {
+      if (payload) {
+        // Consumed by the helper; removed here too after an uncertain start.
+        await this.connection.call("fs/remove", {
+          path: pathToFileURL(payload).href,
+          force: true,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  fileBufferPayloadDirectory() {
+    const home = this.home();
+    return home
+      ? posix.join(home, ".cache", "cowboy", "file-buffers")
+      : undefined;
+  }
+
   async localRead(bytes, extension, target) {
     const directory = this.localDirectory();
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -1818,7 +2197,8 @@ export class WorkspaceTools {
         size += bytes.length;
       }
       if (
-        job.endLines?.stdout !== undefined && job.endLines.stderr !== undefined
+        job.endLines?.stdout !== undefined &&
+        (job.stdoutEnd || job.endLines.stderr !== undefined)
       ) {
         // The shell has exited and both streams are complete.
         job.utf8Pending = {};
@@ -1906,14 +2286,20 @@ export class WorkspaceTools {
     argv,
     timeout = 10000,
     call,
-    { cancelOnError = false, end } = {},
+    { cancelOnError = false, end, stdoutEnd = false } = {},
   ) {
     const id = randomUUID();
     let started = false;
     try {
       // An endedCommand's end lines complete collection without one more
       // read to observe the closed process.
-      await this.startForeground(argv, call, undefined, id, end ? { end } : {});
+      await this.startForeground(
+        argv,
+        call,
+        undefined,
+        id,
+        end ? { end, ...(stdoutEnd ? { stdoutEnd: true } : {}) } : {},
+      );
       started = true;
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -2952,14 +3338,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     // Native results name the file as the call did.
     const shown = args.file_path ?? args.notebook_path;
-    let bytes;
-    try {
-      bytes = await this.bytes(
-        path,
-        name === "write" || name === "edit",
-        metadata,
-      );
-    } catch (error) {
+    const failed = async (error) => {
       if (name === "read" && missing(error)) throw this.missingFile();
       if (large && /4 MiB/.test(error.message)) {
         throw new Error(error.message + "." + large);
@@ -2970,10 +3349,35 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         );
       }
       throw error;
+    };
+    // Edit and Write start from the verified copy of what was last read or
+    // written, when one is kept; the target confirms it by hash on applying.
+    const buffers = name === "write" || name === "edit"
+      ? await this.fileBuffersFor(path)
+      : undefined;
+    // Whether a file exists is always asked of the target.
+    const stamped = this.state.reads[path];
+    let bytes;
+    let buffered = false;
+    if (buffers && stamped !== undefined && stamped !== "absent") {
+      bytes = await this.fileBufferGet(stamped);
+      buffered = bytes !== undefined && bytes.length <= buffers.max_file_size;
+    }
+    if (!buffered) {
+      try {
+        bytes = await this.bytes(
+          path,
+          name === "write" || name === "edit",
+          metadata,
+        );
+      } catch (error) {
+        await failed(error);
+      }
     }
     if (name === "read") {
       const remember = async (result) => {
         await this.rememberRead(path, hash(bytes));
+        await this.fileBufferPut(bytes, await this.fileBuffersFor(path));
         return result;
       };
       const imageTypes = [["89504e470d0a1a0a", "image/png"], [
@@ -3031,9 +3435,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       );
     }
     if (bytes && known !== undefined && known !== hash(bytes)) {
-      throw new Error(
-        "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
-      );
+      throw new Error(MODIFIED_SINCE_READ);
     }
     let content;
     let notebookResult;
@@ -3174,19 +3576,57 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (known === undefined) {
       await this.rememberRead(path, bytes ? hash(bytes) : "absent");
     }
-    await this.connection.call("fs/createDirectory", {
-      path: pathToFileURL(dirname(path)).href,
-      recursive: true,
-    });
-    // Cancellation can arrive while the directory request is outstanding.
-    this.live(call);
-    // Rewritten in place: native replaces the file instead (a new inode, so
-    // a hard link keeps the old content); the executor offers no rename.
-    await this.connection.call("fs/writeFile", {
-      path: pathToFileURL(path).href,
-      dataBase64: written.toString("base64"),
-    });
+    let committed = false;
+    if (
+      buffers && written.length <= buffers.max_file_size &&
+      (bytes?.length ?? 0) <= buffers.max_file_size
+    ) {
+      // Replaced as native replaces it (a new inode), and only if the target
+      // still holds exactly the bytes this edit started from.
+      const outcome = await this.fileBufferApply(
+        path,
+        bytes,
+        written,
+        buffers,
+        call,
+      );
+      if (outcome?.status === "applied" && outcome.sha256 === hash(written)) {
+        committed = true;
+      } else if (outcome?.status === "conflict") {
+        throw new Error(MODIFIED_SINCE_READ);
+      } else {
+        // Failed or unknown: the helper never leaves the file between the
+        // two states, so the target's own bytes decide.
+        let now;
+        try {
+          now = await this.bytes(path, true);
+        } catch (error) {
+          await failed(error);
+        }
+        const held = now ? hash(now) : "absent";
+        if (held === hash(written)) committed = true;
+        else if (held !== (bytes ? hash(bytes) : "absent")) {
+          throw new Error(MODIFIED_SINCE_READ);
+        }
+        this.live(call);
+      }
+    }
+    if (!committed) {
+      await this.connection.call("fs/createDirectory", {
+        path: pathToFileURL(dirname(path)).href,
+        recursive: true,
+      });
+      // Cancellation can arrive while the directory request is outstanding.
+      this.live(call);
+      // Rewritten in place: native replaces the file instead (a new inode, so
+      // a hard link keeps the old content); the executor offers no rename.
+      await this.connection.call("fs/writeFile", {
+        path: pathToFileURL(path).href,
+        dataBase64: written.toString("base64"),
+      });
+    }
     await this.rememberRead(path, hash(written));
+    await this.fileBufferPut(written, buffers);
     const native = name === "write"
       ? {
         type: bytes ? "update" : "create",
