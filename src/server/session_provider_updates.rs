@@ -5,7 +5,9 @@
 //! waiting, then applies it where policy allows: a running session reloads
 //! through the explicit Reload gate once it is idle, and a dormant (exited,
 //! workerless) session is only re-pinned so its next open starts the new
-//! release. Nothing is ever interrupted.
+//! release. Nothing is ever interrupted: a session with background work waits,
+//! and a release whose unattended update just crashed a session is held back
+//! on that Machine for [`FAILURE_HOLD`].
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -16,6 +18,9 @@ use crate::core::ProviderUpdateOffer;
 const PASS_INTERVAL: Duration = Duration::from_secs(30);
 /// How quickly a requested "update when idle" starts after the turn ends.
 const REQUEST_POLL: Duration = Duration::from_secs(5);
+/// How long unattended updates to a release pause on a Machine after one of
+/// them left a session crashed. An explicit request still goes through.
+const FAILURE_HOLD: Duration = Duration::from_mins(30);
 
 fn key(session: &str) -> String {
     format!(
@@ -135,6 +140,7 @@ fn requested_update_ready(state: &AppState) -> bool {
             .as_ref()
             .is_some_and(|offer| offer.when_idle)
             && matches!(meta.status, Status::Running | Status::Exited)
+            && meta.background_tasks == 0
             && !state.hub.session_has_in_flight_prompt(&meta.id)
     })
 }
@@ -245,7 +251,17 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
                     idle_after,
                 )
         };
-        if !still_wanted() {
+        if !still_wanted() || meta.background_tasks > 0 {
+            continue;
+        }
+        if !when_idle
+            && state.hub.automatic_update_failed_within(
+                &meta.machine_id,
+                &meta.provider,
+                &target.digest,
+                FAILURE_HOLD,
+            )
+        {
             continue;
         }
         // A surviving worker makes an exited session not dormant: re-pinning

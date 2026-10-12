@@ -170,7 +170,12 @@ re-pinned after the idle period, exactly like `plugins.repin_dormant_sessions`
 but without its longer wait, so its next open starts the new release and no
 Device slot is spent. Updates are paced: each 30-second pass starts at most one per Device,
 and none while another session on that Device is still starting, so a whole
-idle fleet never relaunches at once. Together with re-pinning, a generation is
+idle fleet never relaunches at once. An unattended update never replaces a
+worker that reports background work, and when one leaves a session crashed,
+further unattended updates to that release pause on the Device for 30 minutes
+(an explicit Reload or update request still applies). Every update logs
+`Provider update finished` or `Provider update left the session crashed` with
+its duration. Together with re-pinning, a generation is
 retained only while a recently active session uses it.
 
 Each pass also publishes, per session, the newer compatible release it could

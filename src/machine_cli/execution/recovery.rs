@@ -101,6 +101,15 @@ impl Manager {
                 return Err(Refusal::IdentityMismatch);
             }
             let mut next = old;
+            // A replacement keeper carries the session's call context even
+            // when the environment it replaces predates managed calls.
+            if next.managed.is_none() {
+                next.call_context = self
+                    .calls
+                    .as_ref()
+                    .and_then(|calls| calls.context_path(session_id))
+                    .map(|path| path.display().to_string());
+            }
             next.binding.revision += 1;
             next.binding.environment.id = random_id();
             next.binding.environment.incarnation = random_id();
