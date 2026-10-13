@@ -170,8 +170,10 @@ uses `authApi`; `src/auth/*` still must not import `src/store.ts`.
 The installed PWA must open from this device on a weak connection, which is
 slow rather than failed. `public/sw.js` answers navigations from the cached
 shell and refreshes it behind; `ProductAuthGate` mounts from the cached
-principal; the product database adopts its remembered dataset; the lazy
-surface keeps the splash. Any new `await fetch(...)` before first paint brings
+principal, and past that principal's deadline it still mounts while Cowboy is
+unreachable or the device is offline (the login answer, another account or
+the lock wins on contact); the product database adopts its remembered
+dataset; the lazy surface keeps the splash. Any new `await fetch(...)` before first paint brings
 the white screen back. `src/serviceWorkerShell.test.ts` is the worker's
 contract, and `vite.config.ts` emits the boot asset list the worker precaches
 before it promotes a deployed shell. Background and measurements:

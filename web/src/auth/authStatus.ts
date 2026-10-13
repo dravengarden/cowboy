@@ -12,6 +12,10 @@ export interface AuthGateDecision {
   /** The principal came from this device's last successful status probe,
    *  because Cowboy could not be reached (docs/offline-first-sync.md). */
   cached?: boolean;
+  /** That probe is older than the earliest server deadline it reported. The
+   *  app still opens on its local replica while Cowboy cannot be reached; the
+   *  next real answer (login, lock or another account) wins at once. */
+  stale?: boolean;
 }
 const AUTH_STATUS_BACKOFF_MAX_MS = 15_000;
 
@@ -27,6 +31,10 @@ export interface CachedAuthStatus {
   readonly capturedAt: number;
   /** `null` when the deployment runs without product authentication. */
   readonly expiresAt: number | null;
+}
+
+function deviceOnline(): boolean {
+  return globalThis.navigator?.onLine !== false;
 }
 
 type StatusStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -84,10 +92,8 @@ export function forgetAuthStatus(storage = statusStorage()): void {
   }
 }
 
-export function readCachedAuthStatus(
-  now = Date.now(),
-  storage = statusStorage(),
-): CachedAuthStatus | null {
+/** The stored record whatever its age; `null` when absent or malformed. */
+function storedAuthStatus(storage: StatusStorage | undefined): CachedAuthStatus | null {
   if (!storage) return null;
   try {
     const raw = storage.getItem(AUTH_STATUS_CACHE_KEY);
@@ -101,11 +107,32 @@ export function readCachedAuthStatus(
       typeof record.capturedAt !== "number" || !Number.isFinite(record.capturedAt) ||
       (record.expiresAt !== null && (typeof record.expiresAt !== "number" || !Number.isFinite(record.expiresAt)))
     ) return null;
-    if (record.expiresAt !== null && record.expiresAt <= now) return null;
     return { me, capturedAt: record.capturedAt, expiresAt: record.expiresAt };
   } catch {
     return null;
   }
+}
+
+export function readCachedAuthStatus(
+  now = Date.now(),
+  storage = statusStorage(),
+): CachedAuthStatus | null {
+  const record = storedAuthStatus(storage);
+  if (!record) return null;
+  if (record.expiresAt !== null && record.expiresAt <= now) return null;
+  return record;
+}
+
+/** The last principal even past its deadline. Only a device that cannot reach
+ *  Cowboy may use it: its replica is already on the device, so showing it
+ *  widens reading, not exposure, and contact decides for real. */
+export function readStaleAuthStatus(
+  now = Date.now(),
+  storage = statusStorage(),
+): (CachedAuthStatus & { readonly stale: boolean }) | null {
+  const record = storedAuthStatus(storage);
+  if (!record) return null;
+  return { ...record, stale: record.expiresAt !== null && record.expiresAt <= now };
 }
 
 /** The decision the gate mounts from BEFORE its first probe answers. The
@@ -117,22 +144,34 @@ export function readCachedAuthStatus(
 export function bootAuthDecision(
   now = Date.now(),
   storage = statusStorage(),
+  online = deviceOnline(),
 ): AuthGateDecision | null {
   const cached = readCachedAuthStatus(now, storage);
-  if (!cached) return null;
-  return { view: "ready", me: cached.me, cached: true };
+  if (cached) return { view: "ready", me: cached.me, cached: true };
+  // A device that knows it is offline gains nothing from the probe; the last
+  // principal still names the replica it opens on, and the sync status says
+  // the device is offline (2026-10-13: offline opens on the last state).
+  if (online) return null;
+  return staleAuthDecision(now, storage);
+}
+
+function staleAuthDecision(now: number, storage: StatusStorage | undefined): AuthGateDecision | null {
+  const stale = readStaleAuthStatus(now, storage);
+  if (!stale) return null;
+  return { view: "ready", me: stale.me, cached: true, ...(stale.stale ? { stale: true } : {}) };
 }
 
 /** A mountable decision from the cache, or `null` when the device must wait
  *  for the server. Only a `retry` probe (network or 5xx) may use it: a login
- *  answer, a changed account, or an incompatible controller always wins. */
+ *  answer, a changed account, or an incompatible controller always wins. Past
+ *  the deadline the principal is stale, and still opens the local replica. */
 export function cachedAuthDecision(
   decision: AuthGateDecision,
   now = Date.now(),
   storage = statusStorage(),
 ): AuthGateDecision | null {
   if (decision.view !== "retry") return null;
-  return bootAuthDecision(now, storage);
+  return staleAuthDecision(now, storage);
 }
 
 export function classifyAuthStatus(probe: AuthStatusProbe): AuthGateDecision {
