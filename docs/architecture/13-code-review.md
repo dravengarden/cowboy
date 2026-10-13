@@ -127,6 +127,26 @@ media bytes. Colocated sessions use `LocalCodeProvider`; remote sessions invoke
 the Machine's versioned `cowboy-code-adapter`. Both return the same stable
 browser contract.
 
+### Change target and worktree ownership
+
+The first `GET /repository` page also carries `target`: what the session's
+worktree is changing. It is derived from Git alone, with no agent involvement
+and no project-layout convention: the branch and `HEAD`, the uncommitted change
+count, the configured upstream, and the default comparison branch (the remote
+`HEAD`, then `main`/`master`), each with commits ahead and behind. Later history
+pages omit it, and a Machine adapter that predates the field omits it too; the
+repository drawer then shows no target strip instead of guessing.
+
+The drawer shows the target under the repository name. The base fact opens
+Changes compared against that branch; the uncommitted fact returns Changes to
+the working tree. The Worktrees tab files `git worktree list` by use: the
+worktree being read, worktrees another visible session works in (tap to switch
+to that session), and worktrees no session owns, collapsed. Ownership is exactly
+"a visible session on the same Machine whose working directory is this
+worktree", computed in the browser from the session list the principal already
+sees, so it adds no server-side visibility rule. Paths are shortened to their
+last two segments; the full path stays available as a hint.
+
 Diff pages carry a content revision and opaque cursor. The browser appends only
 pages with the same revision, so a worktree mutation can never splice two
 different diffs together. Initial generation is deduplicated across foreground

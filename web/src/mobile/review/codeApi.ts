@@ -86,6 +86,23 @@ export interface GitRepositorySnapshot {
   commits: GitCommitSummary[];
   historyTruncated: boolean;
   worktrees: GitWorktreeSummary[];
+  /** Absent on later history pages and from Machines that predate it. */
+  target?: GitChangeTarget;
+}
+
+export interface GitTrackedReference {
+  reference: string;
+  label: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitChangeTarget {
+  branch?: string | null;
+  head?: string | null;
+  changeCount: number;
+  upstream?: GitTrackedReference;
+  base?: GitTrackedReference;
 }
 
 export interface GitCommitFile {

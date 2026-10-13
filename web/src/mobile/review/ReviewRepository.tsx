@@ -3,6 +3,8 @@ import {
   Close,
   CommitOutlined,
   DescriptionOutlined,
+  ExpandLess,
+  ExpandMore,
   History,
   Refresh,
   Settings as SettingsIcon,
@@ -40,6 +42,13 @@ import {
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { HintTooltip } from "../../HintTooltip";
+import type { SessionMeta } from "../../protocol";
+import {
+  changeTargetFacts,
+  groupRepositoryWorktrees,
+  type RepositoryWorktreeRow,
+  worktreeTitle,
+} from "./repositoryTargetModel";
 
 type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -168,6 +177,123 @@ function HistoryCommitSkeleton(
   );
 }
 
+function sessionStatusColor(status: SessionMeta["status"]): string {
+  switch (status) {
+    case "running":
+    case "busy":
+      return "success.main";
+    case "starting":
+      return "warning.main";
+    case "crashed":
+      return "error.main";
+    default:
+      return "text.disabled";
+  }
+}
+
+function WorktreeGroupLabel(
+  { children }: { children: React.ReactNode },
+): React.JSX.Element {
+  return (
+    <Typography
+      variant="overline"
+      color="text.secondary"
+      sx={{ display: "block", px: 1, pt: 1.5, pb: 0.25, lineHeight: 1.6 }}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+function WorktreeRow({
+  row,
+  currentSessionId,
+  onOpenSession,
+}: {
+  row: RepositoryWorktreeRow;
+  currentSessionId?: string | undefined;
+  onOpenSession?: ((session: SessionMeta) => void) | undefined;
+}): React.JSX.Element {
+  const { worktree } = row;
+  // The session being read is the drawer itself; list only its neighbours.
+  const sessions = row.sessions.filter((session) =>
+    session.id !== currentSessionId
+  );
+  return (
+    <Box
+      data-repository-worktree={worktree.current ? "current" : "other"}
+      sx={{ py: 1, px: 1, borderBottom: 1, borderColor: "divider" }}
+    >
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <CommitOutlined
+          fontSize="small"
+          color={worktree.current ? "primary" : "disabled"}
+        />
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography
+            variant="body2"
+            fontWeight={worktree.current ? 700 : 500}
+            noWrap
+          >
+            {worktreeTitle(worktree)}
+          </Typography>
+          <HintTooltip title={worktree.path}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ display: "block" }}
+            >
+              {worktree.head ? `${shortOid(worktree.head)} · ` : ""}
+              {row.location}
+            </Typography>
+          </HintTooltip>
+        </Box>
+      </Stack>
+      {sessions.map((session) => (
+        <ListItemButton
+          key={session.id}
+          disabled={!onOpenSession}
+          onClick={() => onOpenSession?.(session)}
+          sx={{
+            minHeight: 44,
+            mt: 0.5,
+            ml: 3.5,
+            px: 1,
+            py: 0.25,
+            borderRadius: 1.5,
+            gap: 1,
+            "&.Mui-disabled": { opacity: 1 },
+          }}
+        >
+          <Box
+            aria-label={`${session.status} session`}
+            sx={{
+              width: 8,
+              height: 8,
+              flex: "0 0 auto",
+              borderRadius: "50%",
+              bgcolor: sessionStatusColor(session.status),
+            }}
+          />
+          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
+            {session.title || "Untitled session"}
+          </Typography>
+        </ListItemButton>
+      ))}
+      {(worktree.locked || worktree.prunable) && (
+        <Alert
+          severity={worktree.prunable ? "warning" : "info"}
+          sx={{ mt: 1 }}
+        >
+          {worktree.prunable ??
+            `Locked${worktree.locked ? `: ${worktree.locked}` : ""}`}
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 export function ReviewRepository({
   sessionId,
   machineLabel,
@@ -181,6 +307,9 @@ export function ReviewRepository({
   onChanges,
   onClose,
   refreshToken,
+  sessions,
+  machineId,
+  onOpenSession,
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
@@ -194,8 +323,14 @@ export function ReviewRepository({
   onChanges: (entries: GitReviewEntry[]) => void;
   onClose: () => void;
   refreshToken?: number;
+  /** Visible sessions, used to say which worktree belongs to which session. */
+  sessions?: readonly SessionMeta[];
+  /** Machine that owns this repository; absent means the local one. */
+  machineId?: string | undefined;
+  onOpenSession?: (session: SessionMeta) => void;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
+  const [otherOpen, setOtherOpen] = useState(false);
   const [repository, setRepository] = useState<GitRepositorySnapshot>();
   const [commits, setCommits] = useState<GitCommitSummary[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -213,6 +348,20 @@ export function ReviewRepository({
   const graph = useMemo(
     () => buildGitGraph(commits),
     [commits],
+  );
+  const worktreeGroups = useMemo(
+    () =>
+      groupRepositoryWorktrees(
+        repository?.worktrees ?? [],
+        sessions ?? [],
+        machineId,
+      ),
+    [machineId, repository?.worktrees, sessions],
+  );
+  const target = repository?.target;
+  const targetFacts = useMemo(
+    () => target ? changeTargetFacts(target) : [],
+    [target],
   );
   const graphWidth = useMemo(() => {
     const lanes = graph.reduce(
@@ -368,6 +517,52 @@ export function ReviewRepository({
                 {projectPath}
               </Typography>
             </HintTooltip>
+          )}
+          {target && (
+            <Stack
+              data-repository-change-target
+              direction="row"
+              alignItems="center"
+              flexWrap="wrap"
+              sx={{ gap: 0.5, pt: 0.5 }}
+            >
+              <Typography
+                variant="body2"
+                fontWeight={700}
+                noWrap
+                sx={{ minWidth: 0, maxWidth: 1, mr: 0.25 }}
+              >
+                {target.branch ??
+                  (target.head ? `Detached ${shortOid(target.head)}` : "No HEAD")}
+              </Typography>
+              {targetFacts.map((fact) => (
+                <Chip
+                  key={fact.key}
+                  size="small"
+                  variant="outlined"
+                  label={fact.label}
+                  color={fact.tone === "attention" ? "warning" : "default"}
+                  {...(fact.key === "changes" ||
+                      (fact.comparison && fact.comparison !== comparison)
+                    ? {
+                      onClick: (): void => {
+                        if (fact.comparison) {
+                          onComparisonChange(fact.comparison);
+                        } else if (comparison) onComparisonChange(null);
+                        setSection("changes");
+                      },
+                    }
+                    : {})}
+                  sx={{
+                    height: 22,
+                    borderRadius: "11px",
+                    fontSize: "0.6875rem",
+                    fontWeight: 600,
+                    "& .MuiChip-label": { px: 0.9 },
+                  }}
+                />
+              ))}
+            </Stack>
           )}
         </Stack>
         <SegmentedTabs
@@ -535,62 +730,51 @@ export function ReviewRepository({
               }}
             >
               <List disablePadding>
-                {(repository?.worktrees ?? []).map((worktree) => (
-                  <Box
-                    key={worktree.path}
-                    sx={{
-                      py: 1.5,
-                      px: 1,
-                      borderBottom: 1,
-                      borderColor: "divider",
-                    }}
-                  >
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                      <CommitOutlined
-                        color={worktree.current ? "primary" : "disabled"}
+                {worktreeGroups.current && (
+                  <>
+                    <WorktreeGroupLabel>This worktree</WorktreeGroupLabel>
+                    <WorktreeRow
+                      row={worktreeGroups.current}
+                      currentSessionId={sessionId}
+                      onOpenSession={onOpenSession}
+                    />
+                  </>
+                )}
+                {worktreeGroups.sessions.length > 0 && (
+                  <>
+                    <WorktreeGroupLabel>Other sessions</WorktreeGroupLabel>
+                    {worktreeGroups.sessions.map((row) => (
+                      <WorktreeRow
+                        key={row.worktree.path}
+                        row={row}
+                        onOpenSession={onOpenSession}
                       />
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography
-                          variant="body2"
-                          fontWeight={worktree.current ? 700 : 500}
-                          noWrap
-                        >
-                          {worktree.branch ??
-                            (worktree.detached ? "Detached HEAD" : "Worktree")}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block", overflowWrap: "anywhere" }}
-                        >
-                          {worktree.path}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {worktree.head ? shortOid(worktree.head) : "No HEAD"}
-                        </Typography>
-                      </Box>
-                      {worktree.current && (
-                        <Chip
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                          label="Current"
-                        />
-                      )}
-                    </Stack>
-                    {(worktree.locked || worktree.prunable) && (
-                      <Alert
-                        severity={worktree.prunable ? "warning" : "info"}
-                        sx={{ mt: 1 }}
+                    ))}
+                  </>
+                )}
+                {worktreeGroups.other.length > 0 && (
+                  <>
+                    <ListItemButton
+                      aria-expanded={otherOpen}
+                      onClick={() => setOtherOpen((open) => !open)}
+                      sx={{ minHeight: 44, mt: 1, px: 1, borderRadius: 1.5 }}
+                    >
+                      <Typography
+                        variant="overline"
+                        color="text.secondary"
+                        sx={{ flex: 1, lineHeight: 1.6 }}
                       >
-                        {worktree.prunable ??
-                          `Locked${
-                            worktree.locked ? `: ${worktree.locked}` : ""
-                          }`}
-                      </Alert>
-                    )}
-                  </Box>
-                ))}
+                        No session · {worktreeGroups.other.length}
+                      </Typography>
+                      {otherOpen
+                        ? <ExpandLess fontSize="small" color="disabled" />
+                        : <ExpandMore fontSize="small" color="disabled" />}
+                    </ListItemButton>
+                    {otherOpen && worktreeGroups.other.map((row) => (
+                      <WorktreeRow key={row.worktree.path} row={row} />
+                    ))}
+                  </>
+                )}
               </List>
             </Box>
           )}

@@ -16989,6 +16989,8 @@ struct CodeRepositoryResponse {
     commits: Vec<crate::code_review::GitCommitSummary>,
     history_truncated: bool,
     worktrees: Vec<crate::code_review::GitWorktreeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<crate::code_review::GitChangeTarget>,
 }
 
 #[derive(Debug, Serialize)]
@@ -17886,6 +17888,7 @@ async fn api_code_repository(
             commits: result.commits,
             history_truncated: result.history_truncated,
             worktrees: result.worktrees,
+            target: result.target,
         })
         .into_response()
     })

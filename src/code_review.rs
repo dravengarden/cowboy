@@ -179,6 +179,35 @@ pub struct GitRepositorySnapshot {
     pub commits: Vec<GitCommitSummary>,
     pub history_truncated: bool,
     pub worktrees: Vec<GitWorktreeSummary>,
+    /// What this worktree is changing. Only on the first history page, and
+    /// absent from adapters that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<GitChangeTarget>,
+}
+
+/// The change a worktree carries, derived from Git alone: its branch, where
+/// that branch is published, and the branch it would merge into.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitChangeTarget {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub change_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<GitTrackedReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<GitTrackedReference>,
+}
+
+/// A reference `HEAD` is measured against, in commits reachable from only one
+/// side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTrackedReference {
+    pub reference: String,
+    pub label: String,
+    pub ahead: u32,
+    pub behind: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -481,6 +510,69 @@ impl LocalCodeProvider {
         (project, worktree)
     }
 
+    fn tracked_reference(&self, reference: String, label: String) -> Option<GitTrackedReference> {
+        let range = format!("{reference}...HEAD");
+        let counts = git_output(
+            &self.root,
+            &["rev-list", "--left-right", "--count", &range, "--"],
+            128,
+        )
+        .ok()?;
+        let counts = String::from_utf8(counts).ok()?;
+        let mut counts = counts.split_whitespace().map(str::parse::<u32>);
+        let behind = counts.next()?.ok()?;
+        let ahead = counts.next()?.ok()?;
+        Some(GitTrackedReference {
+            reference,
+            label,
+            ahead,
+            behind,
+        })
+    }
+
+    fn change_target(&self) -> GitChangeTarget {
+        let line = |args: &[&str]| {
+            git_output(&self.root, args, 4096)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        };
+        let upstream = line(&["rev-parse", "--symbolic-full-name", "@{upstream}"])
+            .filter(|reference| reference.starts_with("refs/"))
+            .and_then(|reference| {
+                let label = reference
+                    .strip_prefix("refs/remotes/")
+                    .or_else(|| reference.strip_prefix("refs/heads/"))
+                    .unwrap_or(&reference)
+                    .to_owned();
+                self.tracked_reference(reference, label)
+            });
+        let base = self
+            .comparisons()
+            .ok()
+            .and_then(|(comparisons, default)| {
+                let default = default?;
+                comparisons
+                    .into_iter()
+                    .find(|item| item.reference == default)
+            })
+            .and_then(|item| self.tracked_reference(item.reference, item.label));
+        let change_count = git_output(
+            &self.root,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            4 * 1024 * 1024,
+        )
+        .map_or(0, |status| Self::status_change_count(&status));
+        GitChangeTarget {
+            branch: self.branch(),
+            head: line(&["rev-parse", "HEAD"]),
+            change_count,
+            upstream,
+            base,
+        }
+    }
+
     fn worktree_revision(head: Option<&str>, status: &[u8]) -> String {
         let mut digest = sha2::Sha256::new();
         digest.update(LOCAL_PROVIDER_REVISION);
@@ -567,6 +659,7 @@ impl LocalCodeProvider {
             commits,
             history_truncated,
             worktrees: parse_git_worktrees(&worktree_bytes, &current),
+            target: after.is_none().then(|| self.change_target()),
         })
     }
 }
@@ -1396,8 +1489,8 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChangeStatus, CodeProvider as _, DiffScope, LocalCodeProvider, RawFileDocument,
-        preview_media_type,
+        ChangeStatus, CodeProvider as _, DiffScope, GitRepositorySnapshot, GitTrackedReference,
+        LocalCodeProvider, RawFileDocument, preview_media_type,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1519,6 +1612,60 @@ mod tests {
         assert!(diff.text.contains("+fn committed() {}"));
         assert!(diff.text.contains("+fn dirty() {}"));
         assert!(provider.changes(Some("--all")).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repository_reports_the_change_target_of_its_worktree() {
+        let dir = scratch("change-target");
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["branch", "-M", "main"]);
+        git(&["checkout", "-qb", "feature"]);
+        git(&["branch", "-q", "--set-upstream-to=main"]);
+        fs::write(dir.join("tracked.rs"), "fn committed() {}\n").unwrap();
+        git(&["commit", "-qam", "branch work"]);
+        fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+
+        let provider = LocalCodeProvider::new(&dir);
+        let repository = provider.repository(None).unwrap();
+        let target = repository.target.clone().unwrap();
+        assert_eq!(target.branch.as_deref(), Some("feature"));
+        assert_eq!(target.head.as_deref(), Some(&*repository.commits[0].oid));
+        assert_eq!(target.change_count, 1);
+        let expected = GitTrackedReference {
+            reference: "refs/heads/main".to_owned(),
+            label: "main".to_owned(),
+            ahead: 1,
+            behind: 0,
+        };
+        assert_eq!(target.base, Some(expected.clone()));
+        assert_eq!(target.upstream, Some(expected));
+
+        // Later history pages do not repeat it, and an adapter that predates
+        // the field still decodes.
+        let later = provider
+            .repository(Some(&repository.commits[0].oid))
+            .unwrap();
+        assert_eq!(later.target, None);
+        let mut legacy = serde_json::to_value(&repository).unwrap();
+        legacy.as_object_mut().unwrap().remove("target");
+        let legacy: GitRepositorySnapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.target, None);
+
+        git(&["checkout", "-q", "--detach"]);
+        let detached = provider.repository(None).unwrap().target.unwrap();
+        assert_eq!(detached.branch, None);
+        assert_eq!(detached.upstream, None);
+        assert_eq!(detached.base.unwrap().ahead, 1);
         fs::remove_dir_all(dir).unwrap();
     }
 

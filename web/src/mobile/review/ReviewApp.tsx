@@ -3102,6 +3102,9 @@ export function ReviewApp({
             onChanges={setGitQueue}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
+            sessions={sessions}
+            machineId={currentSession?.machine_id}
+            onOpenSession={switchSession}
           />
         )}
     >

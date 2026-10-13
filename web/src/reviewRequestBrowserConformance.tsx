@@ -9,6 +9,7 @@ import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewChanges } from "./mobile/review/ReviewChanges.tsx";
 import { ReviewRepository } from "./mobile/review/ReviewRepository.tsx";
 import type { GitReviewEntry } from "./mobile/review/gitReviewModel.ts";
+import type { SessionMeta } from "./protocol.ts";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -43,6 +44,7 @@ const changes = (name: string, comparison: string) => ({
     unstaged: true,
   }],
 });
+const worktreeFlags = { bare: false, detached: false, current: false };
 const history = (subject: string, truncated: boolean) => ({
   apiVersion: 1,
   commits: [{
@@ -54,8 +56,41 @@ const history = (subject: string, truncated: boolean) => ({
     decorations: [],
   }],
   historyTruncated: truncated,
-  worktrees: [],
+  worktrees: [
+    { path: "/src/app", branch: "main", ...worktreeFlags },
+    {
+      path: "/state/worktrees/mine",
+      branch: "task/mine",
+      head: "0123456789abcdef",
+      ...worktreeFlags,
+      current: true,
+    },
+    { path: "/state/worktrees/busy", branch: "task/busy", ...worktreeFlags },
+  ],
+  target: {
+    branch: "task/mine",
+    head: "0123456789abcdef",
+    changeCount: 2,
+    base: {
+      reference: "refs/remotes/origin/main",
+      label: "origin/main",
+      ahead: 3,
+      behind: 1,
+    },
+  },
 });
+const fixtureSession = (
+  id: string,
+  worktree: string,
+  status: SessionMeta["status"],
+) => ({
+  id,
+  cwd: `/state/worktrees/${worktree}`,
+  provider: "codex",
+  title: `${id} session`,
+  status,
+  machine_id: "hawk",
+} satisfies SessionMeta);
 
 export async function runReviewRequestBrowserConformance(): Promise<string[]> {
   const tests: string[] = [];
@@ -107,6 +142,13 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
   const onChanges = (queue: GitReviewEntry[]) => {
     queues.push(queue);
   };
+  const comparisons: Array<string | null> = [];
+  const opened: string[] = [];
+  const fixtureSessions = [
+    fixtureSession("fixture", "mine", "running"),
+    fixtureSession("peer", "mine", "running"),
+    fixtureSession("busy", "busy", "busy"),
+  ];
   const render = (comparison: string, repository = false, refreshToken = 0) =>
     flushSync(() =>
       root.render(
@@ -122,10 +164,17 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
                     reviewed={new Set()}
                     onRevision={noop}
                     comparison={null}
-                    onComparisonChange={noop}
+                    onComparisonChange={(next) => {
+                      comparisons.push(next);
+                    }}
                     onChanges={noop}
                     onClose={noop}
                     refreshToken={refreshToken}
+                    sessions={fixtureSessions}
+                    machineId="hawk"
+                    onOpenSession={(session) => {
+                      opened.push(session.id);
+                    }}
                   />
                 )
                 : (
@@ -153,6 +202,13 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
       );
     check(button && !button.disabled, `missing enabled ${label}`);
     button.click();
+  };
+  const press = (label: string) => {
+    const control = [
+      ...container.querySelectorAll<HTMLElement>('[role="button"]'),
+    ].find((node) => node.textContent?.trim() === label);
+    check(control, `missing ${label}`);
+    flushSync(() => control.click());
   };
   try {
     render("refs/heads/main");
@@ -274,6 +330,43 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
     tests.push(
       "real light and dark themes retain selected tab fill after touch and clear the old tab",
+    );
+    const strip = container.querySelector<HTMLElement>(
+      "[data-repository-change-target]",
+    );
+    check(
+      strip?.textContent ===
+        "task/mine2 uncommittedNot pushed↑3 ↓1 origin/main",
+      `change target strip reads ${strip?.textContent}`,
+    );
+    click("Worktrees");
+    await settle();
+    const rows = () =>
+      [...container.querySelectorAll<HTMLElement>("[data-repository-worktree]")]
+        .map((row) => `${row.dataset.repositoryWorktree}:${row.textContent}`);
+    check(
+      JSON.stringify(rows()) === JSON.stringify([
+        "current:task/mine01234567 · …/worktrees/minepeer session",
+        "other:task/busy…/worktrees/busybusy session",
+      ]),
+      `worktrees are filed as ${JSON.stringify(rows())}`,
+    );
+    check(
+      !text().includes("/src/app") && text().includes("No session · 1"),
+      "an unowned worktree was not collapsed",
+    );
+    press("busy session");
+    check(opened.join() === "busy", "a session row did not open its session");
+    press("No session · 1");
+    await settle();
+    check(rows().length === 3 && text().includes("/src/app"), "unowned rows");
+    press("↑3 ↓1 origin/main");
+    check(
+      comparisons.join() === "refs/remotes/origin/main",
+      `the base fact requested ${comparisons.join()}`,
+    );
+    tests.push(
+      "the repository names its change target and files worktrees by session",
     );
     render("refs/heads/next");
     historyTruncated = true;
