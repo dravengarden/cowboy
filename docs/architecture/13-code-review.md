@@ -147,6 +147,11 @@ worktree", computed in the browser from the session list the principal already
 sees, so it adds no server-side visibility rule. Paths are shortened to their
 last two segments; the full path stays available as a hint.
 
+When an installed workspace extension offers pull requests, the same drawer
+shows the pull request of the target branch and of each worktree, and lists
+open pull requests that are not checked out. See
+[remote PR review](../remote-pr-review.md); core Git never depends on it.
+
 Diff pages carry a content revision and opaque cursor. The browser appends only
 pages with the same revision, so a worktree mutation can never splice two
 different diffs together. Initial generation is deduplicated across foreground

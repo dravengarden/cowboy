@@ -127,6 +127,15 @@ pub(crate) struct PullSummary {
     pub state: String,
     pub draft: bool,
     pub updated_at: String,
+    /// Only the `branches` relation reports where a pull request comes from
+    /// and merges into; every other relation omits all three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_branch: Option<String>,
+    /// `owner/repository` of the head branch; absent once a fork is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 /// Durable selection only: never a credential, installation grant or cached body.

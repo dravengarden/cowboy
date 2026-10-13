@@ -79,6 +79,54 @@ const history = (subject: string, truncated: boolean) => ({
     },
   },
 });
+const fixtureRemote = {
+  name: "origin",
+  host: "example.test",
+  owner: "owner",
+  repository: "app",
+};
+const fixtureInventory = {
+  type: "inventory",
+  extensions: [{
+    identity: {
+      pluginId: "forge",
+      pluginVersion: "1.0.0",
+      generationDigest: "sha256-fixture",
+    },
+    label: "Forge",
+    description: "Fixture",
+    available: true,
+    views: [{
+      id: "pulls",
+      label: "Pull requests",
+      filters: [],
+      review: "pull_request",
+      discovery: true,
+    }],
+  }],
+  remotes: [fixtureRemote],
+};
+const fixturePull = (number: string, headBranch: string, draft = false) => ({
+  number,
+  title: `Change ${number}`,
+  repository: "owner/app",
+  url: `https://example.test/owner/app/pull/${number}`,
+  author: "alice",
+  state: "open",
+  draft,
+  updatedAt: "2026-10-01T00:00:00Z",
+  headBranch,
+  headRepository: "owner/app",
+  baseBranch: "main",
+});
+const fixturePulls = {
+  type: "pulls",
+  account: "alice",
+  total: 2,
+  incomplete: false,
+  nextPage: null,
+  items: [fixturePull("12", "task/mine"), fixturePull("7", "elsewhere", true)],
+};
 const fixtureSession = (
   id: string,
   worktree: string,
@@ -106,6 +154,16 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
   let historyTruncated = true;
   globalThis.fetch = (input, init) => {
     const url = new URL(String(input), location.href);
+    if (url.pathname.endsWith("/extensions")) {
+      return Promise.resolve(response(fixtureInventory));
+    }
+    if (url.pathname.endsWith("/extensions/resources")) {
+      return Promise.resolve(
+        url.searchParams.get("relation") === "branches"
+          ? response(fixturePulls)
+          : new Response("gone", { status: 404 }),
+      );
+    }
     if (
       url.pathname.endsWith("/repository") && !url.searchParams.has("after")
     ) {
@@ -144,6 +202,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
   };
   const comparisons: Array<string | null> = [];
   const opened: string[] = [];
+  const pulled: string[] = [];
   const fixtureSessions = [
     fixtureSession("fixture", "mine", "running"),
     fixtureSession("peer", "mine", "running"),
@@ -174,6 +233,9 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
                     machineId="hawk"
                     onOpenSession={(session) => {
                       opened.push(session.id);
+                    }}
+                    onOpenPull={(choice, pull) => {
+                      pulled.push(`${choice.remote.name}#${pull.number}`);
                     }}
                   />
                 )
@@ -334,9 +396,13 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     const strip = container.querySelector<HTMLElement>(
       "[data-repository-change-target]",
     );
+    await until(
+      () => !!strip?.querySelector("[data-repository-pull]"),
+      "the branch's pull request",
+    );
     check(
       strip?.textContent ===
-        "task/mine2 uncommittedNot pushed↑3 ↓1 origin/main",
+        "task/mine2 uncommittedNot pushed↑3 ↓1 origin/main#12",
       `change target strip reads ${strip?.textContent}`,
     );
     click("Worktrees");
@@ -346,7 +412,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
         .map((row) => `${row.dataset.repositoryWorktree}:${row.textContent}`);
     check(
       JSON.stringify(rows()) === JSON.stringify([
-        "current:task/mine01234567 · …/worktrees/minepeer session",
+        "current:task/mine01234567 · …/worktrees/mine#12peer session",
         "other:task/busy…/worktrees/busybusy session",
       ]),
       `worktrees are filed as ${JSON.stringify(rows())}`,
@@ -360,13 +426,31 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     press("No session · 1");
     await settle();
     check(rows().length === 3 && text().includes("/src/app"), "unowned rows");
+    const remotePulls = [
+      ...container.querySelectorAll<HTMLElement>(
+        "[data-repository-remote-pull]",
+      ),
+    ];
+    check(
+      remotePulls.map((row) => row.textContent).join("|") ===
+        "Change 7alice · elsewhere → mainDraft #7",
+      `pull requests without a worktree read ${
+        remotePulls.map((row) => row.textContent).join("|")
+      }`,
+    );
+    flushSync(() => remotePulls[0]!.click());
+    press("#12");
+    check(
+      pulled.join() === "origin#7,origin#12",
+      `pull requests opened as ${pulled.join()}`,
+    );
     press("↑3 ↓1 origin/main");
     check(
       comparisons.join() === "refs/remotes/origin/main",
       `the base fact requested ${comparisons.join()}`,
     );
     tests.push(
-      "the repository names its change target and files worktrees by session",
+      "the repository names its change target, its pull requests and files worktrees by session",
     );
     render("refs/heads/next");
     historyTruncated = true;

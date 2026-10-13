@@ -95,7 +95,10 @@ import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
 import { ReviewCommit } from "./ReviewCommit";
-import { RemoteReviewApp } from "./RemoteReviewApp";
+import { bindPullRequest, RemoteReviewApp } from "./RemoteReviewApp";
+import { forgetRepositoryPulls } from "./repositoryPulls";
+import type { Choice } from "./remoteReviewSources";
+import type { PullSummary } from "../../extensions/api";
 import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
@@ -2152,6 +2155,7 @@ export function ReviewApp({
   const sessionListRef = useRef<HTMLDivElement>(null);
   const projectContextSessionRef = useRef(activeSessionId);
   const observedSessionRef = useRef<string | undefined>(undefined);
+  const pullBindRef = useRef<AbortController | undefined>(undefined);
   const suppressedHistoryTargetRef = useRef<string | undefined>(undefined);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
@@ -3043,6 +3047,28 @@ export function ReviewApp({
     }
     returnToPreviousSession();
   };
+  const openRepositoryPull = (choice: Choice, pull: PullSummary): void => {
+    const sessionId = workspace?.sessionId;
+    if (!sessionId) return;
+    navigationHaptic();
+    pullBindRef.current?.abort();
+    const controller = new AbortController();
+    pullBindRef.current = controller;
+    void bindPullRequest(sessionId, choice, pull.number, controller.signal)
+      .then((binding) => {
+        if (controller.signal.aborted) return;
+        mutateMobileReview(sessionId, "setRemoteReview", { binding });
+        mutateMobileReview(sessionId, "selectRemoteReview", { selected: true });
+        setCloseRequest((value) => value + 1);
+      }).catch(() => {
+        if (controller.signal.aborted) return;
+        // The listing was stale or access changed. Read it again next time,
+        // and land on the Remote PR surface, which explains the connection.
+        forgetRepositoryPulls(sessionId);
+        mutateMobileReview(sessionId, "selectRemoteReview", { selected: true });
+        setCloseRequest((value) => value + 1);
+      });
+  };
   const openContextSwitcher = (): void => {
     navigationHaptic();
     setContextProjectKey(undefined);
@@ -3105,6 +3131,10 @@ export function ReviewApp({
             sessions={sessions}
             machineId={currentSession?.machine_id}
             onOpenSession={switchSession}
+            {...(workspace?.sessionId && !projectCodeContext &&
+                typeof syncedReview.remote_selected === "boolean"
+              ? { onOpenPull: openRepositoryPull }
+              : {})}
           />
         )}
     >

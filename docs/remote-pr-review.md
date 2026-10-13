@@ -84,3 +84,31 @@ connection or session changes. No PR list or body is persisted in browser storag
 Filters and link entry expand immediately above the safe-area-aware bottom bar;
 PR/file back actions, local Review, refresh and GitHub link are also at the bottom.
 No animated pill, filter or shadow is added to the swipe surface.
+
+
+## Pull requests of the worktree's branches
+
+The discovery port has one more closed relation, `branches`: the workspace
+repository's open pull requests, newest first, each with its head branch, head
+repository and base branch. It is a single fixed listing
+(`repos/{owner}/{repo}/pulls?state=open`, ten per page, at most ten pages) and
+accepts nothing but `state=open` in the current repository; the account is
+observed before and after like every other discovery read. Complete pull-request
+objects are large, hence the smaller page inside the same 1 MiB output bound.
+
+Only this relation reports the three branch fields, and they are omitted from
+every other response, so a Controller that predates them never receives an
+unknown member. A Machine that predates the relation refuses it as an invalid
+request. Either mismatch simply means no pull requests are shown.
+
+The repository drawer reads at most three pages through the `origin` remote's
+pull-request view (or the only one available) and keeps the result in memory
+for two minutes per code context; nothing is persisted. A pull request is
+attributed to a local branch only when its head repository is one of the
+worktree's own remotes, so a fork that reuses a branch name is not mistaken for
+it. The change target and each worktree row then show their pull request, and
+open pull requests no worktree has checked out are listed below the worktrees.
+Opening one resolves the ordinary Remote PR binding (same identity checks as
+choosing it in the picker) and switches Review to it; when that read fails the
+user lands on the Remote PR surface, which explains the connection. This is
+still read-only and performs no fetch or checkout.

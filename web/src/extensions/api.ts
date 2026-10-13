@@ -47,6 +47,11 @@ export interface PullSummary {
   state: string;
   draft: boolean;
   updatedAt: string;
+  /** Reported only by the `branches` relation. */
+  headBranch?: string;
+  /** `owner/repository` of the head branch; absent once a fork is deleted. */
+  headRepository?: string;
+  baseBranch?: string;
 }
 export interface PullPage {
   type: "pulls";
@@ -167,6 +172,15 @@ export function decodeExtensionResponse(input: unknown): ExtensionResponse {
             state: text(row.state, 16),
             draft: row.draft,
             updatedAt: text(row.updatedAt, 64),
+            ...(row.headBranch == null
+              ? {}
+              : { headBranch: text(row.headBranch, 255) }),
+            ...(row.headRepository == null
+              ? {}
+              : { headRepository: text(row.headRepository, 201) }),
+            ...(row.baseBranch == null
+              ? {}
+              : { baseBranch: text(row.baseBranch, 255) }),
           };
         }),
       };

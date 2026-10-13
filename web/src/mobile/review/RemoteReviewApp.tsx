@@ -87,6 +87,37 @@ async function read(
   return response.review;
 }
 
+/**
+ * Resolve a pull request of the choice's repository into a durable binding.
+ * The read both proves access and supplies the immutable repository identity.
+ */
+export async function bindPullRequest(
+  context: string,
+  choice: Choice,
+  number: string,
+  signal: AbortSignal,
+): Promise<RemoteReviewBinding> {
+  const review = await read(
+    context,
+    choice,
+    number,
+    1,
+    signal,
+    undefined,
+    undefined,
+    `${choice.remote.owner}/${choice.remote.repository}`,
+  );
+  return {
+    pluginId: choice.extension.identity.pluginId,
+    view: choice.view,
+    host: choice.remote.host,
+    owner: choice.remote.owner,
+    repository: choice.remote.repository,
+    repositoryId: review.repositoryId,
+    number,
+  };
+}
+
 function PullRequest(
   { context, choice, binding, initial, active, onLocal, onChoose }: {
     context: string;

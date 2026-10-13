@@ -2,9 +2,14 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "../../protocol";
 import type { GitWorktreeSummary } from "./codeApi";
+import type { PullSummary } from "../../extensions/api";
 import {
   changeTargetFacts,
   groupRepositoryWorktrees,
+  pullLabel,
+  pullsByBranch,
+  pullsWithoutWorktree,
+  remoteRepositories,
   worktreeLocation,
 } from "./repositoryTargetModel";
 
@@ -110,4 +115,53 @@ test("change target facts name what is unpublished and where it merges", () => {
     }),
     [{ key: "base", label: "Level with origin/main", tone: "default" }],
   );
+});
+
+function pull(
+  number: string,
+  headBranch: string,
+  headRepository: string | null = "Owner/App",
+  draft = false,
+): PullSummary {
+  return {
+    number,
+    title: `Change ${number}`,
+    repository: "owner/app",
+    url: `https://example.test/owner/app/pull/${number}`,
+    author: "alice",
+    state: "open",
+    draft,
+    updatedAt: "2026-10-01T00:00:00Z",
+    headBranch,
+    ...(headRepository ? { headRepository } : {}),
+    baseBranch: "main",
+  };
+}
+
+test("a pull request belongs to a branch only from this repository's remotes", () => {
+  const repositories = remoteRepositories([
+    { name: "origin", host: "example.test", owner: "owner", repository: "app" },
+  ]);
+  const pulls = [
+    pull("9", "feature"),
+    pull("8", "feature"),
+    pull("7", "main", "stranger/app"),
+    pull("6", "orphaned", null),
+    pull("5", "remote-only", "owner/app", true),
+  ];
+  const byBranch = pullsByBranch(pulls, repositories);
+  // Newest first: a reopened branch keeps its latest pull request.
+  assertEquals([...byBranch].map(([branch, item]) => [branch, item.number]), [
+    ["feature", "9"],
+    ["remote-only", "5"],
+  ]);
+  assertEquals(
+    pullsWithoutWorktree(pulls, byBranch, [
+      worktree("/state/worktrees/feature", "feature"),
+      worktree("/src/app", "main"),
+    ]).map((item) => item.number),
+    ["8", "7", "6", "5"],
+  );
+  assertEquals(pullLabel(pulls[4]!), "Draft #5");
+  assertEquals(pullLabel(pulls[0]!), "#9");
 });

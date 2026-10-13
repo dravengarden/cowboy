@@ -1,3 +1,4 @@
+import type { PullSummary, RepositoryRemote } from "../../extensions/api";
 import type { SessionMeta } from "../../protocol";
 import type {
   GitChangeTarget,
@@ -139,4 +140,55 @@ export function changeTargetFacts(
     });
   }
   return facts;
+}
+
+/** `owner/repository` of every remote, the only places a local branch lives. */
+export function remoteRepositories(
+  remotes: readonly RepositoryRemote[],
+): ReadonlySet<string> {
+  return new Set(
+    remotes.map((remote) =>
+      `${remote.owner}/${remote.repository}`.toLowerCase()
+    ),
+  );
+}
+
+/**
+ * Open pull requests keyed by head branch. A pull request counts for a local
+ * branch only when its head lives in one of this repository's remotes; a
+ * stranger's fork that happens to reuse the branch name does not.
+ */
+export function pullsByBranch(
+  pulls: readonly PullSummary[],
+  repositories: ReadonlySet<string>,
+): ReadonlyMap<string, PullSummary> {
+  const byBranch = new Map<string, PullSummary>();
+  for (const pull of pulls) {
+    if (
+      !pull.headBranch || !pull.headRepository ||
+      !repositories.has(pull.headRepository.toLowerCase())
+    ) continue;
+    // The listing is newest first; keep the most recently updated one.
+    if (!byBranch.has(pull.headBranch)) byBranch.set(pull.headBranch, pull);
+  }
+  return byBranch;
+}
+
+/** Pull requests no local worktree has checked out. */
+export function pullsWithoutWorktree(
+  pulls: readonly PullSummary[],
+  byBranch: ReadonlyMap<string, PullSummary>,
+  worktrees: readonly GitWorktreeSummary[],
+): readonly PullSummary[] {
+  const local = new Set(
+    worktrees.flatMap((worktree) => {
+      const pull = worktree.branch ? byBranch.get(worktree.branch) : undefined;
+      return pull ? [pull.url] : [];
+    }),
+  );
+  return pulls.filter((pull) => !local.has(pull.url));
+}
+
+export function pullLabel(pull: PullSummary): string {
+  return `${pull.draft ? "Draft " : ""}#${pull.number}`;
 }

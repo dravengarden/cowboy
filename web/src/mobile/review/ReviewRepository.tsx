@@ -43,12 +43,19 @@ import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { HintTooltip } from "../../HintTooltip";
 import type { SessionMeta } from "../../protocol";
+import type { PullSummary } from "../../extensions/api";
+import { loadRepositoryPulls, type RepositoryPulls } from "./repositoryPulls";
 import {
   changeTargetFacts,
   groupRepositoryWorktrees,
+  pullLabel,
+  pullsByBranch,
+  pullsWithoutWorktree,
+  remoteRepositories,
   type RepositoryWorktreeRow,
   worktreeTitle,
 } from "./repositoryTargetModel";
+import type { Choice } from "./remoteReviewSources";
 
 type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -205,14 +212,46 @@ function WorktreeGroupLabel(
   );
 }
 
+const factChipSx = {
+  height: 22,
+  borderRadius: "11px",
+  fontSize: "0.6875rem",
+  fontWeight: 600,
+  "& .MuiChip-label": { px: 0.9 },
+};
+
+function PullChip({
+  pull,
+  onOpen,
+}: {
+  pull: PullSummary;
+  onOpen?: (() => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <Chip
+      data-repository-pull={pull.number}
+      size="small"
+      variant="outlined"
+      color={pull.draft ? "default" : "primary"}
+      label={pullLabel(pull)}
+      {...(onOpen ? { onClick: onOpen } : {})}
+      sx={{ ...factChipSx, flex: "0 0 auto" }}
+    />
+  );
+}
+
 function WorktreeRow({
   row,
   currentSessionId,
   onOpenSession,
+  pull,
+  onOpenPull,
 }: {
   row: RepositoryWorktreeRow;
   currentSessionId?: string | undefined;
   onOpenSession?: ((session: SessionMeta) => void) | undefined;
+  pull?: PullSummary | undefined;
+  onOpenPull?: ((pull: PullSummary) => void) | undefined;
 }): React.JSX.Element {
   const { worktree } = row;
   // The session being read is the drawer itself; list only its neighbours.
@@ -249,6 +288,12 @@ function WorktreeRow({
             </Typography>
           </HintTooltip>
         </Box>
+        {pull && (
+          <PullChip
+            pull={pull}
+            onOpen={onOpenPull ? () => onOpenPull(pull) : undefined}
+          />
+        )}
       </Stack>
       {sessions.map((session) => (
         <ListItemButton
@@ -310,6 +355,7 @@ export function ReviewRepository({
   sessions,
   machineId,
   onOpenSession,
+  onOpenPull,
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
@@ -328,9 +374,21 @@ export function ReviewRepository({
   /** Machine that owns this repository; absent means the local one. */
   machineId?: string | undefined;
   onOpenSession?: (session: SessionMeta) => void;
+  /** Review a pull request of this repository in place of the worktree. */
+  onOpenPull?: (choice: Choice, pull: PullSummary) => void;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
   const [otherOpen, setOtherOpen] = useState(false);
+  const [pulls, setPulls] = useState<RepositoryPulls | null>(null);
+  useEffect(() => {
+    setPulls(null);
+    if (!sessionId) return undefined;
+    const controller = new AbortController();
+    void loadRepositoryPulls(sessionId, controller.signal).then((value) => {
+      if (!controller.signal.aborted) setPulls(value);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [sessionId]);
   const [repository, setRepository] = useState<GitRepositorySnapshot>();
   const [commits, setCommits] = useState<GitCommitSummary[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -358,7 +416,33 @@ export function ReviewRepository({
       ),
     [machineId, repository?.worktrees, sessions],
   );
+  const branchPulls = useMemo(
+    () =>
+      pulls
+        ? pullsByBranch(pulls.pulls, remoteRepositories(pulls.remotes))
+        : new Map<string, PullSummary>(),
+    [pulls],
+  );
+  const remotePulls = useMemo(
+    () =>
+      pulls
+        ? pullsWithoutWorktree(
+          pulls.pulls,
+          branchPulls,
+          repository?.worktrees ?? [],
+        )
+        : [],
+    [branchPulls, pulls, repository?.worktrees],
+  );
+  const openPull = pulls && onOpenPull
+    ? (pull: PullSummary): void => onOpenPull(pulls.choice, pull)
+    : undefined;
+  const pullOf = (row: RepositoryWorktreeRow): PullSummary | undefined =>
+    row.worktree.branch ? branchPulls.get(row.worktree.branch) : undefined;
   const target = repository?.target;
+  const targetPull = target?.branch
+    ? branchPulls.get(target.branch)
+    : undefined;
   const targetFacts = useMemo(
     () => target ? changeTargetFacts(target) : [],
     [target],
@@ -553,15 +637,15 @@ export function ReviewRepository({
                       },
                     }
                     : {})}
-                  sx={{
-                    height: 22,
-                    borderRadius: "11px",
-                    fontSize: "0.6875rem",
-                    fontWeight: 600,
-                    "& .MuiChip-label": { px: 0.9 },
-                  }}
+                  sx={factChipSx}
                 />
               ))}
+              {targetPull && (
+                <PullChip
+                  pull={targetPull}
+                  onOpen={openPull ? () => openPull(targetPull) : undefined}
+                />
+              )}
             </Stack>
           )}
         </Stack>
@@ -737,6 +821,8 @@ export function ReviewRepository({
                       row={worktreeGroups.current}
                       currentSessionId={sessionId}
                       onOpenSession={onOpenSession}
+                      pull={pullOf(worktreeGroups.current)}
+                      onOpenPull={openPull}
                     />
                   </>
                 )}
@@ -748,8 +834,60 @@ export function ReviewRepository({
                         key={row.worktree.path}
                         row={row}
                         onOpenSession={onOpenSession}
+                        pull={pullOf(row)}
+                        onOpenPull={openPull}
                       />
                     ))}
+                  </>
+                )}
+                {remotePulls.length > 0 && (
+                  <>
+                    <WorktreeGroupLabel>
+                      Pull requests · not checked out
+                    </WorktreeGroupLabel>
+                    {remotePulls.map((pull) => (
+                      <ListItemButton
+                        key={pull.url}
+                        data-repository-remote-pull={pull.number}
+                        disabled={!openPull}
+                        onClick={() => openPull?.(pull)}
+                        sx={{
+                          minHeight: 52,
+                          px: 1,
+                          py: 0.75,
+                          gap: 1,
+                          borderBottom: 1,
+                          borderColor: "divider",
+                          "&.Mui-disabled": { opacity: 1 },
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Typography variant="body2" noWrap>
+                            {pull.title}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            noWrap
+                            sx={{ display: "block" }}
+                          >
+                            {pull.author}
+                            {pull.headBranch ? ` · ${pull.headBranch}` : ""}
+                            {pull.baseBranch ? ` → ${pull.baseBranch}` : ""}
+                          </Typography>
+                        </Box>
+                        <PullChip pull={pull} />
+                      </ListItemButton>
+                    ))}
+                    {pulls?.incomplete && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: "block", px: 1, py: 1 }}
+                      >
+                        Showing the most recently updated pull requests
+                      </Typography>
+                    )}
                   </>
                 )}
                 {worktreeGroups.other.length > 0 && (
@@ -771,7 +909,12 @@ export function ReviewRepository({
                         : <ExpandMore fontSize="small" color="disabled" />}
                     </ListItemButton>
                     {otherOpen && worktreeGroups.other.map((row) => (
-                      <WorktreeRow key={row.worktree.path} row={row} />
+                      <WorktreeRow
+                        key={row.worktree.path}
+                        row={row}
+                        pull={pullOf(row)}
+                        onOpenPull={openPull}
+                      />
                     ))}
                   </>
                 )}
