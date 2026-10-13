@@ -69,19 +69,35 @@ import {
   useManagedCalls,
 } from "./managedCalls";
 
-function StateChip({ call }: { call: ManagedCallSummary }): React.JSX.Element {
+function StateChip(
+  { call, desktop = false }: { call: ManagedCallSummary; desktop?: boolean },
+): React.JSX.Element {
   const tone = callTone(call.state);
+  const color = tone === "success"
+    ? "success"
+    : tone === "error"
+    ? "error"
+    : tone === "active"
+    ? "primary"
+    : "default";
+  // Desktop: the same quiet tinted badge as its verdict, with a hairline
+  // spinner while the call is live. An outlined chip reads as a button.
+  if (desktop) {
+    return (
+      <Badge
+        label={callStateLabel(call)}
+        color={color}
+        icon={tone === "active"
+          ? <CircularProgress size={10} thickness={5} color="inherit" />
+          : undefined}
+      />
+    );
+  }
   return (
     <Chip
       size="small"
       variant={tone === "active" ? "outlined" : "filled"}
-      color={tone === "success"
-        ? "success"
-        : tone === "error"
-        ? "error"
-        : tone === "active"
-        ? "primary"
-        : "default"}
+      color={color}
       label={callStateLabel(call)}
       icon={tone === "active"
         ? <CircularProgress size="0.75rem" thickness={5} />
@@ -94,25 +110,30 @@ function StateChip({ call }: { call: ManagedCallSummary }): React.JSX.Element {
 /** Review verdicts are separate from execution success: a completed call can
  * still need attention, and a failed call has no verdict at all. */
 function VerdictChip(
-  { verdict, findings }: {
+  { verdict, findings, desktop = false }: {
     verdict?: string | null;
     findings?: number | undefined;
+    desktop?: boolean;
   },
 ): React.JSX.Element | null {
   if (!verdict && findings === undefined) return null;
   const attention = verdict !== null && verdict !== undefined &&
     verdict !== "approve";
+  const label = [
+    verdict ? verdict.replace(/-/g, " ") : null,
+    findings !== undefined
+      ? `${findings} finding${findings === 1 ? "" : "s"}`
+      : null,
+  ].filter(Boolean).join(" · ");
+  if (desktop) {
+    return <Badge label={label} color={attention ? "warning" : "default"} />;
+  }
   return (
     <Chip
       size="small"
       variant="outlined"
       color={attention ? "warning" : "default"}
-      label={[
-        verdict ? verdict.replace(/-/g, " ") : null,
-        findings !== undefined
-          ? `${findings} finding${findings === 1 ? "" : "s"}`
-          : null,
-      ].filter(Boolean).join(" · ")}
+      label={label}
       sx={{ height: 22, "& .MuiChip-label": { px: 0.75 } }}
     />
   );
@@ -212,10 +233,11 @@ function CallRow({
           alignItems="flex-end"
           sx={{ flexShrink: 0 }}
         >
-          <StateChip call={call} />
+          <StateChip call={call} desktop={desktop} />
           <VerdictChip
             verdict={call.verdict ?? null}
             findings={call.finding_count}
+            desktop={desktop}
           />
         </Stack>
       </Stack>
@@ -276,7 +298,11 @@ function ResultSection(
       <Stack spacing={1}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography variant="overline">Review result</Typography>
-          <VerdictChip verdict={verdict} findings={findings?.length} />
+          <VerdictChip
+            verdict={verdict}
+            findings={findings?.length}
+            desktop={!touch}
+          />
         </Stack>
         {summary && <Typography variant="body2">{summary}</Typography>}
         {(findings ?? []).map((finding, index) => (
@@ -380,7 +406,7 @@ function CallDetailView({
             · read-only {call.purpose}
           </Typography>
         </Box>
-        <StateChip call={call} />
+        <StateChip call={call} desktop={desktop} />
       </Stack>
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         {onOpenChild && (
@@ -519,9 +545,10 @@ function displayTitle(call: ManagedCallSummary): string {
 
 /** A small filled badge in a status color. */
 function Badge(
-  { label, color }: {
+  { label, color, icon }: {
     label: string;
     color: "success" | "error" | "warning" | "primary" | "default";
+    icon?: ReactNode;
   },
 ): React.JSX.Element {
   return (
@@ -537,6 +564,7 @@ function Badge(
           height: 20,
           display: "inline-flex",
           alignItems: "center",
+          gap: 0.5,
           borderRadius: 999,
           fontSize: "0.6875rem",
           fontWeight: 700,
@@ -547,6 +575,7 @@ function Badge(
         };
       }}
     >
+      {icon}
       {label}
     </Box>
   );
@@ -712,7 +741,7 @@ function CallConversation({
           /* A verdict already says the review finished. */
         }
         {(call.state !== "completed" || !call.verdict) && (
-          <StateChip call={call} />
+          <StateChip call={call} desktop />
         )}
         {(call.verdict || call.finding_count !== undefined) && (
           <ButtonBase
@@ -723,6 +752,7 @@ function CallConversation({
             <VerdictChip
               verdict={call.verdict ?? null}
               findings={call.finding_count}
+              desktop
             />
           </ButtonBase>
         )}
