@@ -46,6 +46,18 @@
 	     prompt and auto-reconnects once it's granted. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cowboy connects to its server on your local network (hawk) over Stormbird.</string>
+	<!-- App-Bound Domains: the only way WKWebView exposes Service Workers, which
+	     the Cowboy shell needs so an offline launch opens from the cached app
+	     shell (docs/offline-first-sync.md). Pairs with the window option
+	     limitNavigationsToAppBoundDomains in tauri.conf.json: the WebView may
+	     then navigate only to these registrable domains. localhost serves the
+	     bundled loader and Tauri's IPC; stormbird.xyz covers the Cowboy UI and
+	     Cardea. Provider sign-in opens in the system browser, not in here. -->
+	<key>WKAppBoundDomains</key>
+	<array>
+		<string>localhost</string>
+		<string>stormbird.xyz</string>
+	</array>
 	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

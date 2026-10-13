@@ -216,7 +216,7 @@ native-plugin-conformance:
 native-shell-check:
     dprint check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
     bun run typecheck
-    bun test ./tools/check-native-shell_test.ts ./tools/native-shell-probe_test.ts
+    bun test ./tools/check-native-shell_test.ts ./tools/native-shell-probe_test.ts ./tools/native-shell-loader_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     python3 -m unittest discover -s tools -p 'native_swift_rs_compat_test.py'
     bun tools/check-native-shell.ts
