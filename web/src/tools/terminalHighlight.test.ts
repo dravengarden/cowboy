@@ -35,3 +35,14 @@ test("display segments omit whitespace-only cards between JSON values", () => {
   assertEquals(segments.map((segment) => segment.language), ["json", "json"]);
   assertEquals(segments.some((segment) => segment.text.trim() === ""), false);
 });
+
+test("values nested in a truncated document are not promoted to islands", () => {
+  const text = '{\n  "processes": [\n    {\n      "name": "a"\n    },\n    {\n      "name": "b"\n    },\n    {\n      "name": "c",\n      "log": "/srv/';
+  assertEquals(terminalHighlightSegments(text), [{ text }]);
+});
+
+test("values nested in a balanced non-JSON dump are not promoted to islands", () => {
+  const dump = '{\n  items: [\n    {"id": 1},\n    {"id": 2}\n  ]\n}\n';
+  const segments = terminalHighlightSegments(dump + '{"ok":true}');
+  assertEquals(segments, [{ text: dump }, { text: '{"ok":true}', language: "json" }]);
+});

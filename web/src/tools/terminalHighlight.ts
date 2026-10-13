@@ -25,8 +25,10 @@ function wholeLanguage(text: string): string | undefined {
   return undefined;
 }
 
-/** Find a complete JSON value without interpreting braces inside strings. */
-function jsonEnd(text: string, start: number): number | undefined {
+/** Find a complete JSON value without interpreting braces inside strings.
+ * "open" means the value never closes: everything after `start` is nested in
+ * it, which is different from brackets that simply do not match. */
+function jsonEnd(text: string, start: number): number | "open" | undefined {
   const opener = text[start];
   if (opener !== "{" && opener !== "[") return undefined;
   const stack = [opener];
@@ -48,7 +50,7 @@ function jsonEnd(text: string, start: number): number | undefined {
       if (stack.length === 0) return index + 1;
     }
   }
-  return undefined;
+  return "open";
 }
 
 /**
@@ -70,8 +72,16 @@ export function terminalHighlightSegments(text: string): TerminalHighlightSegmen
     if (start < cursor) continue;
     const end = jsonEnd(text, start);
     if (end === undefined) continue;
+    // A truncated document still owns the values nested in it. Promoting
+    // those to islands would shred one document into cards and stray commas.
+    if (end === "open") break;
     const candidate = text.slice(start, end);
-    if (!parsesJson(candidate)) continue;
+    if (!parsesJson(candidate)) {
+      // Same for a balanced value that is not JSON (a JS object dump): skip
+      // its interior instead of highlighting fragments of it.
+      lineValue.lastIndex = end;
+      continue;
+    }
     if (start > cursor) segments.push({ text: text.slice(cursor, start) });
     segments.push({ text: candidate, language: "json" });
     cursor = end;
