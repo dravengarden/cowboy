@@ -34,10 +34,17 @@ pub(crate) const LANE_PATH: &str = "/api/machine/lane";
 pub(crate) const LANE_MIN_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_LANES: usize = 4;
 /// The Machine closes a lane after this long without traffic either way.
-pub(crate) const LANE_IDLE: Duration = Duration::from_secs(60);
+/// A remote Machine reaches the Controller over pooled cross-border streams:
+/// every lane is a new stream, so a lane costs a pooled connection and a
+/// replacement handshake over a lossy path, and a burst of four empties the
+/// pool for the connection behind it. With a one-minute idle bound OVH opened
+/// 471 lanes in two days, half of them living under 65 s; ten minutes keeps a
+/// lane through a session's bursts at the cost of one idle socket.
+pub(crate) const LANE_IDLE: Duration = Duration::from_secs(600);
 /// The Controller sends only on lanes active more recently than this, so a
-/// lane it writes to can never reach the Machine's idle deadline.
-pub(crate) const LANE_FRESH: Duration = Duration::from_secs(45);
+/// lane it writes to can never reach the Machine's idle deadline. Raise
+/// `LANE_IDLE` on every Machine before raising this bound.
+pub(crate) const LANE_FRESH: Duration = Duration::from_secs(540);
 /// At most one lane is being opened at a time, and not more often than this.
 pub(crate) const LANE_OPEN_INTERVAL: Duration = Duration::from_millis(500);
 

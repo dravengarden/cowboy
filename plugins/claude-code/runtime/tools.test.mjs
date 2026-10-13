@@ -1581,6 +1581,113 @@ test("a held background command waits on output notifications, not a read per se
   assert.ok(Date.now() - started < 5000);
 });
 
+test("output that keeps arriving is read once per settle interval", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.state.jobs.chatty = { afterSeq: null, exited: false };
+  tools.settleMs = 30;
+  tools.settleAfterMs = 0;
+  let reads = 0;
+  let seq = 0;
+  const started = Date.now();
+  connection.call = async (method) => {
+    assert.equal(method, "process/read");
+    reads++;
+    // One short line per read, like a build printing as it goes, for 300 ms.
+    const closed = Date.now() - started >= 300;
+    return {
+      chunks: closed ? [] : [{
+        seq: ++seq,
+        stream: "stdout",
+        chunk: Buffer.from("line\n").toString("base64"),
+      }],
+      exited: closed,
+      closed,
+      exitCode: closed ? 0 : null,
+    };
+  };
+  const result = await tools.collectOutput("chatty", 10000);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.output, "line\n".repeat(seq));
+  // About ten settle intervals fit; without the wait every read returns at
+  // once and the count runs into the hundreds.
+  assert.ok(reads >= 5 && reads <= 16, `reads=${reads}`);
+});
+
+test("a full page of output is drained without waiting", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.state.jobs.bulk = { afterSeq: null, exited: false };
+  tools.settleMs = 200;
+  tools.settleAfterMs = 0;
+  let reads = 0;
+  let seq = 0;
+  const page = Buffer.alloc(32768, 0x61).toString("base64");
+  const started = Date.now();
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    assert.equal(params.maxBytes, 32768);
+    reads++;
+    return {
+      chunks: [{ seq: ++seq, stream: "stdout", chunk: page }],
+      exited: false,
+      closed: false,
+      exitCode: null,
+    };
+  };
+  // Two full pages reach the 64 KiB output limit back to back.
+  const result = await tools.collectOutput("bulk", 10000);
+  assert.equal(result.output.length, 2 * 32768);
+  assert.equal(reads, 2);
+  assert.ok(
+    Date.now() - started < 200,
+    "full pages waited for the settle interval",
+  );
+});
+
+test("the settle wait ends at the process exit notification", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const listeners = new Set();
+  connection.listeners = listeners;
+  tools.state.jobs.ending = { afterSeq: null, exited: false };
+  tools.settleMs = 5000;
+  tools.settleAfterMs = 0;
+  let reads = 0;
+  let exited = false;
+  const started = Date.now();
+  connection.call = async (method) => {
+    assert.equal(method, "process/read");
+    reads++;
+    if (reads === 1) {
+      // The process exits while the collector settles after its first line.
+      setTimeout(() => {
+        exited = true;
+        for (const listener of listeners) {
+          listener({
+            method: "process/exited",
+            params: { processId: "ending" },
+          });
+        }
+      }, 40);
+      return {
+        chunks: [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("x").toString("base64"),
+        }],
+        exited: false,
+        closed: false,
+        exitCode: null,
+      };
+    }
+    return { chunks: [], exited, closed: exited, exitCode: exited ? 0 : null };
+  };
+  const result = await tools.collectOutput("ending", 30000);
+  assert.equal(result.exitCode, 0);
+  assert.ok(
+    Date.now() - started < 2000,
+    "exit notification did not end the settle wait",
+  );
+});
+
 test("cksum digests match the target's POSIX cksum", () => {
   for (const text of ["", "a", "line\n".repeat(70000), "会话🦅"]) {
     const bytes = Buffer.from(text);

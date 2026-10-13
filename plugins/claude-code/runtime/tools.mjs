@@ -39,6 +39,16 @@ const BULK_READ = 1024 * 1024;
 // notification ends the wait. A lost notification costs at most this bound.
 const QUIET_READS = 3;
 const QUIET_WAIT_MS = 15000;
+// Output that keeps arriving is read once per settle interval, not at every
+// round trip: the collector hands output over only when the command ends, so
+// a trickle costs one call per interval while a full page is drained at once.
+// Over the cross-border link a round trip is about 190 ms and a chatty
+// command made five reads a second; reads were 92% of all execution calls.
+// A command is paced only once it has run this long: the helper commands on
+// a tool call's critical path finish well before and keep their round-trip
+// latency.
+const SETTLE_MS = 1000;
+const SETTLE_AFTER_MS = 2000;
 const MAX_READ_STATE = 512 * 1024;
 // Startup reads kept in flight ahead of an order-dependent walk. Startup also
 // runs git status (7 commands), the shell snapshot and the other walks at
@@ -2151,17 +2161,20 @@ export class WorkspaceTools {
     const chunks = [];
     const pending = job.utf8Pending ??= {};
     let size = 0;
-    const deadline = Date.now() + timeout;
+    const started = Date.now();
+    const deadline = started + timeout;
     let quiet = 0;
     do {
+      const page = Math.min(
+        limit > MAX_OUTPUT ? BULK_READ : 32768,
+        limit - size,
+      );
+      const before = size;
       const read = (waitMs) =>
         this.connection.call("process/read", {
           processId,
           afterSeq: job.afterSeq,
-          maxBytes: Math.min(
-            limit > MAX_OUTPUT ? BULK_READ : 32768,
-            limit - size,
-          ),
+          maxBytes: page,
           waitMs,
         });
       const remaining = deadline - Date.now();
@@ -2242,6 +2255,16 @@ export class WorkspaceTools {
         }
       }
       if (drained || size >= limit) break;
+      // Trickling output: let more arrive before the next read. A full page
+      // means more is already waiting and is drained at once; a command that
+      // ends during the wait wakes it through its exit notification.
+      if (
+        result.chunks.length && !result.closed && size - before < page / 2 &&
+        Date.now() - started >= (this.settleAfterMs ?? SETTLE_AFTER_MS) &&
+        deadline - Date.now() > SETTLE_MS
+      ) {
+        await this.settle(processId, this.settleMs ?? SETTLE_MS);
+      }
     } while (Date.now() < deadline || job.closed);
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
@@ -2732,6 +2755,32 @@ export class WorkspaceTools {
   // An idle process costs no executor calls: read without waiting; with
   // nothing new, wait for a notification naming the process (or a lost one,
   // bounded by waitMs), then read once more.
+  // Waits ms for more output to accumulate, ending early when the process
+  // exits or the connection closes. Output notifications do not end it: they
+  // are what the wait coalesces.
+  async settle(id, ms) {
+    const listeners = this.connection.listeners;
+    let listener;
+    let timer;
+    try {
+      await new Promise((resolve) => {
+        timer = setTimeout(resolve, ms);
+        if (!listeners) return;
+        listener = (frame) => {
+          if (
+            frame.method === "closed" ||
+            (frame.method === "process/exited" &&
+              frame.params?.processId === id)
+          ) resolve();
+        };
+        listeners.add(listener);
+      });
+    } finally {
+      clearTimeout(timer);
+      if (listener) listeners.delete(listener);
+    }
+  }
+
   async notifiedRead(id, waitMs, read) {
     // Listen before reading, so output arriving in between still wakes it.
     let listener;
