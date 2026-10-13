@@ -42,9 +42,10 @@ pub(crate) const MAX_LANES: usize = 4;
 /// lane through a session's bursts at the cost of one idle socket.
 pub(crate) const LANE_IDLE: Duration = Duration::from_secs(600);
 /// The Controller sends only on lanes active more recently than this, so a
-/// lane it writes to can never reach the Machine's idle deadline. Raise
-/// `LANE_IDLE` on every Machine before raising this bound.
-pub(crate) const LANE_FRESH: Duration = Duration::from_secs(540);
+/// lane it writes to can never reach the Machine's idle deadline. It stays
+/// below the previous one-minute `LANE_IDLE`, so a Controller is safe beside
+/// a Machine of either release; the Machine's own sends refresh a lane.
+pub(crate) const LANE_FRESH: Duration = Duration::from_secs(45);
 /// At most one lane is being opened at a time, and not more often than this.
 pub(crate) const LANE_OPEN_INTERVAL: Duration = Duration::from_millis(500);
 
