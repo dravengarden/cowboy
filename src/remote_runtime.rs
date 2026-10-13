@@ -1523,6 +1523,14 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 }) {
                     reset_after_workspace_replacement(shared, &session_id);
                 }
+                // The Machine lacks this session's pinned generation: every
+                // later open fails the same way until the update pass re-pins it.
+                if reason
+                    .as_deref()
+                    .is_some_and(crate::generation_retention::is_not_installed_detail)
+                {
+                    shared.hub.note_provider_generation_missing(&session_id);
+                }
                 handle_rejected_command(&shared.hub, &session_id, command, reason);
             }
         }
@@ -2280,11 +2288,6 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.broadcast_error(Some(session_id.to_owned()), error);
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
-            // The Machine lacks this session's pinned generation: every later
-            // open fails the same way until the update pass re-pins it.
-            if crate::generation_retention::is_not_installed_detail(&message) {
-                hub.note_provider_generation_missing(session_id);
-            }
             hub.broadcast_error(Some(session_id.to_owned()), message);
         }
     }
@@ -4362,6 +4365,67 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn a_launch_refused_for_a_missing_generation_is_noted_for_repin() {
+        let hub = Hub::new();
+        for id in ["missing", "other"] {
+            hub.create_local_session(
+                id.to_owned(),
+                "claude-code".to_owned(),
+                "/tmp".to_owned(),
+                "test".to_owned(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+        }
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: Vec::new(),
+            buffered: Vec::new(),
+        };
+        let runtime = RemoteRuntime::new(
+            hub,
+            &bootstrap,
+            "gen-1".to_owned(),
+            Some("/bin/worker".to_owned()),
+        );
+        let refuse = |session: &str, reason: String| Frame::CommandAck {
+            session_id: session.to_owned(),
+            command_id: format!("ensure:{session}"),
+            accepted: false,
+            reason: Some(reason),
+        };
+        // The exact detail a pre-marker Machine sent for the retired generation.
+        handle_frame(
+            &runtime.shared,
+            refuse(
+                "missing",
+                format!(
+                    "reading legacy Provider generation /state/plugins/claude-code/generations/{}/content/package.cowboy-provider",
+                    "f".repeat(64)
+                ),
+            ),
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("rejection");
+        handle_frame(
+            &runtime.shared,
+            refuse("other", "worker exited before readiness".to_owned()),
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("rejection");
+        assert_eq!(
+            runtime.shared.hub.provider_generation_missing_sessions(),
+            vec!["missing".to_owned()]
+        );
     }
 
     #[tokio::test]

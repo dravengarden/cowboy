@@ -4202,17 +4202,14 @@ impl Hub {
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
     ) -> Result<(), String> {
         self.repin_workerless_provider(expected, version, digest, behavior, true)?;
-        self.push(
+        self.set_status(
             &expected.id,
-            Event::Lifecycle {
-                status: Status::Exited,
-                detail: Some(format!(
-                    "Provider {} is no longer installed on {}; the session now opens on {version}",
-                    expected.provider_version, expected.machine_id
-                )),
-            },
+            Status::Exited,
+            Some(format!(
+                "Provider {} is no longer installed on {}; the session now opens on {version}",
+                expected.provider_version, expected.machine_id
+            )),
         );
-        self.broadcast_sessions();
         Ok(())
     }
 
@@ -9773,6 +9770,33 @@ mod core_tests {
         );
         assert_eq!(after.cwd, before.cwd);
         assert_eq!(after.machine_id, before.machine_id);
+    }
+
+    #[test]
+    fn a_missing_generation_repin_moves_a_crashed_session_only_once_noted() {
+        let (hub, running) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.set_status(&running.id, Status::Crashed, None);
+        let before = hub.session_info(&running.id).unwrap().meta;
+        // Without the Machine's refusal a crashed session keeps its pin.
+        assert!(
+            hub.repin_missing_provider(&before, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("dormant")
+        );
+        hub.note_provider_generation_missing(&before.id);
+        assert_eq!(
+            hub.provider_generation_missing_sessions(),
+            vec![before.id.clone()]
+        );
+        hub.repin_missing_provider(&before, "new", "new-digest", &behavior)
+            .expect("re-pin");
+        let after = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(after.provider_version, "new");
+        assert_eq!(after.provider_generation_digest, "new-digest");
+        assert_eq!(after.status, Status::Exited, "the next open launches it");
+        assert_eq!(after.agent_session_id, before.agent_session_id);
+        assert!(hub.provider_generation_missing_sessions().is_empty());
     }
 
     #[test]

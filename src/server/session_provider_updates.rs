@@ -271,9 +271,11 @@ async fn repin_missing(state: &Arc<AppState>) {
             continue;
         };
         let meta = info.meta;
+        // Keep the note while something transient blocks the move.
         if meta.closing
             || !matches!(meta.status, Status::Exited | Status::Crashed)
             || !state.runtime_router.connected(&meta.machine_id)
+            || state.hub.session_has_in_flight_prompt(&meta.id)
         {
             continue;
         }
