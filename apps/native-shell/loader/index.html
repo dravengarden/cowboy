@@ -27,6 +27,13 @@
           connects with no tap.
       On macOS/Android (no Local Network prompt) the first probe succeeds instantly
       → transparent redirect, this UI never shows.
+
+      Offline launches (2026-10-13): once the app has been reached from this
+      shell, a WebView that exposes Service Workers hands off WITHOUT probing, so
+      an offline launch opens the app's own cached shell and the app shows its
+      last state with its connection status. A WebView without Service Workers
+      (WKWebView outside App-Bound Domains) keeps probing and shows the offline
+      card instead of the permission card when the device reports no network.
     -->
     <style>
       :root {
@@ -91,8 +98,9 @@
       body[data-slow="1"] #connecting .label {
         opacity: 1;
       }
-      /* --- error card --- */
-      #error {
+      /* --- error and offline cards --- */
+      #error,
+      #offline {
         display: none;
         width: 100%;
         max-width: 360px;
@@ -105,23 +113,28 @@
         text-align: center;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
       }
-      body[data-state="error"] #connecting {
+      body[data-state="error"] #connecting,
+      body[data-state="offline"] #connecting {
         display: none;
       }
-      body[data-state="error"] #error {
+      body[data-state="error"] #error,
+      body[data-state="offline"] #offline {
         display: block;
       }
-      #error .glyph {
+      #error .glyph,
+      #offline .glyph {
         font-size: 34px;
         line-height: 1;
         margin-bottom: 14px;
       }
-      #error h1 {
+      #error h1,
+      #offline h1 {
         margin: 0 0 8px;
         font-size: 18px;
         font-weight: 600;
       }
-      #error p {
+      #error p,
+      #offline p {
         margin: 0 0 20px;
         color: var(--dim);
         font-size: 14px;
@@ -179,15 +192,78 @@
       <p id="hint">或手动前往：设置 › Cowboy › 本地网络</p>
     </div>
 
+    <div id="offline">
+      <div class="glyph">✈️</div>
+      <h1>当前设备离线</h1>
+      <p>Cowboy 需要先联网打开一次；之后即使离线也会显示上次的内容。网络恢复后这里会自动连接。</p>
+      <button class="btn btn-ghost" id="retry-offline">重试</button>
+    </div>
+
     <script>
       const APP_NAME = "Cowboy";
       const REMOTE = "https://cowboy.stormbird.xyz";
+      // Written once the app has been reached from this shell. From then on a
+      // WebView that exposes Service Workers opens the app without probing: the
+      // app's own worker answers from its cached shell while the network is
+      // down and the app shows its last state with its connection status
+      // (docs/offline-first-sync.md §Boot). A WKWebView without App-Bound
+      // Domains has no Service Worker and still needs the network first.
+      const CONNECTED_KEY = "cowboy:loader-connected-at";
+
+      // @loader-plan-start
+      // The launch decision, kept pure for tools/native-shell-loader_test.ts:
+      // "handoff" opens the app at once, "probe" checks reachability first
+      // (first launch, the iOS Local Network prompt), "offline" says the device
+      // is offline and nothing can open yet.
+      function loaderPlan(input) {
+        const remembered = typeof input.connectedAt === "number" &&
+          Number.isFinite(input.connectedAt) && input.connectedAt > 0;
+        if (remembered && input.serviceWorker === true) return "handoff";
+        if (input.online === false) return "offline";
+        return "probe";
+      }
+      // @loader-plan-end
 
       const body = document.body;
       const hint = document.getElementById("hint");
       let attempt = 0;
       let probing = false;
       let slowTimer;
+      let handOffTimer;
+      // Set when a direct hand-off did not replace this document (a WKWebView
+      // keeps the current page when its navigation fails): the next attempt
+      // probes, so a revoked permission or an empty cache ends on a card.
+      let handOffFailed = false;
+
+      function connectedAt() {
+        try {
+          const value = Number(localStorage.getItem(CONNECTED_KEY));
+          return Number.isFinite(value) && value > 0 ? value : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+
+      function rememberConnected() {
+        try {
+          localStorage.setItem(CONNECTED_KEY, String(Date.now()));
+        } catch {
+          /* private mode: the next launch probes again */
+        }
+      }
+
+      // A full navigation (not a fetch) so the WebView becomes the remote
+      // origin, exactly as before. A document still alive after the budget
+      // means the navigation failed; fall back to the probe path.
+      function handOff() {
+        location.replace(REMOTE);
+        clearTimeout(handOffTimer);
+        handOffTimer = setTimeout(() => {
+          handOffFailed = true;
+          attempt = 0;
+          connect();
+        }, 8000);
+      }
 
       // Probe reachability without CORS: a no-cors fetch resolves (opaque) when
       // the host is reachable and rejects (TypeError) when the network is blocked
@@ -209,6 +285,20 @@
 
       async function connect() {
         if (probing) return;
+        const plan = loaderPlan({
+          connectedAt: handOffFailed ? undefined : connectedAt(),
+          serviceWorker: "serviceWorker" in navigator,
+          online: navigator.onLine,
+        });
+        if (plan === "handoff") {
+          handOff();
+          return;
+        }
+        if (plan === "offline") {
+          clearTimeout(slowTimer);
+          body.dataset.state = "offline";
+          return;
+        }
         probing = true;
         body.dataset.state = "connecting";
         // Reveal the "still trying" label only if it's taking a moment.
@@ -216,9 +306,8 @@
         slowTimer = setTimeout(() => (body.dataset.slow = "1"), 1200);
 
         if (await probe()) {
-          // Reachable → hand off to the real app. A full navigation (not a fetch)
-          // so the WKWebView becomes the remote origin, exactly as before.
-          location.replace(REMOTE);
+          rememberConnected();
+          handOff();
           return;
         }
 
@@ -230,7 +319,7 @@
           setTimeout(connect, 700 * attempt);
         } else {
           clearTimeout(slowTimer);
-          body.dataset.state = "error";
+          body.dataset.state = navigator.onLine === false ? "offline" : "error";
         }
       }
 
@@ -259,15 +348,24 @@
       }
 
       document.getElementById("open-settings").addEventListener("click", openSettings);
-      document.getElementById("retry").addEventListener("click", () => {
-        attempt = 0;
-        connect();
-      });
+      for (const id of ["retry", "retry-offline"]) {
+        document.getElementById(id).addEventListener("click", () => {
+          attempt = 0;
+          connect();
+        });
+      }
 
       // Returning from Settings (or any foreground) → re-probe. This is what makes
       // "grant in Settings, swipe back, it just connects" work with zero taps.
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible" && body.dataset.state !== "connecting") {
+          attempt = 0;
+          connect();
+        }
+      });
+      // The network came back while the offline card was up: connect quietly.
+      window.addEventListener("online", () => {
+        if (body.dataset.state !== "connecting") {
           attempt = 0;
           connect();
         }

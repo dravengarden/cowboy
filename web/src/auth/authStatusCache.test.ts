@@ -7,6 +7,7 @@ import {
   cachedAuthDecision,
   forgetAuthStatus,
   readCachedAuthStatus,
+  readStaleAuthStatus,
   rememberAuthStatus,
 } from "./authStatus.ts";
 
@@ -82,10 +83,46 @@ test("the app boots from a still-valid cached principal before any probe answers
   const me = { account: "draven", user_id: "user-a", role: "owner" as const };
   rememberAuthStatus(status(me, { idle_timeout_ms: 60_000 } as AuthStatus["session"]), now, storage);
   assertEquals(bootAuthDecision(now + 1_000, storage), { view: "ready", me, cached: true });
-  // Past the earliest server deadline the device waits for the server again.
+  // Past the earliest server deadline an online device waits for the server
+  // again; a device that knows it is offline opens on the stale principal.
   assertEquals(bootAuthDecision(now + 60_001, storage), null);
+  assertEquals(bootAuthDecision(now + 60_001, storage, true), null);
+  assertEquals(bootAuthDecision(now + 60_001, storage, false), {
+    view: "ready",
+    me,
+    cached: true,
+    stale: true,
+  });
+  assertEquals(bootAuthDecision(now + 1_000, storage, false), { view: "ready", me, cached: true });
   // A sign-out or a login answer forgets the principal: no optimistic mount.
   rememberAuthStatus(status(me), now, storage);
   forgetAuthStatus(storage);
   assertEquals(bootAuthDecision(now + 1, storage), null);
+});
+
+test("an unreachable Cowboy opens the last principal even past its deadline", () => {
+  const storage = memoryStorage();
+  const now = 3_000_000;
+  const me = { account: "draven", user_id: "user-a", role: "owner" as const };
+  rememberAuthStatus(status(me, { idle_timeout_ms: 60_000 } as AuthStatus["session"]), now, storage);
+  // Fresh: the ordinary cached decision, no stale mark.
+  assertEquals(cachedAuthDecision({ view: "retry" }, now + 1_000, storage), { view: "ready", me, cached: true });
+  assertEquals(readStaleAuthStatus(now + 1_000, storage)?.stale, false);
+  // Past the idle window: still mounts for a retry probe, marked stale.
+  assertEquals(readCachedAuthStatus(now + 60_001, storage), null);
+  assertEquals(readStaleAuthStatus(now + 60_001, storage)?.stale, true);
+  assertEquals(cachedAuthDecision({ view: "retry" }, now + 60_001, storage), {
+    view: "ready",
+    me,
+    cached: true,
+    stale: true,
+  });
+  // A real answer always wins over the stale principal.
+  assertEquals(cachedAuthDecision({ view: "login" }, now + 60_001, storage), null);
+  assertEquals(cachedAuthDecision({ view: "activating" }, now + 60_001, storage), null);
+  // Sign-out forgets it: nothing opens offline after an explicit sign-out.
+  forgetAuthStatus(storage);
+  assertEquals(readStaleAuthStatus(now + 60_001, storage), null);
+  assertEquals(cachedAuthDecision({ view: "retry" }, now + 60_001, storage), null);
+  assertEquals(bootAuthDecision(now + 60_001, storage, false), null);
 });

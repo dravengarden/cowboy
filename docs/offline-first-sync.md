@@ -960,12 +960,24 @@ separate `service:workspaces` cache is not needed.
 
 ## Open decisions
 
-- **Cached identity offline.** Mounting the app from a cached principal while
-  the server cannot be reached is a product decision. The proposed rule is:
-  allowed until the earliest known session deadline, cleared on explicit
-  sign-out, and superseded by the lock screen the moment the server says so.
-  Cached history pages already live in the service worker cache today, so
-  this widens reading, not exposure class.
+- **Cached identity offline.** Decided 2026-10-13: the app opens on the last
+  principal whenever Cowboy cannot be reached, even past the earliest known
+  session deadline (service worker `cowboy-v1920`). A device that reports
+  itself offline opens at once instead of waiting for the probe; an online
+  device still waits for the bounded probe and opens on the stale principal
+  only when that probe fails with a network or 5xx answer. The principal is
+  cleared on explicit sign-out and superseded by the login answer, another
+  account or the lock screen the moment the server says so. Cached history
+  pages already live in the service worker cache today, so this widens
+  reading, not exposure class. The native shell's loader follows the same
+  rule for a WebView that exposes Service Workers (see
+  `apps/native-shell/loader/index.html`): once the app has been reached from
+  that shell, later launches hand off without probing, so an offline launch
+  opens the app's cached shell. iOS WKWebView exposes Service Workers only
+  with App-Bound Domains, which the shell now declares
+  (`limitNavigationsToAppBoundDomains` and `WKAppBoundDomains`); until a
+  build with that declaration is on the device, an offline launch there shows
+  the loader's offline card.
 - **Offline session creation.** Deferred to Phase 4. Until then New Session
   stays a Class C action with an in-place "Needs a connection" outcome.
 - **Rename conflicts.** Last writer wins is proposed as sufficient; a
