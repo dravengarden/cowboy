@@ -74,6 +74,37 @@ pub struct Outcome {
     pub freed_bytes: u64,
 }
 
+/// Stable phrase a Machine puts in a launch rejection when the session's
+/// pinned generation has no directory any more (retired, or never installed
+/// there). The Controller recognizes it and moves the session to the
+/// installed release instead of failing every later open the same way.
+pub const NOT_INSTALLED_MARKER: &str = "is not installed on this Machine";
+
+/// Rejection detail for a session pinned to a generation this Machine lacks.
+#[must_use]
+pub fn not_installed_detail(plugin_id: &str, digest: &str) -> String {
+    format!("Provider {plugin_id} generation {digest} {NOT_INSTALLED_MARKER}")
+}
+
+/// Whether a launch rejection means the pinned generation is gone from the
+/// Machine. Machines before [`NOT_INSTALLED_MARKER`] surface the generation
+/// reader's I/O context instead; its path form is matched for them.
+#[must_use]
+pub fn is_not_installed_detail(detail: &str) -> bool {
+    detail.contains(NOT_INSTALLED_MARKER)
+        || [
+            "reading legacy Provider generation ",
+            "reading Provider generation ",
+        ]
+        .iter()
+        .any(|phrase| {
+            // Also behind "fallback after generation launch failed: ".
+            detail
+                .split_once(phrase)
+                .is_some_and(|(_, path)| path.contains("/generations/"))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +121,31 @@ mod tests {
         assert!(!request(vec!["a".repeat(64)]).is_valid());
         assert!(!request(vec![format!("sha256:{}", "A".repeat(64))]).is_valid());
         assert!(!request(vec!["sha256:../escape".to_owned()]).is_valid());
+    }
+
+    #[test]
+    fn a_missing_generation_is_recognized_from_current_and_older_machines() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert!(is_not_installed_detail(&not_installed_detail(
+            "claude-code",
+            &digest
+        )));
+        assert!(is_not_installed_detail(&format!(
+            "reading legacy Provider generation /state/plugins/claude-code/generations/{}/content/package.cowboy-provider",
+            "a".repeat(64)
+        )));
+        assert!(is_not_installed_detail(&format!(
+            "reading Provider generation /state/plugins/codex/generations/{}/content/package.cowboy-provider",
+            "b".repeat(64)
+        )));
+        assert!(is_not_installed_detail(&format!(
+            "fallback after generation launch failed: reading legacy Provider generation /state/plugins/codex/generations/{}/content/package.cowboy-provider",
+            "c".repeat(64)
+        )));
+        // Other launch failures keep their session on its generation.
+        assert!(!is_not_installed_detail("worker exited before readiness"));
+        assert!(!is_not_installed_detail(
+            "reading Provider generation manifest"
+        ));
     }
 }

@@ -4,7 +4,7 @@
 //! It grants one controller lease, routes commands, starts session workers, and
 //! lets workers replay their unacknowledged outboxes after either side restarts.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::os::fd::{AsFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -290,6 +290,19 @@ impl DurableStateView {
     pub(crate) fn status(&self) -> Option<crate::durable_state::DurableState> {
         let broker = self.0.lock().as_ref()?.upgrade()?;
         Some(broker.durable_state())
+    }
+
+    /// `sha256:<hex>` Provider generations, per Provider, that resident
+    /// Sessions on this Machine were launched with: every registered launch
+    /// declaration (a worker generation cutover relaunches each of them on
+    /// its exact Provider generation) and every live worker's self-reported
+    /// launch. Generation retention keeps them whatever the Controller pins.
+    /// `None` until a broker is attached (or after it ended).
+    pub(crate) fn resident_provider_generations(
+        &self,
+    ) -> Option<BTreeMap<String, BTreeSet<String>>> {
+        let broker = self.0.lock().as_ref()?.upgrade()?;
+        Some(broker.resident_provider_generations())
     }
 }
 
@@ -1401,6 +1414,29 @@ impl Broker {
         })
         .await
         .context("joining Session incarnation retirement")?
+    }
+
+    /// See [`DurableStateView::resident_provider_generations`]. The registry
+    /// and the worker table are locked one after the other, never together.
+    fn resident_provider_generations(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut resident: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut keep = |launch: &StartSession| {
+            if !launch.provider_generation_digest.is_empty() {
+                resident
+                    .entry(launch.provider.clone())
+                    .or_default()
+                    .insert(launch.provider_generation_digest.clone());
+            }
+        };
+        for launch in self.sessions.lock().values() {
+            keep(launch);
+        }
+        for worker in self.workers.lock().values() {
+            if let Some(launch) = worker.snapshot.launch.as_ref() {
+                keep(launch);
+            }
+        }
+        resident
     }
 
     fn durable_state(&self) -> crate::durable_state::DurableState {
@@ -5323,6 +5359,48 @@ mod tests {
             panic!("reader-only snapshot");
         };
         assert!(worker.incarnation.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_durable_state_view_lists_resident_provider_generations() {
+        let view = DurableStateView::default();
+        // Nothing to answer with until a broker attaches: retention fails closed.
+        assert!(view.resident_provider_generations().is_none());
+
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        view.attach(&broker);
+        // A legacy launch without a Provider generation contributes nothing.
+        assert!(view.resident_provider_generations().unwrap().is_empty());
+
+        let digest = |name: &str| format!("sha256:{}", name.repeat(64));
+        // A registered declaration counts even before its worker reports.
+        let mut declared = launch.clone();
+        declared.session_id = "sess-2".to_owned();
+        declared.provider = "claude-code".to_owned();
+        declared.provider_generation_digest = digest("a");
+        broker.sessions.lock().insert("sess-2".to_owned(), declared);
+        // A live worker's self-reported launch counts without a declaration.
+        let mut reported = launch;
+        reported.provider_generation_digest = digest("b");
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .expect("registered worker")
+            .snapshot
+            .launch = Some(reported);
+
+        let resident = view.resident_provider_generations().unwrap();
+        assert_eq!(
+            resident.get("claude-code"),
+            Some(&BTreeSet::from([digest("a")]))
+        );
+        assert_eq!(resident.get("codex"), Some(&BTreeSet::from([digest("b")])));
+        assert_eq!(resident.len(), 2);
+
+        drop(broker);
+        assert!(view.resident_provider_generations().is_none());
     }
 
     #[tokio::test]

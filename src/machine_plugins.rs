@@ -838,9 +838,11 @@ impl MachinePluginStore {
 
     /// Retire Agent Provider generations that nothing can launch any more.
     /// `referenced` is the Controller's set of generations still pinned by a
-    /// recoverable session on this Machine; the active and rollback links are
-    /// always kept. Each retired directory is renamed to a tombstone first, so
-    /// an interrupted removal never leaves a launchable partial generation.
+    /// recoverable session on this Machine, joined by the caller with every
+    /// generation a resident Session here was launched with; the active and
+    /// rollback links are always kept. Each retired directory is renamed to a
+    /// tombstone first, so an interrupted removal never leaves a launchable
+    /// partial generation.
     pub async fn retire_generations(
         &self,
         plugin_id: &str,
@@ -2604,12 +2606,20 @@ impl MachinePluginStore {
         PathBuf,
         String,
     )> {
-        let generation = digest_generation_name(digest)?;
-        let content = self
+        let generation = self
             .plugin_root(provider_id)
             .join("generations")
-            .join(generation)
-            .join("content");
+            .join(digest_generation_name(digest)?);
+        // A retired or never-installed generation has no directory at all. A
+        // launch must learn that as such, not as an I/O error from the legacy
+        // reader, so the Controller can move the session to the installed
+        // release instead of failing every later open the same way.
+        ensure!(
+            generation.is_dir(),
+            "{}",
+            crate::generation_retention::not_installed_detail(provider_id, digest)
+        );
+        let content = generation.join("content");
         if !content.join("package.cowboy-plugin").is_file() {
             let (package, release, path) =
                 self.verified_legacy_provider_generation(provider_id, digest, &content)?;
@@ -7264,6 +7274,32 @@ mod tests {
         restore_generation_link(&plugin.join("active"), Some(&"a".repeat(64))).unwrap();
         restore_generation_link(&plugin.join("rollback"), Some(&"b".repeat(64))).unwrap();
         (root, store)
+    }
+
+    #[test]
+    fn a_launch_on_a_retired_generation_reports_it_as_not_installed() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let digest = |name: &str| format!("sha256:{}", name.repeat(64));
+        // No directory at all: retired, or never installed here.
+        let error = store
+            .launch_context("claude-code", &digest("e"), None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            crate::generation_retention::not_installed_detail("claude-code", &digest("e"))
+        );
+        assert!(crate::generation_retention::is_not_installed_detail(&error));
+        // A present but unreadable generation still names what failed to read.
+        let error = store
+            .launch_context("claude-code", &digest("c"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !error.contains(crate::generation_retention::NOT_INSTALLED_MARKER),
+            "{error}"
+        );
+        assert!(error.contains("package.cowboy-provider"), "{error}");
     }
 
     #[tokio::test]

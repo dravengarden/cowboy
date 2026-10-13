@@ -244,17 +244,109 @@ fn stalled_starts<'a>(
     stalled
 }
 
-/// A requested update whose session just became idle should not wait for the
-/// next full pass.
+/// A requested update whose session just became idle, or a session whose
+/// Machine just refused its pinned generation, should not wait for the next
+/// full pass.
 fn requested_update_ready(state: &AppState) -> bool {
-    state.hub.session_list().iter().any(|meta| {
-        meta.provider_update_available
-            .as_ref()
-            .is_some_and(|offer| offer.when_idle)
-            && matches!(meta.status, Status::Running | Status::Exited)
-            && meta.background_tasks == 0
-            && !state.hub.session_has_in_flight_prompt(&meta.id)
-    })
+    !state.hub.provider_generation_missing_sessions().is_empty()
+        || state.hub.session_list().iter().any(|meta| {
+            meta.provider_update_available
+                .as_ref()
+                .is_some_and(|offer| offer.when_idle)
+                && matches!(meta.status, Status::Running | Status::Exited)
+                && meta.background_tasks == 0
+                && !state.hub.session_has_in_flight_prompt(&meta.id)
+        })
+}
+
+/// Sessions a Machine refused to launch because their pinned generation is
+/// gone there (retired under a surviving worker, or never installed on that
+/// Machine) are moved to the installed release through the explicit-Reload
+/// gate, whatever the update policy says: no open can ever bring them back
+/// on their pin. A queued prompt is then delivered by reviving the session,
+/// as its open would.
+async fn repin_missing(state: &Arc<AppState>) {
+    for session_id in state.hub.provider_generation_missing_sessions() {
+        let Some(info) = state.hub.session_info(&session_id) else {
+            continue;
+        };
+        let meta = info.meta;
+        if meta.closing
+            || !matches!(meta.status, Status::Exited | Status::Crashed)
+            || !state.runtime_router.connected(&meta.machine_id)
+        {
+            continue;
+        }
+        let repinned = {
+            let Ok(_fence) = ProviderReloadFence::acquire(
+                &state.plugin_lifecycle_fences,
+                (meta.machine_id.clone(), meta.provider.clone()),
+            ) else {
+                continue;
+            };
+            let target = match session_reload_target(state, &meta).await {
+                Ok(target) => target,
+                Err(error) => {
+                    // Nothing automatic can move it; a Reset or Reload must.
+                    state.hub.clear_provider_generation_missing(&meta.id);
+                    tracing::warn!(
+                        session = %meta.id,
+                        machine = %meta.machine_id,
+                        version = %meta.provider_version,
+                        %error,
+                        "the session's Provider generation is not installed and it cannot move to the installed release"
+                    );
+                    continue;
+                }
+            };
+            if target.digest == meta.provider_generation_digest {
+                // The installed release itself was refused: not a retired pin.
+                state.hub.clear_provider_generation_missing(&meta.id);
+                tracing::warn!(
+                    session = %meta.id,
+                    machine = %meta.machine_id,
+                    version = %meta.provider_version,
+                    "Machine refused the installed Provider generation it reports; leaving the session on it"
+                );
+                continue;
+            }
+            match state.hub.repin_missing_provider(
+                &meta,
+                &target.version,
+                &target.digest,
+                &target.behavior,
+            ) {
+                Ok(()) => {
+                    tracing::info!(
+                        session = %meta.id,
+                        machine = %meta.machine_id,
+                        from = %meta.provider_version,
+                        to = %target.version,
+                        "re-pinned a session whose Provider generation is no longer installed"
+                    );
+                    true
+                }
+                Err(error) => {
+                    tracing::debug!(session = %meta.id, %error, "missing-generation re-pin deferred");
+                    false
+                }
+            }
+        };
+        if repinned && info.queue_count > 0 {
+            match state.supervisor.ensure_alive(&meta.id) {
+                Ok(started) => tracing::info!(
+                    session = %meta.id,
+                    started,
+                    "revived the re-pinned session for its queued prompt"
+                ),
+                Err(error) => tracing::warn!(
+                    session = %meta.id,
+                    %error,
+                    "the re-pinned session could not be revived for its queued prompt"
+                ),
+            }
+        }
+    }
 }
 
 pub(super) async fn run(state: Arc<AppState>) {
@@ -285,6 +377,7 @@ async fn pass(
     shutdown: &tokio::sync::watch::Receiver<bool>,
     starting_since: &mut HashMap<String, (Instant, bool)>,
 ) {
+    repin_missing(state).await;
     let sessions = state.hub.session_list();
     let stalled = stalled_starts(
         starting_since,

@@ -3087,6 +3087,20 @@ fn durable_state_reply(
     serde_json::to_value(status).context("encoding durable state")
 }
 
+/// Generations the Controller's retention request must keep besides its own
+/// pins: every one a resident Session here was launched with. The Controller
+/// pins describe recoverable Sessions, but a worker generation cutover
+/// relaunches each registered declaration on its exact Provider generation,
+/// and a surviving worker keeps running the one it started on, whichever
+/// release the Controller has meanwhile pinned. Without a broker nothing can
+/// vouch for the resident Sessions, so retention refuses rather than guesses.
+fn resident_provider_generations(
+    view: &crate::machine_broker::DurableStateView,
+) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
+    view.resident_provider_generations()
+        .context("generation retention needs the Machine broker's Session registry")
+}
+
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
@@ -3180,8 +3194,12 @@ async fn run_adapter_request(
                 serde_json::from_value(payload)
                     .context("decoding uninstalled generation retention request")?;
             anyhow::ensure!(request.is_valid(), "invalid generation retention request");
+            let mut referenced = request.referenced;
+            for (plugin_id, digests) in resident_provider_generations(&durable_state)? {
+                referenced.entry(plugin_id).or_default().extend(digests);
+            }
             let outcomes = providers
-                .retire_uninstalled_generations(&request.referenced, &request.skip)
+                .retire_uninstalled_generations(&referenced, &request.skip)
                 .await?;
             for outcome in &outcomes {
                 tracing::info!(
@@ -3197,8 +3215,14 @@ async fn run_adapter_request(
             let request: crate::generation_retention::Request = serde_json::from_value(payload)
                 .context("decoding generation retention request")?;
             anyhow::ensure!(request.is_valid(), "invalid generation retention request");
+            let mut referenced = request.referenced;
+            if let Some(resident) =
+                resident_provider_generations(&durable_state)?.remove(&request.plugin_id)
+            {
+                referenced.extend(resident);
+            }
             let outcome = providers
-                .retire_generations(&request.plugin_id, &request.referenced)
+                .retire_generations(&request.plugin_id, &referenced)
                 .await?;
             if !outcome.retired.is_empty() {
                 tracing::info!(

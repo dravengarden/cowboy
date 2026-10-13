@@ -3139,6 +3139,20 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             return;
         }
     }
+    // A worker the Machine reports can still run a generation its session
+    // record no longer pins: a cutover relaunched it on its declared
+    // generation, or a surviving worker is reconciled only on reconnect.
+    // Keep what every observed worker was launched with.
+    for machine in &machines {
+        if let Some(runtime) = state.runtime_router.runtime(&machine.id) {
+            for (provider, digest) in runtime.worker_provider_generations() {
+                referenced
+                    .entry((machine.id.clone(), provider))
+                    .or_default()
+                    .insert(digest);
+            }
+        }
+    }
     // An unreadable uninstall ledger only skips uninstalled-Plugin cleanup.
     let unfinished_uninstalls = match store.unfinished_plugin_uninstalls().await {
         Ok(pairs) => Some(pairs),

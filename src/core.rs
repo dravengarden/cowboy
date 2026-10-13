@@ -884,6 +884,11 @@ struct Session {
     /// stuck turn while a Busy -> Running -> Busy replacement invalidates every
     /// watchdog armed for the previous turn.
     lifecycle_epoch: u64,
+    /// The Machine rejected the last launch because the pinned Provider
+    /// generation has no directory there any more (retired under a surviving
+    /// worker, or never installed). The Provider update pass moves the session
+    /// to the installed release; nothing else can open it again. Transient.
+    provider_generation_missing: bool,
     /// Mobile-only code-review workspace state. Desktop never consumes it.
     mobile_review: MobileReviewState,
 }
@@ -2396,6 +2401,7 @@ impl Hub {
                         in_flight_epoch: 0,
                         dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
+                        provider_generation_missing: false,
                         lifecycle_epoch: 0,
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
@@ -3159,6 +3165,7 @@ impl Hub {
                     in_flight_epoch: 0,
                     dispatched_cmids: VecDeque::new(),
                     turn_completion_latched: false,
+                    provider_generation_missing: false,
                     lifecycle_epoch: 0,
                     mobile_review: MobileReviewState::default(),
                 },
@@ -4147,12 +4154,88 @@ impl Hub {
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
     ) -> Result<(), String> {
+        self.repin_workerless_provider(expected, version, digest, behavior, false)
+    }
+
+    /// A Machine rejected this session's launch because its pinned Provider
+    /// generation is not installed there any more. Recorded for the Provider
+    /// update pass, which moves the session to the installed release through
+    /// [`Self::repin_missing_provider`]; an open or prompt cannot help it.
+    pub fn note_provider_generation_missing(&self, session_id: &str) {
+        let mut sessions = self.inner.sessions.lock();
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.provider_generation_missing = true;
+        }
+    }
+
+    /// Sessions whose last launch was rejected for a missing Provider generation.
+    #[must_use]
+    pub fn provider_generation_missing_sessions(&self) -> Vec<String> {
+        self.inner
+            .sessions
+            .lock()
+            .iter()
+            .filter(|(_, session)| session.provider_generation_missing)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Forget a missing-generation note nothing can act on, so the pass stops
+    /// resolving it; the next rejected launch records it again.
+    pub fn clear_provider_generation_missing(&self, session_id: &str) {
+        let mut sessions = self.inner.sessions.lock();
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.provider_generation_missing = false;
+        }
+    }
+
+    /// Move a session noted by [`Self::note_provider_generation_missing`] to
+    /// an installed Provider generation. Like a dormant re-pin, except that a
+    /// crashed session qualifies: its launch failed and nothing of it runs.
+    /// Clears the note and records the move in the transcript, leaving the
+    /// session exited so the next open launches the new generation.
+    pub fn repin_missing_provider(
+        &self,
+        expected: &SessionMeta,
+        version: &str,
+        digest: &str,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    ) -> Result<(), String> {
+        self.repin_workerless_provider(expected, version, digest, behavior, true)?;
+        self.push(
+            &expected.id,
+            Event::Lifecycle {
+                status: Status::Exited,
+                detail: Some(format!(
+                    "Provider {} is no longer installed on {}; the session now opens on {version}",
+                    expected.provider_version, expected.machine_id
+                )),
+            },
+        );
+        self.broadcast_sessions();
+        Ok(())
+    }
+
+    fn repin_workerless_provider(
+        &self,
+        expected: &SessionMeta,
+        version: &str,
+        digest: &str,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+        after_rejected_launch: bool,
+    ) -> Result<(), String> {
         let meta = {
             let mut sessions = self.inner.sessions.lock();
             let session = sessions
                 .get_mut(&expected.id)
                 .ok_or_else(|| "session no longer exists".to_owned())?;
-            if session.in_flight || session.meta.status != Status::Exited {
+            let workerless = if after_rejected_launch {
+                session.provider_generation_missing
+                    && matches!(session.meta.status, Status::Exited | Status::Crashed)
+            } else {
+                session.meta.status == Status::Exited
+            };
+            if session.in_flight || !workerless {
                 return Err("session is no longer dormant".to_owned());
             }
             if session.meta.provider != expected.provider
@@ -4181,6 +4264,7 @@ impl Hub {
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
+            session.provider_generation_missing = false;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
             session.meta.clone()
         };

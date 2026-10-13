@@ -238,10 +238,24 @@ Provider updates; a session without one counts as freshly active.
 Disk growth from Plugin releases is retired automatically:
 
 - Every `plugins.generation_retention_interval` the Service asks each Device
-  to retire Plugin generations no recoverable session pins. In the same
+  to retire Plugin generations no recoverable session pins. The Service also
+  keeps every generation a worker it currently observes was launched with,
+  and the Device keeps every generation a resident Session there was launched
+  with (its launch registry and each live worker's self-reported launch),
+  whatever the Service pins: a worker generation cutover relaunches each
+  registered Session on its exact generation, and a surviving worker is
+  reconciled with the session record only on reconnect. A Device without a
+  running broker refuses the request rather than guessing. In the same
   request, under the installation lock, the Device removes artifact-cache
   blobs that no retained generation references and that were not written
   within its `retention.artifact_cache_unreferenced_after`.
+- A session whose Device refuses to launch its pinned generation because that
+  generation is not installed there (retired before these guards, or pinned
+  on another Device) is moved to the installed release by the Provider update
+  pass within seconds, through the same gate as an explicit Reload and
+  regardless of the update policy; a queued prompt is delivered by reviving
+  it. A session that fails the gate keeps its generation and needs a Reset or
+  Reload, and the Service logs why.
 - Each Device reports its `disk.low_watermark` with its host resources. When
   its available disk falls below that watermark the Service runs an extra
   pass for that Device at once, then waits `plugins.urgent_retention_cooldown`

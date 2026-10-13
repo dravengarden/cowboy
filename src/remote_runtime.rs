@@ -2,7 +2,7 @@
 
 #![warn(clippy::pedantic)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -487,6 +487,27 @@ impl RemoteRuntime {
             .get(&parent.id)
             .ok_or_else(|| anyhow::anyhow!("parent worker is unavailable"))?;
         crate::managed_calls::authority::Authority::for_worker(service, parent, worker)
+    }
+
+    /// `(provider, sha256:<hex>)` Provider generations the Machine's reported
+    /// workers were launched with. A worker can outlive its session record's
+    /// pin (a cutover relaunch, a surviving worker reconciled only after a
+    /// reconnect), so generation retention keeps these as well.
+    #[must_use]
+    pub fn worker_provider_generations(&self) -> BTreeSet<(String, String)> {
+        self.shared
+            .workers
+            .lock()
+            .values()
+            .filter_map(|worker| worker.launch.as_ref())
+            .filter(|launch| !launch.provider_generation_digest.is_empty())
+            .map(|launch| {
+                (
+                    launch.provider.clone(),
+                    launch.provider_generation_digest.clone(),
+                )
+            })
+            .collect()
     }
 
     #[must_use]
@@ -2259,6 +2280,11 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.broadcast_error(Some(session_id.to_owned()), error);
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
+            // The Machine lacks this session's pinned generation: every later
+            // open fails the same way until the update pass re-pins it.
+            if crate::generation_retention::is_not_installed_detail(&message) {
+                hub.note_provider_generation_missing(session_id);
+            }
             hub.broadcast_error(Some(session_id.to_owned()), message);
         }
     }
