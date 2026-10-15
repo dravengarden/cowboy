@@ -224,13 +224,16 @@ try {
     }),
   );
 } finally {
-  if (!bindingComplete) {
-    await rm(matrixPath).catch((error: unknown) => {
-      if (!((error as { code?: string }).code === "ENOENT")) throw error;
-    });
+  try {
+    if (!bindingComplete) {
+      await rm(matrixPath).catch((error: unknown) => {
+        if (!((error as { code?: string }).code === "ENOENT")) throw error;
+      });
+    }
+    await rm(stage, { recursive: true });
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
   }
-  await rm(stage, { recursive: true });
-  await rm(temporary, { recursive: true, force: true });
 }
 
 async function sha256(path: string): Promise<string> {
