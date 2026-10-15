@@ -34,7 +34,6 @@ export function DesktopRailGlobalActions({
             detail={disabled ? "Open a session to browse its repository resources" : undefined}
             disabled={disabled}
             onClick={open}
-            size="rail"
             placement="right"
           >
             <ExtensionOutlined />
@@ -46,7 +45,6 @@ export function DesktopRailGlobalActions({
         label="Settings"
         shortcut={DESKTOP_SHORTCUTS.settings}
         onClick={onOpenSettings}
-        size="rail"
         placement="right"
       >
         <SettingsOutlined />
