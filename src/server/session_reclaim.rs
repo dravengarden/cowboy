@@ -112,7 +112,6 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     }
     recent_wakes(Some(&opened));
     tokio::time::sleep(WAKE_SETTLE).await;
-    let woken = recent_wakes(None);
     let Some(machine_id) = state
         .hub
         .session_list()
@@ -143,15 +142,21 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     let min_idle = state
         .service_config
         .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
-    let candidates = candidates(&state, &machine_id);
-    let Some(chosen) = choose_after_wake(
-        &candidates,
-        &woken,
-        capacity.max_sessions as usize,
-        min_idle,
-    )
-    .map(str::to_owned) else {
-        return;
+    let max_sessions = capacity.max_sessions as usize;
+    let chosen = loop {
+        let candidates = candidates(&state, &machine_id);
+        // Taken last, so a session woken while the store was read is known.
+        let woken = recent_wakes(None);
+        if let Some(chosen) = choose_after_wake(&candidates, &woken, max_sessions, min_idle) {
+            break chosen.to_owned();
+        }
+        // Over capacity with only recently woken sessions eligible: try again
+        // once their protection has expired, rather than staying over it.
+        let unprotected = std::collections::HashSet::new();
+        if choose_after_wake(&candidates, &unprotected, max_sessions, min_idle).is_none() {
+            return;
+        }
+        tokio::time::sleep(WAKE_PROTECTION).await;
     };
     match state.supervisor.hibernate_session(&chosen) {
         Ok(()) => tracing::info!(machine = %machine_id, opened = %opened, session = %chosen,

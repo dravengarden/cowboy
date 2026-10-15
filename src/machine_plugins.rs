@@ -1963,6 +1963,23 @@ impl MachinePluginStore {
         let auth_generation_advanced = previous
             .as_ref()
             .is_none_or(|previous| previous.auth_generation < envelope.auth_generation);
+        // A refresh this Machine's own Provider wrote comes back as the next
+        // Service generation with exactly the bytes every runtime projection
+        // already shares; its workers have nothing to reload. Compared before
+        // the envelope is published, so no concurrent launch can have
+        // projected its values yet; disk equality then means process equality.
+        let package = self
+            .active_package(&envelope.provider_id)?
+            .map(|value| value.0);
+        let runtime_changed = match (
+            self.prepare_auth_inner(envelope, package.as_ref()),
+            package.as_ref(),
+        ) {
+            (Ok(PreparedProviderAuth::Apply(bundle)), Some(package)) => {
+                !self.runtime_projects_bundle(package, &bundle)
+            }
+            _ => true,
+        };
         fs::create_dir_all(provider_auth_root.join("replicas"))?;
         fs::set_permissions(&provider_auth_root, fs::Permissions::from_mode(0o700))?;
         atomic_write(
@@ -1978,19 +1995,7 @@ impl MachinePluginStore {
             0o600,
         )?;
 
-        let package = self
-            .active_package(&envelope.provider_id)?
-            .map(|value| value.0);
         let prepared = self.prepare_auth_inner(envelope, package.as_ref())?;
-        // A refresh this Machine's own Provider wrote comes back as the next
-        // Service generation with exactly the bytes every runtime projection
-        // already shares; its workers have nothing to reload.
-        let runtime_changed = match (&prepared, package.as_ref()) {
-            (PreparedProviderAuth::Apply(bundle), Some(package)) => {
-                !self.runtime_projects_bundle(package, bundle)
-            }
-            _ => true,
-        };
         let materialization = self.commit_prepared_auth(envelope, package.as_ref(), prepared)?;
         prune_auth_replicas(
             &provider_auth_root.join("replicas"),
