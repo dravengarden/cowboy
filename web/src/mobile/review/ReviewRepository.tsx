@@ -391,6 +391,8 @@ export function ReviewRepository({
   }, [sessionId]);
   const [repository, setRepository] = useState<GitRepositorySnapshot>();
   const [commits, setCommits] = useState<GitCommitSummary[]>([]);
+  const commitsRef = useRef(commits);
+  commitsRef.current = commits;
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -473,8 +475,17 @@ export function ReviewRepository({
       if (controller.signal.aborted) return;
       settleRetry();
       setRepository(snapshot);
-      setCommits(snapshot.commits);
-      setTruncated(snapshot.historyTruncated);
+      // Worktree edits refresh this drawer far more often than history
+      // moves. An unchanged newest page keeps the older pages already read.
+      const shown = commitsRef.current;
+      const unchanged = shown.length >= snapshot.commits.length &&
+        snapshot.commits.every((commit, index) =>
+          shown[index]?.oid === commit.oid
+        );
+      if (!unchanged) {
+        setCommits(snapshot.commits);
+        setTruncated(snapshot.historyTruncated);
+      }
     } catch (reason) {
       if (
         !controller.signal.aborted &&
@@ -683,13 +694,13 @@ export function ReviewRepository({
               {...(refreshToken === undefined ? {} : { refreshToken })}
             />
           )
-          : loading
+          : loading && !repository
           ? (
             <Box sx={{ height: 1, px: 0.75, pt: 0.5 }}>
               <HistoryCommitSkeleton count={6} loading />
             </Box>
           )
-          : error
+          : error && !repository
           ? (
             <Alert
               severity="error"

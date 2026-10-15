@@ -57,3 +57,24 @@ export function revisionMatches(
 ): boolean {
   return revision !== undefined && progress[key] === revision;
 }
+
+/**
+ * The marks that still hold. A mark records the change's fingerprint when the
+ * Machine reports one, so a file edited after review counts as unreviewed in
+ * the list before it is reopened. Without a fingerprint the mark is the diff
+ * revision, which only the open diff can check; the list then trusts it.
+ */
+export function currentReviewMarks(
+  progress: ReviewProgress,
+  entries: readonly { key: string; fingerprint?: string | undefined }[],
+): ReadonlySet<string> {
+  const fingerprints = new Map(
+    entries.map((entry) => [entry.key, entry.fingerprint]),
+  );
+  return new Set(
+    Object.entries(progress).filter(([key, mark]) => {
+      const fingerprint = fingerprints.get(key);
+      return fingerprint === undefined || fingerprint === mark;
+    }).map(([key]) => key),
+  );
+}

@@ -1,4 +1,5 @@
-import { Alert, Box, Button, Typography } from "@mui/material";
+import { Alert, Box, Button, ButtonBase, Typography } from "@mui/material";
+import { useId, useState } from "react";
 import { openAppSettings } from "../../appSettings";
 import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer";
 import { HintTooltip } from "../../HintTooltip";
@@ -22,6 +23,60 @@ export const reviewCodeStatusRow = {
   "& .MuiAlert-message": { py: 0, minWidth: 0, flex: 1 },
   "& .MuiAlert-action": { py: 0, mr: -0.5, pl: 1, alignItems: "center" },
 } as const;
+
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+} as const;
+
+/**
+ * One status line whose explanation is reachable without a pointer: Review is
+ * read on phones, where a hover hint never opens. Tapping the summary reveals
+ * the detail under it; assistive technology always reads it as the
+ * description. The desktop hover hint stays.
+ */
+export function ReviewStatusMessage(
+  { summary, detail }: { summary: string; detail: string },
+): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <Box sx={{ minWidth: 0, py: open ? 0.75 : 0 }}>
+      <HintTooltip title={open ? "" : detail}>
+        <ButtonBase
+          aria-expanded={open}
+          aria-describedby={id}
+          onClick={() => setOpen((value) => !value)}
+          sx={{
+            display: "block",
+            maxWidth: 1,
+            minHeight: 40,
+            textAlign: "left",
+            font: "inherit",
+            color: "inherit",
+          }}
+        >
+          <Typography variant="body2" noWrap>{summary}</Typography>
+        </ButtonBase>
+      </HintTooltip>
+      <Typography
+        id={id}
+        data-review-status-detail
+        variant="caption"
+        component="p"
+        sx={open
+          ? { display: "block", opacity: 0.85, lineHeight: 1.4 }
+          : visuallyHidden}
+      >
+        {detail}
+      </Typography>
+    </Box>
+  );
+}
 
 /** Paint-only chrome; no inner compositor promotion in the Review peek.
  *  Routine states take no space. A state that needs the reader is one flat
@@ -132,11 +187,7 @@ export function ReviewCodeStatus(
       }
       sx={reviewCodeStatusRow}
     >
-      <HintTooltip title={detail}>
-        <Typography variant="body2" noWrap>
-          {summary}
-        </Typography>
-      </HintTooltip>
+      <ReviewStatusMessage summary={summary} detail={detail} />
     </Alert>
   );
 }

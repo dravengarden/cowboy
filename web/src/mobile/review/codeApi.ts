@@ -12,6 +12,8 @@ export interface CodeChange {
   status: CodeChangeStatus;
   staged: boolean;
   unstaged: boolean;
+  /** Changes whenever this entry's diff can; absent from older Machines. */
+  fingerprint?: string;
 }
 
 export type CodeDiffScope = "combined" | "staged" | "unstaged";
