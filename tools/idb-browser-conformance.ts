@@ -261,7 +261,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "session-fold"
         ? 6
         : suite === "managed-calls"
-        ? 8
+        ? 11
         : suite === "project-placement"
         ? 11
         : suite === "workspace-picker"

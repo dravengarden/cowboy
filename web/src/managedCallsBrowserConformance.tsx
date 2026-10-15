@@ -698,7 +698,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "one callable agent needs no default chooser",
     );
     check(
-      text().includes("Start read-only Codex reviewers"),
+      text().includes("ask Codex for a read-only review"),
       "the switch must name what it starts",
     );
     // The card starts folded; its settings unfold under its header.
