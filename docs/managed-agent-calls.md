@@ -184,12 +184,16 @@ client login is a separate explicit ingress, not an automatic fallback.
 
 ## Agent tools policy
 
-Agent calls cost tokens, so they are off until a person turns them on. Cowboy
-owns one two-layer policy per agent kind (`codex`, `claude-code`):
+Agent calls cost tokens only when an agent decides a change needs a second
+opinion, and its prompt keeps that rare (see below), so they are on by default.
+A person can still turn them off. Cowboy owns one two-layer policy per agent
+kind (`codex`, `claude-code`):
 
 - **Global defaults** (`agent_tools:<agent>` in Hub settings; Settings → Agent
   tools; `GET /api/agent-tools`, `PUT /api/agent-tools/{agent}` for Owners).
-  Built-in defaults: calls off, both targets allowed with the other agent kind
+  A stored global default wins over the built-in one, so a Service that saved
+  "off" keeps it until an Owner changes it.
+  Built-in defaults: calls on, both targets allowed with the other agent kind
   first, default `auto`, at most 4 concurrent and 64 total calls per parent
   session; Matrix memory tools and automatic recall on.
 - **Session override** (`session_tools:<session>`; the session's **Tools**
@@ -236,18 +240,37 @@ capabilities` reports `enabled`, `default`, the limits and a per-Provider reason
 An ordinary Claude or Codex session is told about managed calls once, in its
 system prompt (Claude `--append-system-prompt`; Codex `developer_instructions`
 through the launcher's `-c` options, never replacing a user's or Cowboy's own
-`developer_instructions`). The paragraph names the other family's command, a
-minimal request and the wait/result commands, and says not to start `codex
-exec`, `codex review` or `claude -p` directly: those run hidden from the user,
-outside the session's policy and model choice. Managed children do not get it.
+`developer_instructions`). The paragraph rides every turn, so it is a pointer
+rather than a manual (about 820 characters): it names `cowboy review`, when to
+use it, and `cowboy codex|claude --help` for any other delegation, whose help
+carries the request contract. It says not to start `codex exec`, `codex review`
+or `claude -p` directly: those run hidden from the user, outside the session's
+policy and model choice. Managed children do not get it.
 
-Reviews are opt-in per session. The same paragraph tells the agent that,
-after a substantive code change and before reporting, it reads `cowboy call
-capabilities`: with calls enabled and the other family available it gets a
-read-only review and fixes or reports the findings; with calls off it neither
-reviews nor mentions the absence. An explicit user request while calls are off
-still goes through the approval prompt. Suger's Codex reviewer adapter applies
-the same rule to its review rounds (it skips without prompting when off).
+The agent decides whether a change needs a review, and skipping is the
+default. It reviews at most once per task, before reporting, and only when a
+missed bug would be costly and its own checks cannot rule it out: security or
+permissions, concurrency, persistence or migrations, data deletion, money, or a
+large cross-cutting refactor. Small, mechanical, docs-only, test-only and
+exploratory edits never get one. It does not read capabilities first; `cowboy
+review` answers one `skipped:` line at once when the session's policy refuses
+it, and the agent then carries on without mentioning it. An explicit user
+request uses `cowboy review --ask`, which goes through the approval prompt.
+Suger's Codex reviewer adapter applies its own rule to its review rounds (it
+skips without prompting when off).
+
+`cowboy review` is shaped for the agent that runs it, since every byte it
+prints is read back into that agent's context. Optional focus text comes on
+stdin (otherwise it reviews the worktree's change); it builds the request,
+submits it with Auto selection, waits in one blocking command (`--timeout-min`,
+default 20), and prints only the reviewer's reply. The request asks for one
+line per concrete problem (`path:line - problem - fix`, at most 10) and exactly
+`No findings.` when there is nothing to fix, so a clean review costs a few
+tokens. `--design` reviews design documents; `--agent` and `--preset` choose
+the reviewer. Compared with the earlier flow (a capabilities read after every
+substantive change, then start, wait and result, each printing a JSON
+envelope), a task that needs no review now costs nothing beyond the paragraph,
+and one that does costs one command and its findings.
 
 `--preset ID` on `cowboy codex|claude|call start` selects one of that explicit
 Provider's signed presets for this call (refused with Auto, with `continue`,

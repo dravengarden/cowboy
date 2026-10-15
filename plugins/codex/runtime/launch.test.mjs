@@ -77,8 +77,14 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
     JSON.parse(added[1].slice("developer_instructions=".length)),
     AGENT_CALLS_PROMPT,
   );
-  assert.match(AGENT_CALLS_PROMPT, /cowboy claude --request-file -/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy review`/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy claude --help`/);
   assert.doesNotMatch(AGENT_CALLS_PROMPT, /cowboy codex/);
+  // The agent decides, skipping is the default, and the always-on text is a
+  // pointer rather than a manual.
+  assert.match(AGENT_CALLS_PROMPT, /Skip it by default/);
+  assert.ok(AGENT_CALLS_PROMPT.length < 900, AGENT_CALLS_PROMPT.length);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
   // The user's own developer instructions, or Cowboy's, are never replaced.
   assert.deepEqual(
     agentCallsConfiguration(
