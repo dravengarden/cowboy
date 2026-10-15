@@ -104,10 +104,7 @@ pub(super) fn choose_after_wake<'a>(
 /// hibernate one other eligible idle session afterwards so the slot count
 /// returns to the limit. Best effort: it never delays or refuses the open.
 pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
-    if !state
-        .service_config
-        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
-    {
+    if !reclaim_enabled(&state) {
         return;
     }
     recent_wakes(Some(&opened));
@@ -121,29 +118,18 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     else {
         return;
     };
-    let Some(store) = state.store.as_ref() else {
-        return;
-    };
-    let Ok(machines) = store.list_machines().await else {
-        return;
-    };
-    let Some(machine) = machines
-        .into_iter()
-        .find(|machine| machine.id == machine_id && !machine.revoked)
-    else {
-        return;
-    };
-    let capacity: crate::machine_protocol::MachineCapacity = machine
-        .inventory
-        .get("capacity")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
-    let min_idle = state
-        .service_config
-        .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
-    let max_sessions = capacity.max_sessions as usize;
     let chosen = loop {
+        // Policy and capacity are read on every pass: a retry may follow a
+        // ten-minute wait during which an operator changed them.
+        if !reclaim_enabled(&state) {
+            return;
+        }
+        let Some(max_sessions) = device_capacity(&state, &machine_id).await else {
+            return;
+        };
+        let min_idle = state
+            .service_config
+            .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
         let candidates = candidates(&state, &machine_id);
         // Taken last, so a session woken while the store was read is known.
         let woken = recent_wakes(None);
@@ -164,6 +150,27 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
         Err(error) => tracing::warn!(machine = %machine_id, session = %chosen, %error,
             "could not hibernate a session after a wake exceeded capacity"),
     }
+}
+
+fn reclaim_enabled(state: &AppState) -> bool {
+    state
+        .service_config
+        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+}
+
+/// The enrolled Device's current `max_sessions`, if it is still enrolled.
+async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
+    let machines = state.store.as_ref()?.list_machines().await.ok()?;
+    let machine = machines
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)?;
+    let capacity: crate::machine_protocol::MachineCapacity = machine
+        .inventory
+        .get("capacity")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    Some(capacity.max_sessions as usize)
 }
 
 fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
