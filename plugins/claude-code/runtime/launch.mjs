@@ -345,6 +345,23 @@ export function shellQuote(value) {
   return "'" + value.replaceAll("'", "'\\''") + "'";
 }
 
+// Native's shell prefix. Only a registered project hook command needs the
+// Node proxy; every other single-argument command (a stdio MCP server, a
+// status line) runs in the shell directly. Routing them all through the
+// proxy kept a resident Node parent (about 16 MiB) beside every MCP server
+// of every session.
+export function hookPrefixScript(node, proxy, commands) {
+  const registered = [...new Set(commands)];
+  const route = registered.length
+    ? `  case "$1" in\n    ${
+      registered.map(shellQuote).join("|")
+    })\n      exec ${shellQuote(node)} ${
+      shellQuote(proxy)
+    } "$1"\n      ;;\n  esac\n`
+    : "";
+  return `#!/bin/sh\nif [ "$#" -eq 1 ]; then\n${route}  exec /bin/sh -c "$1"\nfi\nexec "$@"\n`;
+}
+
 export function projectHookSettings(hooks) {
   const commands = [];
   const tool = {};
@@ -1213,18 +1230,19 @@ async function native(args) {
     if (Object.keys(projectHooks).length) {
       const proxy = join(stage, "hook-proxy.mjs");
       await copyFile(new URL("./hook-proxy.mjs", import.meta.url), proxy);
-      const quote = shellQuote;
+      const hooks = projectHookSettings(projectHooks);
       // Native passes each hook command as one argument. The proxy runs
       // registered project commands on the target, anything else locally.
       hookPrefix = join(stage, "hook-prefix.sh");
       await writeFile(
         hookPrefix,
-        `#!/bin/sh\nif [ "$#" -eq 1 ]; then exec ${quote(process.execPath)} ${
-          quote(proxy)
-        } "$1"; fi\nexec "$@"\n`,
+        hookPrefixScript(
+          process.execPath,
+          proxy,
+          hooks.commands.map((entry) => entry.command),
+        ),
         { mode: 0o700, flag: "wx" },
       );
-      const hooks = projectHookSettings(projectHooks);
       // SessionStart hooks may persist exports for later Bash commands.
       tools.hookEnvironment = true;
       context.hooks = { commands: hooks.commands, tool: hooks.tool };

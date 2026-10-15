@@ -27,7 +27,7 @@ use crate::machine_protocol::{
 
 mod auth_watch;
 pub(crate) mod execution;
-mod host_resources;
+pub(crate) mod host_resources;
 mod installation;
 mod liveness;
 mod login_process;
