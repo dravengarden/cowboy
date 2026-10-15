@@ -522,9 +522,11 @@ it); macOS Chrome binds none of them.
   view's actions on the right (Create, fold), then Settings and the pane
   fold. There is no row of buttons above the list any more. The collapsed
   rail keeps Create at its head and Extensions and Settings at its foot,
-  like the activity bar. An icon's slot draws nothing at rest and appears
-  with Sessions focus, hover, or the armed leader, whose root layer lights
-  them all; the tooltip names the key too. Only a drawer-hosted Sessions
+  like the activity bar. Every entry stacks its slot under its glyph, inside
+  the control, so the keys stay visible at rest, the row fits the narrowest
+  sidebar, and nothing hangs out of the bar; the armed leader lights them
+  like every other slot. (Slots placed below or in the corner of the icons
+  were clipped by the bar and covered the list, 2026-10-15.) Only a drawer-hosted Sessions
   leaves Extensions and Settings in the top bar. The Window group
   `␣WW`/`␣WR` cycles visible regions or enters Resize mode.
 - `␣UE` (Prompt pane): toggle the composer between live
