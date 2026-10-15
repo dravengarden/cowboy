@@ -58,7 +58,13 @@ pub struct Supervisor {
     counter: AtomicU64,
     lifecycle: Mutex<()>,
     runtime_restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
+    /// Told the id of every dormant session a prompt woke, so the server can
+    /// return its Device to capacity. Opening a session no longer wakes it.
+    wake_listener: parking_lot::Mutex<Option<WakeListener>>,
 }
+
+/// Receives the id of a dormant session that a prompt is waking.
+pub(crate) type WakeListener = Arc<dyn Fn(&str) + Send + Sync>;
 
 fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
     let live_floor = hub
@@ -117,7 +123,18 @@ impl Supervisor {
             counter: AtomicU64::new(initial),
             lifecycle: Mutex::new(()),
             runtime_restrictions: Arc::default(),
+            wake_listener: parking_lot::Mutex::new(None),
         }
+    }
+
+    pub(crate) fn set_wake_listener(&self, listener: WakeListener) {
+        *self.wake_listener.lock() = Some(listener);
+    }
+
+    /// A dormant session holds no worker and has cleanly exited: it is
+    /// resumable, and only a prompt (or an explicit reload) launches it.
+    fn is_dormant(&self, runtime: &RemoteRuntime, session_id: &str) -> bool {
+        !runtime.has_worker(session_id) && self.hub.status(session_id) == Some(Status::Exited)
     }
 
     pub(crate) fn with_runtime_restrictions(
@@ -409,7 +426,18 @@ impl Supervisor {
                     .into_iter()
                     .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
                     .collect();
-                runtime.ensure(self.start_session(session_id)?);
+                let session = self.start_session(session_id)?;
+                if self.is_dormant(&runtime, session_id) {
+                    // Project Starting at once, as an open used to, so the
+                    // client shows the wake for the whole launch.
+                    runtime.revive(session);
+                    let listener = self.wake_listener.lock().clone();
+                    if let Some(listener) = listener {
+                        listener(session_id);
+                    }
+                } else {
+                    runtime.ensure(session);
+                }
                 runtime.prompt_traced(session_id, content, cmid, trace);
             }
             AgentCommand::Cancel => runtime.cancel(session_id),
@@ -427,6 +455,27 @@ impl Supervisor {
             }
         }
         Ok(())
+    }
+
+    /// Reconcile a session the client opened without waking it when it is
+    /// dormant: its transcript lives in the Controller, so reading history
+    /// needs no worker, and a hibernated session costs its Device nothing
+    /// until a prompt arrives. A live or disagreeing owner is still
+    /// reconciled exactly as [`Self::ensure_alive`] does.
+    ///
+    /// Returns `true` if it launched a worker.
+    ///
+    /// # Errors
+    /// If the session is unknown or its Machine runtime is disconnected.
+    pub fn open(&self, session_id: &str) -> Result<bool, String> {
+        {
+            let _lifecycle = self.lifecycle.lock();
+            let runtime = self.runtime_for_session(session_id)?;
+            if self.is_dormant(&runtime, session_id) {
+                return Ok(false);
+            }
+        }
+        self.ensure_alive(session_id)
     }
 
     /// Ensure a session has a live detached worker without sending a turn.
@@ -1198,6 +1247,86 @@ mod tests {
             [CoreCommand::Cancel { session_id, .. }] if session_id == "s"));
         assert_eq!(hub.status_revision("s"), original);
         assert_eq!(hub.session_list().len(), 1);
+    }
+
+    fn dormant_codex_session(root: &TestDir) -> Hub {
+        let cwd = root.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("workspace");
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "s".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: cwd.display().to_string(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.set_status("s", Status::Exited, None);
+        hub
+    }
+
+    #[tokio::test]
+    async fn opening_a_dormant_session_reads_history_without_launching_a_worker() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
+        let woken = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+        let observed = Arc::clone(&woken);
+        supervisor.set_wake_listener(Arc::new(move |id: &str| {
+            observed.lock().push(id.to_owned());
+        }));
+
+        assert!(!supervisor.open("s").expect("open dormant"));
+        assert!(
+            runtime.pending_for_test().is_empty(),
+            "opening launched a worker"
+        );
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(woken.lock().is_empty());
+
+        // The prompt is what wakes it, with Starting projected at once.
+        supervisor
+            .send(
+                "s",
+                AgentCommand::Prompt(Vec::new(), Some("c1".to_owned()), None),
+            )
+            .expect("prompt wakes the dormant session");
+        assert!(runtime.pending_for_test().iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session } if session.session_id == "s"
+        )));
+        assert_eq!(hub.status("s"), Some(Status::Starting));
+        assert_eq!(woken.lock().as_slice(), ["s".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn opening_a_crashed_session_still_restarts_it() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        hub.set_status("s", Status::Crashed, None);
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
+        supervisor.open("s").expect("open crashed");
+        assert!(runtime.pending_for_test().iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session } if session.session_id == "s"
+        )));
     }
 
     #[tokio::test]

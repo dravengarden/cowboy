@@ -10146,6 +10146,7 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    session_reclaim::listen_for_wakes(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
         state
             .store
@@ -20547,7 +20548,7 @@ fn handle_command(
                 // Log a server-side warning and swallow the error so no error
                 // toast is broadcast (which would otherwise read as a hard
                 // failure).
-                match state.supervisor.ensure_alive(&session_id) {
+                match state.supervisor.open(&session_id) {
                     Ok(revived) => {
                         if revived {
                             tokio::spawn(session_reclaim::rebalance_after_wake(
