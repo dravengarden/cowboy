@@ -151,6 +151,7 @@ import {
   ACTION_ICON_WIDTH_PX,
   type TopBarDensity,
   topBarDensity,
+  topBarWidth,
   USAGE_BALANCE_SEGMENT_WIDTH_PX,
   usageCountdown,
   usagePercentSegmentWidth,
@@ -166,6 +167,11 @@ const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 // they DO consume the width we are deciding against.
 // Settings carries its sequence as two compact keycaps (`⌘K` `,`).
 const TOPBAR_TRAILING_WIDTH_PX = 124;
+
+/** Run configuration budget in 100%-scale px: its floor in the density math,
+ *  and the most it may claim from slack before truncating. */
+const CONFIG_MIN_WIDTH_PX = 190;
+const CONFIG_MAX_WIDTH_PX = 560;
 
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
@@ -231,9 +237,10 @@ function SessionActionLabel({
   return (
     <Stack
       direction="row"
-      spacing={0.5}
       alignItems="center"
-      sx={density === "full" ? { width: "100%" } : undefined}
+      // A gap, not spacing: the keycap's auto margin replaced spacing's
+      // margin, so a hugging button set the word flush against its keycap.
+      sx={{ gap: "0.375rem", ...(density === "full" && { width: "100%" }) }}
     >
       {density === "full" && (
         <Typography variant="caption" fontWeight={750}>
@@ -245,7 +252,7 @@ function SessionActionLabel({
         sx={{
           display: "inline-flex",
           flexShrink: 0,
-          ...(density === "full" && { ml: "auto !important" }),
+          ...(density === "full" && { ml: "auto" }),
         }}
       >
         <LeaderKeycap
@@ -1766,14 +1773,29 @@ export function DesktopTopBarControls({
   const compactActionsMinWidth = actionCount *
     (ACTION_ICON_WIDTH_PX + DESKTOP_TOPBAR_CONTROL_GAP_PX);
   const density = topBarDensity(availableWidth, {
-    config: 190,
+    config: CONFIG_MIN_WIDTH_PX,
     usage: usageMinWidth,
     actions: sessionActionsMinWidth,
     compactActions: compactActionsMinWidth,
     trailing: TOPBAR_TRAILING_WIDTH_PX,
   }, densityRef.current);
   densityRef.current = density;
-  const controlsMinWidth = 190 +
+  // The run configuration's budget is a floor, not its size: leftover pane
+  // width (in the same 100%-scale units) lets it show the whole summary.
+  const configMaxWidth = Math.min(
+    CONFIG_MAX_WIDTH_PX,
+    CONFIG_MIN_WIDTH_PX + Math.max(
+      0,
+      availableWidth - topBarWidth({
+        config: CONFIG_MIN_WIDTH_PX,
+        usage: usageMinWidth,
+        actions: sessionActionsMinWidth,
+        compactActions: compactActionsMinWidth,
+        trailing: TOPBAR_TRAILING_WIDTH_PX,
+      }, density),
+    ),
+  );
+  const controlsMinWidth = CONFIG_MIN_WIDTH_PX +
     usageMinWidth +
     (density === "full" ? sessionActionsMinWidth : compactActionsMinWidth) +
     2 * DESKTOP_TOPBAR_CONTROL_GAP_PX;
@@ -1809,7 +1831,8 @@ export function DesktopTopBarControls({
       spacing={DESKTOP_TOPBAR_CONTROL_GAP}
       sx={{
         flex: "0 0 auto",
-        minWidth: controlsMinWidth,
+        // Budgets are 100%-scale px, like availableWidth; scale them back.
+        minWidth: desktopSize(controlsMinWidth),
         ml: "auto",
         overflow: "visible",
       }}
@@ -1848,12 +1871,15 @@ export function DesktopTopBarControls({
                 ...desktopEmbeddedControlSx({
                   open: configOpen,
                 }),
-                width: `clamp(${desktopSize(190)}, 18vw, ${desktopSize(260)})`,
+                // Hug the full summary, growing into the pane's slack beyond
+                // the strip's budget; truncate only past that.
+                width: "auto",
+                maxWidth: desktopSize(configMaxWidth),
+                flexShrink: 0,
                 height: DESKTOP_TOPBAR_CONTROL_SIZE,
                 px: 1.15,
                 justifyContent: "flex-start",
                 textTransform: "none",
-                flexShrink: 0,
                 minWidth: desktopSize(170),
                 color: "text.primary",
                 "& .MuiButton-startIcon": { mr: 0.8 },
