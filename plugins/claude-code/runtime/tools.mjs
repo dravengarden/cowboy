@@ -2781,23 +2781,28 @@ export class WorkspaceTools {
     }
   }
 
-  async notifiedRead(id, waitMs, read) {
+  //
+  // With `quiet`, a wait that ends without any notification returns null
+  // instead of reading again: the caller's next call reads first anyway, so
+  // a lost notification still costs at most one bound, and an idle process
+  // costs one read per bound instead of two.
+  async notifiedRead(id, waitMs, read, { quiet = false } = {}) {
     // Listen before reading, so output arriving in between still wakes it.
     let listener;
     let timer;
     const notified = new Promise((resolve) => {
       listener = (frame) => {
         if (frame.method === "closed" || frame.params?.processId === id) {
-          resolve();
+          resolve(true);
         }
       };
-      timer = setTimeout(resolve, waitMs);
+      timer = setTimeout(() => resolve(false), waitMs);
       this.connection.listeners?.add(listener);
     });
     try {
       const result = await read();
       if (result.chunks.length || result.closed) return result;
-      await notified;
+      if (!(await notified) && quiet && this.connection.listeners) return null;
       return await read();
     } finally {
       clearTimeout(timer);
@@ -2809,6 +2814,10 @@ export class WorkspaceTools {
     if (!Object.hasOwn(this.state.mcp, id)) {
       throw new Error("MCP process does not belong to this session");
     }
+    // An idle MCP server is the steady state of every session: its relay
+    // asks again as soon as this returns, so a quiet bound skips the second
+    // read. Over the cross-border link that halves the idle polling, which
+    // was most of OVH's 427,000 process reads a day.
     const result = await this.notifiedRead(
       id,
       waitMs,
@@ -2819,7 +2828,11 @@ export class WorkspaceTools {
           maxBytes: MAX_OUTPUT * 16,
           waitMs: 0,
         }),
+      { quiet: true },
     );
+    if (result === null) {
+      return { chunks: [], afterSeq, closed: false, exitCode: null };
+    }
     // The executor retains bounded output (sequence numbers start at 1). A
     // gap would hand native a cut JSON-RPC stream, so the server ends
     // instead, saying why. Its exit and close take numbers of their own.
