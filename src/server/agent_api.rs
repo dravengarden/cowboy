@@ -717,7 +717,9 @@ impl Sandbox {
                     .await;
                 match read {
                     Ok(0) | Err(_) => return None,
-                    Ok(_) if !line.ends_with(b"\n") => return Some(error("budget_exceeded")),
+                    Ok(count) if count > MAX_REPLY_BYTES => return Some(error("budget_exceeded")),
+                    // A truncated final line: the runtime died mid-frame.
+                    Ok(_) if !line.ends_with(b"\n") => return None,
                     Ok(count) => traffic += count,
                 }
                 let Ok(frame) = serde_json::from_slice::<Value>(&line) else {

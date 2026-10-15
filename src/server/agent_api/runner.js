@@ -3,6 +3,10 @@
 // call on stdout, one reply per line on stdin, then exactly one final frame.
 const MAX_LOG = 4096;
 const out = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
+// The final frame must be flushed before exit, or a pipe truncates it.
+const finish = (frame) =>
+  new Promise((resolve) => process.stdout.write(JSON.stringify(frame) + "\n", resolve))
+    .then(() => process.exit(0));
 const lines = console[Symbol.asyncIterator]();
 const pending = new Map();
 let next = 1;
@@ -99,17 +103,18 @@ try {
   program = (await import(process.argv[2])).default;
   if (typeof program !== "function") throw new Error("no default function");
 } catch (error) {
-  out(failure(error, "compile_error"));
-  process.exit(0);
+  await finish(failure(error, "compile_error"));
 }
+let frame;
 try {
   const value = await program({ cowboy });
   try {
-    out({ done: true, value: value === undefined ? null : value, logs });
+    JSON.stringify(value);
+    frame = { done: true, value: value === undefined ? null : value, logs };
   } catch (error) {
-    out(failure(error, "result_not_json"));
+    frame = failure(error, "result_not_json");
   }
 } catch (error) {
-  out(failure(error, "program_error"));
+  frame = failure(error, "program_error");
 }
-process.exit(0);
+await finish(frame);

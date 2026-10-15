@@ -166,6 +166,11 @@ async fn budgets_and_failures_are_explicit() {
         return;
     };
     assert_eq!(value["error"]["code"], "result_too_large");
+    // A result just under the limit arrives whole: the final frame is flushed.
+    let value = run("return 'x'.repeat(16000);", false, 10_000)
+        .await
+        .unwrap();
+    assert_eq!(value["value"].as_str().map(str::len), Some(16000));
     let value = run("return (", false, 10_000).await.unwrap();
     assert_eq!(value["error"]["code"], "compile_error");
     let value = run(
