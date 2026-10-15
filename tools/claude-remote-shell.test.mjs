@@ -18,6 +18,7 @@ import {
   pdfPages,
   pdftoppmFailure,
   persistedOutput,
+  pruneFinishedJobs,
   shellFailure,
   splitEnd,
   WorkspaceTools,
@@ -510,6 +511,42 @@ test("a command's final directory arrives on its end line", async (t) => {
   assert.deepEqual(await readdir(join(home, ".cache/cowboy/shell")), []);
 });
 
+test("finished foreground commands leave no record behind", async (t) => {
+  const { tools, bash } = await shellFixture(t);
+  await bash({ command: "echo one" });
+  assert.deepEqual(await bash({ command: "exit 4" }), { error: "Exit code 4" });
+  assert.deepEqual(tools.state.jobs, {});
+  // A command moved to the background keeps its handle to the end.
+  const timed = await tools.dispatch("Bash", {
+    command: "echo early; sleep 0.5; echo late",
+    timeout: 100,
+  });
+  const id = /\(ID: ([^)]+)\)/.exec(timed.result.stdout)[1];
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const read = await tools.dispatch("Read", {
+    file_path: "cowboy-task://" + id,
+  });
+  assert.match(read.result.file.content, /late/);
+  assert.ok(tools.state.jobs[id]);
+});
+
+test("old finished records are pruned when the state loads", () => {
+  const jobs = {};
+  for (let index = 0; index < 100; index++) {
+    jobs["done-" + index] = { closed: true, endRead: true };
+  }
+  jobs.running = { closed: false };
+  jobs.killed = { closed: true };
+  const pruned = pruneFinishedJobs(jobs);
+  assert.equal(Object.keys(pruned).length, 66);
+  assert.ok(pruned.running && pruned.killed && pruned["done-99"]);
+  assert.equal(pruned["done-35"], undefined);
+  assert.equal(
+    pruneFinishedJobs({ a: { closed: true, endRead: true } }).a.closed,
+    true,
+  );
+});
+
 test("task commands are kept only while running, within a bound", async (t) => {
   const { tools, bash } = await shellFixture(t);
   const long = `: ${"x".repeat(60000)}`;
@@ -531,7 +568,8 @@ test("task commands are kept only while running, within a bound", async (t) => {
     tools.statePath,
   );
   await reloaded.load();
-  assert.equal(Object.keys(reloaded.state.jobs).length, 71);
+  // The finished foreground command left no record.
+  assert.equal(Object.keys(reloaded.state.jobs).length, 70);
 });
 
 test("output read after the other stream's end line is kept", async () => {

@@ -25293,7 +25293,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:d1b931833108d86779cf90a69614d8ef70880bbae6c208b532024967283c8092"
+            "source_digest": "sha256:31eca0a18da27590e36947a9af9db178f606d90b44ec0408ec2bb9e41e862f82"
           },
           "claude-deepseek": {
             "component_release": "3.53.0",
@@ -25357,7 +25357,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:5dfbcf53d17abdaa8420a271627846099f8421e48fde52c429970526c4bfbcff"
+            "source_digest": "sha256:77ea468c5ec385356103038481cb5ab172a749b8cbdf43666b2a8a691479a1d4"
           },
           "codex-deepseek": {
             "component_release": "3.53.0",

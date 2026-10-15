@@ -394,6 +394,21 @@ export function cksumDigest(bytes) {
   return `c${(~crc) >>> 0}-${bytes.length}`;
 }
 
+// Earlier generations kept every finished command. A record read through
+// its end line holds no more output; the most recent few stay readable.
+const FINISHED_JOBS_KEPT = 64;
+export function pruneFinishedJobs(jobs) {
+  const finished = Object.keys(jobs).filter((id) =>
+    jobs[id].closed && jobs[id].endRead
+  );
+  const dropped = new Set(finished.slice(0, -FINISHED_JOBS_KEPT));
+  return dropped.size
+    ? Object.fromEntries(
+      Object.entries(jobs).filter(([id]) => !dropped.has(id)),
+    )
+    : jobs;
+}
+
 // Hook transcripts each keep one target cache; a few recent sources (the
 // session transcript, a subagent's) are enough for consecutive hooks.
 const HOOK_TRANSCRIPT_CACHES = 4;
@@ -970,6 +985,7 @@ export class WorkspaceTools {
       // Earlier generations stored no agents; their absence means none.
       this.state = {
         ...state,
+        jobs: pruneFinishedJobs(state.jobs),
         agents: state.agents ?? {},
         mcp: state.mcp ?? {},
       };
@@ -2309,6 +2325,15 @@ export class WorkspaceTools {
     } while (Date.now() < deadline || job.closed);
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
+      // A foreground command read through its end line has nothing more to
+      // read and no handle: its record would only grow every later save of
+      // this file (sessions kept over a thousand of them).
+      if (job.ephemeral && job.closed && job.endRead && size < limit) {
+        delete this.state.jobs[processId];
+        return () => {
+          this.state.jobs[processId] = beforeSave;
+        };
+      }
       // Concurrent changes to the record survive this cursor update: a stop
       // (never a completion), an observed end and a directory file still to
       // remove.
@@ -3174,6 +3199,8 @@ export class WorkspaceTools {
       const fields = {
         end,
         ...(cwdFile ? { reportsCwd: true } : {}),
+        // A foreground command's record ends with its output (collectOutput).
+        ...(background ? {} : { ephemeral: true }),
         ...(snapshot ? { jobs: true } : {}),
         ...(background ? this.taskCommand(command) : {}),
       };
@@ -3218,7 +3245,7 @@ export class WorkspaceTools {
         if (!result.closed && Buffer.byteLength(output) >= COLLECT_LIMIT) {
           // Still writing past the bound: keep what was read in a file.
           await this.save(() => {
-            const job = this.state.jobs[id];
+            const { ephemeral: _handle, ...job } = this.state.jobs[id];
             this.state.jobs[id] = { ...job, ...this.taskCommand(command) };
             return () =>
               this.state.jobs[id] = job;
@@ -3251,8 +3278,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           // As native's output file does, the handle reads from the start.
           await this.save(() => {
             const job = this.state.jobs[id];
+            const { ephemeral: _handle, ...kept } = job;
             this.state.jobs[id] = {
-              ...job,
+              ...kept,
               afterSeq: null,
               utf8Pending: {},
               endHeld: {},

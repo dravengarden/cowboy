@@ -1,4 +1,4 @@
-import { callGuidance } from "@cowboy/memory-client";
+import { callGuidance } from "./memory.mjs";
 
 // Cowboy managed agent calls, told to the native agent once in its system
 // prompt. Without it an agent asked to "have Codex review this" starts a

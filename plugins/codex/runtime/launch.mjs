@@ -4,8 +4,12 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { callGuidance, sessionExtensions } from "@cowboy/memory-client";
-import { memoryConfiguration, memoryNative } from "./memory.mjs";
+import {
+  callGuidance,
+  memoryConfiguration,
+  memoryNative,
+  sessionExtensions,
+} from "./memory.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
