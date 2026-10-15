@@ -75,6 +75,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod agent_api;
 mod cardea_authorization;
 mod code_buffers;
 mod code_reads;

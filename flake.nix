@@ -153,6 +153,8 @@
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs
+          ./src/agent_api.rs
+          ./src/agent_api
           ./src/managed_calls.rs
           ./src/managed_calls
           ./src/component_proof.rs
@@ -342,7 +344,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-glouy6tiGrPvx1N+hLms9nhZCL3vgp/N2k1pi02nZUQ=";
+        hash = "sha256-h/QojxLSaC7xHKbEfb48fu2MOZihHt2MqaqTVP4wQVg=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -366,6 +368,11 @@
         # instead of silently falling back to a higher-residency default.
         JEMALLOC_SYS_WITH_MALLOC_CONF =
           "abort_conf:true,background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,retain:false,metadata_thp:disabled,thp:never";
+        # The Agent API's contained program runtime (src/server/agent_api.rs).
+        # Pinned at build time; the Controller has no unsandboxed fallback.
+        COWBOY_AGENT_SANDBOX_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
+        COWBOY_AGENT_SANDBOX_PRLIMIT = "${pkgs.util-linux}/bin/prlimit";
+        COWBOY_AGENT_SANDBOX_BUN = "${bun}/bin/bun";
         cargoBuildFlags = [
           "--bin"
           "cowboy"
