@@ -4371,8 +4371,13 @@ impl Hub {
     /// Runs before the snapshot acceptance fence, so it applies its own
     /// placement check: a different execution binding is never adopted.
     pub fn reconcile_provider_release(&self, worker: &WorkerSnapshot) {
+        // Only a worker that still runs defines the release. An exited worker's
+        // stale launch would undo a dormant re-pin, which the next open then
+        // re-pins again, every time the Machine restates its snapshots.
         let Some(launch) = worker.launch.as_ref().filter(|launch| {
-            worker.has_connected_owner() && !launch.provider_generation_digest.is_empty()
+            worker.has_connected_owner()
+                && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                && !launch.provider_generation_digest.is_empty()
         }) else {
             return;
         };
@@ -6521,6 +6526,49 @@ mod managed_call_tests {
         assert_eq!(settled.provider_version, "3.3.0");
         assert_eq!(settled.provider_generation_digest, "older-generation");
         assert!(hub.accept_runtime_snapshot(&worker));
+    }
+
+    #[test]
+    fn an_exited_worker_never_undoes_a_dormant_re_pin() {
+        let hub = Hub::new();
+        let registration = child("dormant");
+        let binding = registration.execution_binding.clone();
+        hub.create_session(registration);
+        hub.set_agent_session_id("dormant", "native-thread".to_owned());
+        let meta = hub.session_info("dormant").unwrap().meta;
+        let mut worker = super::runtime_reconciliation_tests::worker_snapshot("dormant", "epoch-1");
+        worker.state = WorkerState::Exited;
+        worker.agent_session_id.clone_from(&meta.agent_session_id);
+        worker.launch = Some(crate::runtime_wire::StartSession {
+            session_id: meta.id.clone(),
+            provider: meta.provider.clone(),
+            provider_version: "3.3.0".to_owned(),
+            provider_generation_digest: "older-generation".to_owned(),
+            provider_auth_generation: meta.provider_auth_generation,
+            provider_behavior: None,
+            cwd: meta.cwd.clone(),
+            agent_session_id: meta.agent_session_id.clone(),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "worker-generation".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+            execution_binding: binding,
+        });
+
+        hub.reconcile_provider_release(&worker);
+        assert_eq!(
+            hub.session_info("dormant").unwrap().meta.provider_version,
+            "3.4.0"
+        );
+        worker.state = WorkerState::Crashed;
+        hub.reconcile_provider_release(&worker);
+        assert_eq!(
+            hub.session_info("dormant").unwrap().meta.provider_version,
+            "3.4.0"
+        );
     }
 
     #[test]
