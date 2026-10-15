@@ -737,6 +737,16 @@ impl RemoteRuntime {
     /// never launches, and the next ensure resumes the retained native thread.
     /// A refusal therefore leaves both sides unchanged.
     pub fn hibernate(&self, session_id: &str) {
+        // Two opens can each rebalance the same Device before the first
+        // hibernation lands; the Machine would refuse the second one because
+        // the worker is already gone. One request per session is enough.
+        let already_pending = self.shared.pending.lock().values().any(|command| {
+            matches!(command, CoreCommand::HibernateSession { session_id: pending, .. }
+                if pending == session_id)
+        });
+        if already_pending {
+            return;
+        }
         let command_id = self.next_id("hibernate");
         self.queue(
             command_id.clone(),
@@ -2405,6 +2415,14 @@ fn handle_rejected_command(
     reason: Option<String>,
 ) {
     let reason = reason.unwrap_or_else(|| "runtime rejected command".to_owned());
+    // Hibernating a session whose worker is already gone has reached its goal;
+    // reporting it would only toast an error at whoever opened a session.
+    if matches!(command, Some(CoreCommand::HibernateSession { .. }))
+        && reason == "session has no live worker"
+    {
+        tracing::debug!(session = %session_id, "hibernation found no live worker");
+        return;
+    }
     if let Some(CoreCommand::Prompt { content, cmid, .. }) = command {
         let text = content
             .iter()
@@ -3965,6 +3983,21 @@ mod tests {
                 .all(|command| !matches!(command, CoreCommand::SetConfigOption { .. })),
             "the worker applies the parent preset itself; a replay is only refused"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_rebalances_queue_one_hibernation_per_session() {
+        let runtime = RemoteRuntime::for_test(hub_with_stale_spark_preferences(), Vec::new());
+
+        runtime.hibernate("s");
+        runtime.hibernate("s");
+
+        let hibernations = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter(|command| matches!(command, CoreCommand::HibernateSession { .. }))
+            .count();
+        assert_eq!(hibernations, 1);
     }
 
     #[tokio::test]
