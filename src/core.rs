@@ -3995,6 +3995,43 @@ impl Hub {
             .collect()
     }
 
+    /// The session's queued prompts and parked drafts, in order.
+    #[must_use]
+    pub fn queue_and_drafts(
+        &self,
+        session_id: &str,
+    ) -> Option<(Vec<QueuedMessage>, Vec<QueuedMessage>)> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        Some((s.queue.clone(), s.drafts.clone()))
+    }
+
+    /// At most `max` hot-log events: the first ones after `after_seq` when it
+    /// is given, otherwise the last ones before `before_seq` (or the tail).
+    /// The flag reports whether the retained window's start was included.
+    #[must_use]
+    pub fn log_window(
+        &self,
+        session_id: &str,
+        after_seq: Option<u64>,
+        before_seq: Option<u64>,
+        max: usize,
+    ) -> Option<(Vec<Envelope>, bool)> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        let end = before_seq.map_or(s.log.len(), |before| {
+            s.log.partition_point(|e| e.seq < before)
+        });
+        let (start, end) = match after_seq {
+            Some(after) => {
+                let start = s.log.partition_point(|e| e.seq <= after).min(end);
+                (start, end.min(start.saturating_add(max)))
+            }
+            None => (end.saturating_sub(max), end),
+        };
+        Some((s.log[start..end].to_vec(), s.reached_start && start == 0))
+    }
+
     /// A resync `SyncPatch` for one session's queue+drafts state — `resync: true`
     /// so a (re)connecting client adopts it as ground truth. Confirmed = the cmids
     /// present in the value, so any optimistic add that landed while the client was

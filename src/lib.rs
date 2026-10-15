@@ -11,6 +11,8 @@ mod acp;
 mod acp_bridge;
 #[cfg(feature = "full")]
 mod admin;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod agent_api;
 #[cfg(feature = "full")]
 mod agent_model;
 #[cfg(feature = "full")]

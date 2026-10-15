@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use super::super::AppState;
 use super::super::agent_tools;
 use crate::machine_control::ConnectionToken;
-use crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION;
 use crate::machine_protocol::execution;
+use crate::machine_protocol::{AGENT_API_PROTOCOL_VERSION, MANAGED_CALL_PROTOCOL_VERSION};
 use crate::managed_calls::authority::Authority;
 use crate::managed_calls::lifecycle::{Record, State};
 use crate::managed_calls::protocol::{Action, Grant};
@@ -137,10 +137,21 @@ fn reconcile(state: &Arc<AppState>) {
             if protocol < MANAGED_CALL_PROTOCOL_VERSION {
                 continue;
             }
+            let agent_api = protocol >= AGENT_API_PROTOCOL_VERSION;
+            // An older Machine refuses a grant carrying the flag, so a
+            // reconnect at a lower protocol needs a replacement grant.
+            if grants
+                .get(&parent)
+                .is_some_and(|entry| entry.grant.agent_api && !agent_api)
+                && let Some(entry) = grants.remove(&parent)
+            {
+                revoked.push((entry.grant, machine.clone()));
+            }
             let entry = grants.entry(parent.clone()).or_insert_with(|| GrantEntry {
                 grant: Grant {
                     grant_id: random_id("grant"),
                     parent_session_id: parent.clone(),
+                    agent_api,
                 },
                 authority,
                 installed_on: None,
@@ -309,8 +320,51 @@ pub(in crate::server) async fn handle(
         // Authorization precedes admission, so a refusal proves non-admission.
         Err(code) => return error(code, "not_submitted"),
     };
+    dispatch(state, &meta, &ledger, action).await
+}
+
+/// Act for an already authorized parent: Agent API actions, then calls.
+async fn dispatch(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    action: Action,
+) -> Value {
     match action {
-        Action::Capabilities {} => capabilities(state, &meta, &ledger).await,
+        Action::AgentStatus {} => super::super::agent_api::status(state, meta, ledger).await,
+        Action::AgentRead {
+            code,
+            language,
+            format,
+            timeout_ms,
+        } => {
+            super::super::agent_api::read(
+                state,
+                meta,
+                ledger,
+                super::super::agent_api::Program {
+                    code,
+                    typescript: language.as_deref() != Some("js"),
+                    module: format.as_deref() == Some("module"),
+                    timeout_ms: timeout_ms.unwrap_or(crate::agent_api::DEFAULT_TIMEOUT_MS),
+                },
+            )
+            .await
+        }
+        action => dispatch_calls(state, meta, ledger, action).await,
+    }
+}
+
+/// The managed-call actions alone. Agent API programs observe calls through
+/// this, never through [`dispatch`], so a program cannot start another one.
+pub(in crate::server) async fn dispatch_calls(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    action: Action,
+) -> Value {
+    match action {
+        Action::Capabilities {} => capabilities(state, meta, ledger).await,
         Action::Start {
             provider,
             request,
@@ -319,8 +373,8 @@ pub(in crate::server) async fn handle(
         } => {
             start(
                 state,
-                &meta,
-                &ledger,
+                meta,
+                ledger,
                 &provider,
                 *request,
                 wait_ms,
@@ -341,7 +395,7 @@ pub(in crate::server) async fn handle(
         Action::Wait {
             call_id,
             timeout_ms,
-        } => match wait(state, &ledger, &call_id, timeout_ms).await {
+        } => match wait(state, ledger, &call_id, timeout_ms).await {
             Some(record) => envelope(&record),
             None => error("not_found", "not_submitted"),
         },
@@ -361,7 +415,10 @@ pub(in crate::server) async fn handle(
             Ok(None) => error("not_found", "not_submitted"),
             Err(_) => error("capacity", "not_submitted"),
         },
-        Action::Cancel { call_id } => cancel(state, &ledger, &call_id).await,
+        Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
+        Action::AgentStatus {} | Action::AgentRead { .. } => {
+            error("invalid_contract", "not_submitted")
+        }
     }
 }
 
