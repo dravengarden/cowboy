@@ -2692,7 +2692,11 @@ export function validatePluginCompatibilityRequirements(
     (input.release_schema === 3 &&
       (input.plugin_kind !== "workspace_extension" ||
         input.host_bundle_schema !== undefined)) ||
-    (input.release_schema === 4 && input.plugin_kind !== "agent_provider")
+    (input.release_schema === 4 && input.plugin_kind !== "agent_provider") ||
+    (input.release_schema === 5 &&
+      (input.plugin_kind !== "memory_backend" &&
+          input.plugin_kind !== "call_profile" ||
+        input.host_bundle_schema !== undefined))
   ) {
     throw new Error("Invalid Plugin release compatibility requirements");
   }

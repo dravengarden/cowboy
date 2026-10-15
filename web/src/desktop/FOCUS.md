@@ -147,6 +147,17 @@ for the next row in Normal; the Draft title's `Esc`/`j`/`Enter` return to
 the body. Yanks also go to the system clipboard. A field opts out with
 `data-desktop-vim="off"`; read-only pickers are not fields.
 
+#### Vim configuration
+
+Settings → Workflow → Vim config holds a vimrc subset per device
+(`vim/vimConfig.ts`, `cowboy:vim-config`): `map`/`noremap` and their
+`n`/`v`/`x`/`i`/`o` variants, plus `set timeoutlen=<ms>` (default 1000,
+like Vim). "Leave Insert" writes the common `inoremap jj <Esc>` (or `jk`,
+`kj`) line. CodeMirror editors apply every mapping through codemirror-vim;
+native text fields honour typed Insert escape sequences only, removing the
+already-typed prefix as Vim does. Unsupported lines are listed with their
+line numbers and skipped.
+
 #### Context keys
 
 What the current page owns needs no prefix beyond the leader. The open
@@ -428,7 +439,8 @@ wrapping into a second toolbar.
 
 ### Sequential chords
 
-A scoped sequence such as `'` then a row label has a three-state transition:
+A scoped sequence such as `'` then a row label, or `g` then `g` in a list or
+the reader, has a three-state transition:
 
 1. outside its scope, prefix and continuations are `inactive`;
 2. in scope, the prefix is `available` and continuations remain `inactive`;
@@ -437,9 +449,12 @@ A scoped sequence such as `'` then a row label has a three-state transition:
 
 A valid continuation executes and clears the sequence. `Esc`, timeout, focus or
 mode change, and any unrelated unmodified continuation cancel it; the unrelated
-key is consumed so it cannot trigger a row action accidentally. A modified
-global chord cancels the sequence and continues normally. Auto-repeat must not
-turn one held prefix into a completed double-key command.
+key is consumed so it cannot trigger a row action accidentally (`g` then `s`
+must not send a queued message, `g` then `l` must not open a row). Shift is
+case for a label, not a new chord. A modified global chord cancels the sequence
+and continues normally, and a modifier pressed on its own keeps it armed so
+`g` then `G` still means Shift. Auto-repeat must not turn one held prefix into
+a completed double-key command.
 
 The leader is the separate global sequence described above. It does not time
 out, and it never escapes an IME composition, modal, menu, or other exclusive
@@ -718,9 +733,15 @@ it.
 
 ## Commands and help
 
-Commands may declare pane `contexts` and exact `regions`. The Command Palette
-searches every registered command; the status line lists only actions available
-in the current region.
+Commands may declare pane `contexts` and exact `regions`. Those scopes
+disambiguate keys: a key runs only the command whose scope owns the focus. The
+Command Palette searches every registered command (title, id, group and
+description) and runs an explicit pick from any focus, so Toggle Following or a
+Top bar action works from the Prompt; only `when` can still refuse it, and the
+row then shows its `disabledReason`. The status line lists only actions
+available in the current region, and its Top bar legend is read from the
+registry so a conditional action (Verify, Update) is named exactly while it can
+run.
 
 The Desktop-only shortcut dialog opens from the status-line shortcut slot or
 `Mod+/`; `Mod+Shift+P` opens the all-command palette. Workspace destinations use

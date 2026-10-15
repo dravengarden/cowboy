@@ -1,17 +1,18 @@
+import { callGuidance } from "@cowboy/memory-client";
+
 // Cowboy managed agent calls, told to the native agent once in its system
 // prompt. Without it an agent asked to "have Codex review this" starts a
 // hidden `codex exec` that the user never sees, that ignores the session's
 // Tools policy and model choice, and that no one can stop from Cowboy.
-import { callGuidance } from "@cowboy/memory-client";
-
+// It rides every turn, so it is a pointer, not a manual: the agent reads
+// `cowboy review --help` or `cowboy codex --help` only when it needs them.
 export const AGENT_CALLS_PROMPT = [
-  "To have another agent review or analyze work (for example when asked to call Codex), use Cowboy instead of running `codex exec`, `codex review` or `claude -p` yourself.",
-  "Run `cowboy codex --request-file - [--preset ID]` with this JSON on stdin:",
-  '{"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis","instruction":"<self-contained task>","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}.',
-  "It prints a JSON envelope with a call_id; then run `cowboy call wait <call_id>` until it is terminal and `cowboy call result <call_id>`.",
-  "`cowboy call capabilities` reports whether calls are enabled and lists the preset ids (model and reasoning); omit --preset to use the session's choice.",
-  "Reviews are optional and the user turns them on per session: when you have finished a substantive code change and are about to report, run `cowboy call capabilities`; if calls are enabled and Codex is available, get a read-only review from Codex first and fix or report its findings. If they are off, do not review and do not mention it.",
-  "When the user explicitly asks for a call while calls are off, Cowboy asks them and the command waits for the answer; report a refusal instead of working around it.",
+  "`cowboy review` gets a read-only second opinion on this worktree's change from another agent and prints only its findings (optional focus text on stdin; `--help`).",
+  "Skip it by default and decide for yourself: use it at most once per task, before reporting, only when a missed bug would be costly and your own checks cannot rule it out (security, permissions, concurrency, persistence or migrations, data deletion, money, large cross-cutting refactors).",
+  "Never for small, mechanical, docs, test-only or exploratory edits.",
+  "Fix real findings and mention them briefly; after a `skipped:` line, or if the command is missing, say nothing.",
+  "If the user asks for a review, run `cowboy review --ask`.",
+  "Other delegation: `cowboy codex --help`. Never run `codex exec`, `codex review` or `claude -p` yourself; they run hidden from the user.",
 ].join(" ");
 
 /** The installed call profiles' guidance for a Claude caller, else the

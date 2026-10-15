@@ -2,6 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { productSyncDatabase } from "../productSyncDatabase";
 import { createDraftRepository } from "./repository";
 import { documentNotice } from "./DocumentNotifications";
+import { lowPriorityInterval } from "../network/bandwidth";
 
 let repository: ReturnType<typeof createDraftRepository> | undefined;
 /** The controller's `drafts` push; inert until this device opens Drafts. */
@@ -49,11 +50,12 @@ export function useDraftLibrary() {
     const refresh = (): void => {
       if (document.visibilityState !== "hidden") void owner.refresh();
     };
-    const interval = globalThis.setInterval(refresh, 15000);
+    // A fallback to the `drafts` push: slower on a constrained link.
+    const stop = lowPriorityInterval(refresh, 15000);
     globalThis.addEventListener("online", refresh);
     globalThis.addEventListener("focus", refresh);
     return () => {
-      globalThis.clearInterval(interval);
+      stop();
       globalThis.removeEventListener("online", refresh);
       globalThis.removeEventListener("focus", refresh);
     };
@@ -68,10 +70,10 @@ export function useDraftDocument(id: string) {
     const refresh = (): void => {
       if (document.visibilityState !== "hidden") void owner.refresh();
     };
-    const interval = globalThis.setInterval(refresh, 10000);
+    const stop = lowPriorityInterval(refresh, 10000);
     globalThis.addEventListener("focus", refresh);
     return () => {
-      globalThis.clearInterval(interval);
+      stop();
       globalThis.removeEventListener("focus", refresh);
     };
   }, [owner]);

@@ -267,3 +267,33 @@ test("session settings collapse queue and page view behind one disclosure", () =
   assertEquals(composerSource.includes("SessionProviderSection"), true);
   assertEquals(composerSource.includes("SessionProviderAccess"), true);
 });
+
+test("session usage lists model-scoped windows after the account windows", () => {
+  // The collector's projection of a signed-in Max account (usage-snapshot).
+  const rows = sessionProviderUsageRows({
+    provider: "anthropic",
+    status: "available",
+    source: "Anthropic",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimitsByLimitId: {
+        "claude-five_hour": {
+          primary: { usedPercent: 80, windowDurationMins: 300, resetsAt: 4_000_000_000 },
+        },
+        "claude-seven_day": {
+          primary: { usedPercent: 85, windowDurationMins: 10080, resetsAt: 4_000_000_000 },
+        },
+        "claude-model-Fable": {
+          limitName: "Fable",
+          primary: { usedPercent: 98, windowDurationMins: 10080, resetsAt: 4_000_000_000 },
+        },
+      },
+    },
+  }, 1);
+  const windows = rows.filter((row) => row.remaining !== undefined);
+  assertEquals(
+    windows.map((row) => [row.label, row.remaining]),
+    [["5h", 20], ["Weekly", 15], ["Fable · Weekly", 2]],
+  );
+  assertEquals(rows.at(-1)?.id, "usage-updated");
+});

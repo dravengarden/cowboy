@@ -35,6 +35,18 @@ pub struct StartArgs {
     preset: Option<String>,
 }
 
+/// The request contract, shown by `--help` so the always-on agent prompt need
+/// not carry it. For a code review, `cowboy review` builds all of this.
+pub const START_HELP: &str = r#"Request (JSON on stdin with --request-file -):
+  {"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis",
+   "instruction":"<self-contained task>","context":{"scope":"current-worktree"},
+   "access":"read-only","conversation":{"mode":"fresh"}}
+
+The command prints a JSON envelope with a call_id. Then:
+  cowboy call wait <call_id>     until the state is terminal
+  cowboy call result <call_id>   the reply text
+cowboy call capabilities lists whether calls are on and each agent's presets."#;
+
 /// How often a waiting request asks again; it also keeps the prompt shown.
 const APPROVAL_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -234,9 +246,31 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
         Ok(context) => context,
         Err(code) => return emit(&error(code, "not_submitted")),
     };
+    emit(
+        &submit(
+            &context,
+            provider,
+            &request,
+            args.wait_ms,
+            args.approval_wait_ms,
+            args.preset,
+        )
+        .await,
+    )
+}
+
+/// Submit one request, waiting up to `approval_wait_ms` for a person to allow
+/// it while the session's policy refuses it, and resolve a lost response.
+async fn submit(
+    context: &Wiring,
+    provider: &str,
+    request: &Request,
+    wait_ms: u64,
+    approval_wait_ms: u64,
+    preset: Option<String>,
+) -> Value {
     let request_id = request.request_id.clone();
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_millis(args.approval_wait_ms);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(approval_wait_ms);
     let mut announced = false;
     let mut value = loop {
         let value = exchange(
@@ -244,10 +278,10 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
             Action::Start {
                 provider: provider.into(),
                 request: Box::new(request.clone()),
-                wait_ms: args.wait_ms,
-                preset: args.preset.clone(),
+                wait_ms,
+                preset: preset.clone(),
             },
-            args.wait_ms,
+            wait_ms,
         )
         .await;
         if value.get("approval").and_then(Value::as_str) != Some("pending")
@@ -273,13 +307,173 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
     if value.pointer("/error/admission").and_then(Value::as_str) == Some("unknown") {
         // Observing never submits, so resolving a lost response here is
         // safe; only an unresolved outcome is left to the caller.
-        if let Some(observed) = observe(&context, &request_id).await {
-            return emit(&observed);
+        if let Some(observed) = observe(context, &request_id).await {
+            return observed;
         }
         value["request_id"] = json!(request_id);
         value["next"] = json!({"argv":["cowboy","call","observe",request_id]});
     }
-    emit(&value)
+    value
+}
+
+/// A second-opinion code review from another agent, shaped for the agent that
+/// asks: plain text in, one blocking command, only the findings out. Each
+/// printed byte is read back into the caller's context, so nothing else is.
+#[derive(Args)]
+pub struct ReviewArgs {
+    /// Review design documents (specs, plans) instead of code.
+    #[arg(long)]
+    design: bool,
+    /// The user asked for this review: if the session's reviews are off, ask
+    /// them in Cowboy and wait for the answer instead of skipping.
+    #[arg(long)]
+    ask: bool,
+    /// Reviewer agent; Auto lets the session's Tools choose.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "codex", "claude"])]
+    agent: String,
+    /// One of the reviewer's presets (model and reasoning) for this review.
+    #[arg(long)]
+    preset: Option<String>,
+    /// Give up waiting after this many minutes; the review keeps running and
+    /// its call id is printed.
+    #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=60))]
+    timeout_min: u64,
+}
+
+/// The reviewer's reply format, appended to every request: findings only,
+/// bounded, and an exact empty answer so a clean review costs a few tokens.
+const REVIEW_REPLY: &str = "Report only concrete problems worth fixing: bugs, security or data-loss risks, broken contracts, missing error handling. One line each, most severe first, at most 10: `path:line - problem - fix`. No praise, summary, restated diff or style nits. If nothing is worth fixing, reply exactly: No findings.";
+
+const DEFAULT_CODE_REVIEW: &str = "Review this worktree's change (uncommitted work and commits not yet on the default branch). Read the surrounding code you need to judge it.";
+const DEFAULT_DESIGN_REVIEW: &str =
+    "Review the design documents changed in this worktree for gaps, contradictions and risks.";
+
+fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
+    let focus = focus.trim();
+    let task = if focus.is_empty() {
+        if args.design {
+            DEFAULT_DESIGN_REVIEW
+        } else {
+            DEFAULT_CODE_REVIEW
+        }
+    } else {
+        focus
+    };
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    let request = json!({
+        "schema": 1,
+        "request_id": format!("review-{millis}-{}", std::process::id()),
+        "purpose": if args.design { "design_review" } else { "review" },
+        "instruction": format!("{task}\n\n{REVIEW_REPLY}"),
+        "context": {"scope": "current-worktree"},
+        "access": "read-only",
+        "conversation": {"mode": "fresh"},
+    });
+    Request::parse(request.to_string().as_bytes()).map_err(|reason| reason.to_string())
+}
+
+/// One line for an outcome that has no findings to show.
+fn review_line(value: &Value) -> String {
+    let code = value
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match code {
+        // The session decides whether reviews run; an agent that chose to
+        // ask needs only to know it should carry on without one.
+        "calls_disabled" | "policy_denied" | "calls_declined" | "same_agent" => {
+            format!("skipped: reviews are off for this session ({code})")
+        }
+        "concurrency_limit" | "call_limit" => format!("skipped: review budget reached ({code})"),
+        _ => format!("review unavailable: {code}"),
+    }
+}
+
+pub async fn review(args: ReviewArgs) -> anyhow::Result<()> {
+    let mut focus = String::new();
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        std::io::stdin()
+            .take(MAX_REQUEST_BYTES as u64 + 1)
+            .read_to_string(&mut focus)
+            .map_err(|_| anyhow::anyhow!("review unavailable: input_unreadable"))?;
+    }
+    let outcome = match wiring() {
+        Ok(context) => run_review(&context, &args, &focus).await,
+        Err(code) => Err(format!("review unavailable: {code}")),
+    };
+    match outcome {
+        Ok(text) => {
+            println!("{text}");
+            Ok(())
+        }
+        Err(line) => {
+            println!("{line}");
+            anyhow::bail!("{line}")
+        }
+    }
+}
+
+/// What `cowboy review` prints: the findings, or one `skipped:` line, both
+/// successes; any other outcome is one error line.
+async fn run_review(context: &Wiring, args: &ReviewArgs, focus: &str) -> Result<String, String> {
+    let request =
+        review_request(args, focus).map_err(|code| format!("review unavailable: {code}"))?;
+    let provider = match args.agent.as_str() {
+        "claude" => "claude-code",
+        other => other,
+    };
+    let approval_wait_ms = if args.ask { 600_000 } else { 0 };
+    let started = submit(
+        context,
+        provider,
+        &request,
+        MAX_WAIT_MS.min(60_000),
+        approval_wait_ms,
+        args.preset.clone(),
+    )
+    .await;
+    let Some(call_id) = started.get("call_id").and_then(Value::as_str) else {
+        let line = review_line(&started);
+        // Skipping is an answer, not a failure.
+        return if line.starts_with("skipped") {
+            Ok(line)
+        } else {
+            Err(line)
+        };
+    };
+    let call_id = call_id.to_owned();
+    let state = started.get("state").and_then(Value::as_str);
+    let settled = if state == Some("completed") {
+        started.clone()
+    } else {
+        wait(context.clone(), call_id.clone(), args.timeout_min * 60_000).await
+    };
+    match settled.get("state").and_then(Value::as_str) {
+        Some("completed") => {}
+        Some(state) if state != "error" => return Err(format!("review {state}; call {call_id}")),
+        _ => return Err(review_line(&settled)),
+    }
+    let result = exchange(
+        context.clone(),
+        Action::Result {
+            call_id: call_id.clone(),
+        },
+        0,
+    )
+    .await;
+    let text = result
+        .pointer("/result/text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| review_line(&result))?;
+    let mut text = text.trim().to_owned();
+    if result.pointer("/result/truncated") == Some(&Value::Bool(true)) {
+        text.push_str(&format!(
+            "\n(truncated; full result: cowboy call result {call_id})"
+        ));
+    }
+    Ok(text)
 }
 
 /// Resolve a start whose response was lost by its request identity.
@@ -459,6 +653,85 @@ mod tests {
         assert_eq!(seen.lock()[0]["request_id"], "request-1");
         let (_dir, wiring, _) = gateway(|_| error("not_found", "not_submitted"));
         assert!(observe(&wiring, "request-1").await.is_none());
+    }
+
+    fn review_args(design: bool) -> ReviewArgs {
+        ReviewArgs {
+            design,
+            ask: false,
+            agent: "auto".into(),
+            preset: None,
+            timeout_min: 20,
+        }
+    }
+
+    #[test]
+    fn a_review_request_is_valid_bounded_and_asks_for_findings_only() {
+        let request = review_request(&review_args(false), "  \n").unwrap();
+        assert_eq!(request.purpose, super::super::Purpose::Review);
+        assert!(request.instruction.starts_with(DEFAULT_CODE_REVIEW));
+        assert!(request.instruction.ends_with("reply exactly: No findings."));
+        assert!(valid_id(&request.request_id));
+        let focused = review_request(&review_args(true), "Check the migration order").unwrap();
+        assert_eq!(focused.purpose, super::super::Purpose::DesignReview);
+        assert!(
+            focused
+                .instruction
+                .starts_with("Check the migration order\n\n")
+        );
+        assert!(review_request(&review_args(false), &"x".repeat(200 * 1024)).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_review_submits_waits_and_prints_only_the_findings() {
+        let (_dir, wiring, seen) = gateway(|action| match action["kind"].as_str() {
+            Some("start") => json!({"schema":1,"state":"running","call_id":"call-1","error":null}),
+            Some("wait") => json!({"schema":1,"state":"completed","call_id":"call-1","error":null}),
+            Some("result") => {
+                json!({"schema":1,"state":"completed","call_id":"call-1","error":null,
+                "result":{"text":"  src/a.rs:3 - unchecked index - bound it\n","truncated":false}})
+            }
+            other => panic!("unexpected action {other:?}"),
+        });
+        let text = run_review(&wiring, &review_args(false), "").await.unwrap();
+        assert_eq!(text, "src/a.rs:3 - unchecked index - bound it");
+        let seen = seen.lock();
+        assert_eq!(
+            seen.iter()
+                .map(|action| action["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["start", "wait", "result"]
+        );
+        assert_eq!(seen[0]["provider"], "auto");
+        assert_eq!(seen[0]["request"]["purpose"], "review");
+    }
+
+    #[tokio::test]
+    async fn a_review_off_for_the_session_skips_at_once_without_asking() {
+        let (_dir, wiring, seen) = gateway(|_| {
+            json!({"schema":1,"state":"error","approval":"pending",
+                "error":{"code":"calls_disabled","admission":"not_submitted"}})
+        });
+        let text = run_review(&wiring, &review_args(false), "").await.unwrap();
+        assert!(text.starts_with("skipped: "), "{text}");
+        // No approval wait: one exchange, no resubmission loop.
+        assert_eq!(seen.lock().len(), 1);
+    }
+
+    #[test]
+    fn a_review_the_session_does_not_allow_is_a_quiet_skip() {
+        for code in [
+            "calls_disabled",
+            "policy_denied",
+            "calls_declined",
+            "same_agent",
+        ] {
+            assert!(review_line(&error(code, "not_submitted")).starts_with("skipped: "));
+        }
+        assert_eq!(
+            review_line(&error("gateway_unavailable", "unknown")),
+            "review unavailable: gateway_unavailable"
+        );
     }
 
     #[test]

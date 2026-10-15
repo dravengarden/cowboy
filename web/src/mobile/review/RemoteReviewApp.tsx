@@ -1,5 +1,7 @@
 import {
   ArrowBack,
+  CheckCircle,
+  CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
   OpenInNew,
@@ -26,7 +28,10 @@ import {
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
   pullNumber,
+  remoteFileKey,
+  remoteFileMark,
   type RemoteReviewBinding,
+  type RemoteReviewFile,
   type RemoteReviewPage,
   sameReview,
 } from "./remoteReviewModel";
@@ -118,8 +123,14 @@ export async function bindPullRequest(
   };
 }
 
+/** Viewed marks of remote PR files, kept in the session's synced Review state. */
+export interface RemoteReviewMarks {
+  readonly progress: Readonly<Record<string, string>>;
+  readonly mark: (key: string, mark: string | null) => void;
+}
+
 function PullRequest(
-  { context, choice, binding, initial, active, onLocal, onChoose }: {
+  { context, choice, binding, initial, active, onLocal, onChoose, marks }: {
     context: string;
     choice: Choice;
     binding: RemoteReviewBinding;
@@ -127,6 +138,7 @@ function PullRequest(
     active: boolean;
     onLocal: () => void;
     onChoose: () => void;
+    marks?: RemoteReviewMarks | undefined;
   },
 ): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(initial);
@@ -190,7 +202,19 @@ function PullRequest(
     if (!active) setLoading(false);
     return () => controller.current?.abort();
   }, [requestKey, active, initial]);
-  const file = snapshot?.files.find((file) => file.path === selected);
+  const files = snapshot?.files ?? [];
+  const fileIndex = files.findIndex((file) => file.path === selected);
+  const file = fileIndex >= 0 ? files[fileIndex] : undefined;
+  const viewed = (candidate: RemoteReviewFile): boolean => {
+    const key = remoteFileKey(binding, candidate.path);
+    return !!key && marks?.progress[key] === remoteFileMark(candidate);
+  };
+  const viewedCount = files.filter(viewed).length;
+  const fileKey = file ? remoteFileKey(binding, file.path) : undefined;
+  const toggleViewed = (): void => {
+    if (!file || !fileKey || !marks) return;
+    marks.mark(fileKey, viewed(file) ? null : remoteFileMark(file));
+  };
   const scrollKey = JSON.stringify([
     context,
     binding.repositoryId,
@@ -206,13 +230,29 @@ function PullRequest(
             {file?.path ?? snapshot?.title ?? `PR #${binding.number}`}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap>
-            {snapshot
+            {file
+              ? `${fileIndex + 1} of ${files.length} on this page · +${file.additions} −${file.deletions}`
+              : snapshot
               ? `${snapshot.state} · ${
                 snapshot.head.slice(0, 8)
-              } · ${snapshot.totalFiles} files`
+              } · ${snapshot.totalFiles} files${
+                marks && files.length ? ` · ${viewedCount}/${files.length} viewed` : ""
+              }`
               : "Remote pull request"}
           </Typography>
         </Box>
+        {file && marks && fileKey && (
+          <Button
+            size="small"
+            color={viewed(file) ? "success" : "inherit"}
+            aria-pressed={viewed(file)}
+            startIcon={viewed(file) ? <CheckCircle /> : <CheckCircleOutline />}
+            onClick={toggleViewed}
+            sx={{ minHeight: 44, textTransform: "none", flexShrink: 0 }}
+          >
+            Viewed
+          </Button>
+        )}
       </Stack>
       {error && <Alert severity="warning">{error}</Alert>}
       {loading && (
@@ -286,6 +326,18 @@ function PullRequest(
                   key={file.path}
                   onClick={() => setSelected(file.path)}
                 >
+                  {marks && (
+                    <CheckCircleOutline
+                      aria-label={viewed(file) ? "Viewed" : undefined}
+                      fontSize="small"
+                      sx={{
+                        mr: 1.25,
+                        flexShrink: 0,
+                        color: "success.main",
+                        visibility: viewed(file) ? "visible" : "hidden",
+                      }}
+                    />
+                  )}
                   <ListItemText
                     primary={file.path}
                     secondary={`${file.status} · +${file.additions} −${file.deletions}${
@@ -342,13 +394,34 @@ function PullRequest(
         >
           {file ? "Files" : "PRs"}
         </Button>
-        <Button
-          aria-label="Local worktree review"
-          onClick={onLocal}
-          sx={{ minHeight: 44 }}
-        >
-          Local
-        </Button>
+        {file
+          ? (
+            <>
+              <IconButton
+                aria-label="Previous file"
+                disabled={fileIndex <= 0}
+                onClick={() => setSelected(files[fileIndex - 1]?.path)}
+              >
+                <ChevronLeft />
+              </IconButton>
+              <IconButton
+                aria-label="Next file"
+                disabled={fileIndex >= files.length - 1}
+                onClick={() => setSelected(files[fileIndex + 1]?.path)}
+              >
+                <ChevronRight />
+              </IconButton>
+            </>
+          )
+          : (
+            <Button
+              aria-label="Local worktree review"
+              onClick={onLocal}
+              sx={{ minHeight: 44 }}
+            >
+              Local
+            </Button>
+          )}
         <Box sx={{ flex: 1 }} />
         <IconButton
           aria-label="Refresh PR"
@@ -372,13 +445,14 @@ function PullRequest(
 }
 
 export function RemoteReviewApp(
-  { context, title, binding, active, onBind, onLocal }: {
+  { context, title, binding, active, onBind, onLocal, marks }: {
     context: string;
     title: string;
     binding: RemoteReviewBinding | null | undefined;
     active: boolean;
     onBind: (binding: RemoteReviewBinding | null) => void;
     onLocal: () => void;
+    marks?: RemoteReviewMarks;
   },
 ): React.JSX.Element {
   const [inventory, setInventory] = useState<Inventory>();
@@ -526,6 +600,7 @@ export function RemoteReviewApp(
             active={active}
             onLocal={onLocal}
             onChoose={() => setEditing(true)}
+            marks={marks}
           />
         )
         : inventory && binding && !picking && (

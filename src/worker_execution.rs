@@ -175,17 +175,26 @@ impl Client {
         match response {
             Ok(Ok(MachineResponse::Call { response })) => {
                 if let Some(operation) = operation {
-                    let failed = matches!(
-                        &response,
-                        Response::Refused { .. }
-                            | Response::Operation {
-                                outcome: Outcome::Unknown
-                                    | Outcome::Missing
-                                    | Outcome::ResultExpired
-                            }
-                    ) || matches!(&response, Response::Operation { outcome: Outcome::Completed { reply } } if reply.get("error").is_some());
-                    if failed {
-                        tracing::warn!(event_name = "cowboy.execution.call_failed", session = %self.session, environment_id = %self.binding.environment.id, %operation, reason = "native_or_keeper_refusal", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution call failed");
+                    // A transport-level failure is a WARN; a tool that ran
+                    // and reported its own error is ordinary agent traffic.
+                    let failure = match &response {
+                        Response::Refused { .. } => Some("refused"),
+                        Response::Operation {
+                            outcome: Outcome::Unknown,
+                        } => Some("outcome_unknown"),
+                        Response::Operation {
+                            outcome: Outcome::Missing,
+                        } => Some("outcome_missing"),
+                        Response::Operation {
+                            outcome: Outcome::ResultExpired,
+                        } => Some("result_expired"),
+                        _ => None,
+                    };
+                    let tool_error = matches!(&response, Response::Operation { outcome: Outcome::Completed { reply } } if reply.get("error").is_some());
+                    if let Some(reason) = failure {
+                        tracing::warn!(event_name = "cowboy.execution.call_failed", session = %self.session, environment_id = %self.binding.environment.id, %operation, reason, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution call failed");
+                    } else if tool_error {
+                        tracing::debug!(event_name = "cowboy.execution.tool_error", session = %self.session, environment_id = %self.binding.environment.id, %operation, reason = "tool_error", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution tool reported an error");
                     } else if started.elapsed() >= SLOW_CALL {
                         // Every completed tool call already records its total
                         // and backend time (tool_overhead); a wire call is

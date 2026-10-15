@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -78,8 +78,14 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
     JSON.parse(added[1].slice("developer_instructions=".length)),
     AGENT_CALLS_PROMPT,
   );
-  assert.match(AGENT_CALLS_PROMPT, /cowboy claude --request-file -/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy review`/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy claude --help`/);
   assert.doesNotMatch(AGENT_CALLS_PROMPT, /cowboy codex/);
+  // The agent decides, skipping is the default, and the always-on text is a
+  // pointer rather than a manual.
+  assert.match(AGENT_CALLS_PROMPT, /Skip it by default/);
+  assert.ok(AGENT_CALLS_PROMPT.length < 900, AGENT_CALLS_PROMPT.length);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
   // The user's own developer instructions, or Cowboy's, are never replaced.
   assert.deepEqual(
     agentCallsConfiguration(
@@ -99,21 +105,23 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
   );
 });
 
-test("installed call profiles replace the built-in guidance for Codex", () => {
-  const guidance =
-    'To have another agent review or analyze work (for example when asked to call {{peer}}), use Cowboy instead of running `codex exec`, `codex review` or `claude -p` yourself. Run `cowboy {{peer_command}} --request-file - [--preset ID]` with this JSON on stdin: {"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis","instruction":"<self-contained task>","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}. It prints a JSON envelope with a call_id; then run `cowboy call wait <call_id>` until it is terminal and `cowboy call result <call_id>`. `cowboy call capabilities` reports whether calls are enabled and lists the preset ids (model and reasoning); omit --preset to use the session\'s choice. Reviews are optional and the user turns them on per session: when you have finished a substantive code change and are about to report, run `cowboy call capabilities`; if calls are enabled and {{peer}} is available, get a read-only review from {{peer}} first and fix or report its findings. If they are off, do not review and do not mention it. When the user explicitly asks for a call while calls are off, Cowboy asks them and the command waits for the answer; report a refusal instead of working around it.';
+test("the Review Plugin renders Codex's guidance with Claude as its peer", () => {
+  const { guidance } = JSON.parse(
+    readFileSync(
+      new URL("../../review/contract.json", import.meta.url),
+      "utf8",
+    ),
+  );
   const prompt = agentCallsPrompt({
     schema: 1,
     calls: { profiles: [{ guidance }] },
   });
-  assert.match(prompt, /cowboy claude --request-file -/);
-  assert.match(prompt, /review from Claude first/);
-  assert.doesNotMatch(prompt, /\{\{/);
+  assert.match(prompt, /Other delegation: `cowboy claude --help`/);
+  assert.doesNotMatch(prompt, /\{\{|cowboy codex/);
+  // Only the order of the hidden commands differs from the built-in text.
+  const normalize = (text) => text.replace(/Never run .*? yourself/, "");
+  assert.equal(normalize(prompt), normalize(AGENT_CALLS_PROMPT));
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
-  assert.equal(
-    agentCallsPrompt({ schema: 1, calls: null }),
-    AGENT_CALLS_PROMPT,
-  );
   const added = agentCallsConfiguration([], "", prompt);
   assert.equal(
     JSON.parse(added[1].slice("developer_instructions=".length)),

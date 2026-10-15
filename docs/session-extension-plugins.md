@@ -38,8 +38,10 @@ generic layer. What moves to Plugins is what is integration-specific:
 
 ## `memory_backend` Plugin kind
 
-Release schema 1, payload schema 1, Plugin SDK 1.12+. Data-only like
-`telemetry_backend`: no executable artifacts, URLs or credentials.
+Release schema 5, payload schema 1, Plugin SDK 1.12+. Data-only like
+`telemetry_backend`: no executable artifacts, URLs or credentials. Catalog
+readers before session extensions accept release schemas up to 4, so they skip
+these envelopes instead of failing to decode an unknown kind.
 
 ```json
 {
@@ -71,7 +73,7 @@ binding at the new path.
 
 ## `call_profile` Plugin kind
 
-Release schema 1, payload schema 1, Plugin SDK 1.12+, data-only.
+Release schema 5, payload schema 1, Plugin SDK 1.12+, data-only.
 
 ```json
 {

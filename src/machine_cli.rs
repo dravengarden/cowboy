@@ -88,7 +88,8 @@ struct ControllerConfig {
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
 /// Host observations ride the heartbeat, but no more often than this.
-const HOST_RESOURCES_INTERVAL: Duration = Duration::from_secs(30);
+// Every heartbeat: the Controller's memory reclaim acts on fresh headroom.
+const HOST_RESOURCES_INTERVAL: Duration = Duration::from_secs(15);
 /// The Machine's workspace *configuration*. Root identities deliberately stay
 /// out of it: subscribers restart the Code adapter whenever this changes, and
 /// replacing a root's object changes no trusted path.
@@ -3156,8 +3157,8 @@ async fn run_adapter_request(
             adapter = adapter,
             root = payload.get("root").and_then(serde_json::Value::as_str),
             changed = refusal.is_changed(),
-            "refused a Code read: {}",
-            refusal.detail()
+            detail = %refusal.detail(),
+            "refused a Code read"
         );
         let _ = events.send(MachineEvent::AdapterResponse {
             request_id,

@@ -25061,7 +25061,7 @@
           "sources": [
             "components/plugin-sdk"
           ],
-          "digest": "sha256:0d91e0044053d333df08fed32158305d9e5f456ab33941582394d1b6a273fd9a",
+          "digest": "sha256:fce943c20728240501aa7a2e917df671d430aff006b8ae763471d5a253d55103",
           "package": {
             "kind": "cargo",
             "name": "cowboy-plugin-sdk",
@@ -25159,7 +25159,7 @@
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:0664c46de066597fd3300ad3ef5afdb10409afe04f3a3da310d849b15bd07c39",
+          "digest": "sha256:aa3fb922e8b475e7a4acd6704c05cdf191f1661dd401f632accaf4d34207c85c",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",
@@ -25224,9 +25224,9 @@
         }
       ],
       "plugins": {
-        "claude-code": "3.19.31",
+        "claude-code": "3.19.32",
         "claude-deepseek": "3.1.35",
-        "codex": "3.4.6",
+        "codex": "3.4.7",
         "codex-deepseek": "3.1.34",
         "gemini": "3.1.34",
         "grok": "3.1.36",
@@ -25293,7 +25293,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:5f48b825b1b9eaaaa057886d5c5356637b2e6cd94bf5e3d8e5dc5621f91fc480"
+            "source_digest": "sha256:1073248a75e66d6d8c61cedf43728a73388fdce8b267131f79c5cbda8fd45257"
           },
           "claude-deepseek": {
             "component_release": "3.53.0",
@@ -25357,7 +25357,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:bb152cd7becd7c190f0490a72410775aa7a233e6db356dd05e68ff730f19b505"
+            "source_digest": "sha256:6e7349c2c6f103704d6a96e0c40fdea096614315b9be8f585460a8014f81813d"
           },
           "codex-deepseek": {
             "component_release": "3.53.0",
@@ -25489,7 +25489,7 @@
                 "version": "1.12.0"
               }
             ],
-            "source_digest": "sha256:10aaa0479187325f9e2d94131dd0acc858565c3c8b7ad90e33c6a6b8ff4a3009"
+            "source_digest": "sha256:e0afa2db8250aa8758c46451477afba255e211d1d27952cec66a1e70da436290"
           },
           "zed": {
             "component_release": "3.53.0",

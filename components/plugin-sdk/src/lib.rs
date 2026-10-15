@@ -43,12 +43,14 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 4;
+pub const RELEASE_SCHEMA_VERSION: u16 = 5;
 pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 /// Old Catalog readers must skip execution-capable Agent payloads before
 /// decoding their new closed capability vocabulary.
 pub const EXECUTION_RELEASE_SCHEMA_VERSION: u16 = 4;
+/// Old Catalog readers must skip session-extension kinds they cannot decode.
+pub const SESSION_EXTENSION_RELEASE_SCHEMA_VERSION: u16 = 5;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
 pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
@@ -483,6 +485,13 @@ impl PluginCompatibilityRequirements {
             EXECUTION_RELEASE_SCHEMA_VERSION => ensure!(
                 self.plugin_kind == PluginKind::AgentProvider,
                 "Plugin release schema 4 is reserved for execution-capable Agents"
+            ),
+            SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
+                matches!(
+                    self.plugin_kind,
+                    PluginKind::MemoryBackend | PluginKind::CallProfile
+                ) && self.host_bundle_schema.is_none(),
+                "Plugin release schema 5 is reserved for session extensions"
             ),
             _ => {}
         }
@@ -958,6 +967,11 @@ impl PluginPackage {
             EXECUTION_RELEASE_SCHEMA_VERSION
         } else if self.manifest.kind == PluginKind::WorkspaceExtension {
             WORKSPACE_RELEASE_SCHEMA_VERSION
+        } else if matches!(
+            self.manifest.kind,
+            PluginKind::MemoryBackend | PluginKind::CallProfile
+        ) {
+            SESSION_EXTENSION_RELEASE_SCHEMA_VERSION
         } else {
             RELEASE_SCHEMA_MIN_VERSION
         }
@@ -1159,6 +1173,13 @@ impl PluginRelease {
                 matches!(package.payload, PluginPayload::WorkspaceExtension(_))
                     && self.host_bundle_digest.is_none(),
                 "release schema 3 is reserved for data-only workspace extensions"
+            ),
+            SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
+                matches!(
+                    package.payload,
+                    PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_)
+                ) && self.host_bundle_digest.is_none(),
+                "release schema 5 is reserved for data-only session extensions"
             ),
             EXECUTION_RELEASE_SCHEMA_VERSION => {
                 ensure!(

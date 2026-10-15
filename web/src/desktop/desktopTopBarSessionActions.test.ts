@@ -30,9 +30,16 @@ test("desktop session verification lives in Top Bar with a ␣TA slot", () => {
   assert(topBarSource.includes('sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "A"]'));
   assert(topBarSource.includes('<LeaderKeycap leaderKey="TA" />'));
   assert(topBarSource.includes("desktopSessionActionSx({ minWidth: 112 })"));
+  // The guide shows the Top bar group slot (`␣TA`, from any focus) beside
+  // the bare letter that works while the bar owns focus.
   assert(
     shortcutDialogSource.includes(
-      '{ keys: ["A"], title: "Verify Product Session when prompted in Top Bar" }',
+      '["A", "Verify Product Session (while it is requested)"]',
+    ),
+  );
+  assert(
+    shortcutDialogSource.includes(
+      "desktopLeaderGroupSequence(DESKTOP_WORKSPACE_KEYS.focusTopbar, key), key",
     ),
   );
   assert(focusContract.includes("top-bar `R`/`U`/`A`/`L`/`C`/`X`"));

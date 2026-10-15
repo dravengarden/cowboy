@@ -4,8 +4,8 @@ Source contract for standard Codex 3.3.2 and Claude 3.4.7. Upstream native CLI,
 ACP and authentication versions are unchanged. Installation and native runtime
 acceptance are separate release receipts, not implied by this document.
 
-Matrix is the first-party `matrix` memory-backend Plugin (Codex 3.4.6 and
-Claude 3.19.31 onward, see [session extension Plugins](session-extension-plugins.md)).
+Matrix is the first-party `matrix` memory-backend Plugin (Codex 3.4.7 and
+Claude 3.19.32 onward, see [session extension Plugins](session-extension-plugins.md)).
 Installing it on the Machine that runs the Provider and enabling Memory in the
 session's Tools settings is the opt-in. The Machine passes a private
 session-extension descriptor; the Provider then reads the private binding at

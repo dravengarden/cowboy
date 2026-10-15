@@ -387,9 +387,9 @@ export function AgentToolsEditor(
       <Heading>Agent calls</Heading>
       <Row
         label="Allow calls"
-        description={`Start read-only ${
-          names.length > 0 ? names.join(" or ") : "agent"
-        } reviewers from this agent. Off costs no tokens.`}
+        description={`Let this agent ask ${
+          names.length > 0 ? names.join(" or ") : "another agent"
+        } for a read-only review when it judges a change risky. Most tasks need none; off costs no tokens.`}
       >
         <Switch
           checked={calls.enabled}

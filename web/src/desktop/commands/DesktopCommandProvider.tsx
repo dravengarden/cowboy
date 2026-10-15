@@ -121,7 +121,10 @@ export interface DesktopCommand {
 
 interface DesktopCommandContextValue {
   register: (command: DesktopCommand) => () => void;
-  execute: (id: string) => boolean;
+  /** Run a command. A key resolves by focus scope; an explicit pick (the
+   *  Command Palette) passes `anyScope` so a Conversation or Top bar command
+   *  runs from wherever the palette was opened. `when` still applies. */
+  execute: (id: string, options?: { anyScope?: boolean }) => boolean;
   list: () => DesktopCommand[];
   commands: DesktopCommand[];
 }
@@ -428,13 +431,15 @@ export function DesktopCommandProvider(
       }
     };
   }, []);
-  const execute = useCallback((id: string): boolean => {
+  const execute = useCallback((
+    id: string,
+    { anyScope = false }: { anyScope?: boolean } = {},
+  ): boolean => {
     const command = commands.current.get(id);
+    if (!command || command.when?.() === false) return false;
     if (
-      !command || command.when?.() === false ||
-      (command.contexts && !command.contexts.includes(workspace.focusedPane)) ||
-      (command.regions &&
-        (!workspace.focusedRegion || !command.regions.includes(workspace.focusedRegion)))
+      !anyScope &&
+      !desktopCommandInScope(command, workspace.focusedPane, workspace.focusedRegion)
     ) return false;
     command.run();
     return true;
@@ -851,8 +856,9 @@ export function DesktopCommandProvider(
           const key = workspaceCommandKey(event);
           const modifierOnly = isModifierKey(key);
           if (modifierOnly) return;
-          const modified = event.metaKey || event.ctrlKey || event.altKey ||
-            event.shiftKey;
+          // Labels are letters, so Shift is case here, not a new chord: a
+          // shifted letter must not fall through to Shift+X-style row actions.
+          const modified = event.metaKey || event.ctrlKey || event.altKey;
           if (modified) {
             clearPendingJumpChord();
           } else {
@@ -913,43 +919,55 @@ export function DesktopCommandProvider(
       ) {
         let action: string | null = null;
         const key = workspaceCommandKey(event);
-        if (!event.ctrlKey && (key === "h" || key === "l" || key === "Enter")) {
-          const widget = activeWidget ?? (region
-            ? nearestConversationWidget(region, widgets)
-            : null);
-          if (widget) {
+        // A pending `g` owns the next key (the sequential-chord law): `gg`
+        // jumps to the oldest output, and any other unmodified key cancels
+        // the chord and is consumed, so `gf` cannot toggle Following and
+        // `gl` cannot open a widget. A modified chord (Ctrl-D) cancels it and
+        // continues normally; a held modifier alone keeps it armed.
+        if (itemChord.current !== null && !isModifierKey(key)) {
+          globalThis.clearTimeout(itemChord.current);
+          itemChord.current = null;
+          if (!event.ctrlKey) {
             event.preventDefault();
             event.stopPropagation();
-            const expanded = widget.getAttribute("aria-expanded") === "true";
-            const toggle = key === "Enter" || (key === "h" && expanded) ||
-              (key === "l" && !expanded);
-            if (toggle) widget.click();
-            widget.focus({ preventScroll: true });
-            widget.scrollIntoView({ block: "nearest", inline: "nearest" });
-            return;
+            if (key !== "g") return;
+            action = "oldest";
           }
         }
-        if (event.ctrlKey) {
-          action = ({
-            d: "half-page-down",
-            u: "half-page-up",
-            f: "page-down",
-            b: "page-up",
-          } as Record<string, string>)[key.toLowerCase()] ?? null;
-        } else if (key.toLowerCase() === "f") {
-          action = "toggle-following";
-        } else if (!event.shiftKey || key === "G") {
-          if (itemChord.current !== null) {
-            globalThis.clearTimeout(itemChord.current);
-            itemChord.current = null;
-            if (key === "g") action = "oldest";
-          } else if (key === "g") {
-            event.preventDefault();
-            itemChord.current = globalThis.setTimeout(() => {
-              itemChord.current = null;
-            }, 900);
-            return;
-          } else {
+        if (action === null) {
+          if (!event.ctrlKey && (key === "h" || key === "l" || key === "Enter")) {
+            const widget = activeWidget ?? (region
+              ? nearestConversationWidget(region, widgets)
+              : null);
+            if (widget) {
+              event.preventDefault();
+              event.stopPropagation();
+              const expanded = widget.getAttribute("aria-expanded") === "true";
+              const toggle = key === "Enter" || (key === "h" && expanded) ||
+                (key === "l" && !expanded);
+              if (toggle) widget.click();
+              widget.focus({ preventScroll: true });
+              widget.scrollIntoView({ block: "nearest", inline: "nearest" });
+              return;
+            }
+          }
+          if (event.ctrlKey) {
+            action = ({
+              d: "half-page-down",
+              u: "half-page-up",
+              f: "page-down",
+              b: "page-up",
+            } as Record<string, string>)[key.toLowerCase()] ?? null;
+          } else if (key.toLowerCase() === "f") {
+            action = "toggle-following";
+          } else if (!event.shiftKey || key === "G") {
+            if (key === "g") {
+              event.preventDefault();
+              itemChord.current = globalThis.setTimeout(() => {
+                itemChord.current = null;
+              }, 900);
+              return;
+            }
             action = ({
               j: "line-down",
               k: "line-up",
@@ -1029,6 +1047,25 @@ export function DesktopCommandProvider(
           const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
             region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
+          // A pending `g` owns the next key (the sequential-chord law): `gg`
+          // jumps to the first row, and any other unmodified key cancels the
+          // chord and is consumed before it can reach a row verb such as
+          // `s` (send), `x` (remove) or `h` (collapse). A modified chord
+          // (Ctrl-D) cancels it and continues normally; a held modifier
+          // alone keeps it armed so `g` then `G` still means Shift.
+          if (itemChord.current !== null && !isModifierKey(key)) {
+            globalThis.clearTimeout(itemChord.current);
+            itemChord.current = null;
+            if (!event.ctrlKey) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (key === "g") {
+                items[0]?.focus({ preventScroll: true });
+                items[0]?.scrollIntoView({ block: "nearest" });
+              }
+              return;
+            }
+          }
           // Vim's view motions in every list (FOCUS.md "Navigation"):
           // Ctrl-D/U half a page and Ctrl-F/B a page move the cursor and the
           // view together; zz / zt / zb put the cursor row at the centre /
@@ -1204,11 +1241,7 @@ export function DesktopCommandProvider(
             }
           }
           let next = -1;
-          if (itemChord.current !== null) {
-            globalThis.clearTimeout(itemChord.current);
-            itemChord.current = null;
-            if (key === "g") next = 0;
-          } else if (key === "g") {
+          if (key === "g") {
             event.preventDefault();
             itemChord.current = globalThis.setTimeout(() => {
               itemChord.current = null;

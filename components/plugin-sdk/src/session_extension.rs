@@ -364,6 +364,11 @@ mod tests {
             .unwrap();
             assert!(package.agent_provider().is_none());
             assert!(package.authentication_provider().is_none());
+            // Pre-existing Catalog readers stop at release schema 4.
+            assert_eq!(
+                package.minimum_release_schema(),
+                crate::SESSION_EXTENSION_RELEASE_SCHEMA_VERSION
+            );
             assert!(package.validate_host_contract(None).is_ok());
             assert!(
                 package
@@ -374,7 +379,7 @@ mod tests {
                 plugin_sdk_version: Some("1.12.0".into()),
                 manifest_schema: 1,
                 package_schema: 1,
-                release_schema: 1,
+                release_schema: crate::SESSION_EXTENSION_RELEASE_SCHEMA_VERSION,
                 plugin_kind: current.kind,
                 payload_schema: 1,
                 host_bundle_schema: None,

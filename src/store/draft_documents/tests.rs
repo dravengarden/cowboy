@@ -181,6 +181,32 @@ async fn contract(store: &Store) {
         history.iter().map(|d| d.body.as_str()).collect::<Vec<_>>(),
         ["Start"]
     );
+    // The History list carries no content; a version is read on its own.
+    let index = store.draft_history_index("writer", "typing").await.unwrap();
+    assert_eq!(index.len(), 1);
+    assert_eq!(index[0].preview, "Start");
+    assert_eq!(index[0].characters, 5);
+    assert_eq!(index[0].body_revision, typing.body_revision);
+    let snapshot = store
+        .draft_history_snapshot("writer", "typing", index[0].revision)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.body, "Start");
+    assert!(
+        store
+            .draft_history_snapshot("other", "typing", index[0].revision)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .draft_history_snapshot("writer", "typing", index[0].revision + 1000)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Independent metadata and content writers, then competing body writers.
     let left = mutation("doc", "race-a", 2, write("Left"));

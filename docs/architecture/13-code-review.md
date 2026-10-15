@@ -100,7 +100,13 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
 - `GET /search?q=<query>&limit=<n>` returns gitignore-aware fuzzy-ranked files.
 - `GET /changes` returns normalized working-tree change records and the
-  revision of that exact status snapshot.
+  revision of that exact status snapshot. Each record may carry a
+  `fingerprint` that changes whenever that entry's diff can: its Git status,
+  the commits it is compared from, and the worktree file's identity (size,
+  mtime, ctime, inode; never its bytes). A "reviewed" mark records it, so the
+  list shows a file as unreviewed again as soon as it changes, before it is
+  reopened. Machines that predate the field omit it; the mark then falls back
+  to the diff revision, which only the open diff can check.
 - `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
   reuses an immutable unified-diff snapshot and returns its first page.
 - `GET /diff?cursor=<opaque>` returns the next page from that exact snapshot.
@@ -168,6 +174,27 @@ for the repository's object format; staged changes show only the index, and
 unstaged changes compare against that index. Review creates no commit, tree
 object, or index entry. Added/removed totals count hunk content, including
 source lines beginning with `++` or `--`, while excluding patch metadata.
+
+A literal path hides the other side of a rename, so a moved file would read as
+a whole-file addition or deletion. When a diff comes back that way, the
+provider asks Git for the rename pairing under the same base and diffs the two
+literal paths together; a pure move then shows `rename from`/`rename to` and no
+lines. An untracked file diffs the way Git would: a binary file (a NUL in its
+first 8000 bytes) is one `Binary files … differ` line rather than an error, an
+empty file has no hunk, a missing final newline is marked, and a read cut at
+the size bound drops only a split trailing character.
+
+Status rows above a source or diff (out-of-date intelligence, a diff that no
+longer matches the file) say what happened in one line and keep the
+explanation one tap away, never only in a hover hint: Review is read on
+phones. The repository drawer, the change list and the file tree keep showing
+their current content while a worktree change refreshes them; only a new
+session or comparison resets folds, the revealed window or the open drawer tab.
+
+Remote PR review steps to the previous or next changed file in place and keeps
+a per-file "Viewed" mark in the session's synced Review progress. The mark
+records the file's change as shown, so a push that leaves a file alone keeps it
+and one that changes the file clears it.
 
 Source windows end on a complete UTF-8 and preferably line boundary. The
 revision covers the worktree-relative path plus filesystem identity, size,

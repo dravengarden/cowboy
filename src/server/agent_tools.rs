@@ -192,8 +192,9 @@ fn valid_default(default: &str, targets: &[CallTarget]) -> bool {
 }
 
 impl AgentTools {
-    /// Memory stays on; agent calls are off until a session needs them. Every
-    /// agent may call either agent, and Auto prefers the other one.
+    /// Memory and agent calls are on. Calls cost tokens only when an agent
+    /// decides a change needs a second opinion, which its prompt keeps rare.
+    /// Every agent may call the other family, and Auto prefers it.
     pub fn builtin(agent: &str) -> Self {
         let targets = callable(agent)
             .map(|target| CallTarget {
@@ -209,7 +210,7 @@ impl AgentTools {
                 recall: true,
             },
             calls: CallsPolicy {
-                enabled: false,
+                enabled: true,
                 targets,
                 default: AUTO.to_owned(),
                 max_concurrent: 4,
@@ -714,11 +715,11 @@ mod tests {
         assert!(effective.memory.tools && !effective.memory.recall);
     }
     #[test]
-    fn calls_are_off_by_default_and_target_only_other_families() {
+    fn calls_are_on_by_default_and_target_only_other_families() {
         let codex = AgentTools::builtin("codex");
         assert!(codex.validate());
         assert!(codex.memory.tools && codex.memory.recall);
-        assert!(!codex.calls.enabled);
+        assert!(codex.calls.enabled);
         let agents = |tools: &AgentTools| -> Vec<String> {
             tools
                 .calls
@@ -729,12 +730,13 @@ mod tests {
         };
         assert_eq!(agents(&codex), ["claude-code"]);
         assert_eq!(agents(&AgentTools::builtin("claude-deepseek")), ["codex"]);
+        let mut disabled = codex.calls.clone();
+        disabled.enabled = false;
         assert!(matches!(
-            choose(&codex.calls, "codex", AUTO),
+            choose(&disabled, "codex", AUTO),
             Choice::Refused("calls_disabled")
         ));
         let mut enabled = codex.calls.clone();
-        enabled.enabled = true;
         let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO) else {
             panic!("auto must offer candidates");
         };
@@ -799,6 +801,7 @@ mod tests {
     #[test]
     fn an_approval_admits_the_requested_agent_once() {
         let mut calls = AgentTools::builtin("claude-code").calls;
+        calls.enabled = false;
         calls.targets.clear();
         assert!(matches!(
             choose(&calls, "claude-code", "codex"),

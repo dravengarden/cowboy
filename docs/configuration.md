@@ -216,17 +216,45 @@ a slot, is idle (no turn, queued prompt or background task), is not a system
 session, does not have Provider cache protection enabled, and has had no event
 for `sessions.reclaim_min_idle`.
 
-Opening a hibernated session always revives it, even on a full Device, because
-the Machine treats capacity as advisory. With reclaim enabled, the Service then
-hibernates the longest-idle eligible session other than the one just opened
-whenever the Device holds more workers than its capacity. This never delays or
-refuses the open.
+Opening a hibernated session shows its history without waking it: the
+transcript lives in the Controller, so a dormant session costs its Device
+nothing until it is used. The first prompt wakes it (the client shows
+Starting for the whole launch), even on a full Device, because the Machine
+treats capacity as advisory. With reclaim enabled, the Service then
+hibernates the longest-idle eligible session other than the one just woken
+whenever the Device holds more workers than its capacity. This never delays
+or refuses the prompt. Two clients waking one session share one rebalance.
 
-Hibernation sends no model request and the conversation resumes when the
-session is opened (`docs/hibernation-token-audit-2026-10-06.md`). Keeping the
-idle threshold at or above the longest Provider prompt-cache lifetime means a
-reclaimed session's cache had already expired, so reclaiming it adds no token
-cost. Idle time counts from a session's newest activity: prompts, agent
+## Memory reclaim
+
+Off by default. With `sessions.memory_reclaim = true`, the Service keeps each
+Device's Agent workers below the cgroup limit that contains them. A Device
+reports `memory_headroom_bytes` with every heartbeat (every 15 seconds): for
+the worker slice and each of its ancestors with a `memory.high` (or else
+`memory.max`), the limit minus `memory.current` plus its inactive file cache,
+taking the smallest. Host `MemAvailable` is not used: on OVH on 2026-10-15 it
+reported 2.59 GiB while the user slice sat at 10.11 of its 10.20 GB
+`memory.high` and had been throttled into reclaim 145,783 times.
+
+When the headroom falls below `sessions.memory_reclaim_below` (1 GiB), the
+Service hibernates the longest-idle eligible session on that Device, waits
+until its worker has released and a report taken afterwards has arrived, and
+repeats until the headroom reaches `sessions.memory_reclaim_until` (2 GiB).
+Eligibility is that of capacity reclaim with its own idle threshold,
+`sessions.memory_reclaim_min_idle` (15 minutes), and excludes sessions woken
+in the last ten minutes. With nothing eligible it logs once every ten minutes
+and waits. A launch is still admitted immediately; reserving memory before a
+launch and queueing it when the Device is short is a separate step.
+
+Hibernation sends no model request and the wake makes none before the
+prompt (`docs/hibernation-token-audit-2026-10-06.md`). That is not proof that
+the next prompt costs the same as after a warm idle: a Provider prompt cache
+is kept by the Provider, not by the process, and survives a hibernation only
+while it is unexpired and the resumed request repeats the same prefix. Cache
+lifetimes differ by Provider and billing (for Claude Code, one hour on
+included subscription usage and five minutes otherwise), and a relaunch can
+change the prefix, so a threshold below the lifetime can turn a cache read
+into a cache write. Idle time counts from a session's newest activity: prompts, agent
 output, tool calls and permissions. Lifecycle edges and the command, mode,
 configuration and usage updates a worker replays when it starts or reconnects
 do not count. A Controller restart restores the clock from the newest such
