@@ -4,6 +4,7 @@ import { assert, assertEquals } from "@std/assert";
 import {
   hasNewOptimisticDelivery,
   hasNewerLiveUserItem,
+  newestTranscriptSeq,
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy.ts";
@@ -51,8 +52,21 @@ test("a fresh local delivery is detected even when an echo keeps the count stabl
 });
 
 test("confirmed human rows pin only when a newer seq arrives", () => {
-  assertEquals(hasNewerLiveUserItem(["10"], ["10", "11"]), true);
-  assertEquals(hasNewerLiveUserItem(["11"], ["9", "11"]), false);
-  assertEquals(hasNewerLiveUserItem(["11"], ["11"]), false);
-  assertEquals(hasNewerLiveUserItem([], ["3"]), true);
+  assertEquals(hasNewerLiveUserItem(10, ["10", "11"]), true);
+  assertEquals(hasNewerLiveUserItem(11, ["9", "11"]), false);
+  assertEquals(hasNewerLiveUserItem(11, ["11"]), false);
+  assertEquals(hasNewerLiveUserItem(0, ["3"]), true);
+});
+
+test("an older prompt paged into a prompt-free tail does not pin", () => {
+  // A released tool-only tail (seqs 900..950) has no human prompt. Scrolling up
+  // pages in prompt 640; it is older than every presented row, not a send.
+  const tail = newestTranscriptSeq(["900", "925", "950"]);
+  assertEquals(hasNewerLiveUserItem(tail, ["640"]), false);
+  assertEquals(hasNewerLiveUserItem(tail, ["640", "951"]), true);
+});
+
+test("newest transcript seq ignores non-seq row keys", () => {
+  assertEquals(newestTranscriptSeq(["12", "local-cmid", "7"]), 12);
+  assertEquals(newestTranscriptSeq([]), 0);
 });

@@ -210,6 +210,7 @@ import {
 import {
   hasNewOptimisticDelivery,
   hasNewerLiveUserItem,
+  newestTranscriptSeq,
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
@@ -5293,11 +5294,15 @@ export function Transcript({
     [items],
   );
   const liveUserItemSignature = liveUserItemKeys.join("\u001f");
+  const newestItemSeq = useMemo(
+    () => newestTranscriptSeq(items.map((item) => item.key)),
+    [items],
+  );
   const previousOptimisticDeliveriesRef = useRef({
     sessionId,
     pageId: pageId ?? "",
     ids: optimisticDeliveryIds,
-    userKeys: liveUserItemKeys,
+    newestItemSeq,
   });
 
   // A fresh local prompt is an explicit request to see the new delivery. Pin it
@@ -5313,13 +5318,13 @@ export function Transcript({
     const arrived = previous.sessionId === sessionId &&
       previous.pageId === pageKey && (
         hasNewOptimisticDelivery(previous.ids, optimisticDeliveryIds) ||
-        hasNewerLiveUserItem(previous.userKeys, liveUserItemKeys)
+        hasNewerLiveUserItem(previous.newestItemSeq, liveUserItemKeys)
       );
     previousOptimisticDeliveriesRef.current = {
       sessionId,
       pageId: pageKey,
       ids: optimisticDeliveryIds,
-      userKeys: liveUserItemKeys,
+      newestItemSeq,
     };
     if (!arrived) return undefined;
     if (renderPausedRef.current || drawerCatchupActiveRef.current) {

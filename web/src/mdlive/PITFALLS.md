@@ -3042,3 +3042,15 @@ Editor-facing rules that follow from it:
 
 No extension, IME, caret, paste or keyboard path changed. Verified with the
 Web gate and on the Desktop shell in Chrome; not run on iOS.
+
+122. **A paged-in old prompt is not a new send.** Field report: on Desktop,
+    scrolling up through a long tool-heavy turn snapped the transcript back to
+    the latest row. Following releases deep history to a short tail; that tail
+    can hold tool rows and no human prompt. The pin-on-new-prompt check
+    compared incoming prompt seqs with the previous *prompt* keys, so with
+    none the next older page's prompt looked newer than seq 0 and forced
+    Following (`scrollTop = 0`) mid-read. Compare against the newest seq of
+    every row already presented (`newestTranscriptSeq`): history pages are
+    always older, a real echo is always newer. Reproduced and verified in
+    Chrome with a replayed real session and live streaming; the optimistic
+    local-send pin is unchanged.

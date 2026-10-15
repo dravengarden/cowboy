@@ -24,7 +24,8 @@ export function hasNewOptimisticDelivery(
   return currentIds.some((id) => !previous.has(id));
 }
 
-function maxNumericKey(keys: readonly string[]): number {
+/** Newest envelope seq among transcript row keys; non-seq keys are ignored. */
+export function newestTranscriptSeq(keys: Iterable<string>): number {
   let max = 0;
   for (const key of keys) {
     const seq = Number(key);
@@ -33,15 +34,16 @@ function maxNumericKey(keys: readonly string[]): number {
   return max;
 }
 
-/** Confirmed human rows use envelope seq keys. Count only newer seqs so a
- * history prepend cannot look like a fresh send and yank the live edge. */
+/** Confirmed human rows use envelope seq keys. Only a prompt newer than every
+ * row already presented is a fresh send. Comparing with earlier prompt keys
+ * alone failed once a released tool-only tail held no prompt: the next older
+ * page then looked newer than "nothing" and yanked a reader to the live edge. */
 export function hasNewerLiveUserItem(
-  previousKeys: readonly string[],
-  currentKeys: readonly string[],
+  previousNewestSeq: number,
+  currentUserKeys: readonly string[],
 ): boolean {
-  const previousMax = maxNumericKey(previousKeys);
-  return currentKeys.some((key) => {
+  return currentUserKeys.some((key) => {
     const seq = Number(key);
-    return Number.isFinite(seq) && seq > previousMax;
+    return Number.isFinite(seq) && seq > previousNewestSeq;
   });
 }
