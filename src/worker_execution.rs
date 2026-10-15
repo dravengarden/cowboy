@@ -323,8 +323,11 @@ impl Client {
             .and_then(|value| value.as_u64());
         match executed_ms {
             // `duration_ms` is the metric: `cowboy logs metrics` histograms it
-            // per event, so this event's histogram is the Cowboy overhead.
+            // per event, so this event's histogram is the Cowboy overhead. One
+            // per call: the local store keeps it, the journal does not
+            // (logs::EVIDENCE_ONLY).
             Some(executed_ms) => tracing::info!(
+                target: "cowboy::evidence",
                 event_name = "cowboy.execution.tool_overhead",
                 session = %self.session,
                 method,
@@ -336,6 +339,7 @@ impl Client {
             ),
             // A keeper that predates timing: only the whole duration is known.
             None => tracing::info!(
+                target: "cowboy::evidence",
                 event_name = "cowboy.execution.tool_untimed",
                 session = %self.session,
                 method,

@@ -23,6 +23,13 @@ use tracing_subscriber::{
 };
 
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+/// Target of high-volume per-call evidence: retained in the local store,
+/// queryable with `cowboy logs`, and kept out of stderr (the journal), which
+/// otherwise repeated every executor call of every session.
+pub(crate) const EVIDENCE_ONLY: &str = "cowboy::evidence";
+/// Writer health is rewritten (fsynced) at least this often, well within the
+/// 30 s staleness bound; sooner only when losses or failures change.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
 /// How long an ordinary record may wait for others to share its transaction.
 const BATCH_LINGER: Duration = Duration::from_millis(500);
 /// Within the store's per-append bound.
@@ -275,7 +282,10 @@ pub(crate) fn init_stderr() {
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(false)
-        .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")));
+        .with_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(format!("info,{EVIDENCE_ONLY}=off"))),
+        );
     let _ = tracing_subscriber::registry()
         .with(fmt)
         .with(LogLayer)
@@ -372,6 +382,7 @@ fn run(
 ) {
     let mut maintenance = Instant::now() - Duration::from_secs(30);
     let mut health_time = maintenance;
+    let mut reported = (0, 0);
     let mut shutdown = None;
     loop {
         if capture.stopping.load(Ordering::Acquire) {
@@ -453,7 +464,15 @@ fn run(
         let stop = shutdown.is_some_and(|s| {
             capture.pending.load(Ordering::Relaxed) == 0 || s.elapsed() >= Duration::from_secs(5)
         });
-        if stop || health_time.elapsed() >= Duration::from_secs(5) {
+        let troubled = (
+            capture.dropped.load(Ordering::Relaxed),
+            capture.failures.load(Ordering::Relaxed),
+        );
+        if stop
+            || health_time.elapsed() >= HEALTH_INTERVAL
+            || (troubled != reported && health_time.elapsed() >= Duration::from_secs(5))
+        {
+            reported = troubled;
             let health = Health {
                 schema: 1,
                 instance: capture.instance.clone(),
