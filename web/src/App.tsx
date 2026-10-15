@@ -242,7 +242,13 @@ import {
     collapsedSessionsPromptRatioStore,
     dragCollapses,
 } from "./desktopLayout";
-import { setVimSetting, useVimSetting } from "./vimSetting";
+import { setVimConfigSource, setVimSetting, useVimConfigSource, useVimSetting } from "./vimSetting";
+import {
+    parseVimConfig,
+    selectedEscapePreset,
+    VIM_ESCAPE_PRESETS,
+    withEscapePreset,
+} from "./desktop/vim/vimConfig";
 import { setComposerSourceMode, useComposerSourceMode } from "./composerSourceMode";
 import {
     setComposerDebugSetting,
@@ -6223,6 +6229,73 @@ function MobileSettingsRoute({
     );
 }
 
+// Vim configuration: a quick Insert-escape choice (`jj`, …) plus the full
+// vimrc subset it edits. Mappings apply to every CodeMirror editor; native
+// text fields honour the Insert escape sequences.
+function DesktopVimConfigRows({
+    shortcutsAvailable,
+}: {
+    shortcutsAvailable: boolean;
+}): React.JSX.Element {
+    const source = useVimConfigSource();
+    const config = useMemo(() => parseVimConfig(source), [source]);
+    const preset = selectedEscapePreset(source);
+    return (
+        <>
+            <DesktopSettingsRow shortcut="I" shortcutAvailable={shortcutsAvailable} label="Leave Insert" description="Typed keys that act as Esc">
+                <Box sx={{ display: "grid", gridTemplateColumns: `repeat(${String(VIM_ESCAPE_PRESETS.length + 1)}, minmax(0, 1fr))`, gap: 0.75 }}>
+                    <DesktopSettingsChoice active={preset === null} onClick={() => setVimConfigSource(withEscapePreset(source, null))} ariaLabel="Esc only">Esc</DesktopSettingsChoice>
+                    {VIM_ESCAPE_PRESETS.map((sequence) => (
+                        <DesktopSettingsChoice key={sequence} active={preset === sequence} onClick={() => setVimConfigSource(withEscapePreset(source, sequence))} ariaLabel={`${sequence} leaves Insert`}>{sequence}</DesktopSettingsChoice>
+                    ))}
+                </Box>
+            </DesktopSettingsRow>
+            <DesktopSettingsRow shortcut="V" shortcutAvailable={shortcutsAvailable} label="Vim config" description="map / noremap lines and set timeoutlen=ms">
+                <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                    <Box
+                        component="textarea"
+                        data-settings-choice
+                        aria-label="Vim config"
+                        spellCheck={false}
+                        rows={Math.min(8, Math.max(3, source.split("\n").length + 1))}
+                        value={source}
+                        placeholder={'inoremap jj <Esc>\nnnoremap H ^\nset timeoutlen=1000'}
+                        onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setVimConfigSource(event.target.value)}
+                        sx={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            resize: "vertical",
+                            px: 1,
+                            py: 0.75,
+                            borderRadius: 1.25,
+                            border: 1,
+                            borderColor: config.errors.length > 0 ? "warning.main" : "divider",
+                            bgcolor: "transparent",
+                            color: "text.primary",
+                            font: "inherit",
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                            fontSize: "0.8125rem",
+                            lineHeight: 1.5,
+                            outline: "none",
+                            "&:focus": { borderColor: "primary.main" },
+                        }}
+                    />
+                    {config.errors.map((error) => (
+                        <Typography key={error.line} variant="caption" color="warning.main" sx={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+                            Line {error.line}: {error.message}
+                        </Typography>
+                    ))}
+                    {config.errors.length === 0 && config.mappings.length > 0 && (
+                        <Typography variant="caption" color="text.secondary">
+                            {config.mappings.length} mapping{config.mappings.length === 1 ? "" : "s"} · timeout {config.timeoutMs} ms
+                        </Typography>
+                    )}
+                </Stack>
+            </DesktopSettingsRow>
+        </>
+    );
+}
+
 function DesktopSettingsContent({
     themeMode,
     onSetThemeMode,
@@ -6322,6 +6395,7 @@ function DesktopSettingsContent({
                     <DesktopSettingsRow shortcut="M" shortcutAvailable={shortcutsAvailable} label="Vim keybindings" description="Modal editing in the composer">
                         <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
+                    {vim && <DesktopVimConfigRows shortcutsAvailable={shortcutsAvailable} />}
                     <DesktopSettingsRow shortcut="E" shortcutAvailable={shortcutsAvailable} label="Source mode" description="Edit the literal markdown instead of the live preview">
                         <DesktopSettingsChoice active={sourceMode} onClick={() => setComposerSourceMode(!sourceMode)} ariaLabel="Toggle composer source mode">{sourceMode ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>

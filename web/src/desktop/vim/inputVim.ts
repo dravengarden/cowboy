@@ -16,7 +16,12 @@
 // arms, the Draft title returns to its body.
 
 import { useEffect, useState } from "react";
-import { getVimSetting } from "../../vimSetting";
+import { getVimConfigSource, getVimSetting } from "../../vimSetting";
+import {
+  InsertEscapeMatcher,
+  insertEscapeSequences,
+  parseVimConfig,
+} from "./vimConfig";
 import { workspaceCommandKey } from "../commands/workspaceCommandKey";
 import {
   findChar,
@@ -52,6 +57,38 @@ interface FieldState {
 }
 
 const states = new WeakMap<Field, FieldState>();
+const escapeMatchers = new WeakMap<Field, InsertEscapeMatcher>();
+let escapeConfig: { source: string; sequences: string[]; timeoutMs: number } | null = null;
+
+/** The user's insert escape sequences (`inoremap jj <Esc>`), parsed once per edit. */
+function insertEscapes(): { sequences: string[]; timeoutMs: number } {
+  const source = getVimConfigSource();
+  if (escapeConfig?.source !== source) {
+    const config = parseVimConfig(source);
+    escapeConfig = {
+      source,
+      sequences: insertEscapeSequences(config),
+      timeoutMs: config.timeoutMs,
+    };
+  }
+  return escapeConfig;
+}
+
+function escapeMatcher(field: Field): InsertEscapeMatcher {
+  let matcher = escapeMatchers.get(field);
+  if (!matcher) {
+    matcher = new InsertEscapeMatcher();
+    escapeMatchers.set(field, matcher);
+  }
+  return matcher;
+}
+
+/** A printable key the field is about to insert itself (no IME, no chord). */
+function typedCharacter(event: KeyboardEvent): string | null {
+  if (event.isComposing || event.keyCode === 229) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  return event.key.length === 1 ? event.key : null;
+}
 let register: { text: string; linewise: boolean } = { text: "", linewise: false };
 
 function state(field: Field): FieldState {
@@ -219,7 +256,32 @@ export function handleInputVimKey(event: KeyboardEvent): boolean {
       !event.metaKey && !event.altKey && !event.shiftKey) ||
       (event.ctrlKey && !event.metaKey && !event.altKey &&
         event.code === "BracketLeft");
-    if (!escape) return false;
+    if (!escape) {
+      // `inoremap jj <Esc>`: earlier keys of the sequence were typed into the
+      // field; the completing key removes them and leaves Insert, as in Vim.
+      const { sequences, timeoutMs } = insertEscapes();
+      const char = sequences.length > 0 ? typedCharacter(event) : null;
+      const matcher = escapeMatcher(field);
+      if (char === null) {
+        matcher.reset();
+        return false;
+      }
+      const hit = matcher.push(char, sequences, timeoutMs);
+      if (hit === null) return false;
+      const typed = hit.slice(0, -1);
+      const at = field.selectionStart ?? 0;
+      if (
+        field.selectionEnd !== at || at < typed.length ||
+        field.value.slice(at - typed.length, at) !== typed
+      ) return false;
+      const value = field.value.slice(0, at - typed.length) + field.value.slice(at);
+      const cursor = at - typed.length;
+      setValue(field, value);
+      field.setSelectionRange(cursor, cursor);
+      enterInputNormal(field, cursor > lineStart(value, cursor) ? cursor - 1 : cursor);
+      return consume();
+    }
+    escapeMatcher(field).reset();
     const at = field.selectionStart ?? 0;
     enterInputNormal(field, at > lineStart(field.value, at) ? at - 1 : at);
     return consume();

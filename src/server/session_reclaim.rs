@@ -2,10 +2,10 @@
 //!
 //! The policy only ever hibernates, which sends no model request and keeps the
 //! native conversation resumable. It picks the longest-idle session that has
-//! been quiet for at least `sessions.reclaim_min_idle`, so a reclaimed
-//! session's Provider prompt cache has already expired and resuming it costs
-//! no more than leaving it running would have. Busy, permission-waiting,
-//! background-working, system and cache-protected sessions are never chosen.
+//! been quiet for at least `sessions.reclaim_min_idle`. The next prompt after
+//! a wake is not proven to cost the same as after a warm idle: see
+//! docs/configuration.md. Busy, permission-waiting, background-working,
+//! system and cache-protected sessions are never chosen.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +28,18 @@ const WAKE_PROTECTION: Duration = Duration::from_mins(10);
 static RECENT_WAKES: std::sync::LazyLock<
     parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 > = std::sync::LazyLock::new(Default::default);
+
+/// Sessions whose wake already has a rebalance in flight.
+static PENDING: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+struct Pending(String);
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        PENDING.lock().remove(&self.0);
+    }
+}
 
 /// Record a wake and return every session woken within `WAKE_PROTECTION`.
 fn recent_wakes(woken: Option<&str>) -> std::collections::HashSet<String> {
@@ -99,7 +111,20 @@ pub(super) fn choose_after_wake<'a>(
         .map(|candidate| candidate.id.as_str())
 }
 
-/// Opening a hibernated session revives it even on a full Device, because the
+/// Rebalance after every wake a prompt causes. The listener holds the state
+/// weakly: the Supervisor it is installed on is owned by that state.
+pub(super) fn listen_for_wakes(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    state
+        .supervisor
+        .set_wake_listener(Arc::new(move |session_id: &str| {
+            if let Some(state) = weak.upgrade() {
+                tokio::spawn(rebalance_after_wake(state, session_id.to_owned()));
+            }
+        }));
+}
+
+/// Waking a hibernated session revives it even on a full Device, because the
 /// Machine treats capacity as advisory. With `sessions.reclaim_on_capacity`,
 /// hibernate one other eligible idle session afterwards so the slot count
 /// returns to the limit. Best effort: it never delays or refuses the open.
@@ -107,6 +132,13 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     if !reclaim_enabled(&state) {
         return;
     }
+    // Two clients, or a prompt racing an open, can wake the same session
+    // together; one rebalance covers it (production logged every
+    // hibernation twice).
+    if !PENDING.lock().insert(opened.clone()) {
+        return;
+    }
+    let _pending = Pending(opened.clone());
     recent_wakes(Some(&opened));
     tokio::time::sleep(WAKE_SETTLE).await;
     let Some(machine_id) = state
