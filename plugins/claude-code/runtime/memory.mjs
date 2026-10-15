@@ -3,13 +3,23 @@ import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// The runtime build rewrites only this file's package import; other launcher
+// modules reach the memory client through these re-exports.
 import {
+  callGuidance,
   MatrixClient,
   MEMORY_TOOLS,
   memoryConfiguration,
   memoryToolNames,
+  sessionExtensions,
 } from "@cowboy/memory-client";
-export { MatrixClient, memoryConfiguration, memoryToolNames };
+export {
+  callGuidance,
+  MatrixClient,
+  memoryConfiguration,
+  memoryToolNames,
+  sessionExtensions,
+};
 // Legacy Matrix enrollment without a session-extension descriptor.
 export const MATRIX_TOOLS = [
   ...MEMORY_TOOLS,

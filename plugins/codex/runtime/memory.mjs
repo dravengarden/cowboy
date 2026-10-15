@@ -1,9 +1,16 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { MatrixClient, memoryConfiguration } from "@cowboy/memory-client";
+// The runtime build rewrites only this file's package import, so the
+// launcher reaches the memory client through these re-exports.
+import {
+  callGuidance,
+  MatrixClient,
+  memoryConfiguration,
+  sessionExtensions,
+} from "@cowboy/memory-client";
 
-export { memoryConfiguration };
+export { callGuidance, memoryConfiguration, sessionExtensions };
 
 export function codexObservation(message) {
   if (message.method !== "item/completed") return null;

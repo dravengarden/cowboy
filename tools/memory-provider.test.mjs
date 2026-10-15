@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { codexObservation } from "../plugins/codex/runtime/memory.mjs";
 import {
@@ -59,4 +60,26 @@ test("native capture accepts public completions and excludes thinking and images
     }),
     null,
   );
+});
+
+test("only memory.mjs imports the memory client package in a Provider runtime", () => {
+  // The runtime builds rewrite that one file's package import to a bundled
+  // copy; any other module importing the package fails once packaged.
+  for (const plugin of ["claude-code", "codex"]) {
+    const directory = new URL(`../plugins/${plugin}/runtime/`, import.meta.url);
+    for (const name of readdirSync(directory)) {
+      if (
+        !/\.m?js$/.test(name) || name.includes(".test.") ||
+        name === "memory.mjs"
+      ) {
+        continue;
+      }
+      const source = readFileSync(new URL(name, directory), "utf8");
+      assert.doesNotMatch(
+        source,
+        /from "@cowboy\/memory-client"/,
+        `${plugin}/runtime/${name} must import the memory client through memory.mjs`,
+      );
+    }
+  }
 });

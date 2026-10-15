@@ -1,5 +1,4 @@
 import { agentCallsPrompt } from "./agent-calls.mjs";
-import { sessionExtensions } from "@cowboy/memory-client";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -49,6 +48,7 @@ import {
   MatrixClient,
   memoryConfiguration,
   memoryToolNames,
+  sessionExtensions,
 } from "./memory.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
