@@ -17,6 +17,7 @@ import { useComposerSourceMode } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
+import { topBarRegionHints } from "./topBarRegionHints";
 import type { ShortcutAvailability } from "./commands/shortcutAvailability";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
@@ -114,17 +115,17 @@ function regionHints(
   projection: "history" | "explore",
   sourceMode: boolean,
   live: boolean,
+  vim: boolean,
+  topBar: readonly RegionHint[],
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
+      // The action keys come from the registry (topBarRegionHints), so a
+      // conditional action (Verify, Update) is listed exactly while it runs.
       return [
         { keys: "H/L", label: "Select" },
         { keys: "Enter", label: "Open" },
-        { keys: "R", label: "Config" },
-        { keys: "U", label: "Usage" },
-        { keys: "L", label: "Reload" },
-        { keys: "C", label: "Compact" },
-        { keys: "X", label: "Clear" },
+        ...topBar,
       ];
     case "sessions.rail":
       return [
@@ -173,7 +174,9 @@ function regionHints(
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "prompt.composer":
       return [
-        { keys: "Esc", label: "Normal" },
+        // Only Vim turns Esc into a mode change; without it the editor keeps
+        // Esc for its own layers (completion, selection).
+        ...(vim ? [{ keys: "Esc", label: "Normal" }] : []),
         // Without a live server a send is queued, exactly as while busy.
         { keys: "Mod+Enter", label: status === "busy" || !live ? "Queue" : "Send" },
         // The label names the destination, not the current state: a hint
@@ -265,7 +268,15 @@ export function DesktopStatusLine({
     : [];
   const ordinaryHints: RegionHint[] = [
     ...promptRegions,
-    ...regionHints(focusedRegion, status, projection, sourceMode, rawSync.phase === "live"),
+    ...regionHints(
+      focusedRegion,
+      status,
+      projection,
+      sourceMode,
+      rawSync.phase === "live",
+      vimEnabled,
+      focusedRegion === "topbar.controls" ? topBarRegionHints(commands.commands) : [],
+    ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
     ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && itemCount > 0

@@ -305,6 +305,49 @@ try {
     await press("z", "KeyZ", 90);
     await waitFor(`${regionNow} === 'sessions.list'`, "zz keeps the cursor in Sessions");
     console.log(JSON.stringify({ list_view_motion: "zM zR gg ^D ^U zz" }));
+    // The sequential-chord law: a pending `g` takes the next key, so `g`
+    // then `l` neither opens the row nor expands a folder, and `gg` still
+    // reaches the first row afterwards.
+    await press("j", "KeyJ", 74);
+    await waitFor(`${rowIndex} > 0`, "j moves down before the chord probe");
+    const before = await page.evaluate<[number, number]>(`[${rowIndex}, ${expanded}]`);
+    await press("g", "KeyG", 71);
+    await press("l", "KeyL", 76);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const after = await page.evaluate<[number, number]>(`[${rowIndex}, ${expanded}]`);
+    if (await page.evaluate<string>(regionNow) !== "sessions.list") {
+      throw new Error("g then l left the Sessions list: the chord leaked into the row verb");
+    }
+    if (after[0] !== before[0] || after[1] !== before[1]) {
+      throw new Error(`g then l changed the list (${JSON.stringify(before)} → ${JSON.stringify(after)})`);
+    }
+    await press("g", "KeyG", 71);
+    await press("g", "KeyG", 71);
+    await waitFor(`${rowIndex} === 0`, "gg reaches the first row after a cancelled chord");
+    console.log(JSON.stringify({ list_chord_law: "gl consumed; gg" }));
+  }
+  // An explicit Command Palette pick runs a Conversation command from the
+  // Prompt: the focus scope only disambiguates keys.
+  {
+    await press("k", "KeyK", 75, mac ? 4 : 1);
+    await press("p", "KeyP", 80);
+    await waitFor(`${regionNow} === 'prompt.composer'`, "␣P focuses the Prompt for the palette probe");
+    const follow = "document.querySelector('[data-desktop-conversation-follow]')";
+    const pressed = `${follow}?.getAttribute('aria-pressed')`;
+    const before = await page.evaluate<string | null>(pressed);
+    if (before === null) throw new Error("the Session page shows no Follow control");
+    await press("k", "KeyK", 75, mac ? 4 : 1);
+    await press("k", "KeyK", 75);
+    await waitFor(`${palette} && document.activeElement === ${palette}`, "the palette opens for Toggle Following");
+    await page.send("Input.insertText", { text: "Toggle Following" });
+    await waitFor(
+      "document.querySelector('[role=\"dialog\"] .MuiListItemButton-root.Mui-selected')?.textContent.includes('Toggle Following')",
+      "the palette selects Toggle Following",
+    );
+    await press("Enter", "Enter", 13);
+    await waitFor(`!${palette}`, "Enter runs the Conversation command and closes the palette");
+    await waitFor(`${pressed} !== ${JSON.stringify(before)}`, "Toggle Following changed the Follow control");
+    console.log(JSON.stringify({ palette_any_scope: `following ${before} → ${await page.evaluate<string>(pressed)}` }));
   }
 } finally {
   await page.close();
