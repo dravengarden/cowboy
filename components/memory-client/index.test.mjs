@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -12,7 +13,13 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { MatrixClient, matrixConfiguration } from "./index.mjs";
+import {
+  MatrixClient,
+  matrixConfiguration,
+  memoryConfiguration,
+  memoryToolNames,
+  sessionExtensions,
+} from "./index.mjs";
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "matrix-client-test-"));
@@ -256,5 +263,139 @@ test("context failure does not replay already acknowledged user evidence", async
     f.requests.filter((r) => r.path === "/v1/observe").length,
     2,
     "completed-turn learning is a different observation and must still be delivered",
+  );
+});
+
+test("session extensions select the backend binding and switches", async (t) => {
+  const f = await fixture(t);
+  const home = join(f.root, "xdg");
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previous;
+  });
+  const legacy = join(f.root, "legacy.json");
+  await writeFile(legacy, JSON.stringify(f.config), { mode: 0o600 });
+  const memory = {
+    plugin: { id: "matrix", version: "1.0.0", digest: "sha256:x" },
+    protocol: "matrix_http_v1",
+    tools: ["memory_search", "memory_get"],
+    recall: true,
+    observe: true,
+    enable_tools: true,
+    enable_recall: false,
+  };
+  // Without a descriptor the legacy enrollment keeps every capability.
+  const old = await memoryConfiguration("codex", {
+    extensions: null,
+    legacyPath: legacy,
+  });
+  assert.equal(old.enableRecall && old.enableTools && old.observe, true);
+  assert.equal(memoryToolNames(old).length, 7);
+  // The Matrix Plugin falls back to the legacy enrollment.
+  const fallback = await memoryConfiguration("codex", {
+    extensions: { schema: 1, memory },
+    legacyPath: legacy,
+  });
+  assert.equal(fallback.enableRecall, false);
+  assert.deepEqual(memoryToolNames(fallback), [
+    "mcp__matrix__memory_search",
+    "mcp__matrix__memory_get",
+  ]);
+  // The Cowboy binding path wins over the legacy file.
+  const bound = join(home, "cowboy", "memory", "matrix");
+  await mkdir(bound, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(bound, "codex.json"),
+    JSON.stringify({ ...f.config, state_dir: join(f.root, "bound") }),
+    { mode: 0o600 },
+  );
+  const preferred = await memoryConfiguration("codex", {
+    extensions: { schema: 1, memory },
+    legacyPath: legacy,
+  });
+  assert.equal(preferred.state_dir, join(f.root, "bound"));
+  // Another backend never reads the Matrix enrollment.
+  assert.equal(
+    await memoryConfiguration("codex", {
+      extensions: {
+        schema: 1,
+        memory: { ...memory, plugin: { ...memory.plugin, id: "other" } },
+      },
+      legacyPath: legacy,
+    }),
+    null,
+  );
+  // No backend, an unknown protocol, or everything off means no memory.
+  for (
+    const extensions of [
+      { schema: 1, memory: null },
+      { schema: 1, memory: { ...memory, protocol: "unknown" } },
+      {
+        schema: 1,
+        memory: {
+          ...memory,
+          enable_tools: false,
+          enable_recall: false,
+          observe: false,
+        },
+      },
+    ]
+  ) {
+    assert.equal(
+      await memoryConfiguration("codex", { extensions, legacyPath: legacy }),
+      null,
+    );
+  }
+  await assert.rejects(
+    memoryConfiguration("codex", {
+      extensions: {
+        schema: 1,
+        memory: { ...memory, plugin: { id: "../escape" } },
+      },
+    }),
+    /identity/,
+  );
+});
+
+test("descriptor file must be private", async (t) => {
+  const f = await fixture(t);
+  const path = join(f.root, "extensions.json");
+  await writeFile(path, JSON.stringify({ schema: 1, memory: null }), {
+    mode: 0o600,
+  });
+  assert.deepEqual(await sessionExtensions({ path }), {
+    schema: 1,
+    memory: null,
+  });
+  await chmod(path, 0o644);
+  await assert.rejects(sessionExtensions({ path }), /private/);
+  assert.equal(await sessionExtensions({ path: "" }), null);
+});
+
+test("recall off sends no context request; tools off omits the write hint", async (t) => {
+  const f = await fixture(t);
+  const quiet = await MatrixClient.open(
+    { ...f.config, enableRecall: false, enableTools: true, observe: true },
+    f.descriptor,
+  );
+  const text = await quiet.begin("Remember the release gate");
+  assert.match(text, /Current user evidence for memory_put/);
+  assert.equal(f.requests.some((r) => r.path === "/v1/context"), false);
+  await quiet.close();
+  const silent = await MatrixClient.open(
+    { ...f.config, enableRecall: false, enableTools: false, observe: true },
+    f.descriptor,
+  );
+  assert.equal(await silent.begin("Another turn"), "");
+  silent.add("assistant", "Done");
+  await silent.close();
+  await silent.flush();
+  const observed = f.requests.filter((r) => r.path === "/v1/observe");
+  assert.ok(
+    observed.some((r) =>
+      r.payload.events?.some((e) => e.text === "Another turn")
+    ),
   );
 });

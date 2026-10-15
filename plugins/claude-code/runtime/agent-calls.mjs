@@ -2,6 +2,8 @@
 // prompt. Without it an agent asked to "have Codex review this" starts a
 // hidden `codex exec` that the user never sees, that ignores the session's
 // Tools policy and model choice, and that no one can stop from Cowboy.
+import { callGuidance } from "@cowboy/memory-client";
+
 export const AGENT_CALLS_PROMPT = [
   "To have another agent review or analyze work (for example when asked to call Codex), use Cowboy instead of running `codex exec`, `codex review` or `claude -p` yourself.",
   "Run `cowboy codex --request-file - [--preset ID]` with this JSON on stdin:",
@@ -11,3 +13,13 @@ export const AGENT_CALLS_PROMPT = [
   "Reviews are optional and the user turns them on per session: when you have finished a substantive code change and are about to report, run `cowboy call capabilities`; if calls are enabled and Codex is available, get a read-only review from Codex first and fix or report its findings. If they are off, do not review and do not mention it.",
   "When the user explicitly asks for a call while calls are off, Cowboy asks them and the command waits for the answer; report a refusal instead of working around it.",
 ].join(" ");
+
+/** The installed call profiles' guidance for a Claude caller, else the
+ * built-in text above. */
+export function agentCallsPrompt(extensions) {
+  return callGuidance(extensions, {
+    peer: "Codex",
+    peerCommand: "codex",
+    fallback: AGENT_CALLS_PROMPT,
+  });
+}

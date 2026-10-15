@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { matrixConfiguration, memoryNative } from "./memory.mjs";
+import { callGuidance, sessionExtensions } from "@cowboy/memory-client";
+import { memoryConfiguration, memoryNative } from "./memory.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
@@ -37,12 +38,23 @@ export const AGENT_CALLS_PROMPT = [
 // The agent-calls instructions as a native `-c` option, unless the user's
 // own config or Cowboy's options already set developer instructions: those
 // are never replaced.
-export function agentCallsConfiguration(configuration, userConfig) {
+export function agentCallsConfiguration(
+  configuration,
+  userConfig,
+  prompt = AGENT_CALLS_PROMPT,
+) {
   const own = /^\s*developer_instructions\s*=/m.test(userConfig ?? "") ||
     configuration.some((value) => value.startsWith("developer_instructions="));
-  return own
-    ? []
-    : ["-c", `developer_instructions=${JSON.stringify(AGENT_CALLS_PROMPT)}`];
+  return own ? [] : ["-c", `developer_instructions=${JSON.stringify(prompt)}`];
+}
+
+/** The installed call profiles' guidance for a Codex caller. */
+export function agentCallsPrompt(extensions) {
+  return callGuidance(extensions, {
+    peer: "Claude",
+    peerCommand: "claude",
+    fallback: AGENT_CALLS_PROMPT,
+  });
 }
 
 function userCodexConfig() {
@@ -161,15 +173,20 @@ export async function main(args) {
   const inspection = forwarded.length === 1 &&
     ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
   // The client passes these to the exact native CLI it launches.
+  const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
     configuration.push(
-      ...agentCallsConfiguration(configuration, userCodexConfig()),
+      ...agentCallsConfiguration(
+        configuration,
+        userCodexConfig(),
+        agentCallsPrompt(extensions),
+      ),
     );
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (
     !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-      await matrixConfiguration("codex"))
+      await memoryConfiguration("codex", { extensions }))
   ) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");

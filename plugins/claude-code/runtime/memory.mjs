@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MatrixClient,
-  matrixConfiguration,
   MEMORY_TOOLS,
+  memoryConfiguration,
+  memoryToolNames,
 } from "@cowboy/memory-client";
-export { MatrixClient, matrixConfiguration };
+export { MatrixClient, memoryConfiguration, memoryToolNames };
+// Legacy Matrix enrollment without a session-extension descriptor.
 export const MATRIX_TOOLS = [
   ...MEMORY_TOOLS,
   "memory_read",
@@ -55,13 +57,16 @@ async function send(stream, frame) {
 // Local sessions retain the upstream ACP tool surface. The remote Mods facade
 // uses the same memory client but still owns every project tool separately.
 export async function localMemoryNative(executable, args) {
-  const memory = await MatrixClient.open(await matrixConfiguration("claude"));
-  if (!memory) throw new Error("Missing Matrix local configuration");
+  const config = await memoryConfiguration("claude");
+  const memory = await MatrixClient.open(config);
+  if (!memory) throw new Error("Missing memory backend configuration");
   const stage = await mkdtemp(join(tmpdir(), "cowboy-matrix-"));
   const mcp = join(stage, "mcp.json");
   await writeFile(
     mcp,
-    JSON.stringify({ mcpServers: { matrix: memory.mcp() } }),
+    JSON.stringify({
+      mcpServers: memory.tools ? { [config.server]: memory.mcp() } : {},
+    }),
     { mode: 0o600 },
   );
   const child = spawn(executable, [...args, "--mcp-config", mcp], {
@@ -81,13 +86,15 @@ export async function localMemoryNative(executable, args) {
         const prompt = claudePrompt(frame);
         if (prompt.trim() && !prompt.trimStart().startsWith("/")) {
           const context = await memory.begin(prompt);
-          const content = frame.message.content;
-          frame.message.content = [
-            { type: "text", text: context },
-            ...(typeof content === "string"
-              ? [{ type: "text", text: content }]
-              : content),
-          ];
+          if (context) {
+            const content = frame.message.content;
+            frame.message.content = [
+              { type: "text", text: context },
+              ...(typeof content === "string"
+                ? [{ type: "text", text: content }]
+                : content),
+            ];
+          }
         }
       }
       await send(child.stdin, frame);

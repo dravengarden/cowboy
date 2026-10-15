@@ -1,4 +1,5 @@
-import { AGENT_CALLS_PROMPT } from "./agent-calls.mjs";
+import { agentCallsPrompt } from "./agent-calls.mjs";
+import { sessionExtensions } from "@cowboy/memory-client";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -45,9 +46,9 @@ import {
   claudeObservation,
   claudePrompt,
   localMemoryNative,
-  MATRIX_TOOLS,
   MatrixClient,
-  matrixConfiguration,
+  memoryConfiguration,
+  memoryToolNames,
 } from "./memory.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
@@ -417,7 +418,7 @@ export function nativeArguments(
   memoryConfig,
   hookSettings,
   skillPlugin,
-  matrix = Boolean(memoryConfig),
+  memoryTools = [],
 ) {
   const values = new Set([
     "--model",
@@ -546,8 +547,8 @@ export function nativeArguments(
     plugin,
     ...(skillPlugin ? ["--plugin-dir", skillPlugin] : []),
     ...(memoryConfig ? ["--mcp-config", memoryConfig] : []),
-    ...(memoryConfig && matrix
-      ? ["--allowedTools", MATRIX_TOOLS.join(",")]
+    ...(memoryConfig && memoryTools.length
+      ? ["--allowedTools", memoryTools.join(",")]
       : []),
     ...(hookSettings ? ["--settings", hookSettings] : []),
     ...forwarded,
@@ -870,13 +871,15 @@ async function bridge(
         }
         if (memory && prompt.trim() && !command) {
           const recalled = await memory.begin(claudePrompt(frame));
-          const content = frame.message.content;
-          frame.message.content = [
-            { type: "text", text: recalled },
-            ...(typeof content === "string"
-              ? [{ type: "text", text: content }]
-              : content),
-          ];
+          if (recalled) {
+            const content = frame.message.content;
+            frame.message.content = [
+              { type: "text", text: recalled },
+              ...(typeof content === "string"
+                ? [{ type: "text", text: content }]
+                : content),
+            ];
+          }
         }
       }
       await send(child.stdin, frame);
@@ -1047,7 +1050,7 @@ async function native(args) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
-  let child, connection, modBridge, memory, tools;
+  let child, connection, modBridge, memory, tools, extensions, memoryConfigured;
   try {
     // The endpoint serves one connection; a restarted session can arrive
     // while the previous process's connection is still being torn down.
@@ -1085,10 +1088,13 @@ async function native(args) {
       const round = parseRound(await tools.bytes(roundPath));
       managed = { schema: round.output_schema };
     }
-    memory = managed ? null : await MatrixClient.open(
-      await matrixConfiguration("claude"),
-      descriptor,
-    );
+    extensions = await sessionExtensions();
+    memoryConfigured = managed
+      ? null
+      : await memoryConfiguration("claude", { extensions });
+    memory = managed
+      ? null
+      : await MatrixClient.open(memoryConfigured, descriptor);
     if (memory) {
       const nativeCall = tools.nativeCall.bind(tools);
       tools.nativeCall = async (tool, input, call) => {
@@ -1184,7 +1190,7 @@ async function native(args) {
     tools.endStartup();
     startupPhase("target-discovery");
     const mcpEntries = mcp.entries.filter((entry) =>
-      !(memory && entry.name === "matrix")
+      !(memory?.tools && entry.name === memoryConfigured.server)
     );
     tools.mcpServers = new Map(
       mcpEntries.filter((entry) => entry.placement === "target").map((
@@ -1251,7 +1257,9 @@ async function native(args) {
               command: process.execPath,
               args: [proxy, contextPath],
             }),
-            ...(memory ? { matrix: memory.mcp() } : {}),
+            ...(memory?.tools
+              ? { [memoryConfigured.server]: memory.mcp() }
+              : {}),
           },
         }),
         { mode: 0o600, flag: "wx" },
@@ -1286,12 +1294,16 @@ async function native(args) {
       memoryConfig,
       hookSettings,
       skillPlugin,
-      Boolean(memory),
+      memory ? memoryToolNames(memoryConfigured) : [],
     );
     // A managed child cannot call; every ordinary session learns to.
     const nativeArgv = managed
       ? managedNativeArguments(ordinaryArgv, managed.schema)
-      : [...ordinaryArgv, "--append-system-prompt", AGENT_CALLS_PROMPT];
+      : [
+        ...ordinaryArgv,
+        "--append-system-prompt",
+        agentCallsPrompt(extensions),
+      ];
     broker.mode = startingPermissionMode(nativeArgv);
     startupPhase("native-spawn");
     child = spawn(executable, nativeArgv, {
@@ -1373,7 +1385,7 @@ export async function main(args) {
     ["--version", "-V", "--help", "-h"].includes(args[0]);
   if (
     !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-      await matrixConfiguration("claude"))
+      await memoryConfiguration("claude"))
   ) {
     if (!isAbsolute(process.env.CLAUDE_CODE_EXECUTABLE ?? "")) {
       throw new Error("Missing exact Claude executable");

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { MatrixClient, matrixConfiguration } from "@cowboy/memory-client";
+import { MatrixClient, memoryConfiguration } from "@cowboy/memory-client";
 
-export { matrixConfiguration };
+export { memoryConfiguration };
 
 export function codexObservation(message) {
   if (message.method !== "item/completed") return null;
@@ -53,7 +53,7 @@ async function send(stream, message) {
 
 export async function memoryNative(args) {
   const execution = await import("./cowboy-execution.mjs");
-  const config = await matrixConfiguration("codex");
+  const config = await memoryConfiguration("codex");
   if (!config) return await execution.main(args);
   const descriptor = process.env.COWBOY_EXECUTION_DESCRIPTOR
     ? await execution.readExecutionDescriptor(
@@ -70,14 +70,21 @@ export async function memoryNative(args) {
     "memories.generate_memories=false",
     "-c",
     "memories.use_memories=false",
-    "-c",
-    "mcp_servers.matrix.url=" + JSON.stringify(mcp.url),
-    "-c",
-    'mcp_servers.matrix.env_http_headers={Authorization="COWBOY_MATRIX_AUTHORIZATION"}',
-    "-c",
-    'mcp_servers.matrix.http_headers={"X-Matrix-Binding"=' +
-      JSON.stringify(mcp.headers["X-Matrix-Binding"]) + "}",
   );
+  // The backend's MCP tools are exposed only when the session enables them.
+  if (memory.tools) {
+    const server = "mcp_servers." + config.server;
+    configuration.push(
+      "-c",
+      server + ".url=" + JSON.stringify(mcp.url),
+      "-c",
+      server +
+        '.env_http_headers={Authorization="COWBOY_MATRIX_AUTHORIZATION"}',
+      "-c",
+      server + '.http_headers={"X-Matrix-Binding"=' +
+        JSON.stringify(mcp.headers["X-Matrix-Binding"]) + "}",
+    );
+  }
   const child = spawn(process.execPath, [
     fileURLToPath(new URL("./cowboy-execution.mjs", import.meta.url)),
     ...args,
@@ -116,11 +123,13 @@ export async function memoryNative(args) {
           item,
         ) => item.text).join("\n");
         const context = await memory.begin(query);
-        message.params.input = [{
-          type: "text",
-          text: context,
-          text_elements: [],
-        }, ...inputs];
+        if (context) {
+          message.params.input = [{
+            type: "text",
+            text: context,
+            text_elements: [],
+          }, ...inputs];
+        }
       }
       await send(child.stdin, message);
     }

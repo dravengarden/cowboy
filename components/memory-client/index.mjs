@@ -1,4 +1,5 @@
-// Matrix owns memory. This package owns bounded delivery from a native session.
+// A memory backend owns memory. This package owns bounded delivery from a
+// native session to the backend named by the session-extension descriptor.
 import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
@@ -97,6 +98,127 @@ export async function matrixConfiguration(
   return config;
 }
 
+const PROTOCOLS = ["matrix_http_v1"];
+const BINDING_DIRECTORY = ["cowboy", "memory"];
+
+async function privateFile(path, limit) {
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (
+    !stat.isFile() || stat.mode & 0o077 || stat.uid !== process.getuid() ||
+    stat.size > limit
+  ) throw new Error("Session extension files must be private regular files");
+  return await readFile(path, "utf8");
+}
+
+/** The session's extension descriptor written by the runtime Machine, or
+ * `null` when the Machine predates session extensions. */
+export async function sessionExtensions(
+  { path = process.env.COWBOY_SESSION_EXTENSIONS } = {},
+) {
+  if (!path) return null;
+  if (!isAbsolute(path)) throw new Error("Session extensions must be absolute");
+  const text = await privateFile(path, 65536);
+  if (text === null) throw new Error("Session extension descriptor is missing");
+  const value = JSON.parse(text);
+  if (value?.schema !== 1) throw new Error("Unsupported session extensions");
+  return value;
+}
+
+function configHome() {
+  return process.env.XDG_CONFIG_HOME && isAbsolute(process.env.XDG_CONFIG_HOME)
+    ? process.env.XDG_CONFIG_HOME
+    : join(userInfo().homedir, ".config");
+}
+
+/** Memory for one Provider session. With a descriptor, the installed
+ * backend and the session's switches decide; its Machine-private binding
+ * lives at $XDG_CONFIG_HOME/cowboy/memory/<plugin>/<provider>.json, and the
+ * Matrix Plugin also accepts the legacy ~/.config/matrix enrollment. Without
+ * a descriptor the legacy enrollment applies with every capability on. */
+export async function memoryConfiguration(
+  provider,
+  { extensions, legacyPath } = {},
+) {
+  const descriptor = extensions === undefined
+    ? await sessionExtensions()
+    : extensions;
+  if (descriptor === null) {
+    const config = await matrixConfiguration(provider, { path: legacyPath });
+    return config && {
+      ...config,
+      server: "matrix",
+      tools: [
+        ...MEMORY_TOOLS,
+        "memory_read",
+        "memory_execute",
+        "memory_receipt",
+      ],
+      enableTools: true,
+      enableRecall: true,
+      observe: true,
+    };
+  }
+  const memory = descriptor.memory;
+  if (!memory || !PROTOCOLS.includes(memory.protocol)) return null;
+  const plugin = memory.plugin?.id;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(plugin ?? "")) {
+    throw new Error("Invalid memory backend identity");
+  }
+  const enableTools = memory.enable_tools === true;
+  const enableRecall = memory.enable_recall === true;
+  const observe = memory.observe === true;
+  if (!enableTools && !enableRecall && !observe) return null;
+  let config = await matrixConfiguration(provider, {
+    path: join(configHome(), ...BINDING_DIRECTORY, plugin, provider + ".json"),
+  });
+  if (!config && plugin === "matrix") {
+    config = await matrixConfiguration(provider, { path: legacyPath });
+  }
+  if (!config) return null;
+  const tools = Array.isArray(memory.tools) ? memory.tools : [];
+  if (!tools.every((tool) => /^[a-z][a-z0-9_]{0,63}$/.test(tool))) {
+    throw new Error("Invalid memory backend tools");
+  }
+  return {
+    ...config,
+    server: plugin,
+    tools,
+    enableTools: enableTools && tools.length > 0,
+    enableRecall,
+    observe,
+  };
+}
+
+/** Agent-facing call guidance: the installed call profiles' text with the
+ * calling Provider's peer filled in, else the Provider's built-in text. */
+export function callGuidance(extensions, { peer, peerCommand, fallback }) {
+  const profiles = extensions?.calls?.profiles;
+  if (!Array.isArray(profiles) || profiles.length === 0) return fallback;
+  return profiles
+    .map((profile) => String(profile.guidance ?? ""))
+    .filter((text) => text.trim())
+    .map((text) =>
+      text.replaceAll("{{peer}}", peer).replaceAll(
+        "{{peer_command}}",
+        peerCommand,
+      )
+    )
+    .join("\n\n") || fallback;
+}
+
+/** Exact native MCP names a Provider may allow for this configuration. */
+export function memoryToolNames(config) {
+  return config?.enableTools
+    ? config.tools.map((tool) => `mcp__${config.server}__${tool}`)
+    : [];
+}
+
 export class MatrixClient {
   static async open(
     config,
@@ -180,7 +302,17 @@ export class MatrixClient {
       },
     };
   }
+  get recall() {
+    return this.config.enableRecall !== false;
+  }
+  get tools() {
+    return this.config.enableTools !== false;
+  }
+  get observe() {
+    return this.config.observe !== false;
+  }
   add(role, value) {
+    if (!this.observe) return;
     const text = publicText(value);
     if (
       !text.trim() || !["user", "assistant", "tool"].includes(role) ||
@@ -240,8 +372,12 @@ export class MatrixClient {
     // Steering may arrive in an existing turn. Retain the previous segment first.
     await this.finish();
     this.add("user", prompt);
-    this.context =
-      "[Matrix memory unavailable; native memory remains disabled. Verify facts directly.]";
+    // Without recall or tools nothing is injected; the user turn stays in
+    // the segment the turn's completion delivers for learning.
+    if (!this.recall && !this.tools) return "";
+    this.context = this.recall
+      ? "[Matrix memory unavailable; native memory remains disabled. Verify facts directly.]"
+      : "";
     if (!this.events.length) return this.context;
     const evidence = {
       turn: this.turn + "-user",
@@ -257,13 +393,18 @@ export class MatrixClient {
       await unlink(path).catch((error) => {
         if (error.code !== "ENOENT") throw error;
       });
-      const found = await this.request("context", {
-        query: publicText(prompt),
-        budget: 6000,
-      });
-      this.context = found.text + "\nCurrent user evidence for memory_put: " +
-        receipt.events.join(", ") +
-        ". Cite an exact supporting excerpt; automatic learning also runs after the turn.\n";
+      const found = this.recall
+        ? await this.request("context", {
+          query: publicText(prompt),
+          budget: 6000,
+        })
+        : { text: "" };
+      this.context = found.text +
+        (this.tools
+          ? "\nCurrent user evidence for memory_put: " +
+            receipt.events.join(", ") +
+            ". Cite an exact supporting excerpt; automatic learning also runs after the turn.\n"
+          : "");
     } catch {
       /* Preserve unacknowledged evidence and make absence explicit. */
     } finally {

@@ -25210,12 +25210,12 @@
         },
         {
           "id": "cowboy.memory-client",
-          "version": "0.1.1",
+          "version": "0.2.0",
           "publisher": "cowboy",
           "sources": [
             "components/memory-client"
           ],
-          "digest": "sha256:8d9a39afe5486278d713a732a84d9ef92fed3139e9c3aa588a3302ab8de1aacf",
+          "digest": "sha256:26bfcda43c33565f252572742aa0fc46161f5bbb55f22763e65081b1e4289682",
           "package": {
             "kind": "npm",
             "name": "@cowboy/memory-client",
@@ -25290,10 +25290,10 @@
               },
               {
                 "id": "cowboy.memory-client",
-                "version": "0.1.1"
+                "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:df01890475e1789f640581d17368ab55a025b3780aa4e402d7d21d5878f96c2a"
+            "source_digest": "sha256:5f48b825b1b9eaaaa057886d5c5356637b2e6cd94bf5e3d8e5dc5621f91fc480"
           },
           "claude-deepseek": {
             "component_release": "3.53.0",
@@ -25354,10 +25354,10 @@
               },
               {
                 "id": "cowboy.memory-client",
-                "version": "0.1.1"
+                "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:c3d1581b9ab11cf92b8e55e2b3f8f0093441223c5d4cbc902a5c158a3b0068bd"
+            "source_digest": "sha256:bb152cd7becd7c190f0490a72410775aa7a233e6db356dd05e68ff730f19b505"
           },
           "codex-deepseek": {
             "component_release": "3.53.0",
