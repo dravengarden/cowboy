@@ -7,6 +7,7 @@ import {
   type DraftMutationArgs,
   expectedRevision,
   projectDraft,
+  snapshotSummary,
 } from "./model.ts";
 
 function fixture() {
@@ -21,6 +22,8 @@ function fixture() {
   let offline = false;
   let gateway = false;
   let dropReply = false;
+  // False: a Controller from before the History index.
+  let indexed = true;
   let saving: (() => Promise<void>) | undefined;
   let index: unknown = null;
   const client = (
@@ -101,6 +104,17 @@ function fixture() {
         if (path.endsWith("/history")) {
           return Promise.resolve(Response.json(history));
         }
+        if (path.endsWith("/history/index")) {
+          if (!indexed) return Promise.resolve(new Response("", { status: 404 }));
+          return Promise.resolve(Response.json(history.map(snapshotSummary)));
+        }
+        const snapshot = /\/history\/(\d+)$/.exec(path);
+        if (snapshot) {
+          const kept = history.find((d) => d.revision === Number(snapshot[1]));
+          return Promise.resolve(
+            kept ? Response.json(kept) : Response.json({}, { status: 404 }),
+          );
+        }
         const row = server.get(path.split("/").at(-1)!);
         return Promise.resolve(
           row ? Response.json(row) : Response.json({}, { status: 404 }),
@@ -137,6 +151,9 @@ function fixture() {
     },
     cacheIndex: (entries: readonly DraftDocument[]) => {
       index = entries.map(({ body: _b, attachments: _a, ...entry }) => entry);
+    },
+    legacyHistory: () => {
+      indexed = false;
     },
     /** The next accepted mutation is applied, but its reply never arrives. */
     dropReply: () => {
@@ -656,4 +673,43 @@ test("a rename queued offline outranks a newer cached index entry", async () => 
   await second.document(id).change({ type: "rename", title: "Mine" });
   assertEquals(second.get().entries.find((e) => e.id === id)?.title, "Mine");
   await second.dispose();
+});
+
+test("History lists versions without content and fetches one at a time", async () => {
+  for (const legacy of [false, true]) {
+    const f = fixture();
+    if (legacy) f.legacyHistory();
+    const first = f.create();
+    const id = await first.create("Draft", null, "document", "one");
+    await settle(() => first.document(id).get().phase === "saved");
+    for (const [revision, body] of [[1, "one"], [2, "one two"]] as const) {
+      f.history.unshift({
+        ...f.server.get(id)!,
+        body,
+        revision,
+        body_revision: revision,
+      });
+    }
+    const index = await first.historyIndex(id);
+    assertEquals(index.map((v) => [v.revision, v.preview, v.characters]), [
+      [2, "one two", 7],
+      [1, "one", 3],
+    ]);
+    const before = f.requests.length;
+    assertEquals((await first.historySnapshot(id, 1)).body, "one");
+    // A kept version never changes: the second open reads the cache.
+    assertEquals((await first.historySnapshot(id, 1)).body, "one");
+    assertEquals(f.requests.length - before, legacy ? 0 : 1);
+    const prefetch = new AbortController();
+    await first.prefetchHistory(id, [2, 1], prefetch.signal);
+    assertEquals(f.requests.length - before, legacy ? 0 : 2);
+    if (!legacy) {
+      assertEquals(
+        f.requests.filter((p) => p.endsWith(`/history`)).length,
+        0,
+        "the full history list is never downloaded",
+      );
+    }
+    await first.dispose();
+  }
 });

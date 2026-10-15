@@ -165,6 +165,27 @@ cache `/api/auth/*`. Logout and a `me` account change delete `HISTORY_CACHE`.
 API-token management lives in Desktop/Mobile (Settings account menu) and
 uses `authApi`; `src/auth/*` still must not import `src/store.ts`.
 
+## Background transfers yield to the user's bandwidth
+
+`src/network/bandwidth.ts` classifies the link as offline, constrained or
+unconstrained from the Network Information API where it exists and a
+passive throughput estimate of completed same-origin downloads (iOS WebKit
+has no connection API; nothing is sent to measure). Interactive traffic
+never consults it: sending, the transcript stream, pushes, and whatever the
+user just opened. Work that is only a fallback, a status refresh or a
+prefetch does:
+
+- a periodic fallback or status poll uses `lowPriorityInterval`: it skips
+  hidden and offline turns and stretches its period four times on a
+  constrained link (Draft library and document polls, usage, app update
+  checks). The events that make it urgent (focus, reconnect) still run it
+  at once.
+- a prefetch awaits `whenBackgroundTransferAllowed` before each request
+  (the newest History versions of an open Draft).
+
+Telemetry upload is deliberately not deferred: losing a crash report costs
+more than its bytes.
+
 ## Boot is cache-first (do not reintroduce a network wait)
 
 The installed PWA must open from this device on a weak connection, which is

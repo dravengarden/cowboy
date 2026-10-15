@@ -798,6 +798,14 @@ mod component_supersession_tests {
             RouteAuth::Product
         );
         assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/index"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/7"),
+            RouteAuth::Product
+        );
+        assert_eq!(
             classify_route(&Method::POST, "/api/drafts/mutations"),
             RouteAuth::ProductOperator
         );
@@ -10227,6 +10235,8 @@ async fn serve_axum(
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route("/api/drafts/{id}", get(draft_documents::read))
         .route("/api/drafts/{id}/history", get(draft_documents::history))
+        .route("/api/drafts/{id}/history/index", get(draft_documents::history_index))
+        .route("/api/drafts/{id}/history/{revision}", get(draft_documents::history_snapshot))
         .route("/api/sessions/{id}/draft-copies/{cmid}", delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route(
             "/api/observability/batches",

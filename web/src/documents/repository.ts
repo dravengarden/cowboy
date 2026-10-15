@@ -16,14 +16,20 @@ import {
   draftMetadata,
   type DraftMutationArgs,
   draftMutators,
+  decodeSnapshotSummary,
+  type DraftSnapshotSummary,
   expectedRevision,
   mergeDraftContent,
   sameDraftContent,
+  snapshotSummary,
 } from "./model";
+import { whenBackgroundTransferAllowed } from "../network/bandwidth";
 
 /** Automatic rebases per drain; a server that keeps refusing is a bug, not
  * a race, and falls back to the recoverable conflict state. */
 const MAX_REBASES = 8;
+/** Recovery snapshots held in memory; each may carry attachment bytes. */
+const SNAPSHOT_CACHE = 24;
 
 export interface DraftDocumentSnapshot {
   readonly document: DraftDocument | null;
@@ -77,6 +83,77 @@ export function createDraftRepository(options: RepositoryOptions) {
   let starting: Promise<void> | undefined;
   let refreshing: Promise<void> | undefined;
   let stopped = false;
+  // Kept snapshots never change, so a fetched one serves every later open.
+  const snapshots = new Map<string, DraftDocument>();
+  function remember(document: DraftDocument): void {
+    const key = `${document.id}:${String(document.revision)}`;
+    snapshots.delete(key);
+    snapshots.set(key, document);
+    while (snapshots.size > SNAPSHOT_CACHE) {
+      snapshots.delete(snapshots.keys().next().value!);
+    }
+  }
+  const historyPath = (id: string, rest = ""): string =>
+    `/api/drafts/${encodeURIComponent(id)}/history${rest}`;
+  /** The History list, newest first, without content. A Controller older
+   * than the index answers 404; its full list then fills the cache too. */
+  async function historyIndex(id: string): Promise<DraftSnapshotSummary[]> {
+    const response = await options.request(historyPath(id, "/index"));
+    if (response.status === 404) {
+      const legacy = await options.request(historyPath(id));
+      if (!legacy.ok) throw new Error("Could not load recovery history");
+      const documents = (await legacy.json() as unknown[]).map(decodeDraft);
+      for (const document of documents) remember(document);
+      return documents.map(snapshotSummary);
+    }
+    if (!response.ok) throw new Error("Could not load recovery history");
+    const index = await response.json() as unknown;
+    if (!Array.isArray(index)) throw new Error("Invalid recovery history");
+    return index.map(decodeSnapshotSummary);
+  }
+  /** One version with its text and attachments, fetched once. */
+  async function historySnapshot(
+    id: string,
+    revision: number,
+  ): Promise<DraftDocument> {
+    const cached = snapshots.get(`${id}:${String(revision)}`);
+    if (cached) {
+      remember(cached);
+      return cached;
+    }
+    const response = await options.request(
+      historyPath(id, `/${String(revision)}`),
+    );
+    if (response.status === 404) {
+      throw new Error("This version is no longer kept");
+    }
+    if (!response.ok) throw new Error("Could not load this version");
+    const document = decodeDraft(await response.json());
+    if (document.id !== id || document.revision !== revision) {
+      throw new Error("Recovery history changed identity");
+    }
+    remember(document);
+    return document;
+  }
+  /** Fetch `revisions` ahead of the user, one at a time and only while the
+   * link is unconstrained and the page visible; stops on `signal`. */
+  async function prefetchHistory(
+    id: string,
+    revisions: readonly number[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    for (const revision of revisions) {
+      if (snapshots.has(`${id}:${String(revision)}`)) continue;
+      try {
+        await whenBackgroundTransferAllowed(signal);
+        if (signal.aborted) return;
+        await historySnapshot(id, revision);
+      } catch {
+        // A prefetch never surfaces errors; opening the version retries.
+        if (signal.aborted) return;
+      }
+    }
+  }
   function assertActive(): void {
     if (stopped || options.signal.aborted) {
       throw new Error("Draft account was closed");
@@ -207,17 +284,11 @@ export function createDraftRepository(options: RepositoryOptions) {
       bodyRevision: number,
     ): Promise<DraftContent | null> {
       try {
-        const response = await options.request(
-          `/api/drafts/${encodeURIComponent(id)}/history`,
+        // Only the one matching version's content is downloaded.
+        const match = (await historyIndex(id)).find((entry) =>
+          entry.body_revision === bodyRevision
         );
-        if (!response.ok) return null;
-        const history = await response.json() as unknown[];
-        for (const entry of history) {
-          const past = decodeDraft(entry);
-          if (past.id === id && past.body_revision === bodyRevision) {
-            return draftContent(past);
-          }
-        }
+        if (match) return draftContent(await historySnapshot(id, match.revision));
       } catch {
         // No ancestor: the local branch is preserved as a copy instead.
       }
@@ -809,6 +880,9 @@ export function createDraftRepository(options: RepositoryOptions) {
     start,
     refresh,
     announce,
+    historyIndex,
+    historySnapshot,
+    prefetchHistory,
     dispose,
     get: () => library,
     subscribe: (listener: () => void) => {

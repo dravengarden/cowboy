@@ -35,6 +35,7 @@ import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 import { installBrowserDevice } from "./browserDevice";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
+import { lowPriorityInterval } from "./network/bandwidth";
 
 installBrowserDevice();
 
@@ -224,7 +225,7 @@ if (import.meta.env.PROD) {
     // The native iOS shell emits this from UIApplication.didBecomeActive. It
     // closes the last lifecycle gap where WKWebView emits no standard event.
     globalThis.addEventListener("cowboy:native-resume", checkForUpdate);
-    globalThis.setInterval(checkForUpdate, 60_000);
+    lowPriorityInterval(checkForUpdate, 60_000);
     checkForUpdate();
   };
 
