@@ -159,6 +159,7 @@ import {
   type UsageTone,
 } from "./topBarDensity";
 import { HintTooltip } from "../HintTooltip";
+import { lowPriorityInterval } from "../network/bandwidth";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -1305,11 +1306,11 @@ export function DesktopTopBarControls({
       if (document.visibilityState === "hidden") return;
       void loadUsageSnapshot(controller.signal).catch(() => undefined);
     };
-    const timer = window.setInterval(poll, USAGE_POLL_MS);
+    const stop = lowPriorityInterval(poll, USAGE_POLL_MS);
     document.addEventListener("visibilitychange", poll);
     return (): void => {
       controller.abort();
-      window.clearInterval(timer);
+      stop();
       document.removeEventListener("visibilitychange", poll);
     };
   }, []);

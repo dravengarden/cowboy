@@ -224,6 +224,38 @@ export function draftMissingDirectory(
   );
 }
 
+/** One recovery snapshot without its content (the History list). */
+export interface DraftSnapshotSummary {
+  readonly revision: number;
+  readonly body_revision: number;
+  readonly updated_at_ms: number;
+  readonly characters: number;
+  readonly attachments: number;
+  /** The opening of the text. */
+  readonly preview: string;
+}
+
+export function decodeSnapshotSummary(value: unknown): DraftSnapshotSummary {
+  const s = value as DraftSnapshotSummary | null;
+  if (
+    s === null || typeof s !== "object" || typeof s.preview !== "string" ||
+    ![s.revision, s.body_revision, s.updated_at_ms, s.characters, s.attachments]
+      .every((n) => Number.isSafeInteger(n) && n >= 0)
+  ) throw new Error("Invalid recovery history");
+  return s;
+}
+
+export function snapshotSummary(document: DraftDocument): DraftSnapshotSummary {
+  return {
+    revision: document.revision,
+    body_revision: document.body_revision,
+    updated_at_ms: document.updated_at_ms,
+    characters: [...document.body].length,
+    attachments: document.attachments.length,
+    preview: [...document.body].slice(0, 160).join(""),
+  };
+}
+
 export const DRAFT_DRAG_TYPE = "application/x-cowboy-draft-document";
 
 export function decodeDraft(value: unknown): DraftDocument {

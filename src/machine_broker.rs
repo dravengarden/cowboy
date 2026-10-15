@@ -583,6 +583,51 @@ impl Broker {
         snapshots
     }
 
+    /// Hands a newly connected Controller its handshake and only then makes
+    /// it the live controller. Installing first would let a concurrent worker
+    /// event reach the socket ahead of `Welcome`, which the Controller rejects
+    /// as a protocol violation. Anything published between the `Welcome`
+    /// snapshot and the install is recovered afterwards: workers replay from
+    /// the sequence the Controller was told about, and changed snapshots are
+    /// resent.
+    fn attach_controller(&self, protocol: u16, tx: &mpsc::UnboundedSender<Frame>) -> u64 {
+        let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
+        let welcome = self.snapshots();
+        let welcomed_seq: HashMap<String, u64> = welcome
+            .iter()
+            .map(|worker| (worker.session_id.clone(), worker.last_runtime_seq))
+            .collect();
+        let _ = tx.send(Frame::Welcome {
+            protocol,
+            controller_epoch: lease,
+            workers: welcome.clone(),
+        });
+        self.controller.lock().replace(Controller {
+            lease,
+            tx: tx.clone(),
+        });
+        for worker in self.workers.lock().values() {
+            let session_id = &worker.snapshot.session_id;
+            let _ = worker.tx.send(Frame::Replay {
+                session_id: session_id.clone(),
+                worker_epoch: worker.epoch.clone(),
+                after_runtime_seq: welcomed_seq
+                    .get(session_id)
+                    .copied()
+                    .unwrap_or(worker.snapshot.last_runtime_seq),
+            });
+        }
+        for current in self.snapshots() {
+            if !welcome.contains(&current) {
+                self.send_controller(Frame::Snapshot {
+                    worker: Box::new(current),
+                });
+            }
+        }
+        lease
+    }
+
+    #[cfg(test)]
     fn install_controller(&self, tx: mpsc::UnboundedSender<Frame>) -> u64 {
         let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
         self.controller.lock().replace(Controller { lease, tx });
@@ -3510,19 +3555,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     });
     match role {
         PeerRole::Core => {
-            let lease = broker.install_controller(tx.clone());
-            let _ = tx.send(Frame::Welcome {
-                protocol,
-                controller_epoch: lease,
-                workers: broker.snapshots(),
-            });
-            for worker in broker.workers.lock().values() {
-                let _ = worker.tx.send(Frame::Replay {
-                    session_id: worker.snapshot.session_id.clone(),
-                    worker_epoch: worker.epoch.clone(),
-                    after_runtime_seq: worker.snapshot.last_runtime_seq,
-                });
-            }
+            let lease = broker.attach_controller(protocol, &tx);
             handle_core(Arc::clone(&broker), lease, &mut reader).await?;
             broker.remove_controller(lease);
         }
@@ -6387,6 +6420,35 @@ mod tests {
         assert!(broker.cancelled_sessions.lock().contains("sess-1"));
         assert!(!broker.sessions.lock().contains_key("sess-1"));
         assert!(broker.launching.lock().is_empty());
+    }
+
+    #[test]
+    fn attach_controller_sends_welcome_before_any_live_frame() {
+        let (broker, _launch, mut worker_rx) = reconnecting_worker_fixture();
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .expect("worker")
+            .snapshot
+            .last_runtime_seq = 7;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let lease = broker.attach_controller(PROTOCOL_VERSION, &tx);
+        broker.send_controller(Frame::Heartbeat);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::Welcome { controller_epoch, workers, .. })
+                if controller_epoch == lease
+                    && workers.iter().any(|worker| worker.session_id == "sess-1"
+                        && worker.last_runtime_seq == 7)
+        ));
+        assert!(matches!(rx.try_recv(), Ok(Frame::Heartbeat)));
+        let replay = std::iter::from_fn(|| worker_rx.try_recv().ok())
+            .find(|frame| matches!(frame, Frame::Replay { .. }));
+        assert!(matches!(
+            replay,
+            Some(Frame::Replay { session_id, after_runtime_seq: 7, .. }) if session_id == "sess-1"
+        ));
     }
 
     #[tokio::test]

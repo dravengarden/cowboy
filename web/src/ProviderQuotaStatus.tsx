@@ -16,6 +16,7 @@ import {
   usageRefreshing,
 } from "./usageLimits";
 import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
+import { lowPriorityInterval } from "./network/bandwidth";
 
 const USAGE_POLL_MS = 60_000;
 
@@ -56,11 +57,11 @@ export function ProviderQuotaStatus({
       void loadUsageSnapshot(controller.signal).catch(() => undefined);
     };
     load();
-    const timer = globalThis.setInterval(load, USAGE_POLL_MS);
+    const stop = lowPriorityInterval(load, USAGE_POLL_MS);
     document.addEventListener("visibilitychange", load);
     return (): void => {
       controller.abort();
-      globalThis.clearInterval(timer);
+      stop();
       document.removeEventListener("visibilitychange", load);
     };
   }, [provider, providerDigest, providerVersion]);

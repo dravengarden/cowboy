@@ -85,6 +85,34 @@ pub(crate) struct DraftMutation {
     pub change: DraftChange,
 }
 
+/// One recovery snapshot without its content: what the History list shows
+/// before the user opens a version.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct DraftSnapshotSummary {
+    pub revision: i64,
+    pub body_revision: i64,
+    pub updated_at_ms: i64,
+    pub characters: usize,
+    pub attachments: usize,
+    /// The opening of the text, enough to recognize a version.
+    pub preview: String,
+}
+
+const SNAPSHOT_PREVIEW_CHARS: usize = 160;
+
+impl From<&DraftDocument> for DraftSnapshotSummary {
+    fn from(document: &DraftDocument) -> Self {
+        Self {
+            revision: document.revision,
+            body_revision: document.body_revision,
+            updated_at_ms: document.updated_at_ms,
+            characters: document.body.chars().count(),
+            attachments: document.attachments.len(),
+            preview: document.body.chars().take(SNAPSHOT_PREVIEW_CHARS).collect(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum DraftResult {
     Applied(DraftDocument),
@@ -300,6 +328,40 @@ impl Store {
                 .await?
             };
         }
+        let value = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        value
+            .map(|v| serde_json::from_str(&v).map_err(Into::into))
+            .transpose()
+    }
+
+    /// The History list: every kept snapshot, newest first, without content.
+    pub(crate) async fn draft_history_index(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<Vec<DraftSnapshotSummary>> {
+        Ok(self
+            .draft_history(owner, id)
+            .await?
+            .iter()
+            .map(DraftSnapshotSummary::from)
+            .collect())
+    }
+
+    /// One kept snapshot with its content.
+    pub(crate) async fn draft_history_snapshot(
+        &self,
+        owner: &str,
+        id: &str,
+        revision: i64,
+    ) -> Result<Option<DraftDocument>> {
+        macro_rules! read { ($db:expr) => {
+            sqlx::query_scalar::<_, String>("SELECT value FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 AND revision = $3")
+                .bind(owner).bind(id).bind(revision).fetch_optional(&$db.pool).await?
+        }; }
         let value = match &self.backend {
             StorageBackend::Postgres(db) => read!(db),
             StorageBackend::Sqlite(db) => read!(db),

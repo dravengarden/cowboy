@@ -39,7 +39,13 @@ characters are merge tokens. An overlapping region keeps both versions, remote
 first, rather than dropping either. Overwritten server states remain in the
 recovery history, spaced like Obsidian's File recovery: the text before
 writing resumes after five quiet minutes, and one snapshot per five minutes
-of continuous writing, never one per autosave. It keeps the latest 30. Attachments are kept unless one
+of continuous writing, never one per autosave. It keeps the latest 30.
+History downloads only an index of those versions (time, size, the opening
+of the text); a version's text and attachments are fetched when it is
+opened and kept for the page's lifetime, since a kept version never
+changes. While History is open and the link is unconstrained, the newest
+three are prefetched so opening one is instant. A Controller without the
+index serves the full list as before. Attachments are kept unless one
 side removed them. Title and location changes are last-writer-wins. Trash and
 restore reapply the local intent.
 

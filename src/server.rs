@@ -798,6 +798,14 @@ mod component_supersession_tests {
             RouteAuth::Product
         );
         assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/index"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/7"),
+            RouteAuth::Product
+        );
+        assert_eq!(
             classify_route(&Method::POST, "/api/drafts/mutations"),
             RouteAuth::ProductOperator
         );
@@ -10146,6 +10154,7 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    session_reclaim::listen_for_wakes(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
         state
             .store
@@ -10227,6 +10236,8 @@ async fn serve_axum(
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route("/api/drafts/{id}", get(draft_documents::read))
         .route("/api/drafts/{id}/history", get(draft_documents::history))
+        .route("/api/drafts/{id}/history/index", get(draft_documents::history_index))
+        .route("/api/drafts/{id}/history/{revision}", get(draft_documents::history_snapshot))
         .route("/api/sessions/{id}/draft-copies/{cmid}", delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route(
             "/api/observability/batches",
@@ -20547,7 +20558,7 @@ fn handle_command(
                 // Log a server-side warning and swallow the error so no error
                 // toast is broadcast (which would otherwise read as a hard
                 // failure).
-                match state.supervisor.ensure_alive(&session_id) {
+                match state.supervisor.open(&session_id) {
                     Ok(revived) => {
                         if revived {
                             tokio::spawn(session_reclaim::rebalance_after_wake(
