@@ -558,7 +558,8 @@ function DraftEditingSession(
   const recoverCopy = async (): Promise<void> => {
     const copy = await draftRepository().create(
       `${titleRef.current} (recovered)`,
-      null,
+      // Beside the original, in its folder.
+      current.parent_id,
       "document",
       textRef.current,
       attachmentsRef.current.filter((a) => !a.pending),
@@ -1332,7 +1333,8 @@ function DraftEditingSession(
           }
         >
           <Typography variant="body2" color="text.secondary">
-            Previous saved versions. Restoring creates a new version.
+            Snapshots taken every few minutes while you write, and the text as
+            it was before each pause. Restoring creates a new version.
           </Typography>
           <Box sx={{ maxHeight: "50dvh", overflowY: "auto" }}>
             {history.length === 0 && (
