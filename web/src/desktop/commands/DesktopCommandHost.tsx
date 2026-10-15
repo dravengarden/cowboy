@@ -524,8 +524,14 @@ export function DesktopCommandHost({
   const available = registry.list().filter((command) =>
     command.id !== "commandPalette.open" &&
     (!normalized ||
-      `${command.title} ${command.id}`.toLowerCase().includes(normalized))
+      `${command.title} ${command.id} ${command.group} ${command.description ?? ""}`
+        .toLowerCase().includes(normalized))
   );
+  // An explicit pick runs the command wherever the palette was opened: the
+  // focus scope only disambiguates keys (FOCUS.md "Commands and help").
+  const runCommand = (id: string): void => {
+    if (registry.execute(id, { anyScope: true })) setPaletteOpen(false);
+  };
   useEffect(() => setSelected(0), [query]);
   useEffect(() => {
     if (selected >= available.length) {
@@ -535,8 +541,7 @@ export function DesktopCommandHost({
 
   const runSelected = (): void => {
     const command = available[selected];
-    if (!command) return;
-    if (registry.execute(command.id)) setPaletteOpen(false);
+    if (command) runCommand(command.id);
   };
   const selectedCommand = available[selected];
   const selectedAvailable = selectedCommand !== undefined &&
@@ -670,9 +675,7 @@ export function DesktopCommandHost({
               selected={index === selected}
               disabled={command.when?.() === false}
               onMouseMove={(): void => setSelected(index)}
-              onClick={(): void => {
-                if (registry.execute(command.id)) setPaletteOpen(false);
-              }}
+              onClick={(): void => runCommand(command.id)}
               sx={{ borderRadius: 1.5 }}
             >
               <ListItemText
