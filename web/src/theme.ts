@@ -173,6 +173,15 @@ export function useThemeMode(): ThemeControls {
               html: { WebkitTapHighlightColor: "transparent" },
               body: { WebkitTapHighlightColor: "transparent" },
               "#root": { WebkitTapHighlightColor: "transparent" },
+              // A native <button> takes the browser's fixed 13.33px, which
+              // ignores the global font size: text and `em` glyphs in raw
+              // ButtonBase controls stayed one size at every scale. Same size
+              // at 100%, scaled on Desktop (Mobile keeps pixels). This must be
+              // a zero-specificity element default: nested under ButtonBase's
+              // class (`.css-x:where(button)`) it kept class specificity and,
+              // emitted after the base rule, beat every Button, IconButton and
+              // `sx` font size (e.g. the Mobile sync pill stayed 13.33px).
+              ":where(button)": { fontSize: desktopSize(40 / 3) },
             },
           },
           // Session-sheet dismiss is a ButtonBase, not an IconButton. Clear a
@@ -191,13 +200,6 @@ export function useThemeMode(): ThemeControls {
             styleOverrides: {
               root: {
                 WebkitTapHighlightColor: "transparent",
-                // A native <button> takes the browser's fixed 13.33px, which
-                // ignores the global font size: text and `em` glyphs in raw
-                // ButtonBase controls stayed one size at every scale. Same
-                // size at 100%, scaled on Desktop (Mobile keeps pixels).
-                // `:where` adds no specificity, so Button, IconButton and
-                // ToggleButton keep their own sizes.
-                "&:where(button)": { fontSize: desktopSize(40 / 3) },
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
                   "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
                     {
