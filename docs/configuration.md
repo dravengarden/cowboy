@@ -225,6 +225,27 @@ hibernates the longest-idle eligible session other than the one just woken
 whenever the Device holds more workers than its capacity. This never delays
 or refuses the prompt. Two clients waking one session share one rebalance.
 
+## Memory reclaim
+
+Off by default. With `sessions.memory_reclaim = true`, the Service keeps each
+Device's Agent workers below the cgroup limit that contains them. A Device
+reports `memory_headroom_bytes` with every heartbeat (every 15 seconds): for
+the worker slice and each of its ancestors with a `memory.high` (or else
+`memory.max`), the limit minus `memory.current` plus its inactive file cache,
+taking the smallest. Host `MemAvailable` is not used: on OVH on 2026-10-15 it
+reported 2.59 GiB while the user slice sat at 10.11 of its 10.20 GB
+`memory.high` and had been throttled into reclaim 145,783 times.
+
+When the headroom falls below `sessions.memory_reclaim_below` (1 GiB), the
+Service hibernates the longest-idle eligible session on that Device, waits
+until its worker has released and a report taken afterwards has arrived, and
+repeats until the headroom reaches `sessions.memory_reclaim_until` (2 GiB).
+Eligibility is that of capacity reclaim with its own idle threshold,
+`sessions.memory_reclaim_min_idle` (15 minutes), and excludes sessions woken
+in the last ten minutes. With nothing eligible it logs once every ten minutes
+and waits. A launch is still admitted immediately; reserving memory before a
+launch and queueing it when the Device is short is a separate step.
+
 Hibernation sends no model request and the wake makes none before the
 prompt (`docs/hibernation-token-audit-2026-10-06.md`). That is not proof that
 the next prompt costs the same as after a warm idle: a Provider prompt cache
