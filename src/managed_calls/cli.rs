@@ -75,7 +75,7 @@ enum CallCommand {
 // Deliberately no Debug: both wiring and RPC frames contain private grants.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Wiring {
+pub(crate) struct Wiring {
     schema: u16,
     socket: PathBuf,
     capability: String,
@@ -124,7 +124,7 @@ fn read_input(path: &Path) -> Result<Vec<u8>, &'static str> {
     Ok(bytes)
 }
 
-fn wiring() -> Result<Wiring, &'static str> {
+pub(crate) fn wiring() -> Result<Wiring, &'static str> {
     let path = std::env::var_os("COWBOY_CALL_CONTEXT").ok_or("context_unavailable")?;
     if !Path::new(&path).is_absolute() {
         return Err("invalid_context");
@@ -167,7 +167,7 @@ async fn connect(socket: &Path) -> std::io::Result<UnixStream> {
     Ok(stream)
 }
 
-async fn exchange(context: Wiring, action: Action, timeout_ms: u64) -> Value {
+pub(crate) async fn exchange(context: Wiring, action: Action, timeout_ms: u64) -> Value {
     // No frame byte leaves this process before a verified connection exists,
     // so a connect failure proves non-admission and the caller may resubmit.
     let Ok(Ok(mut stream)) =
@@ -360,7 +360,10 @@ pub async fn call(args: CallArgs) -> anyhow::Result<()> {
         CallCommand::Observe { request_id } => (Action::Observe { request_id }, 0),
     };
     let id = match &action {
-        Action::Capabilities {} | Action::Start { .. } => None,
+        Action::Capabilities {}
+        | Action::Start { .. }
+        | Action::AgentStatus {}
+        | Action::AgentRead { .. } => None,
         Action::Observe { request_id } => Some(request_id),
         Action::Inspect { call_id }
         | Action::Wait { call_id, .. }

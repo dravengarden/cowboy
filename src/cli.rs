@@ -33,6 +33,10 @@ enum Command {
     /// Observe and control parent-scoped managed agent calls.
     #[cfg(unix)]
     Call(crate::managed_calls::cli::CallArgs),
+    /// Serve this session's Cowboy tools to its agent as a stdio MCP server.
+    /// Outside a Cowboy session it advertises no tools.
+    #[cfg(unix)]
+    Mcp(crate::agent_api::mcp::McpArgs),
     /// Query, aggregate and analyze `OTel` evidence where it is stored.
     Logs(Box<crate::logs::cli::LogsArgs>),
     /// Inspect, validate and safely change the Service or Device configuration
@@ -503,6 +507,8 @@ impl Cli {
             Command::Claude(args) => crate::managed_calls::cli::start("claude-code", args).await,
             #[cfg(unix)]
             Command::Call(args) => crate::managed_calls::cli::call(args).await,
+            #[cfg(unix)]
+            Command::Mcp(args) => crate::agent_api::mcp::serve(args).await,
             Command::Config(args) => args.run(),
             #[cfg(feature = "full")]
             Command::Serve(args) => crate::server::serve(*args).await,
