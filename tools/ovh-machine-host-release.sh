@@ -2,19 +2,30 @@
 # Replace the OVH Machine host binary; detached ACP workers keep running.
 # With --workers, also select the release's worker bundle: idle workers adopt
 # it, busy ones at their native safe boundary. See docs/ovh-machine-maintenance.md.
+# With --max-sessions N, also set the host's worker capacity in the same
+# guarded transition (the flag in the drop-in wins over the Device file).
 # Run on Hawk from the repository root:
-#   tools/ovh-machine-host-release.sh [--workers] /nix/store/<hash>-cowboy-machine-release
+#   tools/ovh-machine-host-release.sh [--workers] [--max-sessions N] /nix/store/<hash>-cowboy-machine-release
 set -euo pipefail
 
-workers=0
-if (($# == 2)) && [[ $1 == --workers ]]; then
-  workers=1
-  shift
-fi
-if (($# != 1)); then
-  echo "usage: $0 [--workers] /nix/store/<hash>-cowboy-machine-release" >&2
+usage() {
+  echo "usage: $0 [--workers] [--max-sessions N] /nix/store/<hash>-cowboy-machine-release" >&2
   exit 2
-fi
+}
+workers=0
+max_sessions=
+while (($# > 1)); do
+  case $1 in
+    --workers) workers=1; shift ;;
+    --max-sessions)
+      (($# > 2)) && [[ $2 =~ ^[1-9][0-9]{0,3}$ ]] || usage
+      max_sessions=$2
+      shift 2
+      ;;
+    *) usage ;;
+  esac
+done
+(($# == 1)) || usage
 release=$1
 host=${OVH_SSH_ALIAS:-ovh}
 unit_dropin=/home/ubuntu/.config/systemd/user/cowboy-machine-svc-4e4d5154f3df9aa109d7d841dd925fd7.service.d/10-plugin-admission.conf
@@ -80,7 +91,7 @@ remote "sudo -n install -d -m 0755 /nix/var/nix/gcroots/ovh-cowboy-machine-$shor
 echo "== receipt $receipt"
 remote "sudo -n bash -c 'test ! -e $receipt && install -d -m 0700 -o root -g root $receipt && cat > $receipt/maintenance.py && chmod 0700 $receipt/maintenance.py'" \
   <"$script_dir/ovh_machine_host_maintenance.py"
-remote "sudo -n env RELEASE='$release' REVISION='$revision' WORKERS='$workers' D='$receipt' CONF='$unit_dropin' bash -s" <<'EOF'
+remote "sudo -n env RELEASE='$release' REVISION='$revision' WORKERS='$workers' MAX_SESSIONS='$max_sessions' D='$receipt' CONF='$unit_dropin' bash -s" <<'EOF'
 set -euo pipefail
 install -m 0600 "$CONF" "$D/previous.conf"
 python3 - <<'PY'
@@ -94,6 +105,9 @@ text, count = re.subn(pattern, r"\g<1>" + release + r"\g<2>", text, flags=re.MUL
 assert count == 1, "expected one Machine host ExecStart"
 text = re.sub(r"^# Machine host: Cowboy [a-f0-9]{40}$",
               "# Machine host: Cowboy " + os.environ["REVISION"], text, flags=re.MULTILINE)
+if os.environ["MAX_SESSIONS"]:
+    text, count = re.subn(r"(--max-sessions )[0-9]+", r"\g<1>" + os.environ["MAX_SESSIONS"], text)
+    assert count == 1, "expected one --max-sessions"
 if os.environ["WORKERS"] == "1":
     source = json.loads((Path(release) / "etc/cowboy-release/source.json").read_text())
     generation = source["workerGeneration"]
