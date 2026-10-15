@@ -52,7 +52,8 @@ test("plan queue and draft share the exclusive stack accordion", () => {
     true,
   );
   assertEquals(
-    planSource.includes('maxHeight: desktop ? 176 : "30vh"'),
+    planSource.includes('maxHeight: "30vh"') &&
+      planSource.includes("maxHeight: 176"),
     true,
   );
   assertEquals(

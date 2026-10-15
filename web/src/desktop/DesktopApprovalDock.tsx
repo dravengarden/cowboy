@@ -333,7 +333,7 @@ function ApprovalDock({
             }}
           >
             {busyId === choice.id && (
-              <CircularProgress size={12} thickness={5} color="inherit" />
+              <CircularProgress size={desktopSize(12)} thickness={5} color="inherit" />
             )}
             {choice.label}
             <DesktopApprovalKeycap index={index} available={!busy} />

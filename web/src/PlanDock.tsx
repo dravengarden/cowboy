@@ -9,12 +9,20 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
+import {
+  CheckCircle,
+  ChevronRight,
+  Close,
+  ExpandLess,
+  ExpandMore,
+  RadioButtonUnchecked,
+} from "@mui/icons-material";
+import { alpha } from "@mui/material/styles";
 import type { PlanEntry } from "./protocol";
 import { memo, type ReactNode } from "react";
 import { useStore } from "@cowboy/state-store";
 import { useReliableTouchTap } from "./useReliableTouchTap";
-import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
+import { desktopSize } from "./surface/desktopSize";
 import {
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
@@ -62,29 +70,32 @@ export const PlanDock = memo(function PlanDock({
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
 
+  if (desktop) {
+    return (
+      <DesktopPlanRail
+        entries={entries}
+        expanded={expanded}
+        done={done}
+        total={total}
+        allDone={allDone}
+        pct={pct}
+        current={current}
+        onToggle={toggle}
+        onDismiss={onDismiss}
+        shortcut={shortcut}
+      />
+    );
+  }
+
   return (
     <Box
-      data-desktop-plan-surface={desktop ? "true" : undefined}
       sx={{
-        ...(desktop
-          ? desktopSurfaceSx({ interactive: false, focusWithin: true })
-          : mobileComposerPanelFrameSx),
-        mb: desktop ? 1 : 0,
+        ...mobileComposerPanelFrameSx,
         bgcolor: "background.default",
         // The progress track owns the panel's bottom edge. Clip it to the same
         // rounded silhouette instead of letting its square layer read as a
         // shelf below the card.
         overflow: "hidden",
-        ...(desktop && {
-          transition: "background-color 120ms ease, border-color 120ms ease",
-          // Desktop workspace focus already recolors the Plan surface's 1px
-          // boundary. A second 3px outer ring visually merged with the 4px
-          // progress track into a thick, offset bar along the bottom edge.
-          "&:focus-within": {
-            borderColor: "primary.main",
-            boxShadow: "none",
-          },
-        }),
       }}
     >
       {/* Header — a standard ripple ButtonBase (the toggle) beside a separate X
@@ -102,10 +113,7 @@ export const PlanDock = memo(function PlanDock({
             textAlign: "left",
             px: 1,
             py: 0.5,
-            minHeight: desktop ? 40 : mobileComposerPanelHeaderMinHeight,
-            "@media (pointer: coarse)": {
-              minHeight: mobileComposerPanelHeaderMinHeight,
-            },
+            minHeight: mobileComposerPanelHeaderMinHeight,
             touchAction: "manipulation",
           }}
         >
@@ -166,23 +174,15 @@ export const PlanDock = memo(function PlanDock({
             `maxHeight` keeps the dock from crowding out the editor. */}
         <Stack
           spacing={0.5}
-          data-desktop-plan-list={desktop ? "true" : undefined}
-          data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
             p: 1.25,
-            maxHeight: desktop ? 176 : "30vh",
+            maxHeight: "30vh",
             // Collapse keeps the checklist mounted. A collapsed
             // `-webkit-overflow-scrolling: touch` tile freezes transcript
             // scroll on iOS, so only the open body is a native scroller.
             overflowY: expanded ? "auto" : "hidden",
             overscrollBehavior: expanded ? "contain" : "auto",
             WebkitOverflowScrolling: expanded ? "touch" : "auto",
-            ...(desktop && {
-              transition: "max-height 150ms ease, padding 150ms ease",
-              "[data-desktop-focused='true'] &": {
-                maxHeight: "min(46vh, 560px)",
-              },
-            }),
           }}
         >
           {entries.map((e, j) => {
@@ -194,12 +194,6 @@ export const PlanDock = memo(function PlanDock({
                 direction="row"
                 spacing={1}
                 alignItems="center"
-                {...(desktop
-                  ? {
-                    "data-desktop-item": `plan-${String(j)}`,
-                    tabIndex: -1,
-                  }
-                  : {})}
               >
                 <Box
                   sx={{
@@ -240,3 +234,218 @@ export const PlanDock = memo(function PlanDock({
     </Box>
   );
 });
+
+/** Desktop Plan: the same borderless disclosure rail as Calls, Queue and
+ * Drafts (chevron column, caption label, quiet summary, N/M), with progress as
+ * a hairline along the rail's lower edge instead of the Mobile card's 4px
+ * bar. Geometry is root-relative so the rail follows the global font size. */
+function DesktopPlanRail({
+  entries,
+  expanded,
+  done,
+  total,
+  allDone,
+  pct,
+  current,
+  onToggle,
+  onDismiss,
+  shortcut,
+}: {
+  entries: PlanEntry[];
+  expanded: boolean;
+  done: number;
+  total: number;
+  allDone: boolean;
+  pct: number;
+  current: PlanEntry | undefined;
+  onToggle: () => void;
+  onDismiss: () => void;
+  shortcut?: ReactNode;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-desktop-plan-surface="true"
+      sx={{
+        position: "relative",
+        border: 0,
+        borderBottom: 1,
+        borderColor: "divider",
+        borderRadius: 0,
+        bgcolor: "transparent",
+        mb: 0.5,
+        color: "text.primary",
+        overflow: "hidden",
+        transition: "background-color 120ms ease, border-color 120ms ease",
+        "&:focus-within": { borderColor: "primary.main" },
+      }}
+    >
+      <Stack direction="row" alignItems="center" sx={{ pr: 0.5 }}>
+        <ButtonBase
+          onClick={onToggle}
+          disableRipple
+          aria-label={expanded ? "Collapse plan" : "Expand plan"}
+          aria-expanded={expanded}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            alignSelf: "stretch",
+            justifyContent: "flex-start",
+            textAlign: "left",
+            pl: 0.5,
+            pr: 0.5,
+            minHeight: desktopSize(32),
+            "&:active, &:focus-visible": { bgcolor: "action.hover" },
+          }}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            // rem gap + 22 chevron column = Queue/Drafts' 28 column, at any scale.
+            sx={{ width: "100%", minWidth: 0, gap: "0.375rem" }}
+          >
+            <Box
+              sx={{
+                width: desktopSize(22),
+                display: "inline-flex",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              {expanded
+                ? <ExpandMore fontSize="small" />
+                : <ChevronRight fontSize="small" />}
+            </Box>
+            <Typography variant="caption" sx={{ fontWeight: 600, flexShrink: 0 }}>
+              Plan
+            </Typography>
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                color: allDone ? "success.main" : "text.secondary",
+              }}
+            >
+              {allDone ? "All steps complete" : (current?.content ?? "")}
+            </Typography>
+            {shortcut}
+            <Typography
+              variant="caption"
+              color={allDone ? "success.main" : "text.secondary"}
+              sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+            >
+              {done}/{total}
+            </Typography>
+          </Stack>
+        </ButtonBase>
+        <Tooltip title="Dismiss plan">
+          <IconButton
+            aria-label="Dismiss plan"
+            onClick={onDismiss}
+            sx={{
+              width: desktopSize(32),
+              height: desktopSize(32),
+              p: 0,
+              flexShrink: 0,
+              color: "text.secondary",
+              "& .MuiSvgIcon-root": {
+                fontSize: "1rem",
+                width: "1rem",
+                height: "1rem",
+              },
+            }}
+          >
+            <Close />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+      <Box
+        aria-hidden
+        sx={{
+          position: "absolute",
+          left: 0,
+          bottom: 0,
+          height: 2,
+          width: `${String(pct)}%`,
+          bgcolor: allDone ? "success.main" : "primary.main",
+          opacity: allDone ? 0.7 : 0.55,
+          transition: "width 240ms ease",
+        }}
+      />
+      <Collapse in={expanded}>
+        <Box
+          data-desktop-plan-list="true"
+          data-desktop-aux-list="true"
+          sx={{
+            maxHeight: 176,
+            overflowY: expanded ? "auto" : "hidden",
+            overscrollBehavior: "contain",
+            pb: 0.5,
+            transition: "max-height 150ms ease, padding 150ms ease",
+          }}
+        >
+          {entries.map((entry, index) => {
+            const completed = entry.status === "completed";
+            const inProgress = entry.status === "in_progress";
+            return (
+              <Stack
+                key={index}
+                direction="row"
+                alignItems="center"
+                data-desktop-item={`plan-${String(index)}`}
+                tabIndex={-1}
+                sx={{
+                  pl: 0.5,
+                  pr: 1,
+                  gap: "0.375rem",
+                  minHeight: desktopSize(28),
+                  outline: "none",
+                  transition: "background-color 120ms ease, box-shadow 120ms ease",
+                  "&:hover": {
+                    bgcolor: (t) => alpha(t.palette.primary.main, 0.025),
+                  },
+                  "&:focus": {
+                    bgcolor: (t) => alpha(t.palette.primary.main, 0.05),
+                    boxShadow: (t) => `inset 2px 0 0 ${t.palette.primary.main}`,
+                  },
+                }}
+              >
+                <Box
+                  sx={{
+                    width: desktopSize(22),
+                    display: "inline-flex",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    "& .MuiSvgIcon-root": {
+                      fontSize: "0.875rem",
+                      width: "0.875rem",
+                      height: "0.875rem",
+                    },
+                  }}
+                >
+                  {completed
+                    ? <CheckCircle color="success" />
+                    : inProgress
+                    ? <CircularProgress size="0.75rem" thickness={5} color="warning" />
+                    : <RadioButtonUnchecked color="disabled" />}
+                </Box>
+                <Typography
+                  variant="caption"
+                  color={completed ? "text.disabled" : "text.primary"}
+                  sx={{
+                    minWidth: 0,
+                    fontWeight: inProgress ? 600 : 400,
+                    textDecoration: completed ? "line-through" : "none",
+                  }}
+                >
+                  {entry.content}
+                </Typography>
+              </Stack>
+            );
+          })}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}

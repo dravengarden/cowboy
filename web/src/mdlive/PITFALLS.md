@@ -3054,3 +3054,17 @@ Web gate and on the Desktop shell in Chrome; not run on iOS.
     always older, a real echo is always newer. Reproduced and verified in
     Chrome with a replayed real session and live streaming; the optimistic
     local-send pin is unchanged.
+
+123. **Desktop Prompt rails and the row editor share one geometry.** Field
+    report: the Plan dock still rendered the Mobile rounded card with a 4px
+    bar under the borderless Queue/Drafts rails, and the Queue/Draft row
+    editor's icons kept their size when the global font changed. The row
+    editor reused the touch bar: fixed 40px IconButtons with keycaps stacked
+    under them. Desktop Plan is now the Calls/Queue disclosure rail (scaled
+    22px chevron + 0.375rem gap = Queue's 28px column, caption label, N/M,
+    hairline progress), and the row editor uses `DesktopRowEditToolbar`,
+    built on the prompt toolbar's `desktopToolbarActionSx` (all rem, keycap
+    inline, Save as the one contained action). Rail headers, chevron columns,
+    Sessions grips and small Desktop spinners use `desktopSize`. Mobile is
+    unchanged. Verified at 50-150% font scale in fine-pointer Chromium, both
+    themes, and with `just desktop-browser-gate`.

@@ -1775,18 +1775,20 @@ function SessionList({
                         py: 0.5,
                         // 24px is the glyph plus a hover halo; the 32px height
                         // keeps a comfortable vertical target.
+                        // desktopSize: the Desktop rail follows the global
+                        // font size; other fine-pointer surfaces keep 16px units.
                         "& .cowboy-session-grip, & .cowboy-session-actions": {
-                            width: 24,
+                            width: desktopSize(24),
                             minWidth: 0,
-                            height: 32,
+                            height: desktopSize(32),
                             minHeight: 0,
                             borderRadius: "6px",
                         },
                         // The grip overhangs a 16px column, so its dots start
                         // 5px from the row's leading edge; the slot's height
                         // stops the touch box setting the row height.
-                        "& .cowboy-session-grip": { mx: "-4px" },
-                        "& .cowboy-session-grip-slot": { width: 16, height: 32 },
+                        "& .cowboy-session-grip": { mx: desktopSize(-4) },
+                        "& .cowboy-session-grip-slot": { width: desktopSize(16), height: desktopSize(32) },
                         "& .cowboy-session-actions": { ml: 0.25, mr: 0 },
                         "& .cowboy-folder-chevron": { width: 24, mx: 0 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
@@ -4377,7 +4379,7 @@ export function App({
                     },
                     // The Calls and Plan region wrappers have no visual
                     // geometry of their own. Recolor the real dock surface
-                    // (Calls' disclosure rail, Plan's rounded card), exactly
+                    // (the Calls and Plan disclosure rails), exactly
                     // like Queue/Draft, instead of drawing a square ring
                     // around its margin box.
                     "& [data-desktop-region='prompt.calls'][data-desktop-focused='true'] > [data-desktop-calls-surface], & [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {

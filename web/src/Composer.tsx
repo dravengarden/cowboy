@@ -361,6 +361,10 @@ const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
   return { default: module.DesktopContextShortcut };
 });
+const DesktopRowEditToolbar = lazy(async () => {
+  const module = await import("./desktop/DesktopRowEditToolbar");
+  return { default: module.DesktopRowEditToolbar };
+});
 const DesktopComposerToolbar = lazy(async () => {
   const module = await import("./desktop/DesktopComposerToolbar");
   return { default: module.DesktopComposerToolbar };
@@ -809,13 +813,28 @@ function ComposeBar(
           onRemove={onRemoveAttachment}
         />
       )}
+      {desktop && (
+        <Suspense fallback={null}>
+          <DesktopRowEditToolbar
+            dead={dead}
+            sendable={sendable}
+            submitLabel={submitLabel}
+            submitShortcut={submitShortcut}
+            submitIcon={submitIcon}
+            onTrigger={onTrigger}
+            onAttach={onAttach}
+            onSubmit={onSend}
+            onExpand={onExpand}
+          />
+        </Suspense>
+      )}
       {
         /* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
           stretch across the whole width; reads cleaner next to the attachment
           thumbnail), wrapping to a second row when they don't all fit one line. No
           flex spacer / overflow-scroll / breakout, so nothing clips or pushes off. */
       }
-      <Stack
+      {!desktop && <Stack
         direction="row"
         alignItems="center"
         // Left-aligned with a comfortable gap. Buttons keep their FULL, default tap
@@ -1024,7 +1043,7 @@ function ComposeBar(
             </span>
           </HintTooltip>
         )}
-      </Stack>
+      </Stack>}
       {
         /* Narrow-tier overflow for the secondary actions (folded out of the row
           above when !roomy). Force-push anchors its confirm popover to the ⋮ button
@@ -1953,8 +1972,7 @@ export function ComposerWorkspace({
           "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] [data-desktop-aux-list]":
             {
               maxHeight: "min(46vh, 560px)",
-              paddingTop: "10px",
-              paddingBottom: "10px",
+              paddingBottom: "4px",
             },
           "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'] [data-desktop-aux-list], & [data-desktop-region='prompt.draft'][data-desktop-focused='true'] [data-desktop-aux-list]":
             {
@@ -4302,12 +4320,11 @@ export function PendingPanel({
           display: mobileFloatingEdit ? "none" : "flex",
           pr: desktop ? 0.5 : 0.75,
           py: 0,
-          minHeight: desktop ? 32 : mobileComposerPanelHeaderMinHeight,
+          minHeight: desktop ? desktopSize(32) : mobileComposerPanelHeaderMinHeight,
           ...(desktop && {
             "& > .MuiIconButton-root": {
               width: desktopSize(32),
               height: desktopSize(32),
-              minHeight: 32,
             },
           }),
         }}
@@ -4346,7 +4363,7 @@ export function PendingPanel({
         >
           <Box
             sx={{
-              width: desktop ? 28 : 40,
+              width: desktop ? desktopSize(28) : 40,
               display: "inline-flex",
               justifyContent: "center",
               flexShrink: 0,

@@ -169,7 +169,7 @@ export function PermissionOverlay({
                   variant={reject ? "outlined" : "contained"}
                   color={reject ? "error" : "primary"}
                   startIcon={response.busy && response.optionId === opt.optionId
-                    ? <CircularProgress size={14} thickness={5} color="inherit" />
+                    ? <CircularProgress size={desktopSize(14)} thickness={5} color="inherit" />
                     : undefined}
                   endIcon={desktop?.keycap(index, !response.busy)}
                   onClick={(): void => respond(opt.optionId)}

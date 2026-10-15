@@ -50,6 +50,7 @@ import {
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 import { useImeStatus } from "./vim/imeStatusStore";
+import { desktopToolbarActionSx } from "./desktopToolbarAction";
 
 const QUICK_FORMATS = ["bold", "italic", "code", "link", "bulletList"];
 const FORMAT_COMMANDS = COMPOSER_COMMANDS.filter((command) =>
@@ -163,17 +164,8 @@ export function DesktopComposerToolbar(
           color={id === "force" ? "warning" : pressed ? "primary" : "inherit"}
           size="small"
           sx={{
-            minWidth: 0,
-            minHeight: "2rem",
-            px: 0.75,
-            gap: 0.5,
-            borderRadius: 1,
-            textTransform: "none",
-            whiteSpace: "nowrap",
-            fontSize: "0.75rem",
-            fontWeight: 500,
+            ...desktopToolbarActionSx,
             bgcolor: pressed ? "action.selected" : "transparent",
-            "& .MuiSvgIcon-root": { fontSize: "1.125rem" },
           }}
         >
           {icon}
@@ -336,15 +328,9 @@ export function DesktopComposerToolbar(
               if (event.button === 0) event.preventDefault();
             }}
             onClick={(event) => setMoreAnchor(event.currentTarget)}
-            sx={{
-              minWidth: 0,
-              minHeight: "2rem",
-              px: 0.75,
-              gap: 0.5,
-              borderRadius: 1,
-            }}
+            sx={desktopToolbarActionSx}
           >
-            <MoreHoriz sx={{ fontSize: "1.125rem" }} />
+            <MoreHoriz />
             <LeaderKeycap
               leaderKey={DESKTOP_WORKSPACE_KEYS.composerMore}
               scopeAvailable={scoped}

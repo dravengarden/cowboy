@@ -13,6 +13,7 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
+import { desktopSize } from "./surface/desktopSize";
 import {
   AccountTree,
   ChevronRight,
@@ -88,7 +89,7 @@ function StateChip(
         label={callStateLabel(call)}
         color={color}
         icon={tone === "active"
-          ? <CircularProgress size={10} thickness={5} color="inherit" />
+          ? <CircularProgress size={desktopSize(10)} thickness={5} color="inherit" />
           : undefined}
       />
     );
@@ -944,7 +945,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
               pl: 0.5,
               pr: 1,
               py: 0,
-              minHeight: 32,
+              minHeight: desktopSize(32),
               "&:active, &:focus-visible": { bgcolor: "action.hover" },
             }
             : {
@@ -960,16 +961,16 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
         <Stack
           direction="row"
           alignItems="center"
-          spacing={desktop ? 0.75 : 1}
-          sx={{ width: "100%", minWidth: 0 }}
+          spacing={desktop ? 0 : 1}
+          sx={{ width: "100%", minWidth: 0, ...(desktop && { gap: "0.375rem" }) }}
         >
           {desktop
             ? (
-              // With the 6px row gap this is the 28px chevron column the
-              // Queue/Drafts header uses, so the labels share one left edge.
+              // With the 0.375rem row gap this is the 28px (scaled) chevron
+              // column the Queue/Drafts header uses: one shared left edge.
               <Box
                 sx={{
-                  width: 22,
+                  width: desktopSize(22),
                   display: "inline-flex",
                   justifyContent: "center",
                   flexShrink: 0,
