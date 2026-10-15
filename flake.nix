@@ -153,6 +153,8 @@
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs
+          ./src/agent_api.rs
+          ./src/agent_api
           ./src/managed_calls.rs
           ./src/managed_calls
           ./src/component_proof.rs
