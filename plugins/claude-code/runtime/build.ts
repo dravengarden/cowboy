@@ -89,19 +89,17 @@ try {
     const digests: Record<string, string> = {};
     for (const source of sources) {
       const filename = source === "launch.mjs" ? "cowboy-launch.mjs" : source;
-      await copyFile(
-        `${root}/${source}`,
+      // The packaged app has no node_modules: every module importing the
+      // memory client (memory.mjs, agent-calls.mjs) reads the bundled copy.
+      await writeFile(
         `${destination}/app/${filename}`,
+        (await readFile(`${root}/${source}`, "utf8")).replaceAll(
+          '"@cowboy/memory-client"',
+          '"./matrix-client.mjs"',
+        ),
       );
       digests[source] = await sha256(`${root}/${source}`);
     }
-    await writeFile(
-      `${destination}/app/memory.mjs`,
-      (await readFile(`${root}/memory.mjs`, "utf8")).replace(
-        "@cowboy/memory-client",
-        "./matrix-client.mjs",
-      ),
-    );
     await copyFile(
       `${repository}/components/memory-client/index.mjs`,
       `${destination}/app/matrix-client.mjs`,
