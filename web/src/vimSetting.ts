@@ -22,3 +22,26 @@ export function getVimSetting(): boolean {
 export function setVimSetting(on: boolean): void {
   vim.set(on);
 }
+
+// The user's Vim configuration (a vimrc subset, see desktop/vim/vimConfig.ts),
+// kept beside the on/off intent on this device.
+const vimConfig = persisted("cowboy:vim-config", "", {
+  serialize: (text) => text,
+  deserialize: (text) => text,
+});
+
+export function useVimConfigSource(): string {
+  return useStore(vimConfig);
+}
+
+export function getVimConfigSource(): string {
+  return vimConfig.get();
+}
+
+export function setVimConfigSource(text: string): void {
+  vimConfig.set(text);
+}
+
+export function subscribeVimConfigSource(listener: () => void): () => void {
+  return vimConfig.subscribe(listener);
+}

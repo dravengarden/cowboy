@@ -147,6 +147,17 @@ for the next row in Normal; the Draft title's `Esc`/`j`/`Enter` return to
 the body. Yanks also go to the system clipboard. A field opts out with
 `data-desktop-vim="off"`; read-only pickers are not fields.
 
+#### Vim configuration
+
+Settings → Workflow → Vim config holds a vimrc subset per device
+(`vim/vimConfig.ts`, `cowboy:vim-config`): `map`/`noremap` and their
+`n`/`v`/`x`/`i`/`o` variants, plus `set timeoutlen=<ms>` (default 1000,
+like Vim). "Leave Insert" writes the common `inoremap jj <Esc>` (or `jk`,
+`kj`) line. CodeMirror editors apply every mapping through codemirror-vim;
+native text fields honour typed Insert escape sequences only, removing the
+already-typed prefix as Vim does. Unsupported lines are listed with their
+line numbers and skipped.
+
 #### Context keys
 
 What the current page owns needs no prefix beyond the leader. The open
