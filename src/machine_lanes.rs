@@ -46,6 +46,56 @@ pub(crate) const LANE_IDLE: Duration = Duration::from_secs(600);
 /// below the previous one-minute `LANE_IDLE`, so a Controller is safe beside
 /// a Machine of either release; the Machine's own sends refresh a lane.
 pub(crate) const LANE_FRESH: Duration = Duration::from_secs(45);
+/// A lane silent this long is probed with a Ping.
+pub(crate) const LANE_PROBE_AFTER: Duration = Duration::from_secs(5);
+/// A probed lane that receives nothing for this long has failed. A relay that
+/// loses one side of a pooled stream can keep the other side open: on
+/// 2026-10-15 an OVH lane stayed silently dead for 51 s until the relay closed
+/// it, and every request it carried waited that long before being resent.
+pub(crate) const LANE_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const LANE_PROBE_PAYLOAD: &[u8] = b"cowboy-lane-probe";
+
+/// When a lane's liveness probe should be sent, and when it has failed.
+#[derive(Debug)]
+pub(crate) struct Probe {
+    last_inbound: Instant,
+    sent: Option<Instant>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProbeAction {
+    Wait,
+    Send,
+    Failed,
+}
+
+impl Probe {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self {
+            last_inbound: now,
+            sent: None,
+        }
+    }
+
+    /// Anything received, including a Pong, proves the path is alive.
+    pub(crate) fn received(&mut self, now: Instant) {
+        self.last_inbound = now;
+        self.sent = None;
+    }
+
+    pub(crate) fn due(&mut self, now: Instant) -> ProbeAction {
+        match self.sent {
+            Some(sent) if now.duration_since(sent) >= LANE_PROBE_TIMEOUT => ProbeAction::Failed,
+            Some(_) => ProbeAction::Wait,
+            None if now.duration_since(self.last_inbound) >= LANE_PROBE_AFTER => {
+                self.sent = Some(now);
+                ProbeAction::Send
+            }
+            None => ProbeAction::Wait,
+        }
+    }
+}
+
 /// At most one lane is being opened at a time, and not more often than this.
 pub(crate) const LANE_OPEN_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -191,6 +241,28 @@ impl Opener {
 
     pub(crate) fn opened(&mut self) {
         self.opening = false;
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    #[test]
+    fn a_silent_lane_is_probed_and_fails_only_without_any_reply() {
+        let start = Instant::now();
+        let mut probe = Probe::new(start);
+        assert_eq!(probe.due(start + Duration::from_secs(1)), ProbeAction::Wait);
+        let sent = start + LANE_PROBE_AFTER;
+        assert_eq!(probe.due(sent), ProbeAction::Send);
+        // One probe at a time.
+        assert_eq!(probe.due(sent + Duration::from_secs(5)), ProbeAction::Wait);
+        // A Pong (or any frame) restores the lane.
+        probe.received(sent + Duration::from_secs(1));
+        assert_eq!(probe.due(sent + Duration::from_secs(2)), ProbeAction::Wait);
+        let again = sent + Duration::from_secs(1) + LANE_PROBE_AFTER;
+        assert_eq!(probe.due(again), ProbeAction::Send);
+        assert_eq!(probe.due(again + LANE_PROBE_TIMEOUT), ProbeAction::Failed);
     }
 }
 

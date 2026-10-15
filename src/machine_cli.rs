@@ -1682,6 +1682,7 @@ async fn run_lane(
     tracing::info!(lane = id, lanes = lanes.len(), "Machine bulk lane opened");
     let mut decoder = crate::machine_transport::Decoder::new(features);
     let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+    let mut probe = crate::machine_lanes::Probe::new(std::time::Instant::now());
     let failed = loop {
         tokio::select! {
             _ = alive.changed() => break false,
@@ -1690,10 +1691,27 @@ async fn run_lane(
                 if lanes.idle_for(id).is_some_and(|idle| idle >= crate::machine_lanes::LANE_IDLE) {
                     break false;
                 }
+                match probe.due(std::time::Instant::now()) {
+                    crate::machine_lanes::ProbeAction::Wait => {}
+                    crate::machine_lanes::ProbeAction::Send => {
+                        let _ = tx.send(Message::Ping(
+                            crate::machine_lanes::LANE_PROBE_PAYLOAD.to_vec().into(),
+                        ));
+                    }
+                    crate::machine_lanes::ProbeAction::Failed => {
+                        tracing::warn!(lane = id, "Machine bulk lane stopped answering its liveness probe");
+                        break true;
+                    }
+                }
             }
             message = stream.next() => {
                 let Some(Ok(message)) = message else { break true };
-                lanes.touch(id);
+                probe.received(std::time::Instant::now());
+                // Probe replies prove liveness but are not traffic: an
+                // otherwise idle lane still closes after LANE_IDLE.
+                if !matches!(message, Message::Pong(_)) {
+                    lanes.touch(id);
+                }
                 let text = match message {
                     Message::Binary(bytes) => {
                         let Ok(decoded) = decoder.chunk((features.0, features.1), &bytes).await else {
