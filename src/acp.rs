@@ -2383,6 +2383,19 @@ async fn agent_main(
                 );
                 continue;
             }
+            // The ACP adapter's per-phase timings and expected runtime
+            // notices are not failures; at WARN they buried real stderr
+            // (about 400 per day on OVH, mostly from worker restarts).
+            if routine_agent_stderr(&line) {
+                tracing::debug!(
+                    session = %stderr_session,
+                    provider = %stderr_provider,
+                    child = true,
+                    message = %line,
+                    "agent stderr diagnostic"
+                );
+                continue;
+            }
             tracing::warn!(
                 session = %stderr_session,
                 provider = %stderr_provider,
@@ -4145,8 +4158,48 @@ fn startup_phase(line: &str) -> Option<(&str, f64)> {
     Some((phase, f64::from(total)))
 }
 
+/// Diagnostic stderr a healthy Provider writes on every start: Claude ACP
+/// phase timings (`[session/create] sessionId=… phase=… durationMs=…`) and
+/// Node's notice that bypass mode skips the permission callback.
+fn routine_agent_stderr(line: &str) -> bool {
+    let timing = line
+        .strip_prefix("[session/")
+        .and_then(|rest| rest.split_once("] sessionId="))
+        .is_some_and(|(method, _)| {
+            !method.is_empty()
+                && method
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+        });
+    timing
+        || line.contains("[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED]")
+        || line == "(Use `node --trace-warnings ...` to show where the warning was created)"
+}
+
 #[cfg(test)]
 mod startup_phase_tests {
+    #[test]
+    fn routine_stderr_is_recognized_and_failures_are_not() {
+        for line in [
+            "[session/create] sessionId=0d1e phase=settings durationMs=3 totalMs=40",
+            "[session/query] sessionId=0d1e resume=0d1e apiType=native baseUrl=native",
+            "[session/models] sessionId=0d1e phase=read-transcript-tail durationMs=1 totalMs=2",
+            "(node:12) [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked",
+            "(Use `node --trace-warnings ...` to show where the warning was created)",
+        ] {
+            assert!(super::routine_agent_stderr(line), "{line}");
+        }
+        for line in [
+            "claude auth status did not answer within 5 s; the identity is not refreshed",
+            "Error: ENOSPC: no space left on device",
+            "[session/Create] sessionId=x",
+            "[session/] sessionId=x",
+            "TypeError: cannot read properties of undefined",
+        ] {
+            assert!(!super::routine_agent_stderr(line), "{line}");
+        }
+    }
+
     #[test]
     fn startup_milestones_parse_and_other_lines_do_not() {
         assert_eq!(

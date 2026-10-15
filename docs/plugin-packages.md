@@ -652,8 +652,13 @@ rebind only a failed session that never received a native ACP session ID, and
 only after the same signed auth contract is synchronized to its selected
 Machine. Established native sessions never change auth-generation or account
 identity, but a same-account reconnect may rotate their shared credentials.
-After the Machine accepts a newer credential generation it drains matching
-workers, reloads the projection, and resumes each exact native session.
+After the Machine accepts a newer credential generation whose bytes differ
+from what its runtime projections already hold, it drains matching workers,
+reloads the projection, and resumes each exact native session. A generation
+that only re-seals a refresh this Machine's own Provider wrote changes nothing
+its workers read (they share the canonical credential files), so no worker is
+drained. Rollout replacements start at most half the Machine's CPUs (2 to 8)
+native runtimes at once; a session with a waiting prompt starts first.
 
 Online Machines reconcile as part of login. Offline Machines retain `pending`
 convergence and reconcile immediately after reconnect. New Machines receive the

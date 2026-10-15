@@ -37,7 +37,9 @@ server text. It folds every pending write into one write and resends. Edits in
 different places all survive. Words, whitespace, punctuation and single CJK
 characters are merge tokens. An overlapping region keeps both versions, remote
 first, rather than dropping either. Overwritten server states remain in the
-recovery history (its latest 30 revisions). Attachments are kept unless one
+recovery history, spaced like Obsidian's File recovery: the text before
+writing resumes after five quiet minutes, and one snapshot per five minutes
+of continuous writing, never one per autosave. It keeps the latest 30. Attachments are kept unless one
 side removed them. Title and location changes are last-writer-wins. Trash and
 restore reapply the local intent.
 

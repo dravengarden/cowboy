@@ -18,6 +18,27 @@ use super::{AppState, holds_worker_slot};
 /// slot before refusing as before.
 const SLOT_RELEASE_TIMEOUT: Duration = Duration::from_secs(20);
 const SLOT_RELEASE_POLL: Duration = Duration::from_millis(250);
+/// A client restoring its tabs opens several dormant sessions within a
+/// second. Rebalancing waits this long so the whole burst is known, and never
+/// hibernates a session woken within `WAKE_PROTECTION`: on 2026-10-14 three
+/// restored tabs each hibernated the next one being opened.
+const WAKE_SETTLE: Duration = Duration::from_secs(5);
+const WAKE_PROTECTION: Duration = Duration::from_mins(10);
+
+static RECENT_WAKES: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Record a wake and return every session woken within `WAKE_PROTECTION`.
+fn recent_wakes(woken: Option<&str>) -> std::collections::HashSet<String> {
+    let now = std::time::Instant::now();
+    let mut wakes = RECENT_WAKES.lock();
+    if let Some(woken) = woken {
+        wakes.insert(woken.to_owned(), now);
+    }
+    wakes.retain(|_, at| now.duration_since(*at) < WAKE_PROTECTION);
+    wakes.keys().cloned().collect()
+}
 
 /// What the selection needs to know about one session on the full Device.
 #[derive(Debug, Clone)]
@@ -49,12 +70,13 @@ pub(super) fn choose(candidates: &[Candidate], min_idle: Duration) -> Option<&st
         .map(|candidate| candidate.id.as_str())
 }
 
-/// After an open has revived `opened`, the session to hibernate so the Device
+/// After an open has revived a session, the session to hibernate so the Device
 /// returns to its capacity: only when the Device now holds more workers than
-/// `max_sessions`, and never the session that was just opened.
+/// `max_sessions`, and never a session in `woken` (the one just opened and any
+/// other opened recently).
 pub(super) fn choose_after_wake<'a>(
     candidates: &'a [Candidate],
-    opened: &str,
+    woken: &std::collections::HashSet<String>,
     max_sessions: usize,
     min_idle: Duration,
 ) -> Option<&'a str> {
@@ -67,7 +89,7 @@ pub(super) fn choose_after_wake<'a>(
     }
     let others = candidates
         .iter()
-        .filter(|candidate| candidate.id != opened)
+        .filter(|candidate| !woken.contains(&candidate.id))
         .cloned()
         .collect::<Vec<_>>();
     let chosen = choose(&others, min_idle)?.to_owned();
@@ -82,12 +104,11 @@ pub(super) fn choose_after_wake<'a>(
 /// hibernate one other eligible idle session afterwards so the slot count
 /// returns to the limit. Best effort: it never delays or refuses the open.
 pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
-    if !state
-        .service_config
-        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
-    {
+    if !reclaim_enabled(&state) {
         return;
     }
+    recent_wakes(Some(&opened));
+    tokio::time::sleep(WAKE_SETTLE).await;
     let Some(machine_id) = state
         .hub
         .session_list()
@@ -97,36 +118,31 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     else {
         return;
     };
-    let Some(store) = state.store.as_ref() else {
-        return;
-    };
-    let Ok(machines) = store.list_machines().await else {
-        return;
-    };
-    let Some(machine) = machines
-        .into_iter()
-        .find(|machine| machine.id == machine_id && !machine.revoked)
-    else {
-        return;
-    };
-    let capacity: crate::machine_protocol::MachineCapacity = machine
-        .inventory
-        .get("capacity")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
-    let min_idle = state
-        .service_config
-        .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
-    let candidates = candidates(&state, &machine_id);
-    let Some(chosen) = choose_after_wake(
-        &candidates,
-        &opened,
-        capacity.max_sessions as usize,
-        min_idle,
-    )
-    .map(str::to_owned) else {
-        return;
+    let chosen = loop {
+        // Policy and capacity are read on every pass: a retry may follow a
+        // ten-minute wait during which an operator changed them.
+        if !reclaim_enabled(&state) {
+            return;
+        }
+        let Some(max_sessions) = device_capacity(&state, &machine_id).await else {
+            return;
+        };
+        let min_idle = state
+            .service_config
+            .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
+        let candidates = candidates(&state, &machine_id);
+        // Taken last, so a session woken while the store was read is known.
+        let woken = recent_wakes(None);
+        if let Some(chosen) = choose_after_wake(&candidates, &woken, max_sessions, min_idle) {
+            break chosen.to_owned();
+        }
+        // Over capacity with only recently woken sessions eligible: try again
+        // once their protection has expired, rather than staying over it.
+        let unprotected = std::collections::HashSet::new();
+        if choose_after_wake(&candidates, &unprotected, max_sessions, min_idle).is_none() {
+            return;
+        }
+        tokio::time::sleep(WAKE_PROTECTION).await;
     };
     match state.supervisor.hibernate_session(&chosen) {
         Ok(()) => tracing::info!(machine = %machine_id, opened = %opened, session = %chosen,
@@ -134,6 +150,27 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
         Err(error) => tracing::warn!(machine = %machine_id, session = %chosen, %error,
             "could not hibernate a session after a wake exceeded capacity"),
     }
+}
+
+fn reclaim_enabled(state: &AppState) -> bool {
+    state
+        .service_config
+        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+}
+
+/// The enrolled Device's current `max_sessions`, if it is still enrolled.
+async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
+    let machines = state.store.as_ref()?.list_machines().await.ok()?;
+    let machine = machines
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)?;
+    let capacity: crate::machine_protocol::MachineCapacity = machine
+        .inventory
+        .get("capacity")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    Some(capacity.max_sessions as usize)
 }
 
 fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
@@ -230,25 +267,52 @@ mod tests {
     }
 
     #[test]
-    fn a_wake_reclaims_only_when_over_capacity_and_never_the_opened_session() {
+    fn a_wake_reclaims_only_when_over_capacity_and_never_a_recently_woken_session() {
         let hour = Duration::from_hours(1);
+        let woken = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| (*id).to_owned())
+                .collect::<std::collections::HashSet<_>>()
+        };
         let opened = Candidate {
             status: Status::Starting,
             ..idle("opened", 900)
         };
         let sessions = [opened, idle("old", 300), idle("older", 600)];
         // Three workers against a limit of three: nothing to do.
-        assert_eq!(choose_after_wake(&sessions, "opened", 3, hour), None);
+        assert_eq!(
+            choose_after_wake(&sessions, &woken(&["opened"]), 3, hour),
+            None
+        );
         // Over the limit: the longest-idle other session, never the one opened.
         assert_eq!(
-            choose_after_wake(&sessions, "opened", 2, hour),
+            choose_after_wake(&sessions, &woken(&["opened"]), 2, hour),
             Some("older")
+        );
+        // A restored tab opened just before is protected too.
+        assert_eq!(
+            choose_after_wake(&sessions, &woken(&["opened", "older"]), 2, hour),
+            Some("old")
         );
         let only_opened = [Candidate {
             status: Status::Running,
             ..idle("opened", 900)
         }];
-        assert_eq!(choose_after_wake(&only_opened, "opened", 0, hour), None);
+        assert_eq!(
+            choose_after_wake(&only_opened, &woken(&["opened"]), 0, hour),
+            None
+        );
+    }
+
+    #[test]
+    fn recent_wakes_are_remembered_for_the_protection_window() {
+        let id = "sess-recent-wake-test";
+        assert!(recent_wakes(Some(id)).contains(id));
+        assert!(recent_wakes(None).contains(id));
+        RECENT_WAKES
+            .lock()
+            .insert(id.to_owned(), std::time::Instant::now() - WAKE_PROTECTION);
+        assert!(!recent_wakes(None).contains(id));
     }
 
     #[test]

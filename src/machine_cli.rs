@@ -2387,8 +2387,13 @@ fn provider_auth_roll_target(
     receipt: &crate::machine_plugins::PluginInventoryReceipt,
     action: crate::machine_protocol::ProviderAuthAction,
 ) -> Option<String> {
+    // Workers reload only when the credentials they read actually changed:
+    // a refresh written by this Machine's own Provider is already shared by
+    // every worker, and rolling every session for it (every 8 hours for
+    // Claude) restarted dozens of idle native runtimes at once.
     (action == crate::machine_protocol::ProviderAuthAction::Apply
-        && receipt.auth_generation_advanced)
+        && receipt.auth_generation_advanced
+        && receipt.runtime_changed)
         .then(|| receipt.provider_id.clone())
 }
 
@@ -4281,6 +4286,7 @@ mod tests {
             provider_id: "codex".to_owned(),
             auth_generation: 2,
             auth_generation_advanced: true,
+            runtime_changed: true,
             replica_state: ProviderReplicaState::Current,
             materialization_state: ProviderMaterializationState::Current,
         };
@@ -4296,6 +4302,12 @@ mod tests {
         receipt.auth_generation_advanced = true;
         assert_eq!(
             provider_auth_roll_target(&receipt, ProviderAuthAction::Wipe),
+            None
+        );
+        // A refresh this Machine produced: nothing its workers read changed.
+        receipt.runtime_changed = false;
+        assert_eq!(
+            provider_auth_roll_target(&receipt, ProviderAuthAction::Apply),
             None
         );
     }

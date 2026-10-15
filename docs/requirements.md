@@ -522,8 +522,9 @@ swap to the newer auth generation only when the signed auth contract is
 unchanged and the selected Machine acknowledged that exact projection. Once a
 native ACP session ID exists, its auth-generation identity remains immutable.
 A successful refresh or explicit reconnect of the same account may rotate the
-credential lineage used by that session; it must drain and resume the exact
-native session rather than discard its history. Switching accounts still
+credential lineage used by that session; when that changes the credentials
+its worker reads, it must drain and resume the exact native session rather
+than discard its history. Switching accounts still
 requires a new session.
 
 ### CR-10: Uninstall is explicit and recoverable for a bounded period

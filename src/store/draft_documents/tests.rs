@@ -142,6 +142,46 @@ async fn contract(store: &Store) {
             .all(|d| d.body.is_empty() && d.attachments.is_empty())
     );
 
+    // Autosave cadence: writes seconds apart replace the newest text without
+    // pushing a snapshot of every keystroke into the recovery history.
+    let typing = applied(
+        store
+            .mutate_draft_document(
+                "writer",
+                &mutation(
+                    "typing",
+                    "typing-create",
+                    0,
+                    create(DraftKind::Document, "Typing", None, "Start"),
+                ),
+            )
+            .await
+            .unwrap(),
+    );
+    let mut revision = typing.body_revision;
+    for (index, body) in ["typed a", "typed ab", "typed abc"].into_iter().enumerate() {
+        revision = applied(
+            store
+                .mutate_draft_document(
+                    "writer",
+                    &mutation(
+                        "typing",
+                        &format!("autosave-{index}"),
+                        revision,
+                        write(body),
+                    ),
+                )
+                .await
+                .unwrap(),
+        )
+        .body_revision;
+    }
+    let history = store.draft_history("writer", "typing").await.unwrap();
+    assert_eq!(
+        history.iter().map(|d| d.body.as_str()).collect::<Vec<_>>(),
+        ["Start"]
+    );
+
     // Independent metadata and content writers, then competing body writers.
     let left = mutation("doc", "race-a", 2, write("Left"));
     let right = mutation("doc", "race-b", 2, write("Right"));
@@ -389,4 +429,24 @@ async fn postgres_workspace_import_and_folder_deletion_preserve_content_and_owne
         .await
         .unwrap();
     workspace_contract(&store).await;
+}
+
+#[test]
+fn recovery_snapshots_are_spaced_like_obsidian_file_recovery() {
+    let minute = 60 * 1000;
+    // The first snapshot of a document is always kept.
+    assert!(keeps_snapshot(10 * minute, 10 * minute, None));
+    // Continuous writing: one snapshot per interval, not per autosave.
+    assert!(!keeps_snapshot(
+        12 * minute,
+        12 * minute - 400,
+        Some(10 * minute)
+    ));
+    assert!(keeps_snapshot(
+        16 * minute,
+        16 * minute - 400,
+        Some(10 * minute)
+    ));
+    // Resuming after a pause keeps the text as it was left.
+    assert!(keeps_snapshot(60 * minute, 11 * minute, Some(10 * minute)));
 }

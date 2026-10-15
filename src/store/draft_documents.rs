@@ -8,6 +8,22 @@ use serde::{Deserialize, Serialize};
 
 const MAX_BODY: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
+/// Recovery snapshots per document.
+const HISTORY_LIMIT: i64 = 30;
+/// Snapshot spacing, as Obsidian's File recovery: autosave writes every few
+/// hundred milliseconds of typing, so a snapshot per write would leave only
+/// the last minute in the history.
+const HISTORY_INTERVAL_MS: i64 = 5 * 60 * 1000;
+
+/// Whether the content a write replaces becomes a recovery snapshot: the
+/// first one, one that rested unchanged for an interval (the text before an
+/// editing session resumed), or one an interval after the newest snapshot
+/// (periodic snapshots while writing continuously).
+fn keeps_snapshot(now: i64, replaced_at: i64, newest_snapshot_at: Option<i64>) -> bool {
+    newest_snapshot_at.is_none_or(|newest| {
+        now - replaced_at >= HISTORY_INTERVAL_MS || replaced_at - newest >= HISTORY_INTERVAL_MS
+    })
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -295,8 +311,8 @@ impl Store {
 
     pub(crate) async fn draft_history(&self, owner: &str, id: &str) -> Result<Vec<DraftDocument>> {
         macro_rules! read { ($db:expr) => {
-            sqlx::query_scalar::<_, String>("SELECT value FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 30")
-                .bind(owner).bind(id).fetch_all(&$db.pool).await?
+            sqlx::query_scalar::<_, String>("SELECT value FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT $3")
+                .bind(owner).bind(id).bind(HISTORY_LIMIT).fetch_all(&$db.pool).await?
         }; }
         let values = match &self.backend {
             StorageBackend::Postgres(db) => read!(db),
@@ -331,7 +347,7 @@ impl Store {
         shared: &[crate::session_folders::SessionFolder],
     ) -> Result<DraftResult> {
         let request_hash = crate::admin::hex_sha256(&serde_json::to_vec(mutation)?);
-        macro_rules! write { ($db:expr) => {{
+        macro_rules! write { ($db:expr, $newest_snapshot_at:expr) => {{
             let mut tx = $db.pool.begin().await?;
             // The first statement acquires the owner's writer lock on BOTH
             // backends, before any read (including SQLite's snapshot).
@@ -359,13 +375,19 @@ impl Store {
                 let destination: Option<String> = sqlx::query_scalar("SELECT folder_id FROM draft_workspace_folder_imports WHERE owner_user_id=$1 AND document_id=$2").bind(owner).bind(&*parent).fetch_optional(&mut *tx).await?;
                 if let Some(destination) = destination { *parent = destination; }
             }
-            let result = apply(&entries, &mapped, chrono::Utc::now().timestamp_millis(), shared);
+            let now = chrono::Utc::now().timestamp_millis();
+            let result = apply(&entries, &mapped, now, shared);
             if let DraftResult::Applied(ref next) = result {
                 if let Some(previous) = entries.iter().find(|d| d.id == next.id && (d.body != next.body || d.attachments != next.attachments) && d.kind == DraftKind::Document) {
-                    sqlx::query("INSERT INTO draft_document_history (owner_user_id, document_id, revision, value) VALUES ($1, $2, $3, $4)")
-                        .bind(owner).bind(&next.id).bind(previous.revision).bind(serde_json::to_string(previous)?).execute(&mut *tx).await?;
-                    sqlx::query("DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 AND revision NOT IN (SELECT revision FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 30)")
-                        .bind(owner).bind(&next.id).execute(&mut *tx).await?;
+                    // Only the newest snapshot's time is read, never its body.
+                    let newest: Option<i64> = sqlx::query_scalar($newest_snapshot_at)
+                        .bind(owner).bind(&next.id).fetch_optional(&mut *tx).await?;
+                    if keeps_snapshot(now, previous.updated_at_ms, newest) {
+                        sqlx::query("INSERT INTO draft_document_history (owner_user_id, document_id, revision, value) VALUES ($1, $2, $3, $4)")
+                            .bind(owner).bind(&next.id).bind(previous.revision).bind(serde_json::to_string(previous)?).execute(&mut *tx).await?;
+                        sqlx::query("DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 AND revision NOT IN (SELECT revision FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT $3)")
+                            .bind(owner).bind(&next.id).bind(HISTORY_LIMIT).execute(&mut *tx).await?;
+                    }
                 }
                 let mut metadata = serde_json::to_value(next)?;
                 metadata.as_object_mut().expect("document object").remove("body");
@@ -379,8 +401,14 @@ impl Store {
             result
         }}; }
         Ok(match &self.backend {
-            StorageBackend::Postgres(db) => write!(db),
-            StorageBackend::Sqlite(db) => write!(db),
+            StorageBackend::Postgres(db) => write!(
+                db,
+                "SELECT (value::json->>'updated_at_ms')::bigint FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1"
+            ),
+            StorageBackend::Sqlite(db) => write!(
+                db,
+                "SELECT CAST(json_extract(value, '$.updated_at_ms') AS INTEGER) FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1"
+            ),
         })
     }
 }
