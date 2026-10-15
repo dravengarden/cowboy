@@ -25,7 +25,7 @@ import {
 
 const toolsDefaults: AgentTools = {
   schema: 1,
-  matrix: { tools: true, recall: true },
+  memory: { tools: true, recall: true },
   calls: {
     enabled: false,
     targets: [{ agent: "codex" }],
@@ -87,7 +87,7 @@ function overlay(
 ): AgentTools {
   return {
     ...defaults,
-    matrix: { ...defaults.matrix, ...override.matrix },
+    memory: { ...defaults.memory, ...override.memory },
     calls: { ...defaults.calls, ...override.calls },
   };
 }

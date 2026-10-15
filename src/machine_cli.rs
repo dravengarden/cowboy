@@ -4859,6 +4859,7 @@ mod tests {
                     fallback_for: None,
                     adopt_only: false,
                     execution_binding: None,
+                    extensions: None,
                 },
             },
         };

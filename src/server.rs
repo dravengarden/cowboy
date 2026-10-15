@@ -11,6 +11,7 @@
 //! challenge before WebSocket protocol negotiation.
 
 mod agent_tools;
+pub(crate) use agent_tools::launch_extensions;
 mod dormant_pins;
 mod secure_transport;
 mod session_create_replay;

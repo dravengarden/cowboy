@@ -47,15 +47,18 @@ const MAX_TARGETS: usize = 8;
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentTools {
     pub schema: u16,
-    pub matrix: MatrixTools,
+    /// Stored before session extensions as `matrix`; still read under that key.
+    #[serde(alias = "matrix")]
+    pub memory: MemoryTools,
     pub calls: CallsPolicy,
 }
 
-/// Matrix memory: its MCP tools and the recall injected before each turn are
-/// separate costs, so they are separate switches.
+/// The session's memory backend: its MCP tools and the recall injected before
+/// each turn are separate costs, so they are separate switches. Which backend
+/// serves them is the runtime Machine's installed `memory_backend` Plugin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct MatrixTools {
+pub(super) struct MemoryTools {
     pub tools: bool,
     pub recall: bool,
 }
@@ -126,15 +129,15 @@ pub(super) fn custom_values(recorded: &str) -> Option<std::collections::BTreeMap
 #[serde(deny_unknown_fields)]
 pub(super) struct SessionTools {
     pub schema: u16,
-    #[serde(default)]
-    pub matrix: MatrixOverride,
+    #[serde(default, alias = "matrix")]
+    pub memory: MemoryOverride,
     #[serde(default)]
     pub calls: CallsOverride,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct MatrixOverride {
+pub(super) struct MemoryOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,7 +192,7 @@ fn valid_default(default: &str, targets: &[CallTarget]) -> bool {
 }
 
 impl AgentTools {
-    /// Matrix stays on; agent calls are off until a session needs them. Every
+    /// Memory stays on; agent calls are off until a session needs them. Every
     /// agent may call either agent, and Auto prefers the other one.
     pub fn builtin(agent: &str) -> Self {
         let targets = callable(agent)
@@ -201,7 +204,7 @@ impl AgentTools {
             .collect();
         Self {
             schema: SCHEMA,
-            matrix: MatrixTools {
+            memory: MemoryTools {
                 tools: true,
                 recall: true,
             },
@@ -237,11 +240,11 @@ impl AgentTools {
 
     /// Apply a session's override. The result is validated by the caller.
     pub fn overlay(mut self, session: &SessionTools) -> Self {
-        if let Some(tools) = session.matrix.tools {
-            self.matrix.tools = tools;
+        if let Some(tools) = session.memory.tools {
+            self.memory.tools = tools;
         }
-        if let Some(recall) = session.matrix.recall {
-            self.matrix.recall = recall;
+        if let Some(recall) = session.memory.recall {
+            self.memory.recall = recall;
         }
         if let Some(enabled) = session.calls.enabled {
             self.calls.enabled = enabled;
@@ -285,9 +288,11 @@ impl SessionTools {
 
 /// Stored defaults for one agent kind, else the built-in ones.
 pub(super) fn agent_defaults(state: &AppState, agent: &str) -> (AgentTools, bool) {
-    state
-        .hub
-        .setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))
+    hub_agent_defaults(&state.hub, agent)
+}
+
+fn hub_agent_defaults(hub: &crate::core::Hub, agent: &str) -> (AgentTools, bool) {
+    hub.setting(&format!("{AGENT_TOOLS_PREFIX}{agent}"))
         .and_then(|value| serde_json::from_value::<AgentTools>(value).ok())
         .filter(AgentTools::validate)
         .map_or_else(
@@ -297,9 +302,11 @@ pub(super) fn agent_defaults(state: &AppState, agent: &str) -> (AgentTools, bool
 }
 
 pub(super) fn session_override(state: &AppState, session: &str) -> SessionTools {
-    state
-        .hub
-        .setting(&format!("{SESSION_TOOLS_PREFIX}{session}"))
+    hub_session_override(&state.hub, session)
+}
+
+fn hub_session_override(hub: &crate::core::Hub, session: &str) -> SessionTools {
+    hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}"))
         .and_then(|value| serde_json::from_value::<SessionTools>(value).ok())
         .filter(SessionTools::validate)
         .unwrap_or(SessionTools {
@@ -311,10 +318,28 @@ pub(super) fn session_override(state: &AppState, session: &str) -> SessionTools 
 /// What a session actually runs with: its agent kind's defaults with its own
 /// override applied.
 pub(super) fn effective(state: &AppState, session: &crate::core::SessionMeta) -> AgentTools {
-    agent_defaults(state, &session.provider)
+    hub_effective(&state.hub, session)
+}
+
+fn hub_effective(hub: &crate::core::Hub, session: &crate::core::SessionMeta) -> AgentTools {
+    hub_agent_defaults(hub, &session.provider)
         .0
-        .overlay(&session_override(state, &session.id))
+        .overlay(&hub_session_override(hub, &session.id))
         .for_caller(&session.provider)
+}
+
+/// The session-extension switches a worker launch carries. A change applies
+/// at the session's next worker start.
+pub(crate) fn launch_extensions(
+    hub: &crate::core::Hub,
+    session: &crate::core::SessionMeta,
+) -> crate::runtime_wire::SessionExtensions {
+    let memory = hub_effective(hub, session).memory;
+    crate::runtime_wire::SessionExtensions {
+        schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+        memory_tools: memory.tools,
+        memory_recall: memory.recall,
+    }
 }
 
 /// A policy that admits `requested` once, as a person approved it: calls are
@@ -671,10 +696,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stored_matrix_switches_load_as_memory_and_save_under_the_new_key() {
+        let mut stored = serde_json::to_value(AgentTools::builtin("codex")).unwrap();
+        let memory = stored.as_object_mut().unwrap().remove("memory").unwrap();
+        stored["matrix"] = serde_json::json!({"tools": false, "recall": true});
+        let loaded: AgentTools = serde_json::from_value(stored).unwrap();
+        assert!(!loaded.memory.tools && loaded.memory.recall);
+        let saved = serde_json::to_value(&loaded).unwrap();
+        assert!(saved.get("matrix").is_none());
+        assert_eq!(saved["memory"]["tools"], false);
+        assert_eq!(memory["tools"], true);
+        let session: SessionTools =
+            serde_json::from_value(serde_json::json!({"schema": 1, "matrix": {"recall": false}}))
+                .unwrap();
+        assert_eq!(session.memory.recall, Some(false));
+        let effective = AgentTools::builtin("claude-code").overlay(&session);
+        assert!(effective.memory.tools && !effective.memory.recall);
+    }
+    #[test]
     fn calls_are_off_by_default_and_target_only_other_families() {
         let codex = AgentTools::builtin("codex");
         assert!(codex.validate());
-        assert!(codex.matrix.tools && codex.matrix.recall);
+        assert!(codex.memory.tools && codex.memory.recall);
         assert!(!codex.calls.enabled);
         let agents = |tools: &AgentTools| -> Vec<String> {
             tools
@@ -784,7 +827,7 @@ mod tests {
         let defaults = AgentTools::builtin("claude-code");
         let session = SessionTools {
             schema: SCHEMA,
-            matrix: MatrixOverride {
+            memory: MemoryOverride {
                 tools: None,
                 recall: Some(false),
             },
@@ -800,7 +843,7 @@ mod tests {
         };
         assert!(session.validate());
         let effective = defaults.overlay(&session);
-        assert!(effective.matrix.tools && !effective.matrix.recall);
+        assert!(effective.memory.tools && !effective.memory.recall);
         assert!(effective.calls.enabled);
         // A default naming a removed target falls back to Auto.
         assert_eq!(effective.calls.default, AUTO);

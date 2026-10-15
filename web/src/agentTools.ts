@@ -22,13 +22,14 @@ export interface CallsPolicy {
 
 export interface AgentTools {
   schema: 1;
-  matrix: { tools: boolean; recall: boolean };
+  /** Served by the runtime Machine's installed memory backend Plugin. */
+  memory: { tools: boolean; recall: boolean };
   calls: CallsPolicy;
 }
 
 export interface SessionToolsOverride {
   schema: 1;
-  matrix?: { tools?: boolean; recall?: boolean };
+  memory?: { tools?: boolean; recall?: boolean };
   calls?: { enabled?: boolean; targets?: CallTarget[]; default?: string };
 }
 
@@ -179,14 +180,14 @@ export function overrideFor(
   next: AgentTools,
 ): SessionToolsOverride {
   const override: SessionToolsOverride = { schema: 1 };
-  const matrix: NonNullable<SessionToolsOverride["matrix"]> = {};
-  if (next.matrix.tools !== defaults.matrix.tools) {
-    matrix.tools = next.matrix.tools;
+  const memory: NonNullable<SessionToolsOverride["memory"]> = {};
+  if (next.memory.tools !== defaults.memory.tools) {
+    memory.tools = next.memory.tools;
   }
-  if (next.matrix.recall !== defaults.matrix.recall) {
-    matrix.recall = next.matrix.recall;
+  if (next.memory.recall !== defaults.memory.recall) {
+    memory.recall = next.memory.recall;
   }
-  if (Object.keys(matrix).length > 0) override.matrix = matrix;
+  if (Object.keys(memory).length > 0) override.memory = memory;
   const calls: NonNullable<SessionToolsOverride["calls"]> = {};
   if (next.calls.enabled !== defaults.calls.enabled) {
     calls.enabled = next.calls.enabled;
@@ -202,12 +203,22 @@ export function overrideFor(
 }
 
 export function overridden(override: SessionToolsOverride): boolean {
-  return override.matrix !== undefined || override.calls !== undefined;
+  return override.memory !== undefined || override.calls !== undefined;
+}
+
+/** Controllers before session extensions name the memory switches `matrix`. */
+export function withMemoryKey<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withMemoryKey) as T;
+  if (value === null || typeof value !== "object") return value;
+  const entries = Object.entries(value as Record<string, unknown>).map((
+    [key, item],
+  ) => [key === "matrix" ? "memory" : key, withMemoryKey(item)] as const);
+  return Object.fromEntries(entries) as T;
 }
 
 async function json<T>(response: Response, what: string): Promise<T> {
   if (!response.ok) throw new Error(`${what} (${response.status})`);
-  return await response.json() as T;
+  return withMemoryKey(await response.json() as T);
 }
 
 export async function fetchSessionTools(

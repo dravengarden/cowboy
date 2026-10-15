@@ -3036,6 +3036,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             }),
             state: WorkerState::Busy,
             agent_session_id: Some("agent-1".to_owned()),

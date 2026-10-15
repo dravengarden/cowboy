@@ -6508,6 +6508,7 @@ mod managed_call_tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         });
         // An owner on another placement is neither adopted nor reconciled.
         hub.reconcile_provider_release(&worker);
@@ -6556,6 +6557,7 @@ mod managed_call_tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: binding,
+            extensions: None,
         });
 
         hub.reconcile_provider_release(&worker);
@@ -9744,6 +9746,7 @@ mod core_tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         });
         let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();
         for mismatch in ["native", "home", "cwd", "placeholder"] {

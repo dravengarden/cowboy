@@ -250,6 +250,24 @@ pub struct StartSession {
         deserialize_with = "crate::execution_environment::deserialize_optional_binding"
     )]
     pub execution_binding: Option<crate::execution_environment::ExecutionBinding>,
+    /// Controller policy for the runtime Machine's installed session-extension
+    /// Plugins. Older Machines ignore this additive field and keep their host
+    /// enrollment; current ones write the session's private descriptor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<SessionExtensions>,
+}
+
+pub const SESSION_EXTENSIONS_SCHEMA: u16 = 1;
+
+/// Per-session switches for session-extension Plugins. Which memory backend
+/// and call profiles serve them is resolved by the runtime Machine from its
+/// own installed, active Plugins; no endpoint or credential travels here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionExtensions {
+    pub schema: u16,
+    pub memory_tools: bool,
+    pub memory_recall: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

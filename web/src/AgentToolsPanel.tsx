@@ -486,14 +486,14 @@ export function AgentToolsEditor(
           ) => <MenuItem key={limit} value={limit}>{limit}</MenuItem>)}
         </Select>
       </Row>
-      <Heading>Matrix memory</Heading>
+      <Heading>Memory</Heading>
       <Row label="Memory tools" description="Search and record shared memory">
         <Switch
-          checked={value.matrix.tools}
+          checked={value.memory.tools}
           disabled={disabled}
           onChange={(_, checked): void =>
-            onChange({ ...value, matrix: { ...value.matrix, tools: checked } })}
-          slotProps={{ input: { "aria-label": "Matrix memory tools" } }}
+            onChange({ ...value, memory: { ...value.memory, tools: checked } })}
+          slotProps={{ input: { "aria-label": "Memory tools" } }}
         />
       </Row>
       <Row
@@ -501,14 +501,14 @@ export function AgentToolsEditor(
         description="Relevant memory before each turn"
       >
         <Switch
-          checked={value.matrix.recall}
+          checked={value.memory.recall}
           disabled={disabled}
           onChange={(_, checked): void =>
             onChange({
               ...value,
-              matrix: { ...value.matrix, recall: checked },
+              memory: { ...value.memory, recall: checked },
             })}
-          slotProps={{ input: { "aria-label": "Matrix automatic recall" } }}
+          slotProps={{ input: { "aria-label": "Memory automatic recall" } }}
         />
       </Row>
       <Typography
@@ -516,8 +516,8 @@ export function AgentToolsEditor(
         color="text.secondary"
         sx={{ display: "block", pb: 1 }}
       >
-        Matrix switches are saved now and take effect when the agent's Provider
-        supports them; until then the host's Matrix enrollment applies.
+        The memory backend is the Plugin installed on the session's runtime
+        Machine. Changes apply when the session's agent next starts.
       </Typography>
     </Box>
   );
