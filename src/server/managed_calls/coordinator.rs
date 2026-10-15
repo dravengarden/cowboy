@@ -138,11 +138,12 @@ fn reconcile(state: &Arc<AppState>) {
                 continue;
             }
             let agent_api = protocol >= AGENT_API_PROTOCOL_VERSION;
-            // An older Machine refuses a grant carrying the flag, so a
-            // reconnect at a lower protocol needs a replacement grant.
+            // An older Machine refuses a grant carrying the flag, and an
+            // upgraded one refuses Agent API actions under a grant without
+            // it, so a reconnect at another protocol replaces the grant.
             if grants
                 .get(&parent)
-                .is_some_and(|entry| entry.grant.agent_api && !agent_api)
+                .is_some_and(|entry| entry.grant.agent_api != agent_api)
                 && let Some(entry) = grants.remove(&parent)
             {
                 revoked.push((entry.grant, machine.clone()));

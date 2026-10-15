@@ -46,8 +46,9 @@ Gateway actions `agent_status` and `agent_read` extend the closed managed-call
 `Action` enum. Compatibility is explicit:
 
 - Machine protocol 30 adds `Grant.agent_api`. A Controller sets it only for a
-  connection at protocol 30 or later and replaces a flagged grant when the
-  Machine reconnects lower, because an older Machine refuses the field.
+  connection at protocol 30 or later and replaces the grant whenever a
+  reconnect changes that answer: an older Machine refuses the field, and an
+  upgraded Machine refuses Agent API actions under a grant without it.
 - A Machine refuses Agent API actions locally (`unsupported_capability`)
   under a grant without the flag, so an older Controller never receives an
   event it cannot decode.
@@ -89,8 +90,8 @@ Programs run on the Controller host in a fresh process per call:
 
 - Bubblewrap with every namespace unshared (no network), capabilities dropped,
   a cleared environment, a read-only view of `/nix/store` (and `/usr`, `/lib`
-  where present), private `/proc`, `/dev` and `/tmp`, and a read-only
-  directory holding only the runner and the program;
+  where present), private `/proc`, a read-only `/dev`, a 1 MiB `/tmp`, and a
+  read-only directory holding only the runner and the program;
 - `prlimit`: 4 s CPU, 512 MiB data, 64 descriptors, 1 MiB files, no core;
 - Bun as the TS/JS engine; it strips TypeScript without type-checking;
 - a wall-clock deadline (default 20 s, at most 60 s) that kills the process
@@ -100,7 +101,8 @@ The runtime reaches Cowboy only through line-delimited frames on its standard
 streams. The broker validates every operation and its arguments, allows 16
 calls, bounds each reply to 256 KiB and all traffic to 1 MiB. Results over
 16 KiB fail with `result_too_large` instead of being truncated into malformed
-JSON; console output is returned up to 4 KiB. The Nix build pins Bubblewrap,
+JSON; console output is returned up to 4 KiB, and a thrown error returns
+only a bounded identifier code and a message of at most 2000 characters. The Nix build pins Bubblewrap,
 util-linux `prlimit` and Bun; a missing runtime yields `runtime_unavailable`,
 never an unsandboxed fallback. Compared with Matrix CodeAct this omits the
 seccomp filter and cgroup memory accounting; both are Stage 1 hardening gates

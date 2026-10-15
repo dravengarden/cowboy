@@ -678,8 +678,22 @@ impl Sandbox {
             ])
             .arg(directory)
             .args([
-                "/sandbox", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--chdir",
-                "/sandbox", "--",
+                "/sandbox",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                // tmpfs pages are host memory outside every process limit:
+                // /dev stays read-only and /tmp holds at most 1 MiB.
+                "--remount-ro",
+                "/dev",
+                "--size",
+                "1048576",
+                "--tmpfs",
+                "/tmp",
+                "--chdir",
+                "/sandbox",
+                "--",
             ])
             .arg(&self.bun)
             .args(["--no-install", "--smol", "run", "/sandbox/runner.js"])
@@ -797,11 +811,29 @@ fn finish(done: bool, mut frame: Value) -> Value {
             json!({"schema":1,"state":"ok","value":result})
         }
     } else {
-        let mut failure = frame.get_mut("error").map_or(Value::Null, Value::take);
-        if !failure.is_object() {
-            failure = json!({"code": "program_error"});
+        // Only a bounded code and message cross back; a thrown object is
+        // program-controlled and must not bypass the result budget.
+        let failure = frame.get("error");
+        let code = failure
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .filter(|code| {
+                !code.is_empty()
+                    && code.len() <= 64
+                    && code
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+            })
+            .unwrap_or("program_error");
+        let mut error = json!({"code": code});
+        if let Some(message) = failure
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .filter(|message| !message.is_empty())
+        {
+            error["message"] = json!(message.chars().take(2000).collect::<String>());
         }
-        json!({"schema":1,"state":"error","error":failure})
+        json!({"schema":1,"state":"error","error":error})
     };
     if let Some(logs) = logs {
         value["logs"] = json!(logs);
