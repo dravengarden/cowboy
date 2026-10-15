@@ -42,6 +42,10 @@ const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
 const WORKER_BACKLOG_ISOLATION_LIMIT: Duration = Duration::from_secs(300);
 const CORE_COMMAND_QUEUE_CAPACITY: usize = 64;
 const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A worker that just closed its socket is usually still exiting (flushing
+/// its logs and marking its writer stopped); stopping its unit at once killed
+/// every rolled worker mid-flush. A real orphan is stopped after this grace.
+const ORPHAN_EXIT_GRACE: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
 const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
@@ -306,8 +310,24 @@ impl DurableStateView {
     }
 }
 
+/// How often a queued rollout replacement checks whether someone is waiting.
+const CUTOVER_PRIORITY_POLL: Duration = Duration::from_millis(100);
+
+/// Half the CPUs, between 2 and 8: native Provider startup is CPU-bound.
+fn cutover_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map_or(4, std::num::NonZeroUsize::get)
+        .div_ceil(2)
+        .clamp(2, 8)
+}
+
 struct Broker {
     args: MachineBrokerArgs,
+    /// Rollout replacements (generation cutovers and Provider rolls) start at
+    /// most this many native runtimes at once: a credential rotation used to
+    /// relaunch every idle Claude worker together, and 28 concurrent native
+    /// starts on 6 vCPUs took 16 s each instead of 3 s.
+    cutover_launches: Arc<tokio::sync::Semaphore>,
     controller: Mutex<Option<Controller>>,
     workers: Mutex<HashMap<String, WorkerPeer>>,
     pending_commands: Mutex<HashMap<String, VecDeque<WorkerCommand>>>,
@@ -445,6 +465,7 @@ impl Broker {
         }
         Self {
             desired_generation: Mutex::new(args.desired_generation.clone()),
+            cutover_launches: Arc::new(tokio::sync::Semaphore::new(cutover_concurrency())),
             args,
             controller: Mutex::new(None),
             workers: Mutex::new(HashMap::new()),
@@ -2540,6 +2561,7 @@ impl Broker {
         }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
+            let _permit = broker.cutover_permit(&session_id).await;
             let result = broker
                 .spawn_with_fallback(session, Some(old_generation.clone()))
                 .await;
@@ -2569,6 +2591,40 @@ impl Broker {
                 }
             }
         });
+    }
+
+    /// Wait for a rollout launch slot. A session someone is waiting on (a
+    /// queued prompt or other command) starts at once without one, as does a
+    /// deleted session, which only needs to observe its cancellation.
+    async fn cutover_permit(&self, session_id: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let started = Instant::now();
+        let semaphore = Arc::clone(&self.cutover_launches);
+        let acquire = semaphore.acquire_owned();
+        tokio::pin!(acquire);
+        loop {
+            tokio::select! {
+                permit = &mut acquire => {
+                    let waited = started.elapsed();
+                    if waited >= Duration::from_secs(1) {
+                        tracing::info!(session = %session_id, waited_ms = waited.as_millis() as u64,
+                            "rollout replacement waited for a launch slot");
+                    }
+                    return permit.ok();
+                }
+                () = tokio::time::sleep(CUTOVER_PRIORITY_POLL) => {
+                    let waited_on = self
+                        .pending_commands
+                        .lock()
+                        .get(session_id)
+                        .is_some_and(|queue| !queue.is_empty());
+                    if waited_on || self.cancelled_sessions.lock().contains(session_id) {
+                        tracing::info!(session = %session_id, waited_ms = started.elapsed().as_millis() as u64,
+                            "rollout replacement started ahead of the launch queue");
+                        return None;
+                    }
+                }
+            }
+        }
     }
 
     async fn spawn_worker(
@@ -3030,7 +3086,8 @@ fn session_context_environment(
 /// unit to disappear before either the desired generation or its fallback is
 /// launched. A brand-new session returns `not-found` immediately.
 async fn prepare_transient_unit(unit: &str) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + TRANSIENT_UNIT_COLLECT_TIMEOUT;
+    let started = tokio::time::Instant::now();
+    let deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
     let mut stopped_orphan = false;
     loop {
         let output = Command::new("systemctl")
@@ -3055,7 +3112,10 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
         // therefore an orphan from the retired broker socket, not a worker we
         // can safely adopt. Stop that exact per-session unit once, then wait for
         // --collect to remove it before reusing the stable name.
-        if !stopped_orphan && matches!(active_state.as_str(), "active" | "activating") {
+        if !stopped_orphan
+            && matches!(active_state.as_str(), "active" | "activating")
+            && started.elapsed() >= ORPHAN_EXIT_GRACE
+        {
             tracing::warn!(%unit, %active_state, "recycling orphaned transient worker unit");
             let status = Command::new("systemctl")
                 .args(["--user", "stop", unit])
@@ -4919,6 +4979,53 @@ mod tests {
             .lock()
             .get("sess-1")
             .and_then(|session| session.agent_session_id.clone())
+    }
+
+    #[tokio::test]
+    async fn rollout_replacements_queue_unless_someone_is_waiting() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: String::new(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp"),
+            worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
+        }));
+        let slots = broker.cutover_launches.available_permits();
+        assert!((2..=8).contains(&slots));
+        let held: Vec<_> = (0..slots)
+            .map(|_| {
+                Arc::clone(&broker.cutover_launches)
+                    .try_acquire_owned()
+                    .unwrap()
+            })
+            .collect();
+        // A queued idle session waits for a slot.
+        let queued = tokio::spawn({
+            let broker = Arc::clone(&broker);
+            async move { broker.cutover_permit("sess-idle").await.is_some() }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!queued.is_finished());
+        // A session with a waiting prompt starts at once, without a slot.
+        broker
+            .pending_commands
+            .lock()
+            .entry("sess-prompted".to_owned())
+            .or_default()
+            .push_back(WorkerCommand::Drain);
+        let prompted = tokio::time::timeout(
+            Duration::from_secs(1),
+            broker.cutover_permit("sess-prompted"),
+        )
+        .await
+        .expect("a waited-on session is not queued");
+        assert!(prompted.is_none());
+        drop(held);
+        assert!(queued.await.unwrap());
     }
 
     #[tokio::test]
