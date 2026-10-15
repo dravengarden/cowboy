@@ -385,7 +385,10 @@ impl SqliteStore {
         }
         let _lock = self.lock(false)?;
         let mut state = self.state()?;
-        for chunk in entries.chunks(4) {
+        let chunks = transaction_chunks(entries, state.policy.segment_bytes, |e| {
+            (e.protobuf.len() + e.body.len() + 2048) as u64
+        });
+        for chunk in chunks {
             let mut segments = self.segments()?;
             let estimate: u64 = chunk
                 .iter()
@@ -809,5 +812,57 @@ impl super::EvidenceSink for SqliteStore {
     }
     fn maintain(&mut self, now: i64) -> Result<()> {
         SqliteStore::maintain_if_due(self, now)
+    }
+}
+
+/// One connection and durable transaction per chunk: up to 32 records whose
+/// size estimate (as in `append`) still fits one segment, and at least one.
+fn transaction_chunks<T>(items: &[T], segment_bytes: u64, size: impl Fn(&T) -> u64) -> Vec<&[T]> {
+    let mut chunks = Vec::new();
+    let mut rest = items;
+    while !rest.is_empty() {
+        let mut take = 0;
+        let mut estimate = 32 * 1024;
+        while take < rest.len().min(32) {
+            let cost = size(&rest[take]) * 2;
+            if take > 0 && estimate + cost > segment_bytes {
+                break;
+            }
+            estimate += cost;
+            take += 1;
+        }
+        let (chunk, tail) = rest.split_at(take);
+        chunks.push(chunk);
+        rest = tail;
+    }
+    chunks
+}
+
+#[cfg(test)]
+mod transaction_chunk_tests {
+    use super::transaction_chunks;
+
+    #[test]
+    fn chunks_hold_at_most_32_records_within_a_segment() {
+        let small = vec![1024_u64; 70];
+        let lengths: Vec<_> = transaction_chunks(&small, 16 << 20, |s| *s)
+            .iter()
+            .map(|c| c.len())
+            .collect();
+        assert_eq!(lengths, [32, 32, 6]);
+        // Records near the 64 KiB bound in a 1 MiB segment.
+        let large = vec![70_000_u64; 16];
+        let chunks = transaction_chunks(&large, 1 << 20, |s| *s);
+        assert!(
+            chunks
+                .iter()
+                .all(|c| 32 * 1024 + c.iter().sum::<u64>() * 2 <= 1 << 20)
+        );
+        assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), 16);
+        // One record never fitting is still written alone, as before.
+        assert_eq!(
+            transaction_chunks(&[2_000_000_u64], 1 << 20, |s| *s).len(),
+            1
+        );
     }
 }

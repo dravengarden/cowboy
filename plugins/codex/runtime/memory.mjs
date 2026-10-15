@@ -83,6 +83,9 @@ export async function memoryNative(args) {
       "-c",
       server + '.http_headers={"X-Matrix-Binding"=' +
         JSON.stringify(mcp.headers["X-Matrix-Binding"]) + "}",
+      // Only the tools the installed backend declares are exposed.
+      "-c",
+      server + ".enabled_tools=" + JSON.stringify(config.tools),
     );
   }
   const child = spawn(process.execPath, [

@@ -27,7 +27,7 @@ pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner
 pub(crate) use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
 pub(crate) use operations::maintenance::complete_absent_uninstall;
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
-pub(crate) use session_extensions::SESSION_EXTENSIONS_ENV;
+pub(crate) use session_extensions::{SESSION_EXTENSIONS_DISABLED, SESSION_EXTENSIONS_ENV};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
 

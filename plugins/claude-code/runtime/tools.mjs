@@ -397,6 +397,8 @@ export function cksumDigest(bytes) {
 // Hook transcripts each keep one target cache; a few recent sources (the
 // session transcript, a subagent's) are enough for consecutive hooks.
 const HOOK_TRANSCRIPT_CACHES = 4;
+// Hook input up to this size is an argument (Linux allows 128 KiB each).
+const HOOK_INLINE_INPUT = 64 * 1024;
 // Only disposable hook input is cached. A verified base plus an append is
 // materialized into an exclusive snapshot before the hook can start. Never
 // expose the shared cache to a hook, or retry a hook after a lost receipt.
@@ -708,9 +710,16 @@ export function splitEnd(buffer, end) {
   const at = buffer.indexOf(opening);
   if (at >= 0) {
     const status = buffer.slice(at + opening.length);
-    const line = /^(\d{1,3})\n/.exec(status);
-    if (line) return { text: buffer.slice(0, at), code: Number(line[1]) };
-    if (/^\d{0,3}$/.test(status)) {
+    // A Bash command's end line also carries its final directory.
+    const line = /^(\d{1,3})(?::(\/[^\n]*))?\n/.exec(status);
+    if (line) {
+      return {
+        text: buffer.slice(0, at),
+        code: Number(line[1]),
+        ...(line[2] === undefined ? {} : { cwd: line[2] }),
+      };
+    }
+    if (/^\d{0,3}(?::[^\n]*)?$/.test(status)) {
       return { text: buffer.slice(0, at), held: buffer.slice(at) };
     }
     return { text: buffer, held: "" };
@@ -741,16 +750,31 @@ export function endedUtility(argv, end) {
   ];
 }
 
-export function endedCommand(shell, script, end) {
+//
+// With `cwdFile`, the end lines also carry the directory the command wrote
+// there (`\x1e<end>:<status>:<directory>`) and the target removes the file:
+// reading it back cost three more round trips per command. A directory the
+// line cannot carry (one with a newline) stays in the file for the caller.
+export function endedCommand(shell, script, end, cwdFile) {
+  const directory = cwdFile
+    ? `c=; if [ -f "$3" ] && [ ! -L "$3" ]; then ` +
+      `if [ "$s" -ne 0 ]; then rm -f -- "$3"; else c=$(cat -- "$3"); ` +
+      `case $c in /*) case $c in *'\n'*) c= ;; ` +
+      `*) rm -f -- "$3"; c=":$c" ;; esac ;; *) c= ;; esac; fi; fi; `
+    : "";
+  const field = cwdFile ? "%s" : "";
+  const value = cwdFile ? ' "$c"' : "";
   return [
     shell,
     "-c",
-    `exec 3>&2 2>/dev/null; "$0" -c "$1" 2>&3 3>&-; s=$?; ` +
-    `printf '\\036%s:%d\\n' "$2" "$s" >&3; printf '\\036%s:%d\\n' "$2" "$s"; ` +
+    `exec 3>&2 2>/dev/null; "$0" -c "$1" 2>&3 3>&-; s=$?; ` + directory +
+    `printf '\\036%s:%d${field}\\n' "$2" "$s"${value} >&3; ` +
+    `printf '\\036%s:%d${field}\\n' "$2" "$s"${value}; ` +
     `exit "$s"`,
     shell,
     script,
     end,
+    ...(cwdFile ? [cwdFile] : []),
   ];
 }
 
@@ -1107,6 +1131,10 @@ export class WorkspaceTools {
     const id = randomUUID();
     let started = false;
     let settled = false;
+    // Small input travels in the start request itself and reaches the hook
+    // through a pipe, as natively: a file costs a write and a removal, two
+    // more round trips to a distant target for every hook.
+    let inline = false;
     // Both files are removed on every exit path, including a cancelled or
     // failed start; the shell's own unlink is only the normal path.
     try {
@@ -1122,7 +1150,9 @@ export class WorkspaceTools {
           agent_transcript_path: agentCopy,
         });
       }
-      await this.hookInputFile(file, Buffer.from(input), call);
+      const bytes = Buffer.from(input);
+      inline = bytes.length <= HOOK_INLINE_INPUT;
+      if (!inline) await this.hookInputFile(file, bytes, call);
       // Shell form runs through the shell; exec form runs its argv directly
       // (resolved on PATH), with the project placeholder as a plain string.
       started = true;
@@ -1131,9 +1161,11 @@ export class WorkspaceTools {
           ? [
             this.shell,
             "-c",
-            'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
+            inline
+              ? 'i=$1 && shift && printf "%s" "$i" | exec "$@"'
+              : 'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
             this.shell,
-            file,
+            inline ? input : file,
             ...argv.map((value) =>
               value.replaceAll("${CLAUDE_PROJECT_DIR}", this.cwd)
             ),
@@ -1141,9 +1173,11 @@ export class WorkspaceTools {
           : [
             this.shell,
             "-c",
-            'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+            inline
+              ? 'printf "%s" "$1" | exec "$0" -c "$2"'
+              : 'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
             this.shell,
-            file,
+            inline ? input : file,
             command,
           ],
         call,
@@ -1194,7 +1228,7 @@ export class WorkspaceTools {
       if (started && !settled) await this.cancelTasks([id]).catch(() => {});
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
-      for (const path of [file, copy, agentCopy]) {
+      for (const path of [inline ? undefined : file, copy, agentCopy]) {
         if (!path) continue;
         await this.connection.call("fs/remove", {
           path: pathToFileURL(path).href,
@@ -2214,6 +2248,13 @@ export class WorkspaceTools {
           job.endHeld = { ...job.endHeld, [stream]: split.held ?? "" };
           if (split.code !== undefined) {
             job.endLines = { ...job.endLines, [stream]: split.code };
+            // The wrapper has settled the directory file (endedCommand).
+            if (stream === "stdout" && job.reportsCwd) {
+              (this.shellEnds ??= new Map()).set(processId, {
+                code: split.code,
+                cwd: split.cwd,
+              });
+            }
             // Bytes left unfinished come after it.
             decoded.pending = "";
           }
@@ -2909,10 +2950,11 @@ export class WorkspaceTools {
       this.mcpClosed = true;
       await Promise.all([...(this.mcpStarting?.values() ?? [])]);
     }
-    // One at a time: the connection admits a bounded number of requests.
-    for (const id of Object.keys(this.state.mcp)) {
-      await this.mcpStop(id).catch(() => {});
-    }
+    // Together: each stop is a round trip on the session's startup path,
+    // and mcpCall keeps them within MCP traffic's share of the connection.
+    await Promise.all(
+      Object.keys(this.state.mcp).map((id) => this.mcpStop(id).catch(() => {})),
+    );
   }
 
   // The target's skills and custom commands, in native precedence. A listing
@@ -3125,11 +3167,13 @@ export class WorkspaceTools {
         this.shell,
         this.shellCommand(command, cwdFile, snapshot),
         end,
+        cwdFile,
       );
       const environment = shellEnvironment(this.shell, call?.shell);
       // Native's snapshot turns job control on (see killTree).
       const fields = {
         end,
+        ...(cwdFile ? { reportsCwd: true } : {}),
         ...(snapshot ? { jobs: true } : {}),
         ...(background ? this.taskCommand(command) : {}),
       };
@@ -3236,7 +3280,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             isError: true,
           };
         }
-        const reset = cwdFile ? await this.settleShellDirectory(cwdFile) : "";
+        const reported = this.shellEnds?.get(id)?.cwd;
+        const reset = cwdFile
+          ? await this.settleShellDirectory(cwdFile, reported)
+          : "";
         const shown = [output.trim(), reset].filter(Boolean).join("\n");
         return text(JSON.stringify(complete), {
           // Natively a reset still follows a persisted output's preview.
@@ -3249,7 +3296,11 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         });
       } finally {
         this.foreground.delete(id);
-        if (cwdFile) {
+        const ended = this.shellEnds?.get(id);
+        this.shellEnds?.delete(id);
+        // Past its end line the wrapper has removed the file, unless it kept
+        // a directory the line could not carry.
+        if (cwdFile && !(ended && (ended.code !== 0 || ended.cwd))) {
           const job = this.state.jobs[id];
           if (job && !job.closed) {
             // Still running: its wrapper may write the file at the end, so
@@ -3817,9 +3868,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
 
   // The directory a successful command ended in persists for later commands
   // when it is inside the project; elsewhere native resets it and says so.
-  async settleShellDirectory(cwdFile) {
-    const bytes = await this.bytes(cwdFile, true).catch(() => undefined);
-    const next = bytes?.toString("utf8").trim();
+  async settleShellDirectory(cwdFile, reported) {
+    const next = reported ??
+      (await this.bytes(cwdFile, true).catch(() => undefined))
+        ?.toString("utf8").trim();
     if (!next?.startsWith("/")) return "";
     this.projectPhysical ??= this.command([
       this.shell,

@@ -399,3 +399,20 @@ test("recall off sends no context request; tools off omits the write hint", asyn
     ),
   );
 });
+
+test("recall works for a backend that does not observe", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(
+    { ...f.config, enableRecall: true, enableTools: false, observe: false },
+    f.descriptor,
+  );
+  const text = await client.begin("What is the release gate?");
+  assert.match(text, /Current revision only/);
+  assert.equal(f.requests.some((r) => r.path === "/v1/observe"), false);
+  await client.close();
+  assert.deepEqual(await sessionExtensions({ path: "disabled" }), {
+    schema: 1,
+    memory: null,
+    calls: null,
+  });
+});

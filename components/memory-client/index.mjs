@@ -122,6 +122,8 @@ export async function sessionExtensions(
   { path = process.env.COWBOY_SESSION_EXTENSIONS } = {},
 ) {
   if (!path) return null;
+  // The Machine could not resolve this session's extensions: run without.
+  if (path === "disabled") return { schema: 1, memory: null, calls: null };
   if (!isAbsolute(path)) throw new Error("Session extensions must be absolute");
   const text = await privateFile(path, 65536);
   if (text === null) throw new Error("Session extension descriptor is missing");
@@ -378,7 +380,20 @@ export class MatrixClient {
     this.context = this.recall
       ? "[Matrix memory unavailable; native memory remains disabled. Verify facts directly.]"
       : "";
-    if (!this.events.length) return this.context;
+    if (!this.events.length) {
+      // A backend that recalls without observing still answers context.
+      if (!this.recall || !publicText(prompt).trim()) return this.context;
+      try {
+        const found = await this.request("context", {
+          query: publicText(prompt),
+          budget: 6000,
+        });
+        this.context = found.text;
+      } catch {
+        /* Keep the explicit unavailable notice. */
+      }
+      return this.context;
+    }
     const evidence = {
       turn: this.turn + "-user",
       events: this.events,

@@ -47,8 +47,9 @@ const MAX_TARGETS: usize = 8;
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentTools {
     pub schema: u16,
-    /// Stored before session extensions as `matrix`; still read under that key.
-    #[serde(alias = "matrix")]
+    /// Schema 1 keeps the `matrix` wire and storage key, so every deployed
+    /// Web and stored setting reads it; `memory` is accepted on input.
+    #[serde(rename = "matrix", alias = "memory")]
     pub memory: MemoryTools,
     pub calls: CallsPolicy,
 }
@@ -129,7 +130,7 @@ pub(super) fn custom_values(recorded: &str) -> Option<std::collections::BTreeMap
 #[serde(deny_unknown_fields)]
 pub(super) struct SessionTools {
     pub schema: u16,
-    #[serde(default, alias = "matrix")]
+    #[serde(default, rename = "matrix", alias = "memory")]
     pub memory: MemoryOverride,
     #[serde(default)]
     pub calls: CallsOverride,
@@ -697,18 +698,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stored_matrix_switches_load_as_memory_and_save_under_the_new_key() {
+    fn memory_switches_keep_the_matrix_wire_key_and_accept_memory() {
         let mut stored = serde_json::to_value(AgentTools::builtin("codex")).unwrap();
-        let memory = stored.as_object_mut().unwrap().remove("memory").unwrap();
+        // Deployed Web clients read and write `matrix`.
+        assert_eq!(stored["matrix"]["tools"], true);
+        assert!(stored.get("memory").is_none());
         stored["matrix"] = serde_json::json!({"tools": false, "recall": true});
+        let loaded: AgentTools = serde_json::from_value(stored.clone()).unwrap();
+        assert!(!loaded.memory.tools && loaded.memory.recall);
+        let renamed = stored.as_object_mut().unwrap().remove("matrix").unwrap();
+        stored["memory"] = renamed;
         let loaded: AgentTools = serde_json::from_value(stored).unwrap();
         assert!(!loaded.memory.tools && loaded.memory.recall);
-        let saved = serde_json::to_value(&loaded).unwrap();
-        assert!(saved.get("matrix").is_none());
-        assert_eq!(saved["memory"]["tools"], false);
-        assert_eq!(memory["tools"], true);
         let session: SessionTools =
-            serde_json::from_value(serde_json::json!({"schema": 1, "matrix": {"recall": false}}))
+            serde_json::from_value(serde_json::json!({"schema": 1, "memory": {"recall": false}}))
                 .unwrap();
         assert_eq!(session.memory.recall, Some(false));
         let effective = AgentTools::builtin("claude-code").overlay(&session);

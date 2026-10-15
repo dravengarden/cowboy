@@ -10,6 +10,7 @@ import {
   overrideFor,
   withMemoryKey,
   withTarget,
+  withWireKey,
 } from "./agentTools.ts";
 
 const defaults: AgentTools = {
@@ -104,4 +105,14 @@ test("legacy matrix switches from an older Controller read as memory", () => {
     view.agents[0]!.settings.memory.tools !== false ||
     "matrix" in view.defaults
   ) throw new Error("legacy matrix key was not mapped to memory");
+});
+
+test("memory switches travel under the schema-1 matrix key", () => {
+  const wire = withWireKey({ schema: 1, memory: { recall: false } });
+  if (!("matrix" in wire) || "memory" in wire) {
+    throw new Error("memory switches must be sent as matrix");
+  }
+  if (withMemoryKey(wire).memory?.recall !== false) {
+    throw new Error("round trip lost the switch");
+  }
 });

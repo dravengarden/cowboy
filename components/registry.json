@@ -25215,7 +25215,7 @@
           "sources": [
             "components/memory-client"
           ],
-          "digest": "sha256:26bfcda43c33565f252572742aa0fc46161f5bbb55f22763e65081b1e4289682",
+          "digest": "sha256:205e75a689bab198727cf0ee9e76770b1ceb5e72ce0e3b058f36efec919df6dd",
           "package": {
             "kind": "npm",
             "name": "@cowboy/memory-client",
@@ -25224,7 +25224,7 @@
         }
       ],
       "plugins": {
-        "claude-code": "3.19.32",
+        "claude-code": "3.19.33",
         "claude-deepseek": "3.1.35",
         "codex": "3.4.7",
         "codex-deepseek": "3.1.34",
@@ -25293,7 +25293,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:1073248a75e66d6d8c61cedf43728a73388fdce8b267131f79c5cbda8fd45257"
+            "source_digest": "sha256:d1b931833108d86779cf90a69614d8ef70880bbae6c208b532024967283c8092"
           },
           "claude-deepseek": {
             "component_release": "3.53.0",
@@ -25357,7 +25357,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:6e7349c2c6f103704d6a96e0c40fdea096614315b9be8f585460a8014f81813d"
+            "source_digest": "sha256:5dfbcf53d17abdaa8420a271627846099f8421e48fde52c429970526c4bfbcff"
           },
           "codex-deepseek": {
             "component_release": "3.53.0",

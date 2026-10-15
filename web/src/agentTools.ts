@@ -206,14 +206,25 @@ export function overridden(override: SessionToolsOverride): boolean {
   return override.memory !== undefined || override.calls !== undefined;
 }
 
-/** Controllers before session extensions name the memory switches `matrix`. */
-export function withMemoryKey<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(withMemoryKey) as T;
+/** Schema-1 Tools documents name the memory switches `matrix` on the wire;
+ * this client calls them `memory`. Both directions rename recursively. */
+function renameKey<T>(value: T, from: string, to: string): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => renameKey(item, from, to)) as T;
+  }
   if (value === null || typeof value !== "object") return value;
   const entries = Object.entries(value as Record<string, unknown>).map((
     [key, item],
-  ) => [key === "matrix" ? "memory" : key, withMemoryKey(item)] as const);
+  ) => [key === from ? to : key, renameKey(item, from, to)] as const);
   return Object.fromEntries(entries) as T;
+}
+
+export function withMemoryKey<T>(value: T): T {
+  return renameKey(value, "matrix", "memory");
+}
+
+export function withWireKey<T>(value: T): T {
+  return renameKey(value, "memory", "matrix");
 }
 
 async function json<T>(response: Response, what: string): Promise<T> {
@@ -238,7 +249,7 @@ export async function saveSessionTools(
     await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(override),
+      body: JSON.stringify(withWireKey(override)),
     }),
     "Tools were not saved",
   );
@@ -256,7 +267,7 @@ export async function saveAgentTools(
     await fetch(`/api/agent-tools/${encodeURIComponent(agent)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ settings }),
+      body: JSON.stringify({ settings: withWireKey(settings) }),
     }),
     "Defaults were not saved",
   );

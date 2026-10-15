@@ -15,6 +15,10 @@ use crate::runtime_wire::{SESSION_EXTENSIONS_SCHEMA, SessionExtensions};
 
 /// Name of the variable that locates a session's extension descriptor.
 pub(crate) const SESSION_EXTENSIONS_ENV: &str = "COWBOY_SESSION_EXTENSIONS";
+/// Value of that variable when the descriptor could not be resolved: the
+/// Provider then runs without memory instead of falling back to a host
+/// enrollment that could override the session's switches.
+pub(crate) const SESSION_EXTENSIONS_DISABLED: &str = "disabled";
 
 fn valid_session_id(value: &str) -> bool {
     !value.is_empty()
@@ -86,7 +90,9 @@ impl MachinePluginStore {
                 "more than one active memory backend; memory is disabled for the session"
             );
         }
-        let memory = (memory.len() == 1).then(|| memory.remove(0));
+        // Both switches off means no memory at all, including observation.
+        let memory = (memory.len() == 1 && (switches.memory_tools || switches.memory_recall))
+            .then(|| memory.remove(0));
         Ok(json!({
             "schema": SESSION_EXTENSIONS_SCHEMA,
             "memory": memory,
@@ -178,6 +184,13 @@ mod tests {
                 .contains("{{peer_command}}")
         );
         assert!(descriptor_path(&root, "../escape").is_none());
+        let off = SessionExtensions {
+            memory_tools: false,
+            memory_recall: false,
+            ..switches
+        };
+        assert!(store.session_extensions(off).unwrap()["memory"].is_null());
+        assert!(!store.session_extensions(off).unwrap()["calls"].is_null());
         store
             .uninstall("matrix", &installed.generation_digest)
             .await

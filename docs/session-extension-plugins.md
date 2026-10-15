@@ -124,8 +124,19 @@ descriptor and exposes its path to the Provider launcher as
 ```
 
 Provider launchers read only this descriptor and the private binding it names.
-No descriptor means no memory and the built-in call guidance of the release,
-which preserves current behavior for workers that predate it.
+No descriptor (a Machine that predates session extensions) keeps the legacy
+host enrollment with both switches on and the release's built-in call
+guidance. A Machine that cannot resolve or write the descriptor sets
+`COWBOY_SESSION_EXTENSIONS=disabled`, so the session runs without memory
+instead of falling back to an enrollment that ignores its switches. Both
+switches off means no memory at all, including observation. A backend that
+recalls without observing still answers context. Codex exposes only the
+backend's declared tools through `enabled_tools`; Claude allows exactly
+their `mcp__<plugin>__<tool>` names.
+
+The Tools documents keep schema 1 and the `matrix` wire and storage key, so
+deployed Web clients and stored settings keep working; the Controller also
+accepts `memory`, and the Web client renames the key at its boundary.
 
 ## Stages
 

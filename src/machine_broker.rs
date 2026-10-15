@@ -2826,26 +2826,34 @@ impl Broker {
             ));
         }
         // Session extensions are resolved from this Machine's own active
-        // Plugins. A failure omits them: the session starts without memory
-        // or call guidance rather than failing to start.
-        if let (Some(switches), Some(root)) =
-            (session.extensions, self.args.call_context_root.as_deref())
-        {
-            match self.args.provider_store.write_session_extensions(
-                root,
-                &session.session_id,
-                switches,
-            ) {
-                Ok(path) => session_environment.push((
-                    crate::machine_plugins::SESSION_EXTENSIONS_ENV,
-                    path.display().to_string(),
-                )),
-                Err(error) => tracing::warn!(
-                    session = %session.session_id,
-                    error = %format!("{error:#}"),
-                    "session extensions unavailable for this launch"
-                ),
-            }
+        // Plugins. A failure disables them explicitly: the session starts
+        // without memory rather than failing to start, and never falls back
+        // to a host enrollment that could override the session's switches.
+        if let Some(switches) = session.extensions {
+            let written = self
+                .args
+                .call_context_root
+                .as_deref()
+                .context("Machine has no state root for session extensions")
+                .and_then(|root| {
+                    self.args.provider_store.write_session_extensions(
+                        root,
+                        &session.session_id,
+                        switches,
+                    )
+                });
+            let value = match written {
+                Ok(path) => path.display().to_string(),
+                Err(error) => {
+                    tracing::warn!(
+                        session = %session.session_id,
+                        error = %format!("{error:#}"),
+                        "session extensions disabled for this launch"
+                    );
+                    crate::machine_plugins::SESSION_EXTENSIONS_DISABLED.to_owned()
+                }
+            };
+            session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
         }
         if let Some(provider) = &provider {
             session_environment.push((

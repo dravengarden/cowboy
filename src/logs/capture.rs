@@ -23,6 +23,11 @@ use tracing_subscriber::{
 };
 
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+/// How long an ordinary record may wait for others to share its transaction.
+const BATCH_LINGER: Duration = Duration::from_millis(500);
+/// Within the store's per-append bound.
+const MAX_BATCH: usize = 128;
+const MAX_BATCH_BYTES: usize = 1024 * 1024;
 static CAPTURE: OnceLock<Arc<Capture>> = OnceLock::new();
 
 /// Non-secret correlation supplied by the process owner, never environment
@@ -372,16 +377,34 @@ fn run(
         if capture.stopping.load(Ordering::Acquire) {
             shutdown.get_or_insert_with(Instant::now);
         }
-        let first = errors
-            .try_recv()
-            .ok()
-            .or_else(|| rx.recv_timeout(Duration::from_millis(100)).ok());
+        let (first, mut urgent) = match errors.try_recv() {
+            Ok(first) => (Some(first), true),
+            Err(_) => (rx.recv_timeout(Duration::from_millis(100)).ok(), false),
+        };
         if let Some(first) = first {
             let mut batch = vec![first.entry];
             let mut bytes = first.bytes;
-            while batch.len() < 32 {
-                let Some(next) = errors.try_recv().ok().or_else(|| rx.try_recv().ok()) else {
-                    break;
+            // Each batch is a durable SQLite transaction. Ordinary records
+            // wait briefly for company: one transaction per tool call kept a
+            // busy Device writing megabytes a second. Warnings and failures,
+            // and shutdown, still write at once.
+            let linger = Instant::now() + BATCH_LINGER;
+            while batch.len() < MAX_BATCH && bytes < MAX_BATCH_BYTES {
+                let next = if let Ok(next) = errors.try_recv() {
+                    urgent = true;
+                    next
+                } else if let Ok(next) = rx.try_recv() {
+                    next
+                } else {
+                    let left = linger.saturating_duration_since(Instant::now());
+                    if urgent || left.is_zero() || capture.stopping.load(Ordering::Acquire) {
+                        break;
+                    }
+                    // Short waits, so a warning arriving meanwhile is not held.
+                    match rx.recv_timeout(left.min(Duration::from_millis(50))) {
+                        Ok(next) => next,
+                        Err(_) => continue,
+                    }
                 };
                 bytes += next.bytes;
                 batch.push(next.entry);
