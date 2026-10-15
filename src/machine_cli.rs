@@ -3156,8 +3156,8 @@ async fn run_adapter_request(
             adapter = adapter,
             root = payload.get("root").and_then(serde_json::Value::as_str),
             changed = refusal.is_changed(),
-            "refused a Code read: {}",
-            refusal.detail()
+            detail = %refusal.detail(),
+            "refused a Code read"
         );
         let _ = events.send(MachineEvent::AdapterResponse {
             request_id,
