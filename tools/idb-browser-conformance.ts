@@ -261,7 +261,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "session-fold"
         ? 6
         : suite === "managed-calls"
-        ? 8
+        ? 11
         : suite === "project-placement"
         ? 11
         : suite === "workspace-picker"
@@ -269,7 +269,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "sheet-keyboard"
         ? 3
         : suite === "workspace-extensions"
-        ? 24
+        ? 25
         : suite === "review-destination"
         ? 10
         : suite === "settings-recovery"
@@ -291,7 +291,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "review-document-refresh"
         ? 5
         : suite === "review-recovery"
-        ? 16
+        ? 17
         : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {

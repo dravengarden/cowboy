@@ -24,6 +24,7 @@ primary phone/desktop product path.
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat head-of-line blocking, native handshake recovery and same-identity creation recovery
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy capabilities for the session's agent: `cowboy mcp`, contained read programs, protocol 30 grants and staged write/delivery plan
+- [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Implementation design for parent-scoped cross-Provider calls, AI-facing CLI, Suger integration and desktop/mobile lifecycle UI; not yet shipped
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions

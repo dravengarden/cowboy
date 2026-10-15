@@ -22,13 +22,14 @@ export interface CallsPolicy {
 
 export interface AgentTools {
   schema: 1;
-  matrix: { tools: boolean; recall: boolean };
+  /** Served by the runtime Machine's installed memory backend Plugin. */
+  memory: { tools: boolean; recall: boolean };
   calls: CallsPolicy;
 }
 
 export interface SessionToolsOverride {
   schema: 1;
-  matrix?: { tools?: boolean; recall?: boolean };
+  memory?: { tools?: boolean; recall?: boolean };
   calls?: { enabled?: boolean; targets?: CallTarget[]; default?: string };
 }
 
@@ -179,14 +180,14 @@ export function overrideFor(
   next: AgentTools,
 ): SessionToolsOverride {
   const override: SessionToolsOverride = { schema: 1 };
-  const matrix: NonNullable<SessionToolsOverride["matrix"]> = {};
-  if (next.matrix.tools !== defaults.matrix.tools) {
-    matrix.tools = next.matrix.tools;
+  const memory: NonNullable<SessionToolsOverride["memory"]> = {};
+  if (next.memory.tools !== defaults.memory.tools) {
+    memory.tools = next.memory.tools;
   }
-  if (next.matrix.recall !== defaults.matrix.recall) {
-    matrix.recall = next.matrix.recall;
+  if (next.memory.recall !== defaults.memory.recall) {
+    memory.recall = next.memory.recall;
   }
-  if (Object.keys(matrix).length > 0) override.matrix = matrix;
+  if (Object.keys(memory).length > 0) override.memory = memory;
   const calls: NonNullable<SessionToolsOverride["calls"]> = {};
   if (next.calls.enabled !== defaults.calls.enabled) {
     calls.enabled = next.calls.enabled;
@@ -202,12 +203,33 @@ export function overrideFor(
 }
 
 export function overridden(override: SessionToolsOverride): boolean {
-  return override.matrix !== undefined || override.calls !== undefined;
+  return override.memory !== undefined || override.calls !== undefined;
+}
+
+/** Schema-1 Tools documents name the memory switches `matrix` on the wire;
+ * this client calls them `memory`. Both directions rename recursively. */
+function renameKey<T>(value: T, from: string, to: string): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => renameKey(item, from, to)) as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  const entries = Object.entries(value as Record<string, unknown>).map((
+    [key, item],
+  ) => [key === from ? to : key, renameKey(item, from, to)] as const);
+  return Object.fromEntries(entries) as T;
+}
+
+export function withMemoryKey<T>(value: T): T {
+  return renameKey(value, "matrix", "memory");
+}
+
+export function withWireKey<T>(value: T): T {
+  return renameKey(value, "memory", "matrix");
 }
 
 async function json<T>(response: Response, what: string): Promise<T> {
   if (!response.ok) throw new Error(`${what} (${response.status})`);
-  return await response.json() as T;
+  return withMemoryKey(await response.json() as T);
 }
 
 export async function fetchSessionTools(
@@ -227,7 +249,7 @@ export async function saveSessionTools(
     await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(override),
+      body: JSON.stringify(withWireKey(override)),
     }),
     "Tools were not saved",
   );
@@ -245,7 +267,7 @@ export async function saveAgentTools(
     await fetch(`/api/agent-tools/${encodeURIComponent(agent)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ settings }),
+      body: JSON.stringify({ settings: withWireKey(settings) }),
     }),
     "Defaults were not saved",
   );

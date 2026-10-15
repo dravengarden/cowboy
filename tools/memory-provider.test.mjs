@@ -4,6 +4,7 @@ import { codexObservation } from "../plugins/codex/runtime/memory.mjs";
 import {
   claudeObservation,
   MATRIX_TOOLS,
+  memoryToolNames,
 } from "../plugins/claude-code/runtime/memory.mjs";
 test("Claude permits the exact Matrix CodeAct tools", () => {
   assert.deepEqual(
@@ -12,6 +13,16 @@ test("Claude permits the exact Matrix CodeAct tools", () => {
       (name) => "mcp__matrix__memory_" + name,
     ),
   );
+});
+test("Claude allows only the installed backend's enabled tools", () => {
+  const config = {
+    server: "matrix",
+    tools: ["memory_search"],
+    enableTools: true,
+  };
+  assert.deepEqual(memoryToolNames(config), ["mcp__matrix__memory_search"]);
+  assert.deepEqual(memoryToolNames({ ...config, enableTools: false }), []);
+  assert.deepEqual(memoryToolNames(null), []);
 });
 test("native capture accepts public completions and excludes thinking and images", () => {
   assert.equal(

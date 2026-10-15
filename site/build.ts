@@ -11,7 +11,9 @@ interface PluginManifest {
     | "agent_provider"
     | "code_intelligence"
     | "telemetry_backend"
-    | "workspace_extension";
+    | "workspace_extension"
+    | "memory_backend"
+    | "call_profile";
   entrypoint: string;
 }
 
@@ -74,6 +76,8 @@ const PLUGIN_ORDER = [
   "claude-deepseek",
   "zed",
   "victoria",
+  "matrix",
+  "review",
 ];
 
 const PLUGIN_SOURCE_ROOTS = ["plugins", "examples/telemetry"];
@@ -86,6 +90,8 @@ const PLUGIN_KINDS = {
     label: "Workspace extension",
     translation: "extension",
   },
+  memory_backend: { label: "Memory", translation: "memory" },
+  call_profile: { label: "Agent calls", translation: "calls" },
 } satisfies Record<
   PluginManifest["kind"],
   { label: string; translation: string }
@@ -327,6 +333,40 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
           secondaryAccent: "#168B78",
           markViewBox: "0 0 24 24",
           markPath: "M3 3h7v4h4V3h7v7h-4v4h4v7h-7v-4h-4v4H3v-7h4v-4H3Z",
+          markMode: "stroke" as const,
+        };
+      }
+      if (
+        manifest.kind === "memory_backend" || manifest.kind === "call_profile"
+      ) {
+        const contract = await readJson<
+          {
+            id: string;
+            version: string;
+            display_name: string;
+            description: string;
+          }
+        >(joinPath(root, sourcePath, manifest.entrypoint));
+        if (
+          contract.id !== manifest.id || contract.version !== manifest.version
+        ) {
+          throw new Error(
+            `${manifest.id}: session extension identity mismatch`,
+          );
+        }
+        const memory = manifest.kind === "memory_backend";
+        return {
+          ...shared,
+          name: contract.display_name,
+          vendor: manifest.publisher,
+          summary: contract.description,
+          accentLight: memory ? "#B4541A" : "#2F6FDB",
+          accentDark: memory ? "#F0A46B" : "#8DB4FF",
+          secondaryAccent: "#168B78",
+          markViewBox: "0 0 24 24",
+          markPath: memory
+            ? "M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2 4.5V17h8v-3.5c.8-.9 2-2.3 2-4.5a6 6 0 0 0-6-6ZM9 21h6"
+            : "M4 5h16v10H9l-5 4V5Zm5 5 2 2 4-4",
           markMode: "stroke" as const,
         };
       }

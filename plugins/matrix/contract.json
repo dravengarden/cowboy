@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "matrix",
+  "version": "1.0.0",
+  "display_name": "Matrix",
+  "description": "Shared, evidence-backed long-term memory across Codex and Claude sessions.",
+  "supported_platforms": [
+    {
+      "os": "linux",
+      "architecture": "x86_64"
+    }
+  ],
+  "protocol": "matrix_http_v1",
+  "tools": [
+    "memory_search",
+    "memory_get",
+    "memory_put",
+    "memory_forget",
+    "memory_read",
+    "memory_execute",
+    "memory_receipt"
+  ],
+  "recall": true,
+  "observe": true
+}

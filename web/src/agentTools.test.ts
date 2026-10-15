@@ -8,12 +8,14 @@ import {
   normalizedDefault,
   overridden,
   overrideFor,
+  withMemoryKey,
   withTarget,
+  withWireKey,
 } from "./agentTools.ts";
 
 const defaults: AgentTools = {
   schema: 1,
-  matrix: { tools: true, recall: true },
+  memory: { tools: true, recall: true },
   calls: {
     enabled: false,
     targets: [{ agent: "claude-code" }, { agent: "codex" }],
@@ -27,7 +29,7 @@ test("a session stores only what differs from its agent defaults", () => {
   assert(!overridden(overrideFor(defaults, defaults)));
   const next: AgentTools = {
     ...defaults,
-    matrix: { tools: true, recall: false },
+    memory: { tools: true, recall: false },
     calls: {
       ...defaults.calls,
       enabled: true,
@@ -37,7 +39,7 @@ test("a session stores only what differs from its agent defaults", () => {
   const override = overrideFor(defaults, next);
   assert(overridden(override));
   assert(
-    override.matrix?.recall === false && override.matrix.tools === undefined,
+    override.memory?.recall === false && override.memory.tools === undefined,
   );
   assert(override.calls?.enabled === true);
   assert(override.calls?.targets?.[1]?.preset === "astra-max");
@@ -89,4 +91,28 @@ test("a custom choice that equals a preset becomes that preset", () => {
     JSON.stringify(withTarget([], "codex", true, { options: { model: "m" } })) ===
       JSON.stringify([{ agent: "codex", options: { model: "m" } }]),
   );
+});
+
+test("legacy matrix switches from an older Controller read as memory", () => {
+  const view = withMemoryKey({
+    defaults: { schema: 1, matrix: { tools: true, recall: false } },
+    override: { schema: 1, matrix: { recall: false } },
+    agents: [{ settings: { matrix: { tools: false, recall: true } } }],
+  });
+  if (
+    view.defaults.memory.recall !== false ||
+    view.override.memory.recall !== false ||
+    view.agents[0]!.settings.memory.tools !== false ||
+    "matrix" in view.defaults
+  ) throw new Error("legacy matrix key was not mapped to memory");
+});
+
+test("memory switches travel under the schema-1 matrix key", () => {
+  const wire = withWireKey({ schema: 1, memory: { recall: false } });
+  if (!("matrix" in wire) || "memory" in wire) {
+    throw new Error("memory switches must be sent as matrix");
+  }
+  if (withMemoryKey(wire).memory?.recall !== false) {
+    throw new Error("round trip lost the switch");
+  }
 });

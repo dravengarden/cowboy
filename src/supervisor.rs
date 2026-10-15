@@ -343,6 +343,7 @@ impl Supervisor {
             fallback_for: None,
             adopt_only: false,
             execution_binding: meta.execution_binding,
+            extensions: None,
         });
         Ok(())
     }
@@ -566,6 +567,7 @@ impl Supervisor {
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
+        let extensions = Some(crate::server::launch_extensions(&self.hub, &meta));
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
@@ -583,6 +585,7 @@ impl Supervisor {
             fallback_for: None,
             adopt_only: false,
             execution_binding: meta.execution_binding,
+            extensions,
         })
     }
 
@@ -1095,6 +1098,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             }),
             state: WorkerState::Crashed,
             agent_session_id: Some("codex-thread-1".to_owned()),

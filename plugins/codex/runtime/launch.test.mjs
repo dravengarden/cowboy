@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   AGENT_CALLS_PROMPT,
   agentCallsConfiguration,
+  agentCallsPrompt,
   managedMcpOverrides,
   managedRuleViolations,
   splitConfigurationArguments,
@@ -77,8 +78,14 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
     JSON.parse(added[1].slice("developer_instructions=".length)),
     AGENT_CALLS_PROMPT,
   );
-  assert.match(AGENT_CALLS_PROMPT, /cowboy claude --request-file -/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy review`/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy claude --help`/);
   assert.doesNotMatch(AGENT_CALLS_PROMPT, /cowboy codex/);
+  // The agent decides, skipping is the default, and the always-on text is a
+  // pointer rather than a manual.
+  assert.match(AGENT_CALLS_PROMPT, /Skip it by default/);
+  assert.ok(AGENT_CALLS_PROMPT.length < 900, AGENT_CALLS_PROMPT.length);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
   // The user's own developer instructions, or Cowboy's, are never replaced.
   assert.deepEqual(
     agentCallsConfiguration(
@@ -95,5 +102,29 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
   assert.equal(
     agentCallsConfiguration([], '# developer_instructions = "old"\n').length,
     2,
+  );
+});
+
+test("the Review Plugin renders Codex's guidance with Claude as its peer", () => {
+  const { guidance } = JSON.parse(
+    readFileSync(
+      new URL("../../review/contract.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const prompt = agentCallsPrompt({
+    schema: 1,
+    calls: { profiles: [{ guidance }] },
+  });
+  assert.match(prompt, /Other delegation: `cowboy claude --help`/);
+  assert.doesNotMatch(prompt, /\{\{|cowboy codex/);
+  // Only the order of the hidden commands differs from the built-in text.
+  const normalize = (text) => text.replace(/Never run .*? yourself/, "");
+  assert.equal(normalize(prompt), normalize(AGENT_CALLS_PROMPT));
+  assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
+  const added = agentCallsConfiguration([], "", prompt);
+  assert.equal(
+    JSON.parse(added[1].slice("developer_instructions=".length)),
+    prompt,
   );
 });

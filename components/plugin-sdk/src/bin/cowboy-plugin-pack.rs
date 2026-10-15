@@ -57,15 +57,8 @@ fn usage<T>() -> Result<T> {
     )
 }
 
-fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
-    ensure!(
-        (2..=3).contains(&arguments.len()),
-        "build requires plugin directory and output"
-    );
-    let root = PathBuf::from(&arguments[0]);
-    let output = PathBuf::from(&arguments[1]);
-    let manifest: PluginManifest = read_json(&root.join("plugin.json"))?;
-    let payload = match manifest.kind {
+fn read_payload(root: &std::path::Path, manifest: &PluginManifest) -> Result<PluginPayload> {
+    Ok(match manifest.kind {
         PluginKind::AgentProvider => {
             let source: StandardProviderSource = read_json(&root.join(&manifest.entrypoint))?;
             PluginPayload::AgentProvider(Box::new(build_package(source.compile()?)?))
@@ -82,12 +75,17 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         PluginKind::TelemetryBackend => {
             PluginPayload::TelemetryBackend(read_json(&root.join(&manifest.entrypoint))?)
         }
-    };
-    let component_release = manifest.component_release.clone();
-    let package = PluginPackage::new(manifest, component_release, payload)?;
-    let bytes = package.canonical_bytes()?;
-    let digest = PluginPackage::artifact_digest(&bytes);
-    let supported_platforms = match &package.payload {
+        PluginKind::MemoryBackend => {
+            PluginPayload::MemoryBackend(read_json(&root.join(&manifest.entrypoint))?)
+        }
+        PluginKind::CallProfile => {
+            PluginPayload::CallProfile(read_json(&root.join(&manifest.entrypoint))?)
+        }
+    })
+}
+
+fn supported_platforms(package: &PluginPackage) -> Vec<PlatformTarget> {
+    match &package.payload {
         PluginPayload::AgentProvider(provider) => provider
             .manifest
             .runtime
@@ -102,7 +100,25 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         PluginPayload::CodeIntelligence(contract) => contract.supported_platforms.clone(),
         PluginPayload::TelemetryBackend(contract) => contract.supported_platforms.clone(),
         PluginPayload::WorkspaceExtension(contract) => contract.supported_platforms.clone(),
-    };
+        PluginPayload::MemoryBackend(contract) => contract.supported_platforms.clone(),
+        PluginPayload::CallProfile(contract) => contract.supported_platforms.clone(),
+    }
+}
+
+fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
+    ensure!(
+        (2..=3).contains(&arguments.len()),
+        "build requires plugin directory and output"
+    );
+    let root = PathBuf::from(&arguments[0]);
+    let output = PathBuf::from(&arguments[1]);
+    let manifest: PluginManifest = read_json(&root.join("plugin.json"))?;
+    let payload = read_payload(&root, &manifest)?;
+    let component_release = manifest.component_release.clone();
+    let package = PluginPackage::new(manifest, component_release, payload)?;
+    let bytes = package.canonical_bytes()?;
+    let digest = PluginPackage::artifact_digest(&bytes);
+    let supported_platforms = supported_platforms(&package);
     let mut release = PluginRelease {
         release_schema: package.minimum_release_schema(),
         plugin_id: package.manifest.id.clone(),
@@ -141,7 +157,10 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
     };
     if matches!(
         package.payload,
-        PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+        PluginPayload::TelemetryBackend(_)
+            | PluginPayload::WorkspaceExtension(_)
+            | PluginPayload::MemoryBackend(_)
+            | PluginPayload::CallProfile(_)
     ) {
         release.runtime_artifacts = release
             .supported_platforms
@@ -157,7 +176,10 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         || host_bundle_bytes.is_some()
         || matches!(
             package.payload,
-            PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+            PluginPayload::TelemetryBackend(_)
+                | PluginPayload::WorkspaceExtension(_)
+                | PluginPayload::MemoryBackend(_)
+                | PluginPayload::CallProfile(_)
         )
     {
         release.artifact_digest = release.computed_artifact_digest()?;

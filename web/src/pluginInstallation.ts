@@ -24,7 +24,9 @@ type MachinePluginKind =
   | "agent_provider"
   | "code_intelligence"
   | "telemetry_backend"
-  | "workspace_extension";
+  | "workspace_extension"
+  | "memory_backend"
+  | "call_profile";
 const machinePhases = [
   "prepared",
   "staging",
@@ -233,7 +235,14 @@ export function decodeInstallEvidence(
     problem,
     attention_from: attention,
     plugin_kind: member(
-      ["agent_provider", "code_intelligence", "telemetry_backend", "workspace_extension"] as const,
+      [
+        "agent_provider",
+        "code_intelligence",
+        "telemetry_backend",
+        "workspace_extension",
+        "memory_backend",
+        "call_profile",
+      ] as const,
       row.plugin_kind,
     ),
     plugin_version: text(row.plugin_version, 128),

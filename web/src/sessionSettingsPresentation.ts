@@ -4,6 +4,8 @@ import {
   relativeUpdateTime,
   resetCountdown,
   topBarUsageLimits,
+  type UsageLimit,
+  usageLimits,
 } from "./usageLimits";
 import { usageWidgetBalanceLabel, usageWidgetSpendLabel } from "./usageHostMap";
 import {
@@ -127,7 +129,7 @@ export function sessionProviderUsageRows(
     ];
   }
   return [
-    ...topBarUsageLimits(usage).flatMap((limit) => [
+    ...sessionProviderLimits(usage).flatMap((limit) => [
       {
         id: limit.id,
         label: limit.label,
@@ -141,6 +143,19 @@ export function sessionProviderUsageRows(
       }]),
     ]),
     updated,
+  ];
+}
+
+/** Every window the account reports: the account windows in top-bar order
+ *  first, then model-scoped ones (`Fable · Weekly`). The top bar keeps only
+ *  the account windows for space; the session sheet has room for the model
+ *  window that usually runs out first. */
+export function sessionProviderLimits(usage: ProviderUsage): UsageLimit[] {
+  const account = topBarUsageLimits(usage);
+  const shown = new Set(account.map((limit) => limit.id));
+  return [
+    ...account,
+    ...usageLimits(usage).filter((limit) => !shown.has(limit.id)),
   ];
 }
 

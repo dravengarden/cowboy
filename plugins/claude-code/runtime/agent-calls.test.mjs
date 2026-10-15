@@ -1,20 +1,40 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AGENT_CALLS_PROMPT } from "./agent-calls.mjs";
+import { AGENT_CALLS_PROMPT, agentCallsPrompt } from "./agent-calls.mjs";
 
 test("the agent-calls prompt routes reviews through Cowboy", () => {
-  assert.match(AGENT_CALLS_PROMPT, /cowboy codex --request-file -/);
-  assert.match(AGENT_CALLS_PROMPT, /instead of running `codex exec`/);
+  assert.match(AGENT_CALLS_PROMPT, /`cowboy review`/);
+  assert.match(AGENT_CALLS_PROMPT, /Never run `codex exec`/);
   // A Claude agent never calls its own family.
   assert.doesNotMatch(AGENT_CALLS_PROMPT, /cowboy claude/);
-  // One short paragraph: it rides every turn's system prompt.
-  assert.ok(AGENT_CALLS_PROMPT.length < 1800);
-  // Optional: off means silence, on means review before reporting.
-  assert.match(
-    AGENT_CALLS_PROMPT,
-    /If they are off, do not review and do not mention it/,
+  // A pointer, not a manual: it rides every turn's system prompt.
+  assert.ok(AGENT_CALLS_PROMPT.length < 900, AGENT_CALLS_PROMPT.length);
+  // The agent decides, and skipping is the default.
+  assert.match(AGENT_CALLS_PROMPT, /Skip it by default/);
+  assert.match(AGENT_CALLS_PROMPT, /at most once per task/);
+  assert.match(AGENT_CALLS_PROMPT, /say nothing/);
+  assert.match(AGENT_CALLS_PROMPT, /cowboy review --ask/);
+  // No capability dump or JSON template on every turn.
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
+});
+
+test("the Review Plugin renders exactly Claude's built-in guidance", () => {
+  const { guidance } = JSON.parse(
+    readFileSync(
+      new URL("../../review/contract.json", import.meta.url),
+      "utf8",
+    ),
   );
-  const example = AGENT_CALLS_PROMPT.match(/\{"schema".*\}\}/)[0]
-    .replace("review|design_review|analysis", "review");
-  assert.equal(JSON.parse(example).access, "read-only");
+  const prompt = agentCallsPrompt({
+    schema: 1,
+    calls: { profiles: [{ guidance }] },
+  });
+  // Changing either text without the other is a visible drift.
+  assert.equal(prompt, AGENT_CALLS_PROMPT);
+  assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
+  assert.equal(
+    agentCallsPrompt({ schema: 1, calls: null }),
+    AGENT_CALLS_PROMPT,
+  );
 });

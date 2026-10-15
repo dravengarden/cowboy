@@ -248,6 +248,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
                     reviewed={new Set()}
                     onRevision={onRevision}
                     onChanges={onChanges}
+                    refreshToken={refreshToken}
                   />
                 )}
             </SurfaceProvider>
@@ -343,6 +344,25 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     );
     tests.push(
       "a cancelled branch read cannot replace current content with its late failure",
+    );
+
+    render("refs/heads/next");
+    await until(() => text().includes("next.ts"), "settled comparison");
+    hold = true;
+    render("refs/heads/next", false, 1);
+    await until(() => pending.length === 1, "worktree refresh");
+    check(
+      text().includes("next.ts") &&
+        !container.querySelector('[role="progressbar"]'),
+      "a worktree refresh blanked the readable change list",
+    );
+    hold = false;
+    pending.shift()!.resolve(
+      response(changes("refreshed", "refs/heads/next")),
+    );
+    await until(() => text().includes("refreshed.ts"), "refreshed list");
+    tests.push(
+      "a worktree refresh keeps the current change list readable until its replacement arrives",
     );
 
     historyTruncated = false;

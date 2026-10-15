@@ -26,10 +26,17 @@ pub struct Cli {
 enum Command {
     /// Delegate bounded work to Codex on the current session's execution target.
     #[cfg(unix)]
+    #[command(after_help = crate::managed_calls::cli::START_HELP)]
     Codex(crate::managed_calls::cli::StartArgs),
     /// Delegate bounded work to Claude on the current session's execution target.
     #[cfg(unix)]
+    #[command(after_help = crate::managed_calls::cli::START_HELP)]
     Claude(crate::managed_calls::cli::StartArgs),
+    /// Get a second-opinion review of this worktree's change from another
+    /// agent. Optional focus text on stdin; prints only the findings, or one
+    /// `skipped:` line when the session does not allow reviews.
+    #[cfg(unix)]
+    Review(crate::managed_calls::cli::ReviewArgs),
     /// Observe and control parent-scoped managed agent calls.
     #[cfg(unix)]
     Call(crate::managed_calls::cli::CallArgs),
@@ -505,6 +512,8 @@ impl Cli {
             Command::Codex(args) => crate::managed_calls::cli::start("codex", args).await,
             #[cfg(unix)]
             Command::Claude(args) => crate::managed_calls::cli::start("claude-code", args).await,
+            #[cfg(unix)]
+            Command::Review(args) => crate::managed_calls::cli::review(args).await,
             #[cfg(unix)]
             Command::Call(args) => crate::managed_calls::cli::call(args).await,
             #[cfg(unix)]

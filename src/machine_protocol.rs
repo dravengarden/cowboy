@@ -278,6 +278,13 @@ pub struct HostResources {
     /// Memory charged to the Agent worker slice, when the host uses one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_memory_bytes: Option<u64>,
+    /// Memory Agent workers can still use before a cgroup limit above them
+    /// throttles them: the smallest `limit - current + inactive file cache`
+    /// over the worker slice and its ancestors. Host `memory_available_bytes`
+    /// can look ample while the enclosing user slice is at its `memory.high`.
+    /// Absent where no ancestor is limited or on older Machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_headroom_bytes: Option<u64>,
     pub uptime_seconds: u64,
     /// The Device's configured `disk.low_watermark`: below this much available
     /// disk the Controller runs an extra retention pass. Absent from Devices

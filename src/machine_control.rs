@@ -516,6 +516,17 @@ impl MachineControl {
             .collect()
     }
 
+    /// Every Machine's latest host resources.
+    pub(crate) fn all_host_resources(
+        &self,
+    ) -> Vec<(String, crate::machine_protocol::ObservedHostResources)> {
+        self.host_resources
+            .read()
+            .iter()
+            .map(|(machine, observed)| (machine.clone(), observed.clone()))
+            .collect()
+    }
+
     /// Latest host resources a Machine reported, if any.
     pub(crate) fn host_resources(
         &self,

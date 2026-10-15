@@ -25,7 +25,7 @@ import {
 
 const toolsDefaults: AgentTools = {
   schema: 1,
-  matrix: { tools: true, recall: true },
+  memory: { tools: true, recall: true },
   calls: {
     enabled: false,
     targets: [{ agent: "codex" }],
@@ -87,7 +87,7 @@ function overlay(
 ): AgentTools {
   return {
     ...defaults,
-    matrix: { ...defaults.matrix, ...override.matrix },
+    memory: { ...defaults.memory, ...override.memory },
     calls: { ...defaults.calls, ...override.calls },
   };
 }
@@ -698,7 +698,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "one callable agent needs no default chooser",
     );
     check(
-      text().includes("Start read-only Codex reviewers"),
+      text().includes("ask Codex for a read-only review"),
       "the switch must name what it starts",
     );
     // The card starts folded; its settings unfold under its header.

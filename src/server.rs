@@ -11,7 +11,9 @@
 //! challenge before WebSocket protocol negotiation.
 
 mod agent_tools;
+pub(crate) use agent_tools::launch_extensions;
 mod dormant_pins;
+mod memory_reclaim;
 mod secure_transport;
 mod session_create_replay;
 mod session_provider_updates;
@@ -10156,6 +10158,7 @@ async fn serve_axum(
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
     session_reclaim::listen_for_wakes(&state);
+    memory_reclaim::start(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
         state
             .store
@@ -16974,6 +16977,8 @@ struct CodeChangeResponse {
     status: &'static str,
     staged: bool,
     unstaged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -17837,6 +17842,7 @@ async fn api_code_changes(
                     old_path: change.old_path,
                     staged: change.staged,
                     unstaged: change.unstaged,
+                    fingerprint: change.fingerprint,
                     status: match change.status {
                         crate::code_review::ChangeStatus::Modified => "modified",
                         crate::code_review::ChangeStatus::Added => "added",

@@ -140,6 +140,14 @@ pull-request review capability. Explicit PR selection may cross repositories on
 that same remote host; it creates no Provider login, credential replica
 or executable runtime. See [workspace extensions](workspace-extensions.md).
 
+Session extensions use the data-only `memory_backend` and `call_profile` kinds
+(Plugin SDK 1.12+). A memory backend names a closed `cowboy.memory-client`
+protocol, its exact MCP tool names and whether it recalls and observes; its
+endpoint, credential and project mapping are a Machine-private binding. A call
+profile names managed-call purposes and agent-facing guidance; grants,
+snapshots, the read-only sandbox and placement stay core. See
+[session extension Plugins](session-extension-plugins.md).
+
 Telemetry integrations use the data-only `telemetry_backend` kind. Payload
 schema 2 requires Plugin SDK 1.8+ and Machine protocol 9+ for OTLP/HTTP protobuf
 logs, metrics and traces. Retained schema 1 requires SDK 1.7+/protocol 8+ for

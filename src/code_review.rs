@@ -33,6 +33,11 @@ pub struct CodeChange {
     pub status: ChangeStatus,
     pub staged: bool,
     pub unstaged: bool,
+    /// Changes whenever this entry's diff can: its Git status, the commits it
+    /// is compared from, and the worktree file's identity. A reviewer's mark
+    /// holds only while it is unchanged. Absent from adapters that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -573,6 +578,34 @@ impl LocalCodeProvider {
         }
     }
 
+    /// Cheap identity of one listed change: metadata only, never file bytes,
+    /// so a list of a thousand changes costs a thousand `stat` calls.
+    fn change_fingerprint(&self, anchor: Option<&str>, change: &CodeChange) -> String {
+        let mut digest = sha2::Sha256::new();
+        digest.update(LOCAL_PROVIDER_REVISION);
+        for part in [
+            anchor.unwrap_or(""),
+            change.path.as_str(),
+            change.old_path.as_deref().unwrap_or(""),
+        ] {
+            digest.update([0]);
+            digest.update(part.as_bytes());
+        }
+        digest.update([
+            change.status as u8,
+            u8::from(change.staged),
+            u8::from(change.unstaged),
+        ]);
+        match safe_relative(&change.path)
+            .ok()
+            .and_then(|relative| std::fs::symlink_metadata(self.root.join(relative)).ok())
+        {
+            Some(metadata) => digest.update(file_revision(Path::new(""), &metadata).as_bytes()),
+            None => digest.update(b"absent"),
+        }
+        format!("{:x}", digest.finalize())
+    }
+
     fn worktree_revision(head: Option<&str>, status: &[u8]) -> String {
         let mut digest = sha2::Sha256::new();
         digest.update(LOCAL_PROVIDER_REVISION);
@@ -796,19 +829,25 @@ impl CodeProvider for LocalCodeProvider {
             let mut revision_input = output;
             revision_input.extend_from_slice(&status);
             revision_input.extend_from_slice(comparison.as_bytes());
+            let anchor = format!("{base}\0{}", head.as_deref().unwrap_or(""));
             return Ok(ChangeList {
                 revision: Self::worktree_revision(head.as_deref(), &revision_input),
-                head,
                 changes: files
                     .into_iter()
-                    .map(|file| CodeChange {
-                        path: file.path,
-                        old_path: file.old_path,
-                        status: file.status,
-                        staged: false,
-                        unstaged: false,
+                    .map(|file| {
+                        let mut change = CodeChange {
+                            path: file.path,
+                            old_path: file.old_path,
+                            status: file.status,
+                            staged: false,
+                            unstaged: false,
+                            fingerprint: None,
+                        };
+                        change.fingerprint = Some(self.change_fingerprint(Some(&anchor), &change));
+                        change
                     })
                     .collect(),
+                head,
                 truncated,
                 comparison: Some(comparison.to_owned()),
                 default_comparison,
@@ -839,6 +878,7 @@ impl CodeProvider for LocalCodeProvider {
                 status: classify_status(xy),
                 staged: has_staged_change(xy),
                 unstaged: has_unstaged_change(xy),
+                fingerprint: None,
             });
             if changes.len() > MAX_CHANGES {
                 break;
@@ -848,6 +888,9 @@ impl CodeProvider for LocalCodeProvider {
         let truncated = changes.len() > MAX_CHANGES;
         changes.truncate(MAX_CHANGES);
         let head = self.head();
+        for change in &mut changes {
+            change.fingerprint = Some(self.change_fingerprint(head.as_deref(), change));
+        }
         Ok(ChangeList {
             revision: Self::worktree_revision(head.as_deref(), &status),
             head,
@@ -996,9 +1039,21 @@ impl CodeProvider for LocalCodeProvider {
             }
             (None, DiffScope::Unstaged) => {}
         }
+        let base_args = args.clone();
         args.extend(["--".to_owned(), path.clone()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut bytes = git_output(&self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
+        // A literal pathspec hides the other side of a rename, so a moved file
+        // reads as a whole-file addition or deletion. Only then, ask Git for
+        // the pairing and diff the two literal paths together.
+        if (contains(&bytes, b"\nnew file mode ") || contains(&bytes, b"\ndeleted file mode "))
+            && let Some((from, to)) = rename_partner(&self.root, &base_args, &path)
+        {
+            let mut paired = base_args;
+            paired.extend(["-M".to_owned(), "--".to_owned(), from, to]);
+            let refs: Vec<&str> = paired.iter().map(String::as_str).collect();
+            bytes = git_output(&self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
+        }
         if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(&self.root, &path)
         {
             bytes = untracked_diff(&self.root, &relative, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
@@ -1436,6 +1491,45 @@ fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, Strin
     }
 }
 
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// The two paths of the rename `path` takes part in, under the same diff base.
+/// Names come from Git's own NUL-delimited output, never from a pathspec.
+fn rename_partner(root: &Path, base_args: &[String], path: &str) -> Option<(String, String)> {
+    let mut args: Vec<&str> = base_args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with("--unified=") && *arg != "--ignore-all-space")
+        .collect();
+    args.extend(["-M", "--name-status", "-z"]);
+    let listed = git_output(root, &args, 4 * 1024 * 1024).ok()?;
+    let mut fields = listed.split(|byte| *byte == 0);
+    while let Some(status) = fields.next() {
+        match status.first() {
+            None => {}
+            Some(b'R') => {
+                let from = String::from_utf8(fields.next()?.to_vec()).ok()?;
+                let to = String::from_utf8(fields.next()?.to_vec()).ok()?;
+                if from == path || to == path {
+                    return Some((from, to));
+                }
+            }
+            Some(b'C') => {
+                fields.next();
+                fields.next();
+            }
+            Some(_) => {
+                fields.next();
+            }
+        }
+    }
+    None
+}
+
 fn untracked_diff(root: &Path, relative: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let canonical_root = root.canonicalize().map_err(|error| error.to_string())?;
     let path = root.join(relative);
@@ -1446,23 +1540,47 @@ fn untracked_diff(root: &Path, relative: &Path, limit: usize) -> Result<Vec<u8>,
         return Err("file not found".to_owned());
     }
     let file = File::open(canonical_file).map_err(|error| error.to_string())?;
-    let mut content = String::new();
+    let mut bytes = Vec::new();
     file.take(limit as u64)
-        .read_to_string(&mut content)
-        .map_err(|_| "binary file".to_owned())?;
-    let display = relative.to_string_lossy().replace('\\', "/");
-    let mut output = Vec::new();
-    writeln!(output, "diff --git a/{display} b/{display}").map_err(|error| error.to_string())?;
-    writeln!(output, "new file mode 100644").map_err(|error| error.to_string())?;
-    writeln!(output, "--- /dev/null").map_err(|error| error.to_string())?;
-    writeln!(output, "+++ b/{display}").map_err(|error| error.to_string())?;
-    writeln!(output, "@@ -0,0 +1,{} @@", content.lines().count())
+        .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    for line in content.lines() {
-        writeln!(output, "+{line}").map_err(|error| error.to_string())?;
+    let display = relative.to_string_lossy().replace('\\', "/");
+    let io = |error: std::io::Error| error.to_string();
+    let mut output = Vec::new();
+    writeln!(output, "diff --git a/{display} b/{display}").map_err(io)?;
+    writeln!(output, "new file mode 100644").map_err(io)?;
+    // Git's own rule: a NUL in the first 8000 bytes makes the file binary,
+    // and a binary addition is one summary line, not an error.
+    let text = if bytes.iter().take(8000).any(|byte| *byte == 0) {
+        None
+    } else {
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => Some(text),
+            // A read cut at the limit can split a character; drop that tail.
+            Err(error) if error.error_len().is_none() => {
+                std::str::from_utf8(&bytes[..error.valid_up_to()]).ok()
+            }
+            Err(_) => None,
+        }
+    };
+    let Some(text) = text else {
+        writeln!(output, "Binary files /dev/null and b/{display} differ").map_err(io)?;
+        return Ok(output);
+    };
+    if text.is_empty() {
+        return Ok(output);
+    }
+    writeln!(output, "--- /dev/null").map_err(io)?;
+    writeln!(output, "+++ b/{display}").map_err(io)?;
+    writeln!(output, "@@ -0,0 +1,{} @@", text.lines().count()).map_err(io)?;
+    for line in text.lines() {
+        writeln!(output, "+{line}").map_err(io)?;
         if output.len() >= limit {
             break;
         }
+    }
+    if !text.ends_with('\n') && output.len() < limit {
+        writeln!(output, "\\ No newline at end of file").map_err(io)?;
     }
     output.truncate(limit);
     Ok(output)
@@ -1666,6 +1784,118 @@ mod tests {
         assert_eq!(detached.branch, None);
         assert_eq!(detached.upstream, None);
         assert_eq!(detached.base.unwrap().ahead, 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn change_fingerprints_follow_each_file_independently() {
+        let dir = scratch("fingerprints");
+        fs::write(dir.join("other.rs"), "fn other() {}\n").unwrap();
+        Command::new("git")
+            .args(["add", "other.rs"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-qm", "other"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn edited() {}\n").unwrap();
+        fs::write(dir.join("other.rs"), "fn other_edited() {}\n").unwrap();
+        let provider = LocalCodeProvider::new(&dir);
+        let fingerprints = || {
+            provider
+                .changes(None)
+                .unwrap()
+                .changes
+                .into_iter()
+                .map(|change| (change.path, change.fingerprint.unwrap()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let first = fingerprints();
+        assert_eq!(first, fingerprints(), "stable while nothing changes");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(dir.join("tracked.rs"), "fn edited_again() {}\n").unwrap();
+        let second = fingerprints();
+        assert_ne!(first["tracked.rs"], second["tracked.rs"]);
+        assert_eq!(first["other.rs"], second["other.rs"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn untracked_binary_and_edge_files_diff_like_git() {
+        let dir = scratch("untracked-edges");
+        let provider = LocalCodeProvider::new(&dir);
+        let diff = |path: &str| {
+            provider
+                .diff_snapshot(path, 3, true, DiffScope::Combined, None)
+                .unwrap()
+        };
+        fs::write(dir.join("icon.bin"), [0x89, b'P', b'N', b'G', 0, 1, 2]).unwrap();
+        let binary = diff("icon.bin");
+        assert!(
+            binary
+                .text
+                .contains("Binary files /dev/null and b/icon.bin differ")
+        );
+        assert_eq!((binary.added, binary.removed), (0, 0));
+        fs::write(dir.join("empty.txt"), "").unwrap();
+        assert!(!diff("empty.txt").text.contains("@@"));
+        fs::write(dir.join("tail.txt"), "one\ntwo").unwrap();
+        let tail = diff("tail.txt");
+        assert!(tail.text.ends_with("+two\n\\ No newline at end of file\n"));
+        assert_eq!(tail.added, 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_renamed_file_diffs_as_a_rename_not_a_rewrite() {
+        let dir = scratch("rename-diff");
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        let body: String = (0..40).map(|n| format!("line {n}\n")).collect();
+        fs::write(dir.join("old.txt"), &body).unwrap();
+        git(&["add", "old.txt"]);
+        git(&["commit", "-qm", "old"]);
+        git(&["mv", "old.txt", "new.txt"]);
+        let provider = LocalCodeProvider::new(&dir);
+        let staged = provider
+            .diff_snapshot("new.txt", 3, true, DiffScope::Staged, None)
+            .unwrap();
+        assert!(
+            staged.text.contains("rename from old.txt"),
+            "{}",
+            staged.text
+        );
+        assert_eq!((staged.added, staged.removed), (0, 0));
+        fs::write(dir.join("new.txt"), format!("{body}line 40\n")).unwrap();
+        for path in ["new.txt", "old.txt"] {
+            let combined = provider
+                .diff_snapshot(path, 3, true, DiffScope::Combined, None)
+                .unwrap();
+            assert!(
+                combined.text.contains("rename to new.txt"),
+                "{}",
+                combined.text
+            );
+            assert_eq!((combined.added, combined.removed), (1, 0));
+        }
+        // A plain addition keeps its ordinary diff.
+        fs::write(dir.join("fresh.txt"), "fresh\n").unwrap();
+        git(&["add", "fresh.txt"]);
+        let fresh = provider
+            .diff_snapshot("fresh.txt", 3, true, DiffScope::Combined, None)
+            .unwrap();
+        assert!(fresh.text.contains("+fresh") && !fresh.text.contains("rename"));
         fs::remove_dir_all(dir).unwrap();
     }
 

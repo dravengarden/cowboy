@@ -56,6 +56,52 @@ fn agent_memory_bytes() -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// One cgroup's headroom: its limit (`memory.high`, else `memory.max`) minus
+/// `memory.current`, plus the inactive file cache it can drop without
+/// throttling. `None` when the cgroup is unlimited.
+fn cgroup_headroom(high: &str, max: &str, current: &str, stat: &str) -> Option<u64> {
+    let limit = [high, max]
+        .into_iter()
+        .find_map(|value| value.trim().parse::<u64>().ok())?;
+    let current = current.trim().parse::<u64>().ok()?;
+    let inactive_file = stat
+        .lines()
+        .find_map(|line| line.strip_prefix("inactive_file "))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    Some(limit.saturating_sub(current).saturating_add(inactive_file))
+}
+
+/// The smallest headroom from the Agent worker slice (or, without one, the
+/// user manager) up to the cgroup root.
+fn memory_headroom_bytes() -> Option<u64> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let root = Path::new("/sys/fs/cgroup");
+    let manager = root.join(user_manager_root(&cgroup)?.trim_start_matches('/'));
+    let agents = manager.join("cowboy.slice/cowboy-agents.slice");
+    let mut directory = if agents.is_dir() { agents } else { manager };
+    let read = |directory: &Path, name: &str| std::fs::read_to_string(directory.join(name));
+    let mut smallest: Option<u64> = None;
+    while directory.starts_with(root) && directory != root {
+        if let (Ok(high), Ok(max), Ok(current)) = (
+            read(&directory, "memory.high"),
+            read(&directory, "memory.max"),
+            read(&directory, "memory.current"),
+        ) && let Some(headroom) = cgroup_headroom(
+            &high,
+            &max,
+            &current,
+            &read(&directory, "memory.stat").unwrap_or_default(),
+        ) {
+            smallest = Some(smallest.map_or(headroom, |value| value.min(headroom)));
+        }
+        if !directory.pop() {
+            break;
+        }
+    }
+    smallest
+}
+
 /// Observe this host. `None` on platforms or hosts without the Linux sources.
 pub(crate) fn sample(state_dir: &Path) -> Option<HostResources> {
     if !cfg!(target_os = "linux") {
@@ -79,6 +125,7 @@ pub(crate) fn sample(state_dir: &Path) -> Option<HostResources> {
         disk_total_bytes: disk.f_blocks.saturating_mul(block),
         disk_available_bytes: disk.f_bavail.saturating_mul(block),
         agent_memory_bytes: agent_memory_bytes(),
+        memory_headroom_bytes: memory_headroom_bytes(),
         uptime_seconds: std::fs::read_to_string("/proc/uptime")
             .ok()
             .and_then(|text| parse_uptime_seconds(&text))
@@ -120,6 +167,24 @@ mod tests {
             parse_uptime_seconds("454473.12 2700000.00\n"),
             Some(454_473)
         );
+    }
+
+    #[test]
+    fn cgroup_headroom_uses_the_tighter_limit_and_counts_dropable_cache() {
+        let stat = "anon 7000\nfile 1300\ninactive_file 580\nactive_file 720\n";
+        // memory.high wins over memory.max; inactive file cache is headroom.
+        assert_eq!(
+            cgroup_headroom("10200\n", "11274\n", "10106\n", stat),
+            Some(674)
+        );
+        // Without memory.high the hard limit applies.
+        assert_eq!(
+            cgroup_headroom("max\n", "11274\n", "10106\n", stat),
+            Some(1748)
+        );
+        // An unlimited cgroup contributes nothing; usage past a limit is zero.
+        assert_eq!(cgroup_headroom("max\n", "max\n", "10106\n", stat), None);
+        assert_eq!(cgroup_headroom("100\n", "max\n", "500\n", ""), Some(0));
     }
 
     #[test]

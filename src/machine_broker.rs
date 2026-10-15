@@ -233,7 +233,8 @@ pub struct MachineBrokerArgs {
     pub worktree_root: PathBuf,
     pub worker_ready_timeout: Duration,
     /// Machine state directory whose `calls/sessions` holds managed-call
-    /// contexts. Local parent workers receive their stable context path.
+    /// contexts and `extensions/sessions` session-extension descriptors.
+    /// Local parent workers receive their stable context path.
     pub call_context_root: Option<PathBuf>,
 }
 
@@ -2824,6 +2825,36 @@ impl Broker {
                 path.display().to_string(),
             ));
         }
+        // Session extensions are resolved from this Machine's own active
+        // Plugins. A failure disables them explicitly: the session starts
+        // without memory rather than failing to start, and never falls back
+        // to a host enrollment that could override the session's switches.
+        if let Some(switches) = session.extensions {
+            let written = self
+                .args
+                .call_context_root
+                .as_deref()
+                .context("Machine has no state root for session extensions")
+                .and_then(|root| {
+                    self.args.provider_store.write_session_extensions(
+                        root,
+                        &session.session_id,
+                        switches,
+                    )
+                });
+            let value = match written {
+                Ok(path) => path.display().to_string(),
+                Err(error) => {
+                    tracing::warn!(
+                        session = %session.session_id,
+                        error = %format!("{error:#}"),
+                        "session extensions disabled for this launch"
+                    );
+                    crate::machine_plugins::SESSION_EXTENSIONS_DISABLED.to_owned()
+                }
+            };
+            session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
+        }
         if let Some(provider) = &provider {
             session_environment.push((
                 "COWBOY_PROVIDER_PACKAGE_PATH",
@@ -4338,6 +4369,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
         let mut configuration = cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1;
         assert_eq!(
@@ -4475,6 +4507,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         broker
@@ -4552,6 +4585,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         // An old launch is still in flight, so the reset has to wait for it.
@@ -4754,6 +4788,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
 
         let error = tokio::time::timeout(
@@ -4900,6 +4935,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -4977,6 +5013,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -5137,6 +5174,7 @@ mod tests {
                     fallback_for: None,
                     adopt_only: false,
                     execution_binding: None,
+                    extensions: None,
                 },
             );
             let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
@@ -5226,6 +5264,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
         broker.update_snapshot(
             WorkerSnapshot {
@@ -5284,6 +5323,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
         broker
             .sessions
@@ -6841,6 +6881,7 @@ mod tests {
                     fallback_for: Some("gen-2".to_owned()),
                     adopt_only: false,
                     execution_binding: None,
+                    extensions: None,
                 },
             );
             broker.pin_fallback(session_id, "gen-1", "gen-2");
@@ -6905,6 +6946,7 @@ mod tests {
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         let (late_tx, _late_rx) = mpsc::unbounded_channel();
@@ -6987,6 +7029,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         broker.sessions.lock().insert(
@@ -7008,6 +7051,7 @@ mod tests {
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         broker.pin_fallback("sess-fallback", "gen-1", "gen-2");
@@ -7112,6 +7156,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
         broker
             .sessions
@@ -7170,6 +7215,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: true,
                 execution_binding: None,
+                extensions: None,
             })
             .await;
 
@@ -7239,6 +7285,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             })
             .await;
 
@@ -7325,6 +7372,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             })
             .await;
 
@@ -7393,6 +7441,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: true,
                 execution_binding: None,
+                extensions: None,
             })
             .await;
 
@@ -7452,6 +7501,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
 
@@ -7517,6 +7567,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -7926,6 +7977,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         };
 
         let replacement_exit = broker
@@ -8061,6 +8113,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
 
@@ -8140,6 +8193,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -8285,6 +8339,7 @@ mod tests {
                 fallback_for: None,
                 adopt_only: false,
                 execution_binding: None,
+                extensions: None,
             },
         );
     }
@@ -8589,6 +8644,7 @@ mod tests {
                     fallback_for: None,
                     adopt_only: false,
                     execution_binding: None,
+                    extensions: None,
                 },
                 Some("gen-1".to_owned()),
             )

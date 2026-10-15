@@ -517,6 +517,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         fallback_for: args.fallback_for.clone(),
         adopt_only: false,
         execution_binding: args.execution_binding.clone(),
+        extensions: None,
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
     let mut managed_round = None;
@@ -1858,6 +1859,7 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
             execution_binding: None,
+            extensions: None,
         });
         let sink = RemoteSink {
             shared: Arc::clone(&shared),

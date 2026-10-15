@@ -3,6 +3,8 @@ import { assertEquals, assertThrows } from "@std/assert";
 import {
   decodeRemoteReview,
   pullNumber,
+  remoteFileKey,
+  remoteFileMark,
   sameReview,
 } from "./remoteReviewModel.ts";
 
@@ -79,4 +81,30 @@ test("pages cannot cross PR, repository, base/head revision or file-count bounda
     assertEquals(sameReview(first, { ...first, ...change }), false);
   }
   assertEquals(sameReview(first, { ...first, files: [] }), true);
+});
+
+test("a viewed mark follows one PR file's shown change", () => {
+  const file = {
+    path: "src/a.ts",
+    oldPath: null,
+    status: "modified",
+    additions: 1,
+    deletions: 1,
+    patch: "@@ -1 +1 @@\n-old\n+new",
+    limited: false,
+  };
+  const mark = remoteFileMark(file);
+  assertEquals(remoteFileMark({ ...file }), mark);
+  assertEquals(
+    remoteFileMark({ ...file, patch: "@@ -1 +1 @@\n-old\n+newer" }) === mark,
+    false,
+  );
+  assertEquals(
+    remoteFileKey({ repositoryId: "123", number: "12" }, "src/a.ts"),
+    "remote\u0000123\u000012\u0000src/a.ts",
+  );
+  assertEquals(
+    remoteFileKey({ repositoryId: "123", number: "12" }, "x".repeat(2048)),
+    undefined,
+  );
 });

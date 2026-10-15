@@ -54,8 +54,25 @@ schema = 1
 # boolean (true or false); applies live.
 # reclaim_on_capacity = false
 # A session is eligible for reclaim only after this long without any event.
-# Keep it at or above the longest Provider prompt-cache lifetime so a
-# reclaimed session's cache has already expired and resuming costs nothing
-# extra.
+# A Provider prompt cache outlives the process only while unexpired and when
+# the resumed request repeats the same prefix, so below the cache lifetime a
+# resume can turn a cache read into a cache write.
 # duration string such as "6h", from 5m to 7d; applies live.
 # reclaim_min_idle = "1h"
+# Hibernate idle sessions on a Device whose reported memory headroom (the
+# tightest cgroup limit above its Agent workers, less their usage, plus
+# droppable file cache) falls below memory_reclaim_below, longest-idle first
+# and one at a time, until it is back above memory_reclaim_until.
+# boolean (true or false); applies live.
+# memory_reclaim = false
+# Headroom below which memory reclaim starts.
+# size string such as "1.5GiB", from 128MiB to 1TiB; applies live.
+# memory_reclaim_below = "1GiB"
+# Headroom at which memory reclaim stops; never below memory_reclaim_below.
+# size string such as "1.5GiB", from 128MiB to 1TiB; applies live.
+# memory_reclaim_until = "2GiB"
+# Memory reclaim only hibernates sessions this long without any event. Busy,
+# permission-waiting, background-working, system and cache-protected sessions
+# are never chosen.
+# duration string such as "6h", from 5m to 7d; applies live.
+# memory_reclaim_min_idle = "15m"

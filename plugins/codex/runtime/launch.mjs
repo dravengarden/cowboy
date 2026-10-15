@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { matrixConfiguration, memoryNative } from "./memory.mjs";
+import { callGuidance, sessionExtensions } from "@cowboy/memory-client";
+import { memoryConfiguration, memoryNative } from "./memory.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
@@ -25,24 +26,34 @@ export function splitConfigurationArguments(args) {
 // a hidden `claude -p` that the user never sees and that ignores the session's
 // Tools policy and model choice.
 export const AGENT_CALLS_PROMPT = [
-  "To have another agent review or analyze work (for example when asked to call Claude), use Cowboy instead of running `claude -p`, `codex exec` or `codex review` yourself.",
-  "Run `cowboy claude --request-file - [--preset ID]` with this JSON on stdin:",
-  '{"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis","instruction":"<self-contained task>","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}.',
-  "It prints a JSON envelope with a call_id; then run `cowboy call wait <call_id>` until it is terminal and `cowboy call result <call_id>`.",
-  "`cowboy call capabilities` reports whether calls are enabled and lists the preset ids (model and reasoning); omit --preset to use the session's choice.",
-  "Reviews are optional and the user turns them on per session: when you have finished a substantive code change and are about to report, run `cowboy call capabilities`; if calls are enabled and Claude is available, get a read-only review from Claude first and fix or report its findings. If they are off, do not review and do not mention it.",
-  "When the user explicitly asks for a call while calls are off, Cowboy asks them and the command waits for the answer; report a refusal instead of working around it.",
+  "`cowboy review` gets a read-only second opinion on this worktree's change from another agent and prints only its findings (optional focus text on stdin; `--help`).",
+  "Skip it by default and decide for yourself: use it at most once per task, before reporting, only when a missed bug would be costly and your own checks cannot rule it out (security, permissions, concurrency, persistence or migrations, data deletion, money, large cross-cutting refactors).",
+  "Never for small, mechanical, docs, test-only or exploratory edits.",
+  "Fix real findings and mention them briefly; after a `skipped:` line, or if the command is missing, say nothing.",
+  "If the user asks for a review, run `cowboy review --ask`.",
+  "Other delegation: `cowboy claude --help`. Never run `claude -p`, `codex exec` or `codex review` yourself; they run hidden from the user.",
 ].join(" ");
 
 // The agent-calls instructions as a native `-c` option, unless the user's
 // own config or Cowboy's options already set developer instructions: those
 // are never replaced.
-export function agentCallsConfiguration(configuration, userConfig) {
+export function agentCallsConfiguration(
+  configuration,
+  userConfig,
+  prompt = AGENT_CALLS_PROMPT,
+) {
   const own = /^\s*developer_instructions\s*=/m.test(userConfig ?? "") ||
     configuration.some((value) => value.startsWith("developer_instructions="));
-  return own
-    ? []
-    : ["-c", `developer_instructions=${JSON.stringify(AGENT_CALLS_PROMPT)}`];
+  return own ? [] : ["-c", `developer_instructions=${JSON.stringify(prompt)}`];
+}
+
+/** The installed call profiles' guidance for a Codex caller. */
+export function agentCallsPrompt(extensions) {
+  return callGuidance(extensions, {
+    peer: "Claude",
+    peerCommand: "claude",
+    fallback: AGENT_CALLS_PROMPT,
+  });
 }
 
 function userCodexConfig() {
@@ -161,15 +172,20 @@ export async function main(args) {
   const inspection = forwarded.length === 1 &&
     ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
   // The client passes these to the exact native CLI it launches.
+  const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
     configuration.push(
-      ...agentCallsConfiguration(configuration, userCodexConfig()),
+      ...agentCallsConfiguration(
+        configuration,
+        userCodexConfig(),
+        agentCallsPrompt(extensions),
+      ),
     );
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (
     !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-      await matrixConfiguration("codex"))
+      await memoryConfiguration("codex", { extensions }))
   ) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");

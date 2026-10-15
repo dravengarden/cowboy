@@ -18,6 +18,7 @@ mod extensions;
 mod installation;
 mod operations;
 mod remove_projection;
+mod session_extensions;
 mod telemetry;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::InstallGuard;
@@ -26,6 +27,7 @@ pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner
 pub(crate) use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
 pub(crate) use operations::maintenance::complete_absent_uninstall;
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
+pub(crate) use session_extensions::{SESSION_EXTENSIONS_DISABLED, SESSION_EXTENSIONS_ENV};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
 
@@ -298,6 +300,8 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
                 | cowboy_plugin_sdk::PluginKind::CodeIntelligence
                 | cowboy_plugin_sdk::PluginKind::TelemetryBackend
                 | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
+                | cowboy_plugin_sdk::PluginKind::MemoryBackend
+                | cowboy_plugin_sdk::PluginKind::CallProfile
         ),
         "Machine installer received a Controller-only Plugin kind"
     );
@@ -487,6 +491,8 @@ impl MachinePluginStore {
             PluginPayload::CodeIntelligence(_)
                 | PluginPayload::TelemetryBackend(_)
                 | PluginPayload::WorkspaceExtension(_)
+                | PluginPayload::MemoryBackend(_)
+                | PluginPayload::CallProfile(_)
         ) {
             return self
                 .install_non_agent_plugin(
@@ -732,6 +738,8 @@ impl MachinePluginStore {
             plugin_package.manifest.kind,
             cowboy_plugin_sdk::PluginKind::TelemetryBackend
                 | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
+                | cowboy_plugin_sdk::PluginKind::MemoryBackend
+                | cowboy_plugin_sdk::PluginKind::CallProfile
         ) {
             self.validate_extension_dependencies(&plugin_package)?;
             Self::activate(&self.plugin_root(provider_id), &generation_name)?;
@@ -5127,6 +5135,142 @@ mod tests {
         assert_eq!(receipt.outcome, StepOutcome::Applied {});
         assert!(store.inventory().unwrap().is_empty());
         installation::tests::assert_retained_lifecycle(store, desired).await;
+    }
+
+    /// A signed, data-only session extension release built from its
+    /// first-party package source.
+    pub(super) fn session_extension_release(
+        publisher: &crate::machine_auth::MachineIdentity,
+        manifest: &str,
+        contract: &str,
+    ) -> DesiredPlugin {
+        let manifest: cowboy_plugin_sdk::PluginManifest = serde_json::from_str(manifest).unwrap();
+        let payload = match manifest.kind {
+            cowboy_plugin_sdk::PluginKind::MemoryBackend => {
+                PluginPayload::MemoryBackend(serde_json::from_str(contract).unwrap())
+            }
+            cowboy_plugin_sdk::PluginKind::CallProfile => {
+                PluginPayload::CallProfile(serde_json::from_str(contract).unwrap())
+            }
+            kind => panic!("not a session extension: {kind:?}"),
+        };
+        let package = PluginPackage::new(
+            manifest.clone(),
+            manifest.component_release.clone(),
+            payload,
+        )
+        .unwrap();
+        let platforms: Vec<_> = package_platforms(&package);
+        let bytes = package.canonical_bytes().unwrap();
+        let mut release = cowboy_plugin_sdk::PluginRelease {
+            release_schema: package.minimum_release_schema(),
+            plugin_id: manifest.id.clone(),
+            plugin_version: manifest.version,
+            plugin_kind: manifest.kind,
+            package_digest: PluginPackage::artifact_digest(&bytes),
+            artifact_digest: String::new(),
+            artifact_url: format!("https://plugins.example.test/{}.cowboy-plugin", manifest.id),
+            publisher: manifest.publisher,
+            contract_fingerprint: package.contract_fingerprint,
+            component_release: manifest.component_release,
+            host_bundle_digest: None,
+            signature: String::new(),
+            runtime_artifacts: platforms
+                .iter()
+                .map(|platform| PluginRuntimeArtifacts {
+                    os: platform.os.clone(),
+                    architecture: platform.architecture.clone(),
+                    components: Vec::new(),
+                })
+                .collect(),
+            supported_platforms: platforms,
+        };
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = publisher
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        DesiredPlugin {
+            release,
+            package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            publisher_public_key: publisher.public_key().to_owned(),
+            host_bundle_base64: None,
+        }
+    }
+
+    fn package_platforms(package: &PluginPackage) -> Vec<cowboy_provider_sdk::PlatformTarget> {
+        match &package.payload {
+            PluginPayload::MemoryBackend(contract) => contract.supported_platforms.clone(),
+            PluginPayload::CallProfile(contract) => contract.supported_platforms.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_extensions_install_as_data_only_plugins_and_uninstall() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-session-extension-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("publisher")).unwrap();
+        let store =
+            MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".into())
+                .unwrap();
+        for (id, kind, desired) in [
+            (
+                "matrix",
+                cowboy_plugin_sdk::PluginKind::MemoryBackend,
+                session_extension_release(
+                    &publisher,
+                    include_str!("../plugins/matrix/plugin.json"),
+                    include_str!("../plugins/matrix/contract.json"),
+                ),
+            ),
+            (
+                "review",
+                cowboy_plugin_sdk::PluginKind::CallProfile,
+                session_extension_release(
+                    &publisher,
+                    include_str!("../plugins/review/plugin.json"),
+                    include_str!("../plugins/review/contract.json"),
+                ),
+            ),
+        ] {
+            let installed = store.install(&desired).await.unwrap();
+            assert_eq!(installed.plugin_kind, kind);
+            assert_eq!(installed.auth_generation, None);
+            assert!(!store.auth_provider_root(id).exists());
+            // Installing the identical signed release again is idempotent.
+            let again = store.install(&desired).await.unwrap();
+            assert_eq!(again.generation_digest, installed.generation_digest);
+            assert!(
+                store
+                    .inventory()
+                    .unwrap()
+                    .iter()
+                    .any(|plugin| plugin.plugin_id == id && plugin.plugin_kind == kind)
+            );
+            // A tampered package digest never installs.
+            let mut tampered = desired.clone();
+            tampered.release.package_digest = format!("sha256:{}", "0".repeat(64));
+            assert!(store.install(&tampered).await.is_err());
+            store
+                .uninstall(id, &installed.generation_digest)
+                .await
+                .unwrap();
+            assert!(
+                !store
+                    .inventory()
+                    .unwrap()
+                    .iter()
+                    .any(|plugin| plugin.plugin_id == id
+                        && plugin.state
+                            == crate::machine_protocol::PluginInstallationState::Active)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     pub(super) fn telemetry_release(

@@ -92,7 +92,11 @@ import {
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
-import { type ReviewProgress, revisionMatches } from "./reviewProgress";
+import {
+  currentReviewMarks,
+  type ReviewProgress,
+  revisionMatches,
+} from "./reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
 import { ReviewCommit } from "./ReviewCommit";
 import { bindPullRequest, RemoteReviewApp } from "./RemoteReviewApp";
@@ -2852,14 +2856,33 @@ export function ReviewApp({
   const targetReviewKey = target.kind === "diff"
     ? reviewEntryKey(target.path, target.scope, target.comparison)
     : undefined;
+  // Prefer the live list's fingerprint: it tracks the file, not one diff page.
+  const targetFingerprint = target.kind === "diff"
+    ? gitQueue.find((entry) =>
+      reviewEntryKey(entry.change.path, entry.scope, entry.comparison) ===
+        targetReviewKey
+    )?.change.fingerprint
+    : undefined;
+  const reviewMark = targetFingerprint ?? currentRevision;
   const targetIsReviewed = targetReviewKey
-    ? revisionMatches(reviewProgress, targetReviewKey, currentRevision)
+    ? revisionMatches(reviewProgress, targetReviewKey, reviewMark)
     : false;
+  const reviewedMarks = useMemo(
+    () =>
+      currentReviewMarks(
+        reviewProgress,
+        gitQueue.map((entry) => ({
+          key: reviewEntryKey(entry.change.path, entry.scope, entry.comparison),
+          fingerprint: entry.change.fingerprint,
+        })),
+      ),
+    [gitQueue, reviewProgress],
+  );
   useEffect(() => {
     if (
       !workspace?.sessionId ||
       !targetReviewKey ||
-      !currentRevision ||
+      !reviewMark ||
       reviewProgress[targetReviewKey] === undefined ||
       targetIsReviewed
     ) {
@@ -2873,21 +2896,21 @@ export function ReviewApp({
       revision: null,
     });
   }, [
-    currentRevision,
+    reviewMark,
     reviewProgress,
     targetIsReviewed,
     targetReviewKey,
     workspace?.sessionId,
   ]);
   const toggleReviewed = (): void => {
-    if (!targetReviewKey || !currentRevision || !workspace?.sessionId) return;
+    if (!targetReviewKey || !reviewMark || !workspace?.sessionId) return;
     const next = { ...reviewProgress };
     if (targetIsReviewed) delete next[targetReviewKey];
-    else next[targetReviewKey] = currentRevision;
+    else next[targetReviewKey] = reviewMark;
     setReviewProgress(next);
     mutateMobileReview(workspace.sessionId, "markReviewed", {
       key: targetReviewKey,
-      revision: targetIsReviewed ? null : currentRevision,
+      revision: targetIsReviewed ? null : reviewMark,
     });
   };
   const currentSession = sessions.find((session) =>
@@ -3090,6 +3113,18 @@ export function ReviewApp({
       title={currentSession?.title ?? "Session"} binding={syncedReview.remote_review}
       active={surfaceActive}
       onBind={(binding) => mutateMobileReview(sessionId, "setRemoteReview", { binding })}
+      marks={{
+        progress: reviewProgress,
+        mark: (key, mark) => {
+          setReviewProgress((current) => {
+            const next = { ...current };
+            if (mark === null) delete next[key];
+            else next[key] = mark;
+            return next;
+          });
+          mutateMobileReview(sessionId, "markReviewed", { key, revision: mark });
+        },
+      }}
       onLocal={() => mutateMobileReview(sessionId, "selectRemoteReview", { selected: false })} />;
   }
 
@@ -3115,13 +3150,13 @@ export function ReviewApp({
         )
         : (
           <ReviewRepository
-            key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
+            key={workspace?.sessionId ?? "none"}
             sessionId={workspace?.sessionId}
             machineLabel={currentSession?.machine_id ?? "Machine"}
             {...(currentProjectPath ? { projectPath: currentProjectPath } : {})}
             onOpenDiff={openDiff}
             onOpenCommit={openCommit}
-            reviewed={new Set(Object.keys(reviewProgress))}
+            reviewed={reviewedMarks}
             onRevision={adoptManifestRevision}
             comparison={gitComparison}
             onComparisonChange={changeGitComparison}
