@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/memory-backend-v1.json",
+  "title": "Cowboy memory backend",
+  "description": "Data-only memory service declaration. Endpoints, credentials and project mappings are Machine-private bindings, never package data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "display_name",
+    "description",
+    "supported_platforms",
+    "protocol",
+    "tools",
+    "recall",
+    "observe"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\x00-\\x1f\\x7f]*\\S[^\\x00-\\x1f\\x7f]*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\x00-\\x1f\\x7f]*\\S[^\\x00-\\x1f\\x7f]*$"
+    },
+    "supported_platforms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "os",
+          "architecture"
+        ],
+        "properties": {
+          "os": {
+            "enum": [
+              "linux",
+              "macos"
+            ]
+          },
+          "architecture": {
+            "enum": [
+              "x86_64",
+              "aarch64"
+            ]
+          }
+        }
+      }
+    },
+    "protocol": {
+      "enum": [
+        "matrix_http_v1"
+      ]
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      }
+    },
+    "recall": {
+      "type": "boolean"
+    },
+    "observe": {
+      "type": "boolean"
+    }
+  }
+}

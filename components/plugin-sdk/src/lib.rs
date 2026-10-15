@@ -11,6 +11,7 @@ mod code_intelligence;
 #[cfg(test)]
 mod execution_tests;
 pub mod host;
+mod session_extension;
 mod telemetry;
 mod workspace_extension;
 
@@ -19,6 +20,7 @@ pub use cli_auth::{
 };
 pub use code_intelligence::*;
 pub use host::*;
+pub use session_extension::*;
 pub use telemetry::*;
 pub use workspace_extension::*;
 
@@ -76,6 +78,8 @@ pub enum PluginKind {
     CodeIntelligence,
     TelemetryBackend,
     WorkspaceExtension,
+    MemoryBackend,
+    CallProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +133,8 @@ pub enum PluginPayload {
     CodeIntelligence(CodeIntelligenceContract),
     TelemetryBackend(TelemetryBackendContract),
     WorkspaceExtension(WorkspaceExtensionContract),
+    MemoryBackend(MemoryBackendContract),
+    CallProfile(CallProfileContract),
 }
 
 /// Declarative identity-provider package consumed by Cowboy's built-in
@@ -413,6 +419,8 @@ impl PluginCompatibilityRequirements {
             PluginPayload::CodeIntelligence(contract) => contract.schema_version,
             PluginPayload::TelemetryBackend(contract) => contract.schema_version,
             PluginPayload::WorkspaceExtension(contract) => contract.schema_version,
+            PluginPayload::MemoryBackend(contract) => contract.schema_version,
+            PluginPayload::CallProfile(contract) => contract.schema_version,
         };
         let requirements = Self {
             plugin_sdk_version,
@@ -655,6 +663,17 @@ impl PluginContractInventory {
                 }),
                 "telemetry payload schema (Plugin SDK 1.7/1.8)",
             ),
+            // Derived from the attested SDK version like the other data-only kinds.
+            PluginKind::MemoryBackend | PluginKind::CallProfile => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version).is_ok_and(|version| {
+                        let (major, minor, patch) = SESSION_EXTENSION_SDK;
+                        version >= Version::new(major, minor, patch)
+                    }),
+                ),
+                "session extension payload schema (Plugin SDK 1.12)",
+            ),
         }
     }
 
@@ -877,7 +896,9 @@ impl PluginPackage {
             PluginPayload::AuthenticationProvider(_)
             | PluginPayload::CodeIntelligence(_)
             | PluginPayload::TelemetryBackend(_)
-            | PluginPayload::WorkspaceExtension(_) => None,
+            | PluginPayload::WorkspaceExtension(_)
+            | PluginPayload::MemoryBackend(_)
+            | PluginPayload::CallProfile(_) => None,
         }
     }
 
@@ -888,7 +909,9 @@ impl PluginPackage {
             PluginPayload::AgentProvider(_)
             | PluginPayload::CodeIntelligence(_)
             | PluginPayload::TelemetryBackend(_)
-            | PluginPayload::WorkspaceExtension(_) => None,
+            | PluginPayload::WorkspaceExtension(_)
+            | PluginPayload::MemoryBackend(_)
+            | PluginPayload::CallProfile(_) => None,
         }
     }
 
@@ -900,7 +923,10 @@ impl PluginPackage {
     pub fn validate_host_contract(&self, files: Option<&BTreeMap<String, String>>) -> Result<()> {
         if matches!(
             self.payload,
-            PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+            PluginPayload::TelemetryBackend(_)
+                | PluginPayload::WorkspaceExtension(_)
+                | PluginPayload::MemoryBackend(_)
+                | PluginPayload::CallProfile(_)
         ) {
             ensure!(
                 files.is_none(),
@@ -957,6 +983,12 @@ impl PluginPackage {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::TelemetryBackend(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::MemoryBackend(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::CallProfile(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
         }
@@ -1083,6 +1115,20 @@ impl PluginRelease {
             }
             PluginPayload::TelemetryBackend(contract) => {
                 telemetry::validate_release(contract, self)?;
+            }
+            PluginPayload::MemoryBackend(contract) => {
+                session_extension::validate_data_only_release(
+                    &contract.supported_platforms,
+                    self,
+                    "memory backend",
+                )?;
+            }
+            PluginPayload::CallProfile(contract) => {
+                session_extension::validate_data_only_release(
+                    &contract.supported_platforms,
+                    self,
+                    "call profile",
+                )?;
             }
         }
         Ok(())
@@ -1263,8 +1309,41 @@ impl ReleasedPluginComponent {
     }
 }
 
+fn validate_session_extension(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
+    let (id, version) = match (manifest.kind, payload) {
+        (PluginKind::MemoryBackend, PluginPayload::MemoryBackend(contract)) => {
+            contract.validate()?;
+            (&contract.id, &contract.version)
+        }
+        (PluginKind::CallProfile, PluginPayload::CallProfile(contract)) => {
+            contract.validate()?;
+            (&contract.id, &contract.version)
+        }
+        _ => bail!("plugin kind does not match its payload"),
+    };
+    ensure!(
+        *id == manifest.id && *version == manifest.version,
+        "session extension payload identity mismatch"
+    );
+    let (major, minor, patch) = SESSION_EXTENSION_SDK;
+    ensure!(
+        manifest
+            .components
+            .iter()
+            .any(|component| component.id == "cowboy.plugin-sdk"
+                && Version::parse(&component.version)
+                    .is_ok_and(|version| version >= Version::new(major, minor, patch))),
+        "session extensions require Plugin SDK 1.12 or newer"
+    );
+    Ok(())
+}
+
 fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
+        (
+            PluginKind::MemoryBackend | PluginKind::CallProfile,
+            PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_),
+        ) => validate_session_extension(manifest, payload)?,
         (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
             ensure!(
                 contract.id == manifest.id && contract.version == manifest.version,

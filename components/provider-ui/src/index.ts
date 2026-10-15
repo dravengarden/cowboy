@@ -514,7 +514,9 @@ export interface PluginCompatibilityRequirements {
     | "authentication_provider"
     | "code_intelligence"
     | "telemetry_backend"
-    | "workspace_extension";
+    | "workspace_extension"
+    | "memory_backend"
+    | "call_profile";
   payload_schema: number;
   host_bundle_schema?: number;
   host_schema?: number;
@@ -675,7 +677,9 @@ export interface MachinePluginInventory {
     | "agent_provider"
     | "code_intelligence"
     | "telemetry_backend"
-    | "workspace_extension";
+    | "workspace_extension"
+    | "memory_backend"
+    | "call_profile";
   generation_digest: string;
   contract_fingerprint: string;
   state: MachineProviderInventory["state"];
@@ -1031,6 +1035,8 @@ export function validateMachinePluginInventory(
         "code_intelligence",
         "telemetry_backend",
         "workspace_extension",
+        "memory_backend",
+        "call_profile",
       ].includes(
         String(raw.plugin_kind),
       ) ||
@@ -2660,6 +2666,8 @@ export function validatePluginCompatibilityRequirements(
       "code_intelligence",
       "telemetry_backend",
       "workspace_extension",
+      "memory_backend",
+      "call_profile",
     ]
       .includes(String(input.plugin_kind)) ||
     ![
@@ -2884,6 +2892,15 @@ export function genericPluginCompatibilityProblem(
         ? 1
         : 0,
       "telemetry payload schema (Plugin SDK 1.7/1.8)",
+    ] as const
+    : requirements.plugin_kind === "memory_backend" ||
+        requirements.plugin_kind === "call_profile"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.12.0") >= 0
+        ? 1
+        : 0,
+      "session extension payload schema (Plugin SDK 1.12)",
     ] as const
     : [
       inventory.min_code_intelligence_schema,

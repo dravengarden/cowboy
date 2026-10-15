@@ -45,7 +45,11 @@ component dependency list. The initial kinds are:
 - `telemetry_backend`: a data-only exporter contract under the existing
   explicit Controller and Machine telemetry policy;
 - `workspace_extension`: repository resource views, exact Plugin dependencies
-  and a user-managed connection capability, rendered by the common workbench.
+  and a user-managed connection capability, rendered by the common workbench;
+- `memory_backend`: a data-only memory service declaration (protocol, exact
+  MCP tools, recall/observe) whose binding is Machine-private;
+- `call_profile`: data-only managed-call purposes and agent-facing guidance;
+  the call mechanism and sandbox remain core.
 
 The generic Plugin identity is the repository, publication, discovery,
 installation, rollback, and uninstall boundary. A Provider package is only the

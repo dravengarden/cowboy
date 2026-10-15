@@ -93,6 +93,8 @@ test("website catalog follows every first-party Plugin manifest", async () => {
     "zed",
     "victoria",
     "github",
+    "matrix",
+    "review",
   ];
   for (const id of currentFirstParty) {
     assert(
