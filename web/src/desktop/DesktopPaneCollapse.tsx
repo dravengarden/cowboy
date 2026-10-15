@@ -615,6 +615,7 @@ export function DesktopSessionsRail({
   onPick,
   onNew,
   renderStatus,
+  footer,
 }: {
   groups: readonly RailGroup[];
   activeId: string | null;
@@ -622,6 +623,8 @@ export function DesktopSessionsRail({
   onPick: (id: string) => void;
   onNew: () => void;
   renderStatus: (session: SessionMeta) => React.ReactNode;
+  /** The window's actions, pinned to the foot like VS Code's activity bar. */
+  footer?: React.ReactNode;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
@@ -766,6 +769,22 @@ export function DesktopSessionsRail({
           />
         ))}
       </Stack>
+      {footer && (
+        <Box
+          data-desktop-sessions-rail-foot
+          sx={{
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            py: 0.5,
+            borderTop: 1,
+            borderColor: "divider",
+          }}
+        >
+          {footer}
+        </Box>
+      )}
       <RailGroupMenu
         group={openGroup}
         anchor={menu?.anchor ?? null}

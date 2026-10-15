@@ -1259,10 +1259,13 @@ export async function runDraftDocumentsBrowserConformance(
       document.documentElement.style.fontSize = `${size}px`;
       document.documentElement.style.setProperty("--cowboy-font-scale", String(size / 16));
       await tick();
-      const create = container.querySelector<HTMLElement>("[data-desktop-new-session]")!;
-      check(Math.abs(parseFloat(getComputedStyle(create).fontSize) - size * 0.875) < 1, "Sidebar Create label tracks root font");
-      const toolbar = create.parentElement!;
-      check(toolbar.scrollWidth <= toolbar.clientWidth + 1, `Sidebar Create/fold controls fit at ${size}px`);
+      // Create and fold are the Sessions title bar's own actions; the bar
+      // never widens the sidebar, whatever the root font.
+      const createSelector = "[data-desktop-sessions-header-actions] [data-desktop-new-session]";
+      await until(() => !!container.querySelector(createSelector), "Create sits in the Sessions title bar");
+      const create = container.querySelector<HTMLElement>(createSelector)!;
+      const header = create.closest<HTMLElement>("[data-desktop-pane-header]")!;
+      check(header.scrollWidth <= header.clientWidth + 1, `Sessions title bar fits at ${size}px`);
     }
     document.documentElement.style.fontSize = originalFont;
     if (originalScale) document.documentElement.style.setProperty("--cowboy-font-scale", originalScale);
@@ -1488,11 +1491,42 @@ export async function runDraftDocumentsBrowserConformance(
             ?.dataset.desktopFoldAction;
         const before = foldAction();
         check(before, "Sessions offers a fold action");
+        const foldSelector = "[data-desktop-sessions-header-actions] [data-desktop-sessions-fold]";
+        await until(() => !!container.querySelector(foldSelector), "Fold sits in the Sessions title bar beside Create");
+        const fold = container.querySelector<HTMLElement>(foldSelector)!;
+        let slotOwner: HTMLElement | null = fold;
+        while (slotOwner && !slotOwner.textContent?.includes("␣SZ")) {
+          slotOwner = slotOwner.parentElement;
+          if (slotOwner?.hasAttribute("data-desktop-sessions-header-actions")) break;
+        }
         check(
-          [...container.querySelectorAll("[aria-keyshortcuts]")].some((element) =>
-            element.textContent?.includes("␣SZ")
-          ),
+          slotOwner?.textContent?.includes("␣SZ") &&
+            !slotOwner.hasAttribute("data-desktop-sessions-header-actions"),
           "The fold button shows its ␣SZ slot",
+        );
+        // The window's entries moved from the top bar to the Sessions bar
+        // (Extensions beside the Sessions view, Settings at the right end),
+        // each with its leader slot.
+        const sessionsBar = fold.closest<HTMLElement>("[data-desktop-pane-header]")!;
+        check(
+          sessionsBar.querySelector("[data-desktop-sessions-activities] [data-desktop-global-action='extensions']") &&
+            sessionsBar.querySelector("[data-desktop-sessions-header-actions] [data-desktop-global-action='settings']"),
+          "Extensions is an activity beside Sessions; Settings ends the bar",
+        );
+        for (const [action, slot] of [["extensions", "␣X"], ["settings", "␣,"]] as const) {
+          const button = sessionsBar.querySelector<HTMLElement>(
+            `[data-desktop-global-action="${action}"]`,
+          );
+          check(button, `${action} sits in the Sessions bar`);
+          check(
+            button.getAttribute("aria-keyshortcuts")?.length &&
+              button.closest("span")?.parentElement?.textContent?.includes(slot),
+            `${action} shows its ${slot} slot`,
+          );
+        }
+        check(
+          !container.querySelector("[data-desktop-topbar-action='settings'], [data-desktop-item='topbar-extensions']"),
+          "The top bar no longer carries the window's actions",
         );
         row.focus();
         press(row, " ", "Space");

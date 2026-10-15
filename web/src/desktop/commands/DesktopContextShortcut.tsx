@@ -18,6 +18,7 @@ export function DesktopContextShortcut({
   showBadge = true,
   alwaysVisible = false,
   itemScoped = false,
+  restingHidden = false,
   enabled = true,
   active = false,
   placement = "below",
@@ -29,6 +30,9 @@ export function DesktopContextShortcut({
   alwaysVisible?: boolean;
   /** Reveal only for the focused list item, not every row in a focused region. */
   itemScoped?: boolean;
+  /** Draw nothing at rest; reveal on hover, region focus and the armed
+   *  leader. For dense icon bars whose keys the tooltip also names. */
+  restingHidden?: boolean;
   /** Whether the underlying action can execute in its current business state. */
   enabled?: boolean;
   /** A pending prefix, open overlay, or engaged transient command. */
@@ -49,8 +53,9 @@ export function DesktopContextShortcut({
     );
   }, []);
   const listJumpArmed = useDesktopListJumpChord(ownerRegion ?? "");
+  // A resting-hidden slot is global too: the armed leader lights it anywhere.
   const scopeAvailable = enabled && !listJumpArmed && (alwaysVisible ||
-    (!!ownerRegion && workspace?.focusedRegion === ownerRegion));
+    restingHidden || (!!ownerRegion && workspace?.focusedRegion === ownerRegion));
   const leader = useDesktopLeaderOptional();
   // A leader badge lights at full strength while the leader is armed and the
   // badge would run now, so every next key is visible at once.
@@ -135,7 +140,7 @@ export function DesktopContextShortcut({
             left: corner || toolbar ? "auto" : inline ? "auto" : "50%",
             display: "inline-flex",
             overflow: "visible",
-            opacity: inline ? 0.72 : itemScoped ? 0 : 0.28,
+            opacity: inline ? 0.72 : itemScoped || restingHidden ? 0 : 0.28,
             transform: restingTransform,
             transition: "opacity 120ms ease, transform 120ms ease",
             pointerEvents: "none",

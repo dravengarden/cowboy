@@ -71,6 +71,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    ViewListOutlined,
     ArrowBackIosNew,
     ChatBubbleOutline,
     Check as CheckIcon,
@@ -445,6 +446,22 @@ const DesktopSplitterHint = lazy(async () => {
     const module = await import("./desktop/DesktopSplitterHint");
     return { default: module.DesktopSplitterHint };
 });
+const DesktopSidebarAction = lazy(async () => {
+    const module = await import("./desktop/DesktopSidebarAction");
+    return { default: module.DesktopSidebarAction };
+});
+const DesktopRailGlobalActions = lazy(async () => {
+    const module = await import("./desktop/DesktopGlobalActions");
+    return { default: module.DesktopRailGlobalActions };
+});
+const DesktopExtensionsActivity = lazy(async () => {
+    const module = await import("./desktop/DesktopGlobalActions");
+    return { default: module.DesktopExtensionsActivity };
+});
+const DesktopSettingsAction = lazy(async () => {
+    const module = await import("./desktop/DesktopGlobalActions");
+    return { default: module.DesktopSettingsAction };
+});
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
 // (a list row stays readable), 480px ceiling (wider and the list looks empty
@@ -723,6 +740,7 @@ function SessionList({
     mobileDrawerOpen = false,
     phone = false,
     allowNewSession = true,
+    desktopHeaderActions = null,
 }: {
     sessions: SessionMeta[];
     drafts: readonly DraftMetadata[];
@@ -749,6 +767,9 @@ function SessionList({
     mobileDrawerOpen?: boolean;
     phone?: boolean;
     allowNewSession?: boolean;
+    /** The docked Desktop sidebar's title bar: Create and fold render there as
+     *  view actions (VS Code style) instead of in a row above the list. */
+    desktopHeaderActions?: HTMLElement | null;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
     // the same keys into spatial reorder commands until O/Esc (or opening a
@@ -1602,7 +1623,35 @@ function SessionList({
             {movePicking && movePick && <SessionsSpotlight anchor={listRef} />}
             {/* Desktop keeps this row as low as the top bar's controls: the
                 list below is what the sidebar is for. */}
-            {!mobileDrawer && <Box sx={{ p: 1, ...(desktop && { py: 0.5 }) }}>
+            {desktopHeaderActions && createPortal(
+                <Suspense fallback={null}>
+                    {allowNewSession && (
+                        <DesktopSidebarAction
+                            data-desktop-new-session="true"
+                            label="Create"
+                            detail="Session, Draft or Folder"
+                            shortcut={DESKTOP_SHORTCUTS.newSession}
+                            disabled={movePicking}
+                            onClick={onNew}
+                        >
+                            <Add />
+                        </DesktopSidebarAction>
+                    )}
+                    {fold.action && (
+                        <DesktopSidebarAction
+                            data-desktop-sessions-fold="true"
+                            label={fold.label}
+                            shortcut={DESKTOP_SHORTCUTS.sessionsFold}
+                            disabled={movePicking}
+                            onClick={fold.run}
+                        >
+                            {fold.icon}
+                        </DesktopSidebarAction>
+                    )}
+                </Suspense>,
+                desktopHeaderActions,
+            )}
+            {!mobileDrawer && (!desktopHeaderActions || movePicking || pinned) && <Box sx={{ p: 1, ...(desktop && { py: 0.5 }) }}>
                 {movePicking && movePick && (
                     <Box
                         role="status"
@@ -1639,7 +1688,7 @@ function SessionList({
                         </Stack>
                     </Box>
                 )}
-                <Stack
+                {!desktopHeaderActions && <Stack
                     direction="row"
                     spacing={0.75}
                     alignItems="stretch"
@@ -1693,7 +1742,7 @@ function SessionList({
                         {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.sessionsFold} quiet />}
                     </IconButton>
                 </Tooltip>}
-                </Stack>
+                </Stack>}
                 {desktop && pinned && (
                     <Box
                         role="status"
@@ -3781,6 +3830,8 @@ export function App({
     // the handle's active highlight and a body-wide drag cursor / no-select.
     const [sidebarWidth, setSidebarWidth] = useState<number>(sidebarWidthStore.get);
     const [resizing, setResizing] = useState(false);
+    // The docked Sessions title bar hosts the list's Create and fold actions.
+    const [sessionsHeaderActions, setSessionsHeaderActions] = useState<HTMLElement | null>(null);
     // Persist after a drag settles, not on every pointermove (localStorage is
     // synchronous — writing per pixel would stutter the drag). The ref carries
     // the latest dragged width into pointerup without re-binding listeners.
@@ -4251,6 +4302,9 @@ export function App({
                 openNewSession();
             }}
             allowNewSession
+            desktopHeaderActions={surface === "desktop" && !sessionsInDrawer && !sessionsCollapsed
+                ? sessionsHeaderActions
+                : null}
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
                 : undefined}
@@ -4311,31 +4365,84 @@ export function App({
                 },
             }}
         >
-            <Typography
-                variant="overline"
-                sx={{
-                    color: "text.secondary",
-                    fontWeight: 700,
-                    letterSpacing: "0.09em",
-                    lineHeight: 1,
-                    WebkitAppRegion: "no-drag",
-                }}
-            >
-                Sessions
-            </Typography>
-            <Box sx={{ flex: 1 }} />
-            {surface === "desktop" && (
+            {surface === "desktop" ? (
                 <Suspense fallback={null}>
-                    <DesktopRegionShortcut
-                        shortcut={DESKTOP_SHORTCUTS.focusSessions}
-                        title="Focus Sessions"
-                        singleKeycap={DESKTOP_SHORTCUTS.focusSessions}
-                    />
+                    {/* VS Code with its activity bar on top: the views on the
+                        left (Sessions, Extensions), the shown view's actions
+                        and the window's Settings on the right, then the pane
+                        fold. Each icon's leader slot appears with focus, hover
+                        or the armed leader; the pane fold keeps its key like
+                        every other pane header. */}
+                    <Box
+                        data-desktop-sessions-activities
+                        role="toolbar"
+                        aria-label="Sessions views"
+                        sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0, WebkitAppRegion: "no-drag" }}
+                    >
+                        <DesktopSidebarAction
+                            data-desktop-sessions-view="sessions"
+                            label="Sessions"
+                            shortcut={DESKTOP_SHORTCUTS.focusSessions}
+                            active
+                            onClick={(): void => desktopWorkspace?.focusPane("sessions")}
+                        >
+                            <ViewListOutlined />
+                        </DesktopSidebarAction>
+                        {!sessionsCollapsed && (
+                            <DesktopExtensionsActivity
+                                sessionId={active?.id}
+                                machineId={active?.machine_id}
+                            />
+                        )}
+                    </Box>
+                    <Box
+                        data-desktop-sessions-header-actions
+                        role="toolbar"
+                        aria-label="Sessions actions"
+                        sx={{
+                            flex: "1 1 auto",
+                            minWidth: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 0.25,
+                            overflowX: "auto",
+                            overflowY: "hidden",
+                            scrollbarWidth: "none",
+                            "&::-webkit-scrollbar": { display: "none" },
+                            WebkitAppRegion: "no-drag",
+                            "& > *": { flexShrink: 0 },
+                            // Right-aligned without justify-content, which would
+                            // push an overflowing start out of reach.
+                            "& > :first-of-type": { ml: "auto" },
+                        }}
+                    >
+                        <Box
+                            ref={setSessionsHeaderActions}
+                            sx={{ display: "flex", alignItems: "center", gap: 0.25 }}
+                        />
+                        {!sessionsCollapsed && (
+                            <DesktopSettingsAction
+                                onOpenSettings={(): void => openSettings("settings")}
+                            />
+                        )}
+                    </Box>
                     <DesktopPaneCollapseButton
                         pane="sessions"
                         sx={{ ml: 0.5, mr: -0.75, WebkitAppRegion: "no-drag" }}
                     />
                 </Suspense>
+            ) : (
+                <Typography
+                    variant="overline"
+                    sx={{
+                        color: "text.secondary",
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                        lineHeight: 1,
+                    }}
+                >
+                    Sessions
+                </Typography>
             )}
         </Toolbar>
     );
@@ -4631,6 +4738,13 @@ export function App({
                             allowNewSession
                             onPick={pick}
                             onNew={openNewSession}
+                            footer={
+                                <DesktopRailGlobalActions
+                                    sessionId={active?.id}
+                                    machineId={active?.machine_id}
+                                    onOpenSettings={(): void => openSettings("settings")}
+                                />
+                            }
                             renderStatus={(s): React.ReactNode => (
                                 <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} />
                             )}
@@ -5313,8 +5427,11 @@ export function App({
                                     {active && (
                                         <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.75 }} />
                                     )}
-                                    <WorkspaceExtensionsButton context={active?.id} machineId={active?.machine_id} />
-                                    <Suspense fallback={null}>
+                                    {/* The window's actions live with Sessions (its
+                                        title bar, or its collapsed rail); only a
+                                        drawer-hosted Sessions leaves them here. */}
+                                    {sessionsInDrawer && <WorkspaceExtensionsButton context={active?.id} machineId={active?.machine_id} />}
+                                    {sessionsInDrawer && <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={DESKTOP_SHORTCUTS.settings}
                                             placement="inline"
@@ -5335,7 +5452,7 @@ export function App({
                                                 </IconButton>
                                             </HintTooltip>
                                         </DesktopContextShortcut>
-                                    </Suspense>
+                                    </Suspense>}
                                 </Stack>
                             </Box>
                         ) : (

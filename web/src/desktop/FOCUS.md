@@ -110,6 +110,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣G` | Open or close Calls (Agents this session called) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
+| `␣X` | Extensions: the installed Plugins' resources for the open session (VS Code's Ctrl+Shift+X) |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
 | `␣1`…`␣9` | While an approval waits: answer it with that choice (see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
@@ -514,7 +515,17 @@ it); macOS Chrome binds none of them.
 - Leader then `P/C`: focus Prompt or Conversation; `␣SS` focuses Sessions
   and `␣TT` the Top Bar.
 - Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
-- Leader then `N` or `,`: create, or open Settings. The Window group
+- Leader then `N`, `,` or `X`: create, open Settings, or open Extensions.
+  These window-wide entries sit with Sessions, VS Code style with its
+  activity bar on top: the docked sidebar's bar shows the views on the left
+  (Sessions, the current one, underlined; then Extensions), the shown
+  view's actions on the right (Create, fold), then Settings and the pane
+  fold. There is no row of buttons above the list any more. The collapsed
+  rail keeps Create at its head and Extensions and Settings at its foot,
+  like the activity bar. An icon's slot draws nothing at rest and appears
+  with Sessions focus, hover, or the armed leader, whose root layer lights
+  them all; the tooltip names the key too. Only a drawer-hosted Sessions
+  leaves Extensions and Settings in the top bar. The Window group
   `␣WW`/`␣WR` cycles visible regions or enters Resize mode.
 - `␣UE` (Prompt pane): toggle the composer between live
   preview and Source mode. Obsidian binds this to `Mod+E`, which both collision

@@ -139,6 +139,7 @@ test("every prefix continuation has one stable command meaning", () => {
     h: "composer.schedule",
     j: "composer.jumpFront",
     ",": "settings.open",
+    x: "workspace.extensions",
     ".": "sync.retry",
     r: "item.rename",
     o: "session.recent",

@@ -53,6 +53,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.focusTopbar], title: "Focus Top Bar" },
   { keys: [DESKTOP_SHORTCUTS.newSession], title: "Create a new Session" },
   { keys: [DESKTOP_SHORTCUTS.settings], title: "Open Settings" },
+  { keys: [DESKTOP_SHORTCUTS.extensions], title: "Extensions" },
   {
     keys: [DESKTOP_SHORTCUTS.toggleSourceMode],
     title: "Toggle composer Source mode",

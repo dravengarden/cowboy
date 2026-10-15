@@ -103,6 +103,7 @@ test("workspace navigation has no global bare-letter shortcut", () => {
     "tab",
     "u",
     "w",
+    "x",
     "z",
   ]);
   // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.

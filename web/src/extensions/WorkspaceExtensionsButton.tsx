@@ -1,7 +1,7 @@
 import { desktopSize } from "../surface/desktopSize";
 import { ExtensionOutlined } from "@mui/icons-material";
 import { Box, CircularProgress, IconButton } from "@mui/material";
-import { lazy, Suspense, useState } from "react";
+import { lazy, type ReactNode, Suspense, useState } from "react";
 import { Sheet } from "../Sheet";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { HintTooltip } from "../HintTooltip";
@@ -13,9 +13,14 @@ const DesktopExtensionsSurface = lazy(() =>
 );
 
 export function WorkspaceExtensionsButton(
-  { context, machineId }: {
+  { context, machineId, renderTrigger }: {
     context?: string | undefined;
     machineId?: string | undefined;
+    /** Draw the trigger in the host's own style (the Desktop Sessions header
+     *  and rail); the default is the top-bar icon button. */
+    renderTrigger?:
+      | ((trigger: { disabled: boolean; open: () => void }) => ReactNode)
+      | undefined;
   },
 ): React.JSX.Element {
   const desktop = useSurfaceProfile().kind === "desktop";
@@ -43,16 +48,20 @@ export function WorkspaceExtensionsButton(
     : null;
   return (
     <>
-      <HintTooltip title="Extensions">
-        <IconButton
-          disabled={!context}
-          onClick={() => setOpen(true)}
-          aria-label="Open extensions"
-          data-desktop-item="topbar-extensions"
-        >
-          <ExtensionOutlined />
-        </IconButton>
-      </HintTooltip>
+      {renderTrigger
+        ? renderTrigger({ disabled: !context, open: () => setOpen(true) })
+        : (
+          <HintTooltip title="Extensions">
+            <IconButton
+              disabled={!context}
+              onClick={() => setOpen(true)}
+              aria-label="Open extensions"
+              data-desktop-item="topbar-extensions"
+            >
+              <ExtensionOutlined />
+            </IconButton>
+          </HintTooltip>
+        )}
       {desktop
         ? (context && (
           <Suspense fallback={null}>

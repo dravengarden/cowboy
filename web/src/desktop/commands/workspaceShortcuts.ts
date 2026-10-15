@@ -124,6 +124,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   focusQueue: "Q",
   focusDrafts: "D",
   newSession: "N",
+  // VS Code opens Extensions with Ctrl+Shift+X; the leader keeps the letter.
+  extensions: "X",
   cycleRegion: "WW",
   resize: "WR",
   settings: ",",
@@ -200,6 +202,7 @@ export const DESKTOP_SHORTCUTS = {
   saveDraft: "Mod+S",
   newSession: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.newSession),
   settings: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.settings),
+  extensions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.extensions),
   focusTopbar: desktopLeaderGroupSequence(
     DESKTOP_WORKSPACE_KEYS.focusTopbar,
     DESKTOP_WORKSPACE_KEYS.focusTopbar,
@@ -276,6 +279,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   h: "composer.schedule",
   j: "composer.jumpFront",
   ",": "settings.open",
+  x: "workspace.extensions",
   ".": "sync.retry",
   r: "item.rename",
   o: "session.recent",
