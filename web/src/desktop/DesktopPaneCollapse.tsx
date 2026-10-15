@@ -98,7 +98,7 @@ export function DesktopPaneCollapseButton(
         onMouseDown={(event): void => event.preventDefault()}
         onClick={(): void => workspace.togglePane(pane)}
         sx={{
-          height: 24,
+          height: desktopSize(24),
           px: 0.5,
           gap: 0.4,
           flexShrink: 0,
@@ -187,8 +187,8 @@ export function DesktopRailCount(
         component="span"
         aria-label={`${String(count)} ${label}`}
         sx={{
-          minWidth: 20,
-          height: 18,
+          minWidth: desktopSize(20),
+          height: desktopSize(18),
           px: 0.5,
           display: "inline-grid",
           placeItems: "center",
@@ -277,8 +277,8 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
         // Sits off the glyph's corner so the folder shape stays readable.
         top: -6,
         right: -9,
-        minWidth: 15,
-        height: 15,
+        minWidth: desktopSize(15),
+        height: desktopSize(15),
         px: "3px",
         display: "grid",
         placeItems: "center",
@@ -334,7 +334,7 @@ function RailGroupButton({
           // past the rail's edge.
           width: "100%",
           minWidth: 0,
-          minHeight: 50,
+          minHeight: desktopSize(50),
           py: 0.5,
           flexShrink: 0,
           display: "flex",
@@ -513,7 +513,7 @@ function RailGroupMenu({
               }}
               sx={{
                 gap: 1,
-                minHeight: 36,
+                minHeight: desktopSize(36),
                 pl: 2 + indent * 1.5,
                 // The open session reads like the current row in the list.
                 "&.Mui-focusVisible, &:focus-visible": {
@@ -642,7 +642,7 @@ export function DesktopSessionsRail({
         onMouseDown={(event): void => event.preventDefault()}
         onClick={(): void => workspace.togglePane("sessions")}
         sx={{
-          height: 30,
+          height: desktopSize(30),
           px: 0.6,
           gap: 0.4,
           borderRadius: `${DESKTOP_INSET_RADIUS}px`,
@@ -684,7 +684,7 @@ export function DesktopSessionsRail({
         data-desktop-sessions-rail-head
         sx={{
           // Same height as the top bar so the two hairlines meet.
-          minHeight: 44,
+          minHeight: desktopSize(44),
           flexShrink: 0,
           display: "grid",
           placeItems: "center",
@@ -742,8 +742,8 @@ export function DesktopSessionsRail({
               onMouseDown={(event): void => event.preventDefault()}
               onClick={onNew}
               sx={{
-                width: 36,
-                height: 36,
+                width: desktopSize(36),
+                height: desktopSize(36),
                 flexShrink: 0,
                 borderRadius: `${DESKTOP_INSET_RADIUS + 2}px`,
                 color: "text.secondary",

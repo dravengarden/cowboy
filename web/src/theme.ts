@@ -191,6 +191,13 @@ export function useThemeMode(): ThemeControls {
             styleOverrides: {
               root: {
                 WebkitTapHighlightColor: "transparent",
+                // A native <button> takes the browser's fixed 13.33px, which
+                // ignores the global font size: text and `em` glyphs in raw
+                // ButtonBase controls stayed one size at every scale. Same
+                // size at 100%, scaled on Desktop (Mobile keeps pixels).
+                // `:where` adds no specificity, so Button, IconButton and
+                // ToggleButton keep their own sizes.
+                "&:where(button)": { fontSize: desktopSize(40 / 3) },
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
                   "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
                     {

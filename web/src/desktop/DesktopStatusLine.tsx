@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
 import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
@@ -41,7 +42,7 @@ function Segment({
   onClick?: () => void;
 }): React.JSX.Element {
   const sx = {
-    height: 28,
+    height: desktopSize(28),
     px: 1,
     color,
     fontSize: "0.6875rem",
@@ -312,7 +313,7 @@ export function DesktopStatusLine({
         order: 2,
         position: "relative",
         zIndex: 2,
-        minHeight: 29,
+        minHeight: desktopSize(29),
         display: "flex",
         alignItems: "center",
         borderTop: 1,

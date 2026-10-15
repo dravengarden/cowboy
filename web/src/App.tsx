@@ -449,6 +449,14 @@ const DesktopSidebarAction = lazy(async () => {
     const module = await import("./desktop/DesktopSidebarAction");
     return { default: module.DesktopSidebarAction };
 });
+// The activity bar's entries need about 12.5rem with their slots; below 13rem
+// (a narrow sidebar at a large font size) they keep only their glyphs.
+const SESSIONS_ACTIVITY_SLOT_FIT_SX = {
+    containerType: "inline-size",
+    "@container (max-width: 13rem)": {
+        "& .cowboy-sidebar-slot": { display: "none !important" },
+    },
+} as const;
 const DesktopRailGlobalActions = lazy(async () => {
     const module = await import("./desktop/DesktopGlobalActions");
     return { default: module.DesktopRailGlobalActions };
@@ -1937,8 +1945,8 @@ function SessionList({
                             className="cowboy-session-grip cowboy-folder-chevron"
                             aria-hidden
                             sx={{
-                                width: 44,
-                                height: 44,
+                                width: desktopSize(44),
+                                height: desktopSize(44),
                                 flexShrink: 0,
                                 display: "grid",
                                 placeItems: "center",
@@ -2007,7 +2015,7 @@ function SessionList({
                                 e.stopPropagation();
                                 setFolderMenu({ folder: f, el: e.currentTarget });
                             }}
-                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0, position: "relative" }}
+                            sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
                         >
                             <MoreVert sx={{ fontSize: "1.5rem" }} />
                         </IconButton>
@@ -2128,8 +2136,8 @@ function SessionList({
                             className="cowboy-session-grip-slot"
                             sx={{
                                 position: "relative",
-                                width: 44,
-                                height: 44,
+                                width: desktopSize(44),
+                                height: desktopSize(44),
                                 flexShrink: 0,
                                 display: "grid",
                                 placeItems: "center",
@@ -2140,7 +2148,7 @@ function SessionList({
                                 {...(deleting ? {} : sortable.handleProps(s.id))}
                                 disabled={deleting}
                                 aria-label="Drag to reorder"
-                                sx={{ width: 44, height: 44, color: "text.disabled" }}
+                                sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
                             >
                                 <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
@@ -2261,9 +2269,9 @@ function SessionList({
                                 if (deleting) return;
                                 setMenuAnchor({ row: s, el: e.currentTarget });
                             }}
-                            // Keep the 44px Apple-HIG tap target fixed, but let the
-                            // 1.5rem glyph track the global font-size preference.
-                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0, position: "relative" }}
+                            // A 44px Apple-HIG tap target on touch; on Desktop the
+                            // target and its 1.5rem glyph track the global font size.
+                            sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
                         >
                             {deleting
                                 ? <DelayedNetworkProgress size={desktopSize(18)} />
@@ -4336,20 +4344,27 @@ export function App({
     // breakpoints) and stays in lockstep with the AppBar's Toolbar on the
     // right pane — no hardcoded pixel value. On mobile the sidebar is a
     // Drawer and the brand goes in the AppBar instead.
+    // The docked sidebar's two bars, VS Code with its activity bar on top:
+    // the activity bar (views left: Sessions, the shown one, then Extensions;
+    // the window's Settings and the pane fold right) aligned with the work
+    // panes' top bar, then the shown view's title bar (its name and its own
+    // actions, Create and fold). Every entry is the pane-fold capsule: glyph
+    // plus quiet leader slot, sized in units that follow the global font size.
     const sidebarHeader = (
+        <Box data-desktop-pane-header sx={{ flexShrink: 0 }}>
         <Toolbar
-            data-desktop-pane-header
+            data-desktop-sessions-activity-bar
             variant="dense"
             sx={{
+                ...SESSIONS_ACTIVITY_SLOT_FIT_SX,
                 borderBottom: 1,
                 borderColor: "divider",
-                flexShrink: 0,
-                gap: 0.5,
-                // Match the right pane's AppBar Toolbar EXACTLY (it overrides the
-                // dense 48px down to 44), so the sidebar header's bottom border lines
-                // up with the chat header's edge instead of sitting 4px lower.
-                minHeight: 44,
-                "@media (min-width: 600px)": { minHeight: 44 },
+                gap: desktopSize(6),
+                px: desktopSize(10),
+                // Match the right pane's AppBar Toolbar EXACTLY, so the sidebar
+                // bar's bottom border lines up with the chat header's edge.
+                minHeight: desktopSize(44),
+                "@media (min-width: 600px)": { minHeight: desktopSize(44), px: desktopSize(10) },
                 // Installed desktop PWA (manifest `display_override:
                 // window-controls-overlay`): the browser's title bar is gone and
                 // content reaches the window's top edge. macOS overlays its window
@@ -4366,17 +4381,11 @@ export function App({
         >
             {surface === "desktop" ? (
                 <Suspense fallback={null}>
-                    {/* VS Code with its activity bar on top: the views on the
-                        left (Sessions, Extensions), the shown view's actions
-                        and the window's Settings on the right, then the pane
-                        fold. Each icon's leader slot appears with focus, hover
-                        or the armed leader; the pane fold keeps its key like
-                        every other pane header. */}
                     <Box
                         data-desktop-sessions-activities
                         role="toolbar"
                         aria-label="Sessions views"
-                        sx={{ display: "flex", alignItems: "center", gap: 0.25, flexShrink: 0, ml: -0.75, WebkitAppRegion: "no-drag" }}
+                        sx={{ display: "flex", alignItems: "center", gap: desktopSize(6), WebkitAppRegion: "no-drag" }}
                     >
                         <DesktopSidebarAction
                             data-desktop-sessions-view="sessions"
@@ -4394,43 +4403,17 @@ export function App({
                             />
                         )}
                     </Box>
-                    <Box
-                        data-desktop-sessions-header-actions
-                        role="toolbar"
-                        aria-label="Sessions actions"
-                        sx={{
-                            flex: "1 1 auto",
-                            minWidth: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 0.25,
-                            overflowX: "auto",
-                            overflowY: "hidden",
-                            scrollbarWidth: "none",
-                            "&::-webkit-scrollbar": { display: "none" },
-                            WebkitAppRegion: "no-drag",
-                            "& > *": { flexShrink: 0 },
-                            // Right-aligned without justify-content, which would
-                            // push an overflowing start out of reach.
-                            "& > :first-of-type": { ml: "auto" },
-                        }}
-                    >
-                        <Box
-                            ref={setSessionsHeaderActions}
-                            sx={{ display: "flex", alignItems: "center", gap: 0.25 }}
+                    <Box sx={{ flex: 1 }} />
+                    {!sessionsCollapsed && (
+                        <DesktopSettingsAction
+                            onOpenSettings={(): void => openSettings("settings")}
                         />
-                        {!sessionsCollapsed && (
-                            <DesktopSettingsAction
-                                onOpenSettings={(): void => openSettings("settings")}
-                            />
-                        )}
-                    </Box>
+                    )}
                     <DesktopSidebarAction
                         data-desktop-pane-collapse="sessions"
                         label="Collapse Sessions"
                         shortcut={DESKTOP_SHORTCUTS.toggleSessions}
                         onClick={(): void => desktopWorkspace?.togglePane("sessions")}
-                        sx={{ mr: -0.75 }}
                     >
                         <KeyboardDoubleArrowLeft />
                     </DesktopSidebarAction>
@@ -4449,6 +4432,42 @@ export function App({
                 </Typography>
             )}
         </Toolbar>
+        {surface === "desktop" && (
+            <Box
+                data-desktop-sessions-view-title
+                sx={{
+                    minHeight: desktopSize(34),
+                    px: desktopSize(10),
+                    display: "flex",
+                    alignItems: "center",
+                    gap: desktopSize(6),
+                }}
+            >
+                <Typography
+                    variant="overline"
+                    noWrap
+                    sx={{
+                        flex: "1 1 auto",
+                        minWidth: 0,
+                        color: "text.secondary",
+                        fontSize: desktopSize(11),
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                        lineHeight: 1,
+                    }}
+                >
+                    Sessions
+                </Typography>
+                <Box
+                    data-desktop-sessions-header-actions
+                    role="toolbar"
+                    aria-label="Sessions actions"
+                    ref={setSessionsHeaderActions}
+                    sx={{ display: "flex", alignItems: "center", gap: desktopSize(6), flexShrink: 0 }}
+                />
+            </Box>
+        )}
+        </Box>
     );
 
     return (
@@ -5244,8 +5263,8 @@ export function App({
                             // Hug the 44px icon row: the dense Toolbar's 48px min-height
                             // floated the icons with ~2px above, widening the gap to the
                             // composer's action row. Let the icons drive the height.
-                            minHeight: 44,
-                            "@media (min-width: 600px)": { minHeight: 44 },
+                            minHeight: desktopSize(44),
+                            "@media (min-width: 600px)": { minHeight: desktopSize(44) },
                             // Narrow installed PWA: the sidebar has collapsed to a
                             // drawer, so this bar is full-width and the macOS window
                             // controls now overlay ITS left (the hamburger). Inset
@@ -5963,7 +5982,7 @@ function DesktopSettingsChoice({
             aria-pressed={active}
             onClick={onClick}
             sx={{
-                minHeight: 38,
+                minHeight: desktopSize(38),
                 minWidth: 0,
                 width: "100%",
                 px: 0.75,

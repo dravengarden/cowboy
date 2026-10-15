@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { defaultDraftTitle } from "./defaultDraftTitle";
 import {
   Alert,
@@ -606,7 +607,7 @@ function DraftWorkspaceBody(
             elevation={0}
             sx={{ borderBottom: 1, borderColor: "divider" }}
           >
-            <Toolbar variant="dense" sx={{ gap: 1, minHeight: 44 }}>
+            <Toolbar variant="dense" sx={{ gap: 1, minHeight: desktopSize(44) }}>
               {!inlineSidebar && (
                 <IconButton
                   aria-label="Open draft library"

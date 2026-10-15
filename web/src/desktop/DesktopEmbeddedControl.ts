@@ -1,4 +1,5 @@
 import { alpha, type Theme } from "@mui/material";
+import { desktopSize } from "../surface/desktopSize";
 
 /** One geometry vocabulary for Desktop's keyboard-first surfaces. Outer
  * controls, panels, and first-level interactive rows share the same silhouette;
@@ -9,6 +10,8 @@ export const DESKTOP_INSET_RADIUS = 6;
 /** Shared top-bar control geometry. Keep every first-level control on the
  * same baseline, including the nested session lifecycle cluster. */
 export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38;
+/** The same height as a CSS length that follows the global font size. */
+export const DESKTOP_TOPBAR_CONTROL_SIZE = desktopSize(DESKTOP_TOPBAR_CONTROL_HEIGHT);
 export const DESKTOP_TOPBAR_CONTROL_GAP = 0.75;
 export const DESKTOP_TOPBAR_CONTROL_GAP_PX = 6;
 
@@ -80,8 +83,8 @@ export function desktopSessionActionSx({
 } = {}) {
   return {
     ...desktopEmbeddedControlSx({ active, open }),
-    height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
-    minWidth,
+    height: DESKTOP_TOPBAR_CONTROL_SIZE,
+    minWidth: desktopSize(minWidth),
     px: 0.75,
     flexShrink: 0,
     textTransform: "none",

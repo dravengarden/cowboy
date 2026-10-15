@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { AutoStoriesOutlined, HistoryOutlined } from "@mui/icons-material";
 import {
   Box,
@@ -58,7 +59,7 @@ export function DesktopProjectionToggle({
         // ToggleButtonGroup below owns the History/Explore selection.
         ...desktopEmbeddedControlSx(),
         mr: 0.75,
-        height: 34,
+        height: desktopSize(34),
         p: "3px",
         gap: 0.25,
         display: "inline-flex",
@@ -75,9 +76,9 @@ export function DesktopProjectionToggle({
         }}
         aria-label="Transcript view"
         sx={{
-          height: 28,
+          height: desktopSize(28),
           "& .MuiToggleButtonGroup-grouped": {
-            minWidth: 62,
+            minWidth: desktopSize(62),
             px: 1.1,
             py: 0,
             border: 0,

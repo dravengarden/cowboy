@@ -52,6 +52,15 @@ This is a core visual invariant:
 - Keep hit-target geometry separate from glyph geometry. Mobile controls retain
   their 40–44 px minimum physical target while the icon inside scales with the
   global font size; enlarging text must not shrink the target or clip the glyph.
+- On Desktop the whole control scales, not only its glyph: heights, widths and
+  bar heights are `desktopSize(px)` lengths (root-relative on Desktop, the same
+  pixels on Mobile), and a native `<button>`'s fixed 13.33px font is replaced by
+  the theme's `desktopSize(40 / 3)` so text and `em` glyphs inside a raw
+  `ButtonBase` grow too. Headers that must line up (the Sessions activity bar,
+  the top bar beside it, the collapsed rail's head, a Draft's bar) share the
+  same scaled height. The integrated Desktop fixture's `fontScaleAudit` measures
+  every visible control at 100% and 150% and fails on any box or glyph that
+  does not grow (2026-10-15).
 - Non-semantic pixel geometry such as a progress stroke, chart mark, or
   alignment hairline may remain fixed only when it is not the action's readable
   symbol. Document and regression-test any interactive exception.

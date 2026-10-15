@@ -50,7 +50,7 @@ export function ConnectionNoticeStrip({
             minWidth: 0,
             flexShrink: 1,
             overflow: "hidden",
-            height: 24,
+            height: desktopSize(24),
             px: 1,
             display: "flex",
             alignItems: "center",
@@ -103,8 +103,8 @@ export function ConnectionNoticeStrip({
             fontWeight: 600,
             borderRadius: 999,
             py: 0,
-            minHeight: 24,
-            height: 24,
+            minHeight: desktopSize(24),
+            height: desktopSize(24),
           }}
         >
           Retry now

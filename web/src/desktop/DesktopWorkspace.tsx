@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Typography } from "@mui/material";
 import { useMemo } from "react";
 import {
@@ -77,7 +78,7 @@ function PaneHeader({
       data-desktop-pane-header
       data-pane={pane}
       sx={{
-        minHeight: 36,
+        minHeight: desktopSize(36),
         px: 2,
         display: "flex",
         alignItems: "center",

@@ -125,7 +125,7 @@ import {
   DESKTOP_INSET_RADIUS,
   DESKTOP_TOPBAR_CONTROL_GAP,
   DESKTOP_TOPBAR_CONTROL_GAP_PX,
-  DESKTOP_TOPBAR_CONTROL_HEIGHT,
+  DESKTOP_TOPBAR_CONTROL_SIZE,
   desktopEmbeddedControlSx,
   desktopSessionActionSx,
 } from "./DesktopEmbeddedControl";
@@ -948,7 +948,7 @@ function ConfigOptionControl({
               onChange={(event): void => setValue(String(event.target.value))}
               aria-label="Model"
               sx={{
-                height: 34,
+                height: desktopSize(34),
                 borderRadius: 1.25,
                 fontSize: "0.75rem",
                 fontWeight: 650,
@@ -1027,7 +1027,7 @@ function ConfigOptionControl({
                 // When the row is genuinely too narrow a label wraps at a word
                 // instead; the segment never shrinks below its longest word.
                 sx={{
-                  minHeight: 28,
+                  minHeight: desktopSize(28),
                   px: 1,
                   py: 0.2,
                   flex: "1 1 auto",
@@ -1099,7 +1099,7 @@ function RecommendedPresetControls({
               sx={{
                 flex: 1,
                 minWidth: 0,
-                minHeight: 44,
+                minHeight: desktopSize(44),
                 px: 1.2,
                 py: 0.65,
                 borderRadius: 1.25,
@@ -1214,7 +1214,12 @@ export function DesktopTopBarControls({
       "[data-desktop-topbar-scroller]",
     );
     if (!scroller || typeof ResizeObserver !== "function") return undefined;
-    const measure = (): void => setAvailableWidth(scroller.clientWidth);
+    // The width budgets below are in 100%-scale pixels; controls grow with
+    // the global font size, so measure the pane in the same unit.
+    const measure = (): void => {
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      setAvailableWidth(scroller.clientWidth * 16 / rootPx);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(scroller);
@@ -1815,7 +1820,7 @@ export function DesktopTopBarControls({
           <Skeleton
             variant="rounded"
             width={300}
-            height={DESKTOP_TOPBAR_CONTROL_HEIGHT}
+            height={DESKTOP_TOPBAR_CONTROL_SIZE}
           />
         )
         : (
@@ -1843,13 +1848,13 @@ export function DesktopTopBarControls({
                 ...desktopEmbeddedControlSx({
                   open: configOpen,
                 }),
-                width: "clamp(190px, 18vw, 260px)",
-                height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
+                width: `clamp(${desktopSize(190)}, 18vw, ${desktopSize(260)})`,
+                height: DESKTOP_TOPBAR_CONTROL_SIZE,
                 px: 1.15,
                 justifyContent: "flex-start",
                 textTransform: "none",
                 flexShrink: 0,
-                minWidth: 170,
+                minWidth: desktopSize(170),
                 color: "text.primary",
                 "& .MuiButton-startIcon": { mr: 0.8 },
                 "& .MuiButton-endIcon": { ml: "auto" },
@@ -1951,7 +1956,7 @@ export function DesktopTopBarControls({
             ...desktopEmbeddedControlSx({
               open: usageOpen,
             }),
-            height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
+            height: DESKTOP_TOPBAR_CONTROL_SIZE,
             px: 0.75,
             gap: 0.65,
             flexShrink: 0,

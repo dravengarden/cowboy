@@ -89,13 +89,20 @@ test("desktop session actions share compact geometry without duplicate context t
       "export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38",
     ),
   );
+  // The height follows the global font size (a desktopSize length).
   assert(
-    embeddedControlSource.includes("height: DESKTOP_TOPBAR_CONTROL_HEIGHT"),
+    embeddedControlSource.includes(
+      "export const DESKTOP_TOPBAR_CONTROL_SIZE = desktopSize(DESKTOP_TOPBAR_CONTROL_HEIGHT)",
+    ),
+  );
+  assert(
+    embeddedControlSource.includes("height: DESKTOP_TOPBAR_CONTROL_SIZE"),
   );
 });
 
 test("desktop top-bar controls share height and spacing vocabulary", () => {
-  assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_HEIGHT"));
+  assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_SIZE"));
+  assertEquals(topBarSource.includes("height: DESKTOP_TOPBAR_CONTROL_HEIGHT"), false);
   assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_GAP"));
   assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_GAP_PX"));
   assert(topBarSource.includes("spacing={DESKTOP_TOPBAR_CONTROL_GAP}"));

@@ -1,3 +1,4 @@
+import { desktopSize } from "../../surface/desktopSize";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   alpha,
@@ -595,7 +596,7 @@ export function DesktopCommandHost({
       <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
         <Box
           sx={{
-            minHeight: 44,
+            minHeight: desktopSize(44),
             px: 1.5,
             display: "flex",
             alignItems: "center",

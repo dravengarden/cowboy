@@ -74,6 +74,62 @@ export function shortcutAudit(root: Document): string[] {
   });
 }
 
+/** Visible Desktop controls whose box or glyph keeps its size when the global
+ *  font size changes (the reading settings scale the root font). Every
+ *  control must grow with it; a fixed pixel height or a native button's fixed
+ *  13.33px font leaves text and glyphs one size at every scale. */
+export async function fontScaleAudit(
+  root: Document,
+  settle: () => Promise<void>,
+): Promise<string[]> {
+  const html = root.documentElement;
+  const previousSize = html.style.fontSize;
+  const previousScale = html.style.getPropertyValue("--cowboy-font-scale");
+  const controls = [
+    ...root.querySelectorAll<HTMLElement>(
+      "button, [role=button], [role=tab], [role=menuitem], a[href]",
+    ),
+  ].filter((element) =>
+    element.getClientRects().length > 0 &&
+    !element.closest("[aria-hidden=true], .cm-editor")
+  );
+  const measure = (element: HTMLElement) => {
+    const glyph = element.querySelector("svg")?.getBoundingClientRect().height ?? null;
+    return { height: element.getBoundingClientRect().height, glyph };
+  };
+  const scaleTo = async (scale: number): Promise<void> => {
+    html.style.fontSize = `${String(scale * 100)}%`;
+    html.style.setProperty("--cowboy-font-scale", String(scale));
+    await settle();
+  };
+  try {
+    await scaleTo(1);
+    const base = controls.map(measure);
+    await scaleTo(1.5);
+    return controls.flatMap((element, index) => {
+      const before = base[index]!;
+      const after = measure(element);
+      if (before.height === 0 || after.height === 0) return [];
+      const fixedBox = after.height / before.height < 1.2;
+      const fixedGlyph = before.glyph !== null && after.glyph !== null &&
+        after.glyph / before.glyph < 1.2;
+      if (!fixedBox && !fixedGlyph) return [];
+      const name = (element.getAttribute("aria-label") || element.textContent ||
+        element.tagName).replace(/\s+/g, " ").trim().slice(0, 50);
+      const region = element.closest<HTMLElement>("[data-desktop-region]")
+        ?.dataset.desktopRegion ??
+        element.closest<HTMLElement>("[data-desktop-pane]")?.dataset.desktopPane ??
+        "chrome";
+      return [`${region} :: ${name} (${fixedBox ? "box" : "glyph"})`];
+    });
+  } finally {
+    html.style.fontSize = previousSize;
+    if (previousScale) html.style.setProperty("--cowboy-font-scale", previousScale);
+    else html.style.removeProperty("--cowboy-font-scale");
+    await settle();
+  }
+}
+
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
@@ -1448,13 +1504,21 @@ export async function runDraftDocumentsBrowserConformance(
       // slot, so missing shortcuts are found from the real DOM.
       if ((globalThis as { __cowboyShortcutAudit?: boolean }).__cowboyShortcutAudit) {
         (globalThis as { __cowboyShortcutAuditResult?: unknown })
-          .__cowboyShortcutAuditResult = shortcutAudit(document);
+          .__cowboyShortcutAuditResult = [
+            ...shortcutAudit(document),
+            ...(await fontScaleAudit(document, () => tick(150))).map((item) => "font size: " + item),
+          ];
         await new Promise<void>(() => {});
       }
       const unreachable = shortcutAudit(document);
       check(
         unreachable.length === 0,
         `Every visible Desktop control has a keyboard slot: ${unreachable.join("; ")}`,
+      );
+      const unscaled = await fontScaleAudit(document, () => tick(150));
+      check(
+        unscaled.length === 0,
+        `Every visible Desktop control follows the global font size: ${unscaled.join("; ")}`,
       );
       check(
         document.querySelector("[data-desktop-topbar-action='usage']")
@@ -1504,14 +1568,14 @@ export async function runDraftDocumentsBrowserConformance(
             !slotOwner.hasAttribute("data-desktop-sessions-header-actions"),
           "The fold button shows its ␣SZ slot",
         );
-        // The window's entries moved from the top bar to the Sessions bar
-        // (Extensions beside the Sessions view, Settings at the right end),
-        // each with its leader slot.
+        // The window's entries moved from the top bar to the Sessions
+        // activity bar (Extensions beside the Sessions view, Settings at the
+        // right end), each with its leader slot.
         const sessionsBar = fold.closest<HTMLElement>("[data-desktop-pane-header]")!;
         check(
           sessionsBar.querySelector("[data-desktop-sessions-activities] [data-desktop-global-action='extensions']") &&
-            sessionsBar.querySelector("[data-desktop-sessions-header-actions] [data-desktop-global-action='settings']"),
-          "Extensions is an activity beside Sessions; Settings ends the bar",
+            sessionsBar.querySelector("[data-desktop-sessions-activity-bar] [data-desktop-global-action='settings']"),
+          "Extensions is an activity beside Sessions; Settings ends the activity bar",
         );
         for (const [action, slot] of [["extensions", "␣X"], ["settings", "␣,"]] as const) {
           const button = sessionsBar.querySelector<HTMLElement>(

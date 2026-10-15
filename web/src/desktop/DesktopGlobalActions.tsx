@@ -2,7 +2,7 @@ import { ExtensionOutlined, SettingsOutlined } from "@mui/icons-material";
 import { Stack } from "@mui/material";
 import { WorkspaceExtensionsButton } from "../extensions/WorkspaceExtensionsButton";
 import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
-import { DesktopSidebarAction } from "./DesktopSidebarAction";
+import { DesktopSidebarAction, sidebarSlotFitSx } from "./DesktopSidebarAction";
 
 /**
  * The window-wide entries, VS Code style: Extensions (the installed Plugins'
@@ -22,7 +22,13 @@ export function DesktopRailGlobalActions({
   onOpenSettings: () => void;
 }): React.JSX.Element {
   return (
-    <Stack data-desktop-global-actions="rail" alignItems="center">
+    <Stack
+      data-desktop-global-actions="rail"
+      alignItems="center"
+      spacing={0.5}
+      // The 56 px rail fits a glyph and its slot up to about 3.25rem.
+      sx={{ alignSelf: "stretch", ...sidebarSlotFitSx(3.25) }}
+    >
       <WorkspaceExtensionsButton
         context={sessionId}
         machineId={machineId}

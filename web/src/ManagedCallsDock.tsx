@@ -562,7 +562,7 @@ function Badge(
         return {
           flexShrink: 0,
           px: 0.75,
-          height: 20,
+          height: desktopSize(20),
           display: "inline-flex",
           alignItems: "center",
           gap: 0.5,

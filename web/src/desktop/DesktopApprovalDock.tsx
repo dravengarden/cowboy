@@ -323,7 +323,7 @@ function ApprovalDock({
             onClick={choice.run}
             sx={{
               gap: 0.75,
-              minHeight: 28,
+              minHeight: desktopSize(28),
               py: 0.25,
               px: 1.25,
               textTransform: "none",

@@ -135,7 +135,7 @@ function PageTurnFooter({
   const actionSx = desktop
     ? {
       ...desktopEmbeddedControlSx(),
-      minHeight: 52,
+      minHeight: desktopSize(52),
       px: 1.25,
       textTransform: "none",
     }

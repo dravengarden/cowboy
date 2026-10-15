@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Stack, Tooltip, Typography } from "@mui/material";
 import type { ShortcutKeycapAvailability } from "../ShortcutKeycap";
 import { DesktopShortcut } from "./commands/DesktopKeycap";
@@ -32,7 +33,7 @@ export function DesktopShortcutBar({
       data-desktop-shortcut-bar
       sx={{
         ...(sticky && { position: "sticky", bottom: 0, zIndex: 5 }),
-        minHeight: 42,
+        minHeight: desktopSize(42),
         px: 2,
         py: 0.8,
         borderTop: 1,

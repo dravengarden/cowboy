@@ -1,3 +1,4 @@
+import { desktopSize } from "../../surface/desktopSize";
 import {
   alpha,
   Box,
@@ -246,7 +247,7 @@ function ShortcutSection({
         <Box
           key={`${row.title}-${String(index)}`}
           sx={{
-            minHeight: 46,
+            minHeight: desktopSize(46),
             px: 1.5,
             py: 0.8,
             display: "grid",

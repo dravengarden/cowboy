@@ -516,18 +516,22 @@ it); macOS Chrome binds none of them.
   and `␣TT` the Top Bar.
 - Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
 - Leader then `N`, `,` or `X`: create, open Settings, or open Extensions.
-  These window-wide entries sit with Sessions, VS Code style with its
-  activity bar on top: the docked sidebar's bar shows the views on the left
-  (Sessions, the current one, underlined; then Extensions), the shown
-  view's actions on the right (Create, fold), then Settings and the pane
-  fold. There is no row of buttons above the list any more. The collapsed
-  rail keeps Create at its head and Extensions and Settings at its foot,
-  like the activity bar. Every entry stacks its slot under its glyph, inside
-  the control, so the keys stay visible at rest, the row fits the narrowest
-  sidebar, and nothing hangs out of the bar; the armed leader lights them
-  like every other slot. (Slots placed below or in the corner of the icons
-  were clipped by the bar and covered the list, 2026-10-15.) Only a drawer-hosted Sessions
-  leaves Extensions and Settings in the top bar. The Window group
+  These window-wide entries sit with Sessions, laid out like VS Code with
+  its activity bar on top. The docked sidebar has two bars: the activity
+  bar, level with the work panes' top bar, holds the views on the left
+  (Sessions, the shown one, underlined; then Extensions) and Settings and
+  the pane fold on the right; under it the view title bar holds the view's
+  name and its own actions, Create and fold. The collapsed rail keeps Create
+  at its head and Extensions and Settings at its foot. Every entry is the
+  pane fold's capsule: glyph and quiet leader slot side by side, one height
+  and one gap, so the keys stay visible at rest and the armed leader lights
+  them like every other slot. When a large font size leaves a bar too narrow
+  for its slots, the entries keep their glyphs and drop their slots instead
+  of clipping (the tooltip, which-key and the palette still name the keys).
+  (Two earlier forms were rejected on 2026-10-15: slots hung below or in the
+  corner of the icons were clipped and covered the list, and slots stacked
+  under the glyphs read as uneven.) Only a drawer-hosted Sessions leaves
+  Extensions and Settings in the top bar. The Window group
   `␣WW`/`␣WR` cycles visible regions or enters Resize mode.
 - `␣UE` (Prompt pane): toggle the composer between live
   preview and Source mode. Obsidian binds this to `Mod+E`, which both collision

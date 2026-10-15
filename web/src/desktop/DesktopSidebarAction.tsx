@@ -1,16 +1,38 @@
 import { alpha, ButtonBase, type SxProps, type Theme } from "@mui/material";
 import { forwardRef, type ReactNode } from "react";
 import { HintTooltip } from "../HintTooltip";
-import { DesktopShortcut } from "./commands/DesktopKeycap";
+import { desktopSize } from "../surface/desktopSize";
+import { LeaderKeycap } from "./commands/DesktopKeycap";
+import { DESKTOP_WORKSPACE_PREFIX } from "./commands/workspaceShortcuts";
 import { DESKTOP_INSET_RADIUS } from "./DesktopEmbeddedControl";
 
 /**
- * One entry of the Desktop Sessions bar (VS Code's activity bar on top) or of
- * the collapsed Sessions rail: the glyph with its leader slot stacked under
- * it, inside the control. Stacking keeps every key visible at rest (FOCUS.md
- * "Leader") while a whole row of entries still fits the narrowest sidebar,
- * and nothing hangs outside the bar to be clipped or to cover the list. The
- * slot lights with the armed leader like every other slot.
+ * Sx for a bar of sidebar entries: when the bar is narrower than `fitRem`
+ * (everything scales with the global font size, so the fit is in rem) the
+ * entries keep their glyphs and drop their slots instead of being clipped.
+ */
+export function sidebarSlotFitSx(fitRem: number) {
+  return {
+    containerType: "inline-size",
+    [`@container (max-width: ${String(fitRem)}rem)`]: {
+      "& .cowboy-sidebar-slot": { display: "none !important" },
+    },
+  } as const;
+}
+
+/** `Mod+K → S → S` → `SS`: the leader path a slot draws. */
+function leaderPath(shortcut: string): string {
+  const [prefix, ...strokes] = shortcut.split(" → ");
+  return prefix === DESKTOP_WORKSPACE_PREFIX ? strokes.join("") : shortcut;
+}
+
+/**
+ * One entry of the Desktop Sessions bars (VS Code's activity bar on top and
+ * its view title bar) or of the collapsed Sessions rail. It is the same
+ * control as a pane header's fold button: a 16-unit glyph and its quiet
+ * leader slot side by side in a 24-unit capsule, so every entry, the fold
+ * included, shares one height, one gap and one keycap. All of it is sized in
+ * `desktopSize` units and follows the global font size.
  */
 export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
   label: string;
@@ -20,7 +42,7 @@ export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
   /** Tooltip detail, for example why the action is unavailable. */
   detail?: ReactNode | undefined;
   placement?: "bottom" | "right" | undefined;
-  /** The view this bar is showing (VS Code's active activity item). */
+  /** The view the bar is showing: VS Code's active activity item. */
   active?: boolean | undefined;
   sx?: SxProps<Theme> | undefined;
   children: ReactNode;
@@ -63,44 +85,61 @@ export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
           sx={[
             {
               position: "relative",
-              minWidth: 32,
-              height: 40,
-              px: 0.25,
-              flexDirection: "column",
-              justifyContent: "center",
-              gap: "2px",
+              height: desktopSize(24),
+              px: desktopSize(4),
+              gap: desktopSize(3),
+              flexShrink: 0,
               borderRadius: `${DESKTOP_INSET_RADIUS}px`,
               color: active ? "primary.main" : "text.secondary",
+              border: 1,
+              borderColor: "transparent",
               WebkitAppRegion: "no-drag",
-              "& > .MuiSvgIcon-root": { fontSize: "1.05rem" },
-              "&:hover": { color: "primary.main", bgcolor: "action.hover" },
-              "&.Mui-disabled": { color: "text.disabled", opacity: 0.7 },
-              "&.Mui-focusVisible": {
-                boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.5)}`,
+              transition: "background-color 120ms ease, border-color 120ms ease, color 120ms ease",
+              "& > .MuiSvgIcon-root": {
+                fontSize: desktopSize(16),
+                width: desktopSize(16),
+                height: desktopSize(16),
               },
-              // The shown view carries VS Code's underline on the bar's edge.
-              ...(active && {
-                "&::after": {
-                  content: '""',
-                  position: "absolute",
-                  left: 6,
-                  right: 6,
-                  bottom: -2,
-                  height: 2,
-                  borderRadius: 1,
-                  bgcolor: "primary.main",
-                },
-              }),
+              "&:hover": {
+                color: "primary.main",
+                borderColor: (theme) => alpha(theme.palette.primary.main, 0.28),
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
+              },
+              "&.Mui-disabled": { color: "text.disabled" },
+              "&.Mui-focusVisible": {
+                borderColor: "primary.main",
+                boxShadow: (theme) => `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
+              },
             },
             ...(Array.isArray(sx) ? sx : [sx]),
           ]}
         >
           {children}
-          <DesktopShortcut
-            shortcut={shortcut}
-            compact
-            availability={disabled ? "inactive" : "available"}
-          />
+          {/* A host too narrow for every slot at a large font size hides the
+              slots (SIDEBAR_SLOT_FIT) rather than clip its entries; the
+              tooltip, which-key and the palette still name every key. */}
+          <span className="cowboy-sidebar-slot" style={{ display: "inline-flex" }}>
+            <LeaderKeycap
+              leaderKey={leaderPath(shortcut)}
+              {...(disabled ? { availability: "inactive" as const } : {})}
+            />
+          </span>
+          {active && (
+            // VS Code's active-view underline, on the bar's bottom edge: the
+            // 24-unit capsule sits centred in the 44-unit bar.
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: 4,
+                right: 4,
+                bottom: `calc(-1 * ${desktopSize(10)} - 1px)`,
+                height: 2,
+                borderRadius: 1,
+                background: "currentColor",
+              }}
+            />
+          )}
         </ButtonBase>
       </span>
     </HintTooltip>
