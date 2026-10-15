@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   allowedControl,
+  hookPrefixScript,
   initializeRequest,
   NATIVE_PASSTHROUGH,
   nativeArguments,
@@ -221,4 +223,37 @@ test("tool inputs stream eagerly unless the user chose otherwise", () => {
   assert.deepEqual(toolStreamingEnvironment({ [TOOL_STREAMING]: "0" }), {
     [TOOL_STREAMING]: "0",
   });
+});
+
+test("the shell prefix sends only registered hook commands to the proxy", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-prefix-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const proxy = join(directory, "proxy.sh");
+  await writeFile(proxy, '#!/bin/sh\nprintf "proxied:%s" "$1"\n', {
+    mode: 0o700,
+  });
+  const hook = "printf 'it'\"'\"'s a hook' # *";
+  const script = join(directory, "prefix.sh");
+  await writeFile(script, hookPrefixScript("/bin/sh", proxy, [hook, hook]), {
+    mode: 0o700,
+  });
+  const run = (...argv) => execFileSync(script, argv, { encoding: "utf8" });
+  assert.equal(run(hook), "proxied:" + hook);
+  // An MCP server or any other command runs directly, without the proxy.
+  assert.equal(run("printf direct"), "direct");
+  assert.equal(run("printf 'it'\"'\"'s a hook' #"), "it's a hook");
+  // Multi-argument (exec form) commands are passed through unchanged.
+  assert.equal(run("printf", "%s-%s", "a", "b"), "a-b");
+  // With no registered hooks nothing is proxied.
+  await writeFile(
+    join(directory, "none.sh"),
+    hookPrefixScript("/bin/sh", proxy, []),
+    {
+      mode: 0o700,
+    },
+  );
+  assert.equal(
+    execFileSync(join(directory, "none.sh"), [hook], { encoding: "utf8" }),
+    "it's a hook",
+  );
 });
