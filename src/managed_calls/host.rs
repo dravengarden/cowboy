@@ -235,6 +235,9 @@ impl CallHost {
     }
 
     async fn forward(&self, grant: Grant, action: Action) -> Value {
+        if action.agent_api() && !grant.agent_api {
+            return refusal("unsupported_capability", "not_submitted");
+        }
         let submits = action.submits();
         let unknown = if submits {
             refusal("outcome_unknown", "unknown")
@@ -312,6 +315,7 @@ mod tests {
         let grant = Grant {
             grant_id: "grant-1".into(),
             parent_session_id: "parent-1".into(),
+            agent_api: false,
         };
         host.install(&grant).unwrap();
         host.install(&grant).unwrap();
@@ -338,6 +342,11 @@ mod tests {
         assert_eq!(forwarded, grant);
         host.reply(&request_id, json!({"schema":1,"state":"ok"}));
         assert_eq!(waiting.await.unwrap()["state"], "ok");
+        // A grant from a Controller without the Agent API refuses its actions
+        // here, so no undecodable event reaches that Controller.
+        let refused = request(&context, json!({"kind":"agent_status"})).await;
+        assert_eq!(refused["error"]["code"], "unsupported_capability");
+        assert!(rx.try_recv().is_err());
         // A Start whose uplink disappears has an unknown outcome.
         let waiting = tokio::spawn({
             let context = context.clone();
@@ -358,6 +367,7 @@ mod tests {
         let replacement = Grant {
             grant_id: "grant-2".into(),
             parent_session_id: "parent-1".into(),
+            agent_api: false,
         };
         host.install(&replacement).unwrap();
         assert_ne!(std::fs::read(&context).unwrap(), old_wiring);

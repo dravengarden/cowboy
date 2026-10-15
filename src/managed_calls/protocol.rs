@@ -37,6 +37,18 @@ pub enum Action {
     Observe {
         request_id: String,
     },
+    /// Agent API: the parent's compact status, without a program.
+    AgentStatus {},
+    /// Agent API: one read-only program run beside the Controller's state.
+    AgentRead {
+        code: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
 }
 
 impl std::fmt::Debug for Action {
@@ -100,6 +112,28 @@ impl Action {
                     Err(InputError::InvalidRequestId)
                 }
             }
+            Self::AgentStatus {} => Ok(()),
+            Self::AgentRead {
+                code,
+                language,
+                format,
+                timeout_ms,
+            } => {
+                if code.trim().is_empty()
+                    || code.len() > crate::agent_api::MAX_SOURCE_BYTES
+                    || code.contains('\0')
+                    || language
+                        .as_deref()
+                        .is_some_and(|l| !matches!(l, "ts" | "js"))
+                    || format
+                        .as_deref()
+                        .is_some_and(|f| !matches!(f, "body" | "module"))
+                    || timeout_ms.is_some_and(|ms| ms == 0 || ms > MAX_WAIT_MS)
+                {
+                    return Err(InputError::InvalidContract);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -107,8 +141,18 @@ impl Action {
         match self {
             Self::Start { wait_ms, .. } => *wait_ms,
             Self::Wait { timeout_ms, .. } => *timeout_ms,
+            Self::AgentRead { timeout_ms, .. } => {
+                timeout_ms.unwrap_or(crate::agent_api::DEFAULT_TIMEOUT_MS)
+                    + crate::agent_api::STARTUP_MARGIN_MS
+            }
             _ => 0,
         }
+    }
+
+    /// Agent API actions need a Controller that understands them; the grant
+    /// says so (see [`Grant::agent_api`]).
+    pub fn agent_api(&self) -> bool {
+        matches!(self, Self::AgentStatus {} | Self::AgentRead { .. })
     }
 }
 
@@ -128,6 +172,12 @@ impl Action {
 pub struct Grant {
     pub grant_id: String,
     pub parent_session_id: String,
+    /// Set only by a Controller that handles Agent API actions, and only for
+    /// a Machine connection whose protocol carries the field. A Machine
+    /// refuses those actions locally under a grant without it, so an older
+    /// Controller never receives an event it cannot decode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_api: bool,
 }
 
 impl Grant {

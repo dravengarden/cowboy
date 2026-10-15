@@ -4,7 +4,7 @@ mod approval;
 mod coordinator;
 mod runner;
 
-pub(super) use coordinator::{Coordinator, delete_child, handle, parent_deleted};
+pub(super) use coordinator::{Coordinator, delete_child, dispatch_calls, handle, parent_deleted};
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use axum::{

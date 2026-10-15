@@ -74,7 +74,7 @@ fn cgroup_headroom(high: &str, max: &str, current: &str, stat: &str) -> Option<u
 
 /// The smallest headroom from the Agent worker slice (or, without one, the
 /// user manager) up to the cgroup root.
-fn memory_headroom_bytes() -> Option<u64> {
+pub(crate) fn memory_headroom_bytes() -> Option<u64> {
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
     let root = Path::new("/sys/fs/cgroup");
     let manager = root.join(user_manager_root(&cgroup)?.trim_start_matches('/'));
