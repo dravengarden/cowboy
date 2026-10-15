@@ -11,6 +11,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,6 +82,11 @@ const stage = await mkdtemp(join(cache, "codex-source-"));
 buildEnvironment.HOME = `${stage}/home`;
 buildEnvironment.XDG_CONFIG_HOME = `${stage}/home/.config`;
 await mkdir(buildEnvironment.HOME);
+// Upstream tests create a Codex home per case under os.tmpdir() and never
+// remove it. A short private directory keeps socket paths valid and is removed
+// with the stage.
+const temporary = await mkdtemp(join(tmpdir(), "codex-build-"));
+for (const key of ["TMPDIR", "TMP", "TEMP"]) buildEnvironment[key] = temporary;
 const matrixPath = `${output}/runtime-artifacts.json`;
 let bindingComplete = false;
 try {
@@ -224,6 +230,7 @@ try {
     });
   }
   await rm(stage, { recursive: true });
+  await rm(temporary, { recursive: true, force: true });
 }
 
 async function sha256(path: string): Promise<string> {
