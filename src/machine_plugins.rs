@@ -1981,7 +1981,17 @@ impl MachinePluginStore {
         let package = self
             .active_package(&envelope.provider_id)?
             .map(|value| value.0);
-        let materialization = self.apply_auth_inner(envelope, package.as_ref())?;
+        let prepared = self.prepare_auth_inner(envelope, package.as_ref())?;
+        // A refresh this Machine's own Provider wrote comes back as the next
+        // Service generation with exactly the bytes every runtime projection
+        // already shares; its workers have nothing to reload.
+        let runtime_changed = match (&prepared, package.as_ref()) {
+            (PreparedProviderAuth::Apply(bundle), Some(package)) => {
+                !self.runtime_projects_bundle(package, bundle)
+            }
+            _ => true,
+        };
+        let materialization = self.commit_prepared_auth(envelope, package.as_ref(), prepared)?;
         prune_auth_replicas(
             &provider_auth_root.join("replicas"),
             envelope.auth_generation,
@@ -1990,18 +2000,33 @@ impl MachinePluginStore {
             provider_id: envelope.provider_id.clone(),
             auth_generation: envelope.auth_generation,
             auth_generation_advanced,
+            runtime_changed,
             replica_state: ProviderReplicaState::Current,
             materialization_state: materialization,
         })
     }
 
-    fn apply_auth_inner(
+    /// Whether every writable runtime projection already holds exactly this
+    /// bundle: credential files (shared through the canonical projection) and
+    /// each generation's environment. Any unreadable projection counts as a
+    /// change, so uncertainty still reloads workers.
+    fn runtime_projects_bundle(
         &self,
-        envelope: &SealedProviderAuth,
-        package: Option<&ProviderPackage>,
-    ) -> Result<ProviderMaterializationState> {
-        let prepared = self.prepare_auth_inner(envelope, package)?;
-        self.commit_prepared_auth(envelope, package, prepared)
+        package: &ProviderPackage,
+        bundle: &PortableCredentialBundle,
+    ) -> bool {
+        let auth = &package.manifest.authentication;
+        let Ok(Some(_canonical)) = self.canonical_runtime_projection(package) else {
+            return false;
+        };
+        let Ok(generations) = self.writable_auth_projection_generations(package) else {
+            return false;
+        };
+        !generations.is_empty()
+            && generations.iter().all(|generation| {
+                projected_credential_bundle(auth, generation, &bundle.method_id)
+                    .is_ok_and(|projected| projected == *bundle)
+            })
     }
 
     fn prepare_auth_inner(
@@ -3693,6 +3718,9 @@ pub(crate) struct PluginInventoryReceipt {
     pub provider_id: String,
     pub auth_generation: u64,
     pub auth_generation_advanced: bool,
+    /// Whether applying the generation changed what this Machine's Provider
+    /// processes read. False for a refresh this Machine produced itself.
+    pub runtime_changed: bool,
     pub replica_state: ProviderReplicaState,
     pub materialization_state: ProviderMaterializationState,
 }
@@ -5971,6 +5999,8 @@ mod tests {
             seal_auth_for_test(&store, &package, &service_signer, 2, &refreshed_bundle);
         let refreshed_receipt = store.apply_auth(&refreshed_envelope).await.unwrap();
         assert!(refreshed_receipt.auth_generation_advanced);
+        // New bytes from the Service: workers must reload them.
+        assert!(refreshed_receipt.runtime_changed);
         // Seed legacy state after the credential refresh, before testing the
         // historical-home repair below. Do not delete state already migrated
         // by a successful launch in this fixture.
@@ -6155,6 +6185,9 @@ mod tests {
                 .contains("changed during host observation")
         );
         assert!(refreshed_receipt.auth_generation_advanced);
+        // The same bytes again as the next generation, as when the Service
+        // re-seals a refresh this Machine wrote: nothing for workers to reload.
+        assert!(!refreshed_receipt.runtime_changed);
         assert_installation_cas(&store, &desired).await;
         server.await.unwrap();
         fs::remove_dir_all(root).unwrap();
