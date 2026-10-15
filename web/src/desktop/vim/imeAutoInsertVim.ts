@@ -19,6 +19,27 @@ import {
 } from "./macroStatusStore";
 import { vimCommandKey } from "./vimCommandKey";
 import { syncVimCursorOwnership } from "./vimCursorOwnership";
+import { getVimConfigSource, subscribeVimConfigSource } from "../../vimSetting";
+import { parseVimConfig } from "./vimConfig";
+
+/** Apply the user's Vim configuration to codemirror-vim's global keymap.
+ *  `mapclear` removes only user mappings, so re-applying after an edit
+ *  replaces the previous set instead of stacking it. */
+function applyUserVimConfig(): void {
+  const config = parseVimConfig(getVimConfigSource());
+  Vim.mapclear();
+  for (const mapping of config.mappings) {
+    try {
+      if (mapping.recursive) Vim.map(mapping.lhs, mapping.rhs, mapping.mode as string);
+      else Vim.noremap(mapping.lhs, mapping.rhs, mapping.mode as string);
+    } catch {
+      // One unusable line must not keep the rest of the config from loading.
+    }
+  }
+  Vim.setOption("insertModeEscKeysTimeout", config.timeoutMs);
+}
+applyUserVimConfig();
+subscribeVimConfigSource(applyUserVimConfig);
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
 // These commands can replace/create an empty line whose DOM is not available
