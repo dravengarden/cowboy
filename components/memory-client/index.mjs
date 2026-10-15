@@ -118,18 +118,29 @@ async function privateFile(path, limit) {
 
 /** The session's extension descriptor written by the runtime Machine, or
  * `null` when the Machine predates session extensions. */
+const DISABLED = Object.freeze({ schema: 1, memory: null, calls: null });
+
 export async function sessionExtensions(
   { path = process.env.COWBOY_SESSION_EXTENSIONS } = {},
 ) {
   if (!path) return null;
   // The Machine could not resolve this session's extensions: run without.
-  if (path === "disabled") return { schema: 1, memory: null, calls: null };
-  if (!isAbsolute(path)) throw new Error("Session extensions must be absolute");
-  const text = await privateFile(path, 65536);
-  if (text === null) throw new Error("Session extension descriptor is missing");
-  const value = JSON.parse(text);
-  if (value?.schema !== 1) throw new Error("Unsupported session extensions");
-  return value;
+  if (path === "disabled") return DISABLED;
+  // A descriptor that is missing, unsafe or malformed disables extensions
+  // for this process; it never falls back to a host enrollment.
+  try {
+    if (!isAbsolute(path)) throw new Error("descriptor path is not absolute");
+    const text = await privateFile(path, 65536);
+    if (text === null) throw new Error("descriptor is missing");
+    const value = JSON.parse(text);
+    if (value?.schema !== 1) throw new Error("unsupported descriptor schema");
+    return value;
+  } catch (error) {
+    process.stderr.write(
+      "Session extensions disabled: " + String(error?.message ?? error) + "\n",
+    );
+    return DISABLED;
+  }
 }
 
 function configHome() {

@@ -90,11 +90,12 @@ Release schema 5, payload schema 1, Plugin SDK 1.12+, data-only.
 }
 ```
 
-Purposes become validated identifiers instead of a closed enum: a request's
-purpose must be declared by an installed, enabled call profile. The three
-existing identifiers stay accepted when no profile is installed so existing
-sessions and records keep working. Guidance replaces each Provider's copy of
-`AGENT_CALLS_PROMPT`.
+Payload schema 1 may only label the purposes core managed calls accept
+(`review`, `design_review`, `analysis`); a profile-defined purpose needs a
+later payload schema together with core request validation, so it is refused
+today rather than advertised and then rejected. Guidance replaces each
+Provider's copy of `AGENT_CALLS_PROMPT`; `{{peer}}` and `{{peer_command}}` are
+the only placeholders.
 
 ## Delivery to a session
 
@@ -128,7 +129,10 @@ No descriptor (a Machine that predates session extensions) keeps the legacy
 host enrollment with both switches on and the release's built-in call
 guidance. A Machine that cannot resolve or write the descriptor sets
 `COWBOY_SESSION_EXTENSIONS=disabled`, so the session runs without memory
-instead of falling back to an enrollment that ignores its switches. Both
+instead of falling back to an enrollment that ignores its switches. A
+descriptor that later disappears or is unsafe or malformed is treated the
+same way by the Provider. The Machine carries at most eight call profiles and
+refuses to publish a descriptor larger than the Providers' 64 KiB read limit. Both
 switches off means no memory at all, including observation. A backend that
 recalls without observing still answers context. Codex exposes only the
 backend's declared tools through `enabled_tools`; Claude allows exactly

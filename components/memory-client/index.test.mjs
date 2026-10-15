@@ -369,8 +369,19 @@ test("descriptor file must be private", async (t) => {
     schema: 1,
     memory: null,
   });
+  const disabled = { schema: 1, memory: null, calls: null };
   await chmod(path, 0o644);
-  await assert.rejects(sessionExtensions({ path }), /private/);
+  assert.deepEqual(await sessionExtensions({ path }), disabled);
+  await chmod(path, 0o600);
+  await writeFile(path, "{not json");
+  assert.deepEqual(await sessionExtensions({ path }), disabled);
+  await writeFile(path, JSON.stringify({ schema: 2 }));
+  assert.deepEqual(await sessionExtensions({ path }), disabled);
+  assert.deepEqual(
+    await sessionExtensions({ path: join(f.root, "absent.json") }),
+    disabled,
+  );
+  assert.deepEqual(await sessionExtensions({ path: "relative" }), disabled);
   assert.equal(await sessionExtensions({ path: "" }), null);
 });
 

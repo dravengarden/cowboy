@@ -80,8 +80,7 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            "enum": ["review", "design_review", "analysis"]
           },
           "label": {
             "type": "string",

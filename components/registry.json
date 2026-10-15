@@ -25047,7 +25047,7 @@
           "sources": [
             "components/plugin-contract"
           ],
-          "digest": "sha256:cd459c4afe7c4496464e15f062512977166319c089775f8418634c2bcfdda840",
+          "digest": "sha256:f0540116bfb081cec28d433b1861ee132a5b5ac4f4d04b1626a3844c4f71922d",
           "package": {
             "kind": "npm",
             "name": "@cowboy/plugin-contract",
@@ -25061,7 +25061,7 @@
           "sources": [
             "components/plugin-sdk"
           ],
-          "digest": "sha256:fce943c20728240501aa7a2e917df671d430aff006b8ae763471d5a253d55103",
+          "digest": "sha256:88ba933c1b6184f1c07c2f3a4c780b437a63ea5b94a6c2167d3730d9937c908c",
           "package": {
             "kind": "cargo",
             "name": "cowboy-plugin-sdk",
@@ -25215,7 +25215,7 @@
           "sources": [
             "components/memory-client"
           ],
-          "digest": "sha256:205e75a689bab198727cf0ee9e76770b1ceb5e72ce0e3b058f36efec919df6dd",
+          "digest": "sha256:879f30e8f0516aa7a1516ea02a08862383fbf88fdcb5ddec110cd8b1d5e78f3e",
           "package": {
             "kind": "npm",
             "name": "@cowboy/memory-client",

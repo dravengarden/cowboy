@@ -13,6 +13,11 @@ use super::{MachinePluginStore, atomic_write};
 use crate::machine_protocol::PluginInstallationState;
 use crate::runtime_wire::{SESSION_EXTENSIONS_SCHEMA, SessionExtensions};
 
+/// Provider launchers refuse larger descriptors.
+const DESCRIPTOR_LIMIT: usize = 65_536;
+/// Call profiles a descriptor carries; each guidance is at most 4 KiB.
+const MAX_CALL_PROFILES: usize = 8;
+
 /// Name of the variable that locates a session's extension descriptor.
 pub(crate) const SESSION_EXTENSIONS_ENV: &str = "COWBOY_SESSION_EXTENSIONS";
 /// Value of that variable when the descriptor could not be resolved: the
@@ -93,6 +98,14 @@ impl MachinePluginStore {
         // Both switches off means no memory at all, including observation.
         let memory = (memory.len() == 1 && (switches.memory_tools || switches.memory_recall))
             .then(|| memory.remove(0));
+        if profiles.len() > MAX_CALL_PROFILES {
+            tracing::warn!(
+                profiles = profiles.len(),
+                kept = MAX_CALL_PROFILES,
+                "too many active call profiles; the rest are omitted"
+            );
+            profiles.truncate(MAX_CALL_PROFILES);
+        }
         Ok(json!({
             "schema": SESSION_EXTENSIONS_SCHEMA,
             "memory": memory,
@@ -109,10 +122,14 @@ impl MachinePluginStore {
         switches: SessionExtensions,
     ) -> Result<PathBuf> {
         let path = descriptor_path(state_dir, session_id).context("invalid session id")?;
-        let descriptor = self.session_extensions(switches)?;
+        let bytes = serde_json::to_vec(&self.session_extensions(switches)?)?;
+        ensure!(
+            bytes.len() <= DESCRIPTOR_LIMIT,
+            "session extension descriptor exceeds its read limit"
+        );
         let parent = path.parent().context("descriptor has no parent")?;
         std::fs::create_dir_all(parent)?;
-        atomic_write(&path, &serde_json::to_vec(&descriptor)?, 0o600)?;
+        atomic_write(&path, &bytes, 0o600)?;
         Ok(path)
     }
 }

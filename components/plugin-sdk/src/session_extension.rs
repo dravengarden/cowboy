@@ -14,6 +14,9 @@ pub const CALL_PROFILE_SCHEMA_VERSION: u16 = 1;
 pub const SESSION_EXTENSION_SDK: (u64, u64, u64) = (1, 12, 0);
 const MAX_TOOLS: usize = 16;
 const MAX_PURPOSES: usize = 16;
+/// Purposes core managed calls accept. Payload schema 1 may label and select
+/// among them; profile-defined purposes need a later schema and core change.
+pub const CALL_PURPOSES: [&str; 3] = ["review", "design_review", "analysis"];
 const MAX_GUIDANCE_BYTES: usize = 4096;
 
 /// A memory service a Provider bridge reaches through `cowboy.memory-client`.
@@ -160,7 +163,8 @@ impl CallProfileContract {
                 && self
                     .purposes
                     .iter()
-                    .all(|purpose| identifier(&purpose.id) && label(&purpose.label, 64))
+                    .all(|purpose| CALL_PURPOSES.contains(&purpose.id.as_str())
+                        && label(&purpose.label, 64))
                 && self
                     .purposes
                     .iter()
@@ -311,6 +315,10 @@ mod tests {
             (
                 "purposes",
                 serde_json::json!([{"id": "Review!", "label": "A"}]),
+            ),
+            (
+                "purposes",
+                serde_json::json!([{"id": "triage", "label": "A"}]),
             ),
             ("guidance", serde_json::json!("x".repeat(4097))),
             ("guidance", serde_json::json!("bell\u{7}")),
