@@ -86,6 +86,69 @@ pub(super) async fn history(
     }
 }
 
+/// The History list without content (`draft_history_index`); a client
+/// fetches a version's text and attachments only when it is opened.
+pub(super) async fn history_index(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(store) = &state.store else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Durable storage is unavailable",
+        );
+    };
+    match store
+        .draft_history_index(&auth.principal.user_id, &id)
+        .await
+    {
+        Ok(index) => ([(header::CACHE_CONTROL, "no-store")], Json(index)).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "read draft recovery index");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not load recovery history",
+            )
+        }
+    }
+}
+
+pub(super) async fn history_snapshot(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path((id, revision)): Path<(String, i64)>,
+) -> Response {
+    let Some(store) = &state.store else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Durable storage is unavailable",
+        );
+    };
+    match store
+        .draft_history_snapshot(&auth.principal.user_id, &id, revision)
+        .await
+    {
+        // A kept snapshot never changes: a client may cache it for good.
+        Ok(Some(snapshot)) => (
+            [(
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable",
+            )],
+            Json(snapshot),
+        )
+            .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "This version is no longer kept"),
+        Err(e) => {
+            tracing::error!(error = %e, "read draft recovery snapshot");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not load this version",
+            )
+        }
+    }
+}
+
 pub(super) async fn mutate(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
@@ -164,5 +227,49 @@ pub(super) async fn undo_copy(
             StatusCode::CONFLICT,
             "This draft was edited, scheduled, sent or removed; it has been kept",
         )
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use axum::{Router, extract::Path, routing::get};
+
+    /// The History index and a numbered version share one path position; the
+    /// literal segment must win, and the full list must stay where old
+    /// clients read it.
+    #[tokio::test]
+    async fn history_routes_coexist() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let app = Router::new()
+            .route("/api/drafts/{id}/history", get(|| async { "list" }))
+            .route("/api/drafts/{id}/history/index", get(|| async { "index" }))
+            .route(
+                "/api/drafts/{id}/history/{revision}",
+                get(|Path((_, revision)): Path<(String, i64)>| async move {
+                    format!("version {revision}")
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let read = |path: &'static str| async move {
+            let response = reqwest::get(format!("http://{address}{path}"))
+                .await
+                .unwrap();
+            (response.status().as_u16(), response.text().await.unwrap())
+        };
+        assert_eq!(
+            read("/api/drafts/doc/history").await,
+            (200, "list".to_owned())
+        );
+        assert_eq!(
+            read("/api/drafts/doc/history/index").await,
+            (200, "index".to_owned())
+        );
+        assert_eq!(
+            read("/api/drafts/doc/history/7").await,
+            (200, "version 7".to_owned())
+        );
+        assert_eq!(read("/api/drafts/doc/history/latest").await.0, 400);
     }
 }

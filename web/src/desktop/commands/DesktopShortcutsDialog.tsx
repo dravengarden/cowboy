@@ -20,6 +20,7 @@ import {
   DESKTOP_DOCUMENT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
+  desktopLeaderGroupSequence,
   desktopWorkspaceSequence,
 } from "./workspaceShortcuts";
 import { DesktopModal } from "../DesktopModal";
@@ -61,12 +62,26 @@ const NAVIGATION: ShortcutRow[] = [
     description:
       "Edit the literal markdown instead of the live preview. Obsidian's Mod+E is reserved by Chrome and macOS, so Source mode uses the workspace prefix",
   },
-  { keys: ["R"], title: "Open Run Configuration in Top Bar" },
-  { keys: ["U"], title: "Open Usage Limits in Top Bar" },
-  { keys: ["A"], title: "Verify Product Session when prompted in Top Bar" },
-  { keys: ["L"], title: "Reload Session Runtime in Top Bar" },
-  { keys: ["C"], title: "Compact Conversation in Top Bar" },
-  { keys: ["X"], title: "Clear Conversation in Top Bar" },
+  // The Top bar group (FOCUS.md "Leader"): `␣T` then the key runs the
+  // control from any focus; the bare letter works while the bar owns focus.
+  ...([
+    ["R", "Open Run Configuration"],
+    ["U", "Open Usage Limits"],
+    ["A", "Verify Product Session (while it is requested)"],
+    ["N", "Update Provider (while a newer release waits)"],
+    ["L", "Reload Session Runtime"],
+    ["C", "Compact Conversation"],
+    ["X", "Clear Conversation"],
+  ] as const).map(([key, title], index): ShortcutRow => ({
+    keys: [desktopLeaderGroupSequence(DESKTOP_WORKSPACE_KEYS.focusTopbar, key), key],
+    title: `${title} in Top Bar`,
+    ...(index === 0
+      ? {
+        description:
+          "The Top bar group runs from any focus; the bare letter works while the Top Bar owns focus",
+      }
+      : {}),
+  })),
   {
     keys: [DESKTOP_SHORTCUTS.focusQueue, DESKTOP_SHORTCUTS.focusDrafts],
     title: "Queue / Drafts inside Prompt",
@@ -100,10 +115,14 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["J/K"], title: "Move through items in list regions" },
   { keys: ["Shift+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["O"], title: "Toggle continuous Order mode for list reordering" },
-  { keys: ["G", "G"], title: "First item" },
+  {
+    keys: ["gg"],
+    title: "First item",
+    description: "A pending g takes the next key: any other key cancels it and does nothing else",
+  },
   { keys: ["Ctrl+D/U", "Ctrl+F/B"], title: "Half page / page down and up in a list, cursor and view together" },
-  { keys: ["Z Z", "Z T", "Z B"], title: "Scroll the cursor row to the centre / top / bottom" },
-  { keys: ["Z A", "Shift+Z M", "Shift+Z R"], title: "Sessions: fold button, close every folder, open every folder" },
+  { keys: ["zz", "zt", "zb"], title: "Scroll the cursor row to the centre / top / bottom" },
+  { keys: ["za", "zM", "zR"], title: "Sessions: fold button, close every folder, open every folder" },
   { keys: ["Shift+G"], title: "Last item" },
   {
     keys: ["'"],
@@ -130,6 +149,11 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.saveDraft], title: "Save edited Queue/Draft changes, save a document, or save the new prompt as a draft" },
   { keys: ["Alt+Enter"], title: "Force push the current prompt" },
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
+  {
+    keys: [DESKTOP_SHORTCUTS.reconnect],
+    title: "Reconnect now",
+    description: "Only while the status line shows a Retry control",
+  },
   {
     keys: [DESKTOP_SHORTCUTS.switchSession],
     title: "Switch session: every session gets a letter label, press it to open",
@@ -178,12 +202,20 @@ const CONVERSATION: ShortcutRow[] = [
   { keys: ["J/K"], title: "Scroll down / up by one reading line" },
   { keys: ["Ctrl+D/U"], title: "Scroll down / up by half a page" },
   { keys: ["Ctrl+F/B"], title: "Scroll down / up by a page" },
-  { keys: ["G", "G"], title: "Jump to the oldest loaded message" },
+  { keys: ["gg"], title: "Jump to the oldest loaded message" },
   { keys: ["Shift+G"], title: "Jump to latest and enable Following" },
   { keys: ["F"], title: "Toggle automatic Following" },
+  { keys: ["V"], title: "Switch the Conversation between History and Explore" },
   { keys: ["Tab / Shift+Tab"], title: "Select the next / previous expandable widget" },
   { keys: ["H/L"], title: "Close / open the selected widget" },
   { keys: ["Enter"], title: "Toggle the selected widget" },
+  {
+    keys: ["P"],
+    title: "Explore: open or close the Page Index",
+    description: "J/K move, L or Enter opens, / searches, H or Esc closes",
+  },
+  { keys: ["[", "]"], title: "Explore: previous / next page" },
+  { keys: ["N"], title: "Explore: new page, focusing the Prompt editor" },
   {
     keys: [DESKTOP_APPROVAL_SHORTCUT],
     title: "Answer a pending approval with its first choice (1–9 pick the others)",
@@ -328,9 +360,13 @@ export function DesktopShortcutsDialog({
         <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
         <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
         <ShortcutSection title="Direct actions" rows={DIRECT_ACTIONS} />
-        {workspace.focusedRegion === "conversation.transcript" && (
-          <ShortcutSection title="Conversation reading" rows={CONVERSATION} active />
-        )}
+        {/* Reference material stays readable from every focus; it lights
+            up while the reader owns the keys. */}
+        <ShortcutSection
+          title="Conversation reading"
+          rows={CONVERSATION}
+          active={workspace.focusedRegion === "conversation.transcript"}
+        />
         {paneCommands.length > 0 && (
           <ShortcutSection
             title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}

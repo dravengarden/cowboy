@@ -1,12 +1,12 @@
-import { Alert, Box, Button, Typography } from "@mui/material";
+import { Alert, Box, Button } from "@mui/material";
 import {
   ReviewCodeStatus,
   reviewCodeStatusAction,
   reviewCodeStatusRow,
+  ReviewStatusMessage,
 } from "./ReviewCodeStatus.tsx";
 import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer.ts";
 import type { useOwnedReviewDiff } from "./useOwnedReviewDiff.ts";
-import { HintTooltip } from "../../HintTooltip";
 
 /** Read-only diff chrome: one attention row, no native reload/Apply control. */
 export function ReviewDiffCodeStatus({ diff, intelligence }: {
@@ -47,18 +47,14 @@ export function ReviewDiffCodeStatus({ diff, intelligence }: {
         </Button>
       }
     >
-      <HintTooltip title={mismatch
+      <ReviewStatusMessage
+        summary={mismatch
+          ? "Diff differs from current file · intelligence hidden"
+          : "Diff intelligence unavailable"}
+        detail={mismatch
           ? "Diff cannot be matched to the complete current file. No positions are queried."
-          : "Complete current-file content is unavailable or exceeds the bounded preview. Nothing was reopened or retried automatically."}>
-        <Typography
-          variant="body2"
-          noWrap
-        >
-          {mismatch
-            ? "Diff differs from current file · intelligence hidden"
-            : "Diff intelligence unavailable"}
-        </Typography>
-      </HintTooltip>
+          : "Complete current-file content is unavailable or exceeds the bounded preview. Nothing was reopened or retried automatically."}
+      />
     </Alert>
   );
 }

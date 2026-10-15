@@ -12,6 +12,7 @@
 
 mod agent_tools;
 mod dormant_pins;
+mod memory_reclaim;
 mod secure_transport;
 mod session_create_replay;
 mod session_provider_updates;
@@ -795,6 +796,14 @@ mod component_supersession_tests {
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/drafts/doc/history"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/index"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history/7"),
             RouteAuth::Product
         );
         assert_eq!(
@@ -10147,6 +10156,7 @@ async fn serve_axum(
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
     session_reclaim::listen_for_wakes(&state);
+    memory_reclaim::start(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
         state
             .store
@@ -10228,6 +10238,8 @@ async fn serve_axum(
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route("/api/drafts/{id}", get(draft_documents::read))
         .route("/api/drafts/{id}/history", get(draft_documents::history))
+        .route("/api/drafts/{id}/history/index", get(draft_documents::history_index))
+        .route("/api/drafts/{id}/history/{revision}", get(draft_documents::history_snapshot))
         .route("/api/sessions/{id}/draft-copies/{cmid}", delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route(
             "/api/observability/batches",
@@ -16963,6 +16975,8 @@ struct CodeChangeResponse {
     status: &'static str,
     staged: bool,
     unstaged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -17826,6 +17840,7 @@ async fn api_code_changes(
                     old_path: change.old_path,
                     staged: change.staged,
                     unstaged: change.unstaged,
+                    fingerprint: change.fingerprint,
                     status: match change.status {
                         crate::code_review::ChangeStatus::Modified => "modified",
                         crate::code_review::ChangeStatus::Added => "added",

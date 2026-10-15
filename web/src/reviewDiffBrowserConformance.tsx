@@ -354,7 +354,9 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
     await until(
       () =>
         status() === "mismatch" &&
-        !!container.querySelector('[title*="Open full source"]'),
+        [...container.querySelectorAll("[data-review-status-detail]")].some(
+          (detail) => detail.textContent?.includes("Open full source"),
+        ),
       "native mismatch",
     );
     check(

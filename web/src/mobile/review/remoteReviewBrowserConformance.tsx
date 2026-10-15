@@ -50,6 +50,14 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
       deletions: 1,
       patch: "@@ -1 +1 @@\n-local\n+remote",
       limited: false,
+    }, {
+      path: "second.txt",
+      oldPath: null,
+      status: "added",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -0,0 +1 @@\n+second",
+      limited: false,
     }],
   });
   const pulls = (title = "Remote change", empty = false) =>
@@ -121,11 +129,22 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
   const root = createRoot(container);
   function Harness({ context }: { context: string }) {
     const [binding, setBinding] = useState<RemoteReviewBinding | null>(null);
+    const [progress, setProgress] = useState<Record<string, string>>({});
     return (
       <RemoteReviewApp
         context={context}
         title={context}
         binding={binding}
+        marks={{
+          progress,
+          mark: (key, mark) =>
+            setProgress((current) => {
+              const next = { ...current };
+              if (mark === null) delete next[key];
+              else next[key] = mark;
+              return next;
+            }),
+        }}
         active
         onBind={(value) => {
           saved = value;
@@ -244,7 +263,26 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
       requests.every((url) => url.pathname.includes("/extensions")),
       "remote diff contacted local file or native buffer API",
     );
+    const previous = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Previous file"]',
+    );
+    check(previous?.disabled, "the first file offered a previous file");
+    click("Next file");
+    await until(
+      "next file",
+      () => !!container.textContent?.includes("second.txt"),
+    );
+    click("Viewed");
+    check(
+      container.querySelector('[aria-pressed="true"]')?.textContent ===
+        "Viewed",
+      "the viewed mark did not hold",
+    );
     click("PR files");
+    await until(
+      "viewed count",
+      () => !!container.textContent?.includes("1/2 viewed"),
+    );
     click("Next PR files");
     await until("page pending", () => pending.length > 0);
     const last = requests.at(-1)!;
@@ -348,6 +386,7 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
       "relationship filter executes a new bounded account search",
       "PR association retains repository identity without code bodies",
       "actual CodeMirror renders the remote patch without workspace or native reads",
+      "PR files step to the next file in place and keep a viewed mark per file",
       "PR page continuation retains repository and revision",
       "concurrent remote update refuses continuation and preserves readable files",
       "late private PR replies cannot cross session changes",

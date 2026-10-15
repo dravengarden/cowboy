@@ -42,7 +42,7 @@ impl Drop for Pending {
 }
 
 /// Record a wake and return every session woken within `WAKE_PROTECTION`.
-fn recent_wakes(woken: Option<&str>) -> std::collections::HashSet<String> {
+pub(super) fn recent_wakes(woken: Option<&str>) -> std::collections::HashSet<String> {
     let now = std::time::Instant::now();
     let mut wakes = RECENT_WAKES.lock();
     if let Some(woken) = woken {
@@ -205,7 +205,7 @@ async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
     Some(capacity.max_sessions as usize)
 }
 
-fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
+pub(super) fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
     state
         .hub
         .session_list()

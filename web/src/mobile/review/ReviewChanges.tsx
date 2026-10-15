@@ -225,6 +225,7 @@ export function ReviewChanges({
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+  const shownList = useRef<string | undefined>(undefined);
   const request = useRef<AbortController | undefined>(undefined);
   const reload = useRef<() => void>(() => {});
   const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
@@ -270,13 +271,19 @@ export function ReviewChanges({
       );
       if (controller.signal.aborted) return;
       settleRetry();
+      // A refresh of the same list keeps the reader's folds and how far the
+      // list has been revealed; only a new session or comparison resets.
+      const listKey = JSON.stringify([sessionId, comparison ?? null]);
+      if (shownList.current !== listKey) {
+        shownList.current = listKey;
+        setVisibleCount(REVIEW_WINDOW_SIZE);
+        setCollapsed(new Set());
+      }
       setSnapshot({ sessionId, comparison, result });
       if (comparison === undefined && onComparisonChange) {
         onComparisonChange(result.defaultComparison ?? null);
         if (result.defaultComparison) return;
       }
-      setVisibleCount(REVIEW_WINDOW_SIZE);
-      setCollapsed(new Set());
       onRevision(result.revision);
     } catch (reason) {
       if (
@@ -416,13 +423,13 @@ export function ReviewChanges({
           ...mobileNativeYScrollSx,
         }}
       >
-        {loading || (!!sessionId && !result && !error)
+        {(loading && !result) || (!!sessionId && !result && !error)
           ? (
             <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
               <CircularProgress size={24} />
             </Box>
           )
-          : error
+          : error && !result
           ? (
             <Alert
               severity="error"

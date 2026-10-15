@@ -73,6 +73,7 @@ import {
   type DraftContent,
   draftContent,
   type DraftDocument,
+  type DraftSnapshotSummary,
   mergeDraftContent,
   sameDraftContent,
 } from "./model";
@@ -249,11 +250,43 @@ function DraftEditingSession(
   const titleRevision = useRef(initial.metadata_revision);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<readonly DraftDocument[] | null>(null);
+  // The History list carries no content; a version's text and attachments
+  // arrive when it is opened, or earlier by a low-priority prefetch.
+  const [history, setHistory] = useState<
+    readonly DraftSnapshotSummary[] | null
+  >(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyPreview, setHistoryPreview] = useState<DraftDocument | null>(
-    null,
-  );
+  const [historyPreview, setHistoryPreview] = useState<
+    {
+      summary: DraftSnapshotSummary;
+      document: DraftDocument | null;
+      error: string | null;
+    } | null
+  >(null);
+  const historyPrefetch = useRef<AbortController | null>(null);
+  useEffect(() => () => historyPrefetch.current?.abort(), []);
+  const closeHistory = (): void => {
+    historyPrefetch.current?.abort();
+    setHistory(null);
+    setHistoryPreview(null);
+  };
+  const previewVersion = (summary: DraftSnapshotSummary): void => {
+    setHistoryPreview({ summary, document: null, error: null });
+    void draftRepository().historySnapshot(initial.id, summary.revision).then(
+      (document) =>
+        setHistoryPreview((open) =>
+          open?.summary.revision === summary.revision
+            ? { ...open, document }
+            : open
+        ),
+      (cause: Error) =>
+        setHistoryPreview((open) =>
+          open?.summary.revision === summary.revision
+            ? { ...open, error: cause.message }
+            : open
+        ),
+    );
+  };
   const [readableWidth, setReadableWidth] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const dirtyRef = useRef(false);
@@ -543,12 +576,19 @@ function DraftEditingSession(
     try {
       // History is how a user recovers from a save problem; never gate it.
       await flush().catch((e: Error) => setError(e.message));
-      const response = await fetch(
-        `/api/drafts/${encodeURIComponent(initial.id)}/history`,
-        { cache: "no-store" },
+      const repository = draftRepository();
+      const index = await repository.historyIndex(initial.id);
+      setHistory(index);
+      // The newest versions are the likeliest to be opened: fetch them
+      // while the link has room, so opening one is instant.
+      historyPrefetch.current?.abort();
+      const prefetch = new AbortController();
+      historyPrefetch.current = prefetch;
+      void repository.prefetchHistory(
+        initial.id,
+        index.slice(0, 3).map((entry) => entry.revision),
+        prefetch.signal,
       );
-      if (!response.ok) throw new Error("Could not load recovery history");
-      setHistory(await response.json() as DraftDocument[]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Recovery unavailable");
     } finally {
@@ -1317,20 +1357,8 @@ function DraftEditingSession(
         <Sheet
           open
           title="Recovery history"
-          onClose={() => {
-            setHistory(null);
-            setHistoryPreview(null);
-          }}
-          actions={
-            <Button
-              onClick={() => {
-                setHistory(null);
-                setHistoryPreview(null);
-              }}
-            >
-              Close
-            </Button>
-          }
+          onClose={closeHistory}
+          actions={<Button onClick={closeHistory}>Close</Button>}
         >
           <Typography variant="body2" color="text.secondary">
             Snapshots taken every few minutes while you write, and the text as
@@ -1344,35 +1372,66 @@ function DraftEditingSession(
               <Button
                 key={version.revision}
                 fullWidth
-                onClick={() => setHistoryPreview(version)}
+                data-draft-history-version={version.revision}
+                aria-pressed={historyPreview?.summary.revision ===
+                  version.revision}
+                onClick={() => previewVersion(version)}
+                sx={{
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  textTransform: "none",
+                  textAlign: "left",
+                }}
               >
-                {new Date(version.updated_at_ms).toLocaleString()} ·{" "}
-                {version.body.length.toLocaleString()} characters
+                <span>
+                  {new Date(version.updated_at_ms).toLocaleString()} ·{" "}
+                  {version.characters.toLocaleString()} characters
+                  {version.attachments > 0
+                    ? ` · ${version.attachments.toLocaleString()} ${
+                      version.attachments === 1 ? "attachment" : "attachments"
+                    }`
+                    : ""}
+                </span>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  sx={{ maxWidth: "100%" }}
+                >
+                  {version.preview || "Empty"}
+                </Typography>
               </Button>
             ))}
             {historyPreview && (
               <>
                 <Box
                   component="pre"
+                  data-draft-history-preview
                   sx={{
                     whiteSpace: "pre-wrap",
                     overflowWrap: "anywhere",
                     fontSize: "0.9rem",
                   }}
                 >
-                  {historyPreview.body}
+                  {historyPreview.document?.body ??
+                    historyPreview.error ??
+                    "Loading this version…"}
                 </Box>
                 <Button
-                  onClick={() =>
+                  disabled={!historyPreview.document}
+                  onClick={() => {
+                    const version = historyPreview.document;
+                    if (!version) return;
                     void owner.change({
                       type: "write",
-                      body: historyPreview.body,
-                      attachments: historyPreview.attachments,
+                      body: version.body,
+                      attachments: version.attachments,
                     }).then(() => {
                       dirtyRef.current = false;
-                      setHistory(null);
+                      closeHistory();
                       onReload();
-                    }).catch((e: Error) => setError(e.message))}
+                    }).catch((e: Error) => setError(e.message));
+                  }}
                 >
                   Restore this version
                 </Button>

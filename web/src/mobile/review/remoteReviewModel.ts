@@ -133,3 +133,35 @@ export function sameReview(
     left.number === right.number &&
     left.revision === right.revision && left.totalFiles === right.totalFiles;
 }
+
+function fnv1a(text: string, seed: number): string {
+  let hash = seed >>> 0;
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/** Synced progress key of one PR file, or none when it would not fit. */
+export function remoteFileKey(
+  binding: Pick<RemoteReviewBinding, "repositoryId" | "number">,
+  path: string,
+): string | undefined {
+  const key = `remote\u0000${binding.repositoryId}\u0000${binding.number}\u0000${path}`;
+  return key.length <= 2048 ? key : undefined;
+}
+
+/**
+ * What a "viewed" mark vouches for: this file's change as shown. A push that
+ * leaves the file alone keeps the mark; one that changes it clears it.
+ */
+export function remoteFileMark(file: RemoteReviewFile): string {
+  const shown = [
+    file.status,
+    file.oldPath ?? "",
+    `${file.additions}/${file.deletions}`,
+    file.patch ?? "",
+  ].join("\u0000");
+  return `pr:${fnv1a(shown, 0x811c9dc5)}${fnv1a(shown, 0x01000193)}`;
+}
