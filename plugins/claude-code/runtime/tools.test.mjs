@@ -1688,6 +1688,63 @@ test("the settle wait ends at the process exit notification", async (t) => {
   );
 });
 
+test("an idle MCP server costs one read per wait bound", async (t) => {
+  const { tools, connection } = await fixture(t);
+  connection.listeners = new Set();
+  tools.state.mcp.idle = {};
+  let reads = 0;
+  tools.mcpCall = async (method) => {
+    assert.equal(method, "process/read");
+    reads++;
+    return { chunks: [], exited: false, closed: false, exitCode: null };
+  };
+  const result = await tools.mcpRead("idle", 7, 20);
+  assert.deepEqual(result, {
+    chunks: [],
+    afterSeq: 7,
+    closed: false,
+    exitCode: null,
+  });
+  assert.equal(reads, 1);
+});
+
+test("an MCP notification during the wait is read at once", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const listeners = new Set();
+  connection.listeners = listeners;
+  tools.state.mcp.server = {};
+  let reads = 0;
+  tools.mcpCall = async () => {
+    reads++;
+    if (reads === 1) {
+      setTimeout(() => {
+        for (const listener of listeners) {
+          listener({
+            method: "process/output",
+            params: { processId: "server" },
+          });
+        }
+      }, 10);
+      return { chunks: [], exited: false, closed: false, exitCode: null };
+    }
+    return {
+      chunks: [{
+        seq: 1,
+        stream: "stdout",
+        chunk: Buffer.from("{}").toString("base64"),
+      }],
+      exited: false,
+      closed: false,
+      exitCode: null,
+    };
+  };
+  const started = Date.now();
+  const result = await tools.mcpRead("server", null, 5000);
+  assert.equal(reads, 2);
+  assert.equal(result.afterSeq, 1);
+  assert.ok(Date.now() - started < 1000);
+});
+
 test("cksum digests match the target's POSIX cksum", () => {
   for (const text of ["", "a", "line\n".repeat(70000), "会话🦅"]) {
     const bytes = Buffer.from(text);

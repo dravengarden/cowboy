@@ -71,6 +71,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    KeyboardDoubleArrowLeft,
     ViewListOutlined,
     ArrowBackIosNew,
     ChatBubbleOutline,
@@ -410,9 +411,9 @@ const DesktopRegionShortcut = lazy(async () => {
     const module = await import("./desktop/DesktopRegionShortcut");
     return { default: module.DesktopRegionShortcut };
 });
-// The Sessions header's collapse button loads this module long before the
-// first collapse, but a React.lazy that has never rendered still suspends
-// once even for a cached module. The rail is mounted by the collapse itself,
+// The Sessions bar loads this module long before the first collapse (see
+// DesktopSidebarAction below), but a React.lazy that has never rendered still
+// suspends once even for a cached module. The rail is mounted by the collapse itself,
 // so that one suspension committed its null fallback: for a frame the hidden
 // list and the unresolved rail left no Sessions column at all and the work
 // panes reflowed across it. Once the module is here, render the rail directly.
@@ -421,10 +422,6 @@ const loadDesktopPaneCollapse = async (): Promise<typeof import("./desktop/Deskt
     desktopPaneCollapseModule = await import("./desktop/DesktopPaneCollapse");
     return desktopPaneCollapseModule;
 };
-const DesktopPaneCollapseButton = lazy(async () => {
-    const module = await loadDesktopPaneCollapse();
-    return { default: module.DesktopPaneCollapseButton };
-});
 const LazyDesktopSessionsRail = lazy(async () => {
     const module = await loadDesktopPaneCollapse();
     return { default: module.DesktopSessionsRail };
@@ -447,6 +444,8 @@ const DesktopSplitterHint = lazy(async () => {
     return { default: module.DesktopSplitterHint };
 });
 const DesktopSidebarAction = lazy(async () => {
+    // The Sessions bar renders first; warm the collapsed rail's module with it.
+    void loadDesktopPaneCollapse();
     const module = await import("./desktop/DesktopSidebarAction");
     return { default: module.DesktopSidebarAction };
 });
@@ -4377,7 +4376,7 @@ export function App({
                         data-desktop-sessions-activities
                         role="toolbar"
                         aria-label="Sessions views"
-                        sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0, WebkitAppRegion: "no-drag" }}
+                        sx={{ display: "flex", alignItems: "center", gap: 0.25, flexShrink: 0, ml: -0.75, WebkitAppRegion: "no-drag" }}
                     >
                         <DesktopSidebarAction
                             data-desktop-sessions-view="sessions"
@@ -4426,10 +4425,15 @@ export function App({
                             />
                         )}
                     </Box>
-                    <DesktopPaneCollapseButton
-                        pane="sessions"
-                        sx={{ ml: 0.5, mr: -0.75, WebkitAppRegion: "no-drag" }}
-                    />
+                    <DesktopSidebarAction
+                        data-desktop-pane-collapse="sessions"
+                        label="Collapse Sessions"
+                        shortcut={DESKTOP_SHORTCUTS.toggleSessions}
+                        onClick={(): void => desktopWorkspace?.togglePane("sessions")}
+                        sx={{ mr: -0.75 }}
+                    >
+                        <KeyboardDoubleArrowLeft />
+                    </DesktopSidebarAction>
                 </Suspense>
             ) : (
                 <Typography
