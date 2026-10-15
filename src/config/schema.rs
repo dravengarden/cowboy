@@ -32,6 +32,13 @@ pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
     Key::new(Scope::Service, "sessions.reclaim_on_capacity");
 pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
     Key::new(Scope::Service, "sessions.reclaim_min_idle");
+pub const SESSIONS_MEMORY_RECLAIM: Key<bool> = Key::new(Scope::Service, "sessions.memory_reclaim");
+pub const SESSIONS_MEMORY_RECLAIM_BELOW: Key<u64> =
+    Key::new(Scope::Service, "sessions.memory_reclaim_below");
+pub const SESSIONS_MEMORY_RECLAIM_UNTIL: Key<u64> =
+    Key::new(Scope::Service, "sessions.memory_reclaim_until");
+pub const SESSIONS_MEMORY_RECLAIM_MIN_IDLE: Key<Duration> =
+    Key::new(Scope::Service, "sessions.memory_reclaim_min_idle");
 
 pub static SERVICE_FIELDS: &[Field] = &[
     Field {
@@ -120,7 +127,44 @@ pub static SERVICE_FIELDS: &[Field] = &[
         },
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
-        doc: "A session is eligible for reclaim only after this long without any event.\nKeep it at or above the longest Provider prompt-cache lifetime so a\nreclaimed session's cache has already expired and resuming costs nothing\nextra.",
+        doc: "A session is eligible for reclaim only after this long without any event.\nA Provider prompt cache outlives the process only while unexpired and when\nthe resumed request repeats the same prefix, so below the cache lifetime a\nresume can turn a cache read into a cache write.",
+    },
+    Field {
+        key: "sessions.memory_reclaim",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Hibernate idle sessions on a Device whose reported memory headroom (the\ntightest cgroup limit above its Agent workers, less their usage, plus\ndroppable file cache) falls below memory_reclaim_below, longest-idle first\nand one at a time, until it is back above memory_reclaim_until.",
+    },
+    Field {
+        key: "sessions.memory_reclaim_below",
+        kind: Kind::Bytes {
+            min: 128 << 20,
+            max: 1 << 40,
+        },
+        default: Value::Bytes(1 << 30),
+        reload: Reload::Live,
+        doc: "Headroom below which memory reclaim starts.",
+    },
+    Field {
+        key: "sessions.memory_reclaim_until",
+        kind: Kind::Bytes {
+            min: 128 << 20,
+            max: 1 << 40,
+        },
+        default: Value::Bytes(2 << 30),
+        reload: Reload::Live,
+        doc: "Headroom at which memory reclaim stops; never below memory_reclaim_below.",
+    },
+    Field {
+        key: "sessions.memory_reclaim_min_idle",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(7 * 24),
+        },
+        default: Value::Duration(Duration::from_mins(15)),
+        reload: Reload::Live,
+        doc: "Memory reclaim only hibernates sessions this long without any event. Busy,\npermission-waiting, background-working, system and cache-protected sessions\nare never chosen.",
     },
 ];
 

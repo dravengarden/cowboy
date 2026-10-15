@@ -12,6 +12,7 @@
 
 mod agent_tools;
 mod dormant_pins;
+mod memory_reclaim;
 mod secure_transport;
 mod session_create_replay;
 mod session_provider_updates;
@@ -10155,6 +10156,7 @@ async fn serve_axum(
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
     session_reclaim::listen_for_wakes(&state);
+    memory_reclaim::start(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
         state
             .store
