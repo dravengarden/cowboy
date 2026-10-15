@@ -385,7 +385,9 @@ impl SqliteStore {
         }
         let _lock = self.lock(false)?;
         let mut state = self.state()?;
-        for chunk in entries.chunks(4) {
+        // One connection and durable transaction per chunk; the estimate keeps
+        // a chunk inside its segment's size bound.
+        for chunk in entries.chunks(32) {
             let mut segments = self.segments()?;
             let estimate: u64 = chunk
                 .iter()
