@@ -491,6 +491,25 @@ test("a closed command's status is its end line's, even pages later", async () =
   });
 });
 
+test("a command's final directory arrives on its end line", async (t) => {
+  const { tools, bash, home } = await shellFixture(t);
+  const methods = [];
+  const call = tools.connection.call.bind(tools.connection);
+  tools.connection.call = async (method, params) => {
+    methods.push(method);
+    return await call(method, params);
+  };
+  await bash({ command: "cd sub" });
+  assert.match(await bash({ command: "pwd" }), /\/project\/sub$/);
+  assert.deepEqual(await bash({ command: "cd ..; exit 3" }), {
+    error: "Exit code 3",
+  });
+  assert.match(await bash({ command: "pwd" }), /\/project\/sub$/);
+  // No file reads or removals: the wrapper settled the directory file.
+  assert.deepEqual(methods.filter((method) => method.startsWith("fs/")), []);
+  assert.deepEqual(await readdir(join(home, ".cache/cowboy/shell")), []);
+});
+
 test("task commands are kept only while running, within a bound", async (t) => {
   const { tools, bash } = await shellFixture(t);
   const long = `: ${"x".repeat(60000)}`;

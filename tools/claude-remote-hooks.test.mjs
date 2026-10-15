@@ -507,32 +507,58 @@ test("a target hook gets its input on stdin, the project directory and separate 
     call: { id: "hook-1" },
   });
   assert.deepEqual(result, { exitCode: 2, stdout: "out", stderr: "err" });
-  // The private directory is prepared on the target before any write.
+  // The private directory (the environment file's) is prepared first.
   const prepare = calls.find(({ method, params }) =>
     method === "process/start" && params.argv[2].startsWith("umask 077")
   );
-  assert.ok(
-    calls.indexOf(prepare) <
-      calls.findIndex(({ method }) => method === "fs/writeFile"),
-  );
   assert.equal(prepare.params.argv[4], "/home/target/.cache/cowboy/hook-input");
-  const written = calls.find(({ method }) => method === "fs/writeFile").params;
-  const file = fileURLToPath(written.path);
-  assert.ok(file.startsWith("/home/target/.cache/cowboy/hook-input/"));
-  assert.equal(
-    Buffer.from(written.dataBase64, "base64").toString(),
-    '{"tool_name":"Bash"}',
-  );
+  // Small input is the start request's argument, piped to the hook: no
+  // file is written or removed for it.
+  assert.ok(!calls.some(({ method }) => method === "fs/writeFile"));
+  assert.ok(!calls.some(({ method }) => method === "fs/remove"));
   const start = calls.findLast(({ method }) => method === "process/start")
     .params;
   assert.deepEqual(start.argv, [
     "/bin/bash",
     "-c",
-    'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+    'printf "%s" "$1" | exec "$0" -c "$2"',
     "/bin/bash",
-    file,
+    '{"tool_name":"Bash"}',
     "guard.sh",
   ]);
+  // Larger input travels in a private file that the shell opens as stdin.
+  calls.length = 0;
+  const large = JSON.stringify({
+    tool_name: "Write",
+    content: "x".repeat(70000),
+  });
+  await tools.runHook({
+    command: "guard.sh",
+    input: large,
+    timeoutMs: 5000,
+    call: { id: "hook-big" },
+  });
+  const written = calls.find(({ method }) => method === "fs/writeFile").params;
+  const file = fileURLToPath(written.path);
+  assert.ok(file.startsWith("/home/target/.cache/cowboy/hook-input/"));
+  assert.equal(Buffer.from(written.dataBase64, "base64").toString(), large);
+  assert.deepEqual(
+    calls.findLast(({ method }) => method === "process/start").params.argv,
+    [
+      "/bin/bash",
+      "-c",
+      'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+      "/bin/bash",
+      file,
+      "guard.sh",
+    ],
+  );
+  assert.deepEqual(
+    calls.filter(({ method }) => method === "fs/remove").map(({ params }) =>
+      params.path
+    ),
+    [written.path],
+  );
   assert.equal(start.envPolicy.set.CLAUDE_PROJECT_DIR, "/target");
   assert.match(
     start.envPolicy.set.CLAUDE_ENV_FILE,
@@ -551,11 +577,9 @@ test("a target hook gets its input on stdin, the project directory and separate 
   });
   // Even a small transcript travels as a delta into the target cache; the
   // hook reads a snapshot materialized from it.
-  const [deltaWrite, inputWrite] = calls.filter(({ method }) =>
-    method === "fs/writeFile"
-  );
+  const [deltaWrite] = calls.filter(({ method }) => method === "fs/writeFile");
   const copy = JSON.parse(
-    Buffer.from(inputWrite.params.dataBase64, "base64"),
+    calls.findLast(({ method }) => method === "process/start").params.argv[4],
   ).transcript_path;
   assert.ok(copy.endsWith(".jsonl"));
   assert.equal(fileURLToPath(deltaWrite.params.path), copy + ".delta");
@@ -572,7 +596,6 @@ test("a target hook gets its input on stdin, the project directory and separate 
       href(copy),
       href(copy + ".delta"),
       href(copy + ".cache"),
-      inputWrite.params.path,
     ].sort(),
   );
   // Exec form runs its argv directly; the placeholder is the target's.
@@ -586,9 +609,10 @@ test("a target hook gets its input on stdin, the project directory and separate 
   });
   const execStart = calls.find(({ method }) => method === "process/start")
     .params.argv;
-  assert.deepEqual(execStart.slice(2, 4), [
-    'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
+  assert.deepEqual(execStart.slice(2, 5), [
+    'i=$1 && shift && printf "%s" "$i" | exec "$@"',
     "/bin/bash",
+    "{}",
   ]);
   assert.deepEqual(execStart.slice(5), ["node", "/target/hook.js"]);
   // A lost output observation cancels the started command.
