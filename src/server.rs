@@ -16962,6 +16962,8 @@ struct CodeChangeResponse {
     status: &'static str,
     staged: bool,
     unstaged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -17825,6 +17827,7 @@ async fn api_code_changes(
                     old_path: change.old_path,
                     staged: change.staged,
                     unstaged: change.unstaged,
+                    fingerprint: change.fingerprint,
                     status: match change.status {
                         crate::code_review::ChangeStatus::Modified => "modified",
                         crate::code_review::ChangeStatus::Added => "added",
