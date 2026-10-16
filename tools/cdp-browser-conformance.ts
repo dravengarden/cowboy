@@ -18,7 +18,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],
   "managed-calls": ["runManagedCallsBrowserConformance", 11],
-  "session-fold": ["runSessionFoldBrowserConformance", 6],
+  "session-fold": ["runSessionFoldBrowserConformance", 7],
   "session-move": ["runSessionMoveBrowserConformance", 4],
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 3],
   "tool-inspector": ["runToolInspectorBrowserConformance", 3],
