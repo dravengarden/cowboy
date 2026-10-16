@@ -63,6 +63,9 @@ Gateway actions `agent_status`, `agent_read` and `agent_invoke` extend the close
   Both the Machine and Controller check it; reconnecting at a different floor
   replaces the grant. Protocol-30 peers keep the two read tools. An older
   Controller never receives an unknown action variant.
+- Discovery reports that authenticated grant's capabilities. A remote session's
+  runtime Machine may have a different protocol from its execution Machine;
+  querying the runtime's connection would advertise the wrong surface.
 - `cowboy mcp` probes `agent_status` once at startup and advertises no tools
   or resources when it fails. Outside a Cowboy session, or before both
   components are updated, a registered server therefore costs no tokens.

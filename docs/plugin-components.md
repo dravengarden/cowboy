@@ -138,6 +138,13 @@ a component release changes, schema 3 versions the affected dependency closure.
 An unaffected Plugin keeps its exact source, version and historical
 component-release pin; the active matrix is not a new identity for that Plugin.
 
+Claude Code 3.19.38 independently fixes target Git context when the runtime
+directory is not a repository. The target snapshot is supplied once through
+native `prompt.context`; any runtime Git section is removed from
+`session_context`. Native CLI 2.1.296, ACP 0.89.1 and all shared component pins
+remain unchanged. This is a runtime change requiring packaged acceptance,
+unlike the preceding 3.19.37 source-test update.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source
