@@ -412,6 +412,8 @@ struct MachineSnapshots {
     desired_plugins: Arc<crate::machine_convergence::PluginDesiredSource>,
     product_auth_enabled: bool,
     revision: Arc<AtomicU64>,
+    /// Whether a full Machine can still free a slot (`sessions.reclaim_*`).
+    service_config: crate::config::Handle,
 }
 
 /// Whether a session holds one of its Machine's worker slots. Capacity bounds
@@ -675,8 +677,22 @@ impl MachineSnapshots {
                 let connected = self.runtime_router.connected(&machine.id);
                 // Projects belong to the execution target; an AI-only Machine
                 // can accept Remote sessions with an empty project registry.
-                let schedulable =
-                    connected && !capacity.draining && active_sessions < capacity.max_sessions;
+                // A full Machine stays schedulable while a create can free a
+                // slot by hibernating an idle session, as the create does.
+                let schedulable = connected
+                    && !capacity.draining
+                    && (active_sessions < capacity.max_sessions
+                        || session_reclaim::reclaimable(
+                            self.service_config
+                                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY),
+                            self.service_config
+                                .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE),
+                            &session_reclaim::candidates_in(
+                                &self.hub,
+                                &self.runtime_router,
+                                &machine.id,
+                            ),
+                        ));
                 let health = project_machine_health(
                     &machine.status,
                     connected,
@@ -1368,6 +1384,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         desired_plugins: Arc::clone(&desired_machine_plugins),
         product_auth_enabled: args.product_auth_enabled,
         revision: Arc::new(AtomicU64::new(0)),
+        service_config: service_config.clone(),
     };
     let machine_presence_task = store.as_ref().map(|store| {
         let store = store.clone();
@@ -16178,30 +16195,12 @@ async fn api_new_session(
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
-        let active_sessions = state
-            .hub
-            .session_list()
-            .into_iter()
-            .filter(|session| {
-                session.machine_id == req.machine_id
-                    && holds_worker_slot(&state.runtime_router, session)
-            })
-            .count();
-        // A draining Device never gets a slot back; a full one may, if the
-        // Service is configured to hibernate its longest-idle session.
-        let reclaimed = !capacity.draining
-            && active_sessions >= capacity.max_sessions as usize
-            && state
-                .service_config
-                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
-            && session_reclaim::reclaim_slot(&state, &req.machine_id).await;
-        if !reclaimed && (capacity.draining || active_sessions >= capacity.max_sessions as usize) {
-            return (
-                StatusCode::CONFLICT,
-                format!("machine {:?} is draining or at capacity", req.machine_id),
-            )
-                .into_response();
-        }
+        // Held until the handler returns: by then the session is registered
+        // as `Starting` and holds its slot itself.
+        let _slot = match session_reclaim::reserve_slot(&state, &req.machine_id, &capacity).await {
+            Ok(slot) => slot,
+            Err(refusal) => return (StatusCode::CONFLICT, refusal).into_response(),
+        };
         let providers = machine
             .inventory
             .get("plugins")

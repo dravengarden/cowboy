@@ -208,10 +208,19 @@ whose release is no longer newer is dropped rather than firing later.
 
 ## Session reclaim on capacity
 
+Capacity (`capacity.max_sessions`) counts live workers only: sessions that
+are starting or hold a worker, plus creates admitted but not yet registered.
+Dormant sessions and their history never count. Both create paths (direct and
+split runtime/execution placement) reserve a slot on the runtime Machine, one
+decision per Machine at a time, so concurrent creates cannot both take the
+last slot.
+
 Off by default. With `sessions.reclaim_on_capacity = true`, a new session that
 targets a full Device first hibernates that Device's longest-idle eligible
-session, waits up to 20 seconds for its slot, then proceeds; otherwise the
-request is refused exactly as before. A session is eligible only when it holds
+session, waits up to 20 seconds for its slot, counts again, and repeats at most
+twice; otherwise the request is refused, naming the idle sessions the user
+could hibernate. A full Device is still offered for new sessions while one is
+eligible. A session is eligible only when it holds
 a slot, is idle (no turn, queued prompt or background task), is not a system
 session, does not have Provider cache protection enabled, and has had no event
 for `sessions.reclaim_min_idle`.
@@ -243,8 +252,11 @@ repeats until the headroom reaches `sessions.memory_reclaim_until` (2 GiB).
 Eligibility is that of capacity reclaim with its own idle threshold,
 `sessions.memory_reclaim_min_idle` (15 minutes), and excludes sessions woken
 in the last ten minutes. With nothing eligible it logs once every ten minutes
-and waits. A launch is still admitted immediately; reserving memory before a
-launch and queueing it when the Device is short is a separate step.
+and waits. The Machine admits each cold launch against the same headroom
+(two at a time, 512 MiB reserved per launch beside a 512 MiB floor). A launch
+that finds no headroom within 60 seconds is refused as resource exhaustion
+rather than started, so a wake or create on a Device whose sessions are all
+busy fails visibly instead of stalling the Device.
 
 Hibernation sends no model request and the wake makes none before the
 prompt (`docs/hibernation-token-audit-2026-10-06.md`). That is not proof that

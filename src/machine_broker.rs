@@ -103,7 +103,9 @@ fn launch_fits(headroom: u64, admitted: u64) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaunchHeadroom {
     /// Reserved in `admitted`; `waited` when headroom was short at first.
-    Reserved { waited: bool },
+    Reserved {
+        waited: bool,
+    },
     Cancelled,
     /// Headroom stayed short for the whole wait; nothing was reserved.
     Exhausted,

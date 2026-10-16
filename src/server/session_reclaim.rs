@@ -150,7 +150,8 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     else {
         return;
     };
-    let chosen = loop {
+    let decisions = decisions(&machine_id);
+    let (chosen, _decision) = loop {
         // Policy and capacity are read on every pass: a retry may follow a
         // ten-minute wait during which an operator changed them.
         if !reclaim_enabled(&state) {
@@ -159,6 +160,9 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
         let Some(max_sessions) = device_capacity(&state, &machine_id).await else {
             return;
         };
+        let decision = decisions.lock().await;
+        // Creates reserved but not registered yet hold slots too.
+        let max_sessions = max_sessions.saturating_sub(reserved(&machine_id));
         let min_idle = state
             .service_config
             .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
@@ -166,7 +170,7 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
         // Taken last, so a session woken while the store was read is known.
         let woken = recent_wakes(None);
         if let Some(chosen) = choose_after_wake(&candidates, &woken, max_sessions, min_idle) {
-            break chosen.to_owned();
+            break (chosen.to_owned(), decision);
         }
         // Over capacity with only recently woken sessions eligible: try again
         // once their protection has expired, rather than staying over it.
@@ -174,6 +178,7 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
         if choose_after_wake(&candidates, &unprotected, max_sessions, min_idle).is_none() {
             return;
         }
+        drop(decision);
         tokio::time::sleep(WAKE_PROTECTION).await;
     };
     match state.supervisor.hibernate_session(&chosen) {
@@ -206,24 +211,30 @@ async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
 }
 
 pub(super) fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
-    state
-        .hub
-        .session_list()
+    candidates_in(&state.hub, &state.runtime_router, machine_id)
+}
+
+/// `candidates` for callers that hold the Hub and router but no `AppState`.
+pub(super) fn candidates_in(
+    hub: &crate::core::Hub,
+    router: &crate::runtime_router::RuntimeRouter,
+    machine_id: &str,
+) -> Vec<Candidate> {
+    hub.session_list()
         .into_iter()
         .filter(|session| session.machine_id == machine_id)
         .filter_map(|session| {
-            let idle_for = state.hub.session_idle_for(&session.id)?;
+            let idle_for = hub.session_idle_for(&session.id)?;
             let configuration = session.provider_behavior.as_ref().map_or_else(
                 || crate::provider::legacy_behavior(&session.provider).configuration,
                 |behavior| behavior.configuration.clone(),
             );
-            let preferences = state
-                .hub
+            let preferences = hub
                 .config_preferences(&session.id)
                 .unwrap_or_else(|| serde_json::json!({}));
             Some(Candidate {
-                holds_slot: holds_worker_slot(&state.runtime_router, &session),
-                in_flight: state.hub.session_has_in_flight_prompt(&session.id),
+                holds_slot: holds_worker_slot(router, &session),
+                in_flight: hub.session_has_in_flight_prompt(&session.id),
                 cache_protection: crate::managed_config::cache_protection(
                     &configuration,
                     &preferences,
@@ -237,6 +248,145 @@ pub(super) fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
             })
         })
         .collect()
+}
+
+/// How many hibernations one create may trigger before it is refused: each
+/// may lose its slot to a concurrent wake.
+const MAX_RECLAIMS_PER_CREATE: usize = 2;
+/// Idle sessions a capacity refusal names.
+const REFUSAL_IDLE_LISTED: usize = 5;
+
+/// Creates admitted on each Machine whose session is not registered yet.
+static RESERVED: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<String, usize>>> =
+    std::sync::LazyLock::new(Default::default);
+/// Serialises each Machine's slot decisions: a create's count, its reclaim
+/// and its reservation, and a wake's rebalance. Without it two creates could
+/// both see the last free slot, or both count one hibernated victim.
+static DECISIONS: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn decisions(machine_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    Arc::clone(DECISIONS.lock().entry(machine_id.to_owned()).or_default())
+}
+
+fn reserved(machine_id: &str) -> usize {
+    RESERVED.lock().get(machine_id).copied().unwrap_or(0)
+}
+
+/// A worker slot held for a create until its session is registered (as
+/// `Starting`, which then holds the slot itself). Dropping it releases the
+/// reservation, whether the create succeeded or failed.
+pub(super) struct SlotReservation {
+    machine_id: String,
+}
+
+impl Drop for SlotReservation {
+    fn drop(&mut self) {
+        let mut reserved = RESERVED.lock();
+        if let Some(count) = reserved.get_mut(&self.machine_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                reserved.remove(&self.machine_id);
+            }
+        }
+    }
+}
+
+/// Live worker slots on `machine_id`: sessions holding a worker plus creates
+/// reserved but not yet registered.
+fn occupied(state: &AppState, machine_id: &str) -> usize {
+    state
+        .hub
+        .session_list()
+        .iter()
+        .filter(|session| {
+            session.machine_id == machine_id && holds_worker_slot(&state.runtime_router, session)
+        })
+        .count()
+        + reserved(machine_id)
+}
+
+/// Whether a full Machine could still take a session: capacity reclaim is on
+/// and some session is idle enough to hibernate.
+pub(super) fn reclaimable(
+    reclaim_on_capacity: bool,
+    min_idle: Duration,
+    candidates: &[Candidate],
+) -> bool {
+    reclaim_on_capacity && choose(candidates, min_idle).is_some()
+}
+
+/// Reserve one live worker slot on `machine_id` for a create. Counts only
+/// sessions holding a worker (and other pending creates), never dormant
+/// history. On a full Machine with `sessions.reclaim_on_capacity`, hibernates
+/// the longest-idle eligible session and counts again. A refusal names the
+/// idle sessions the user could hibernate.
+pub(super) async fn reserve_slot(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    capacity: &crate::machine_protocol::MachineCapacity,
+) -> Result<SlotReservation, String> {
+    if capacity.draining {
+        return Err(format!("machine {machine_id:?} is draining or at capacity"));
+    }
+    let max_sessions = capacity.max_sessions as usize;
+    let decisions = decisions(machine_id);
+    let _decision = decisions.lock().await;
+    let mut reclaims = 0;
+    loop {
+        if occupied(state, machine_id) < max_sessions {
+            *RESERVED.lock().entry(machine_id.to_owned()).or_default() += 1;
+            return Ok(SlotReservation {
+                machine_id: machine_id.to_owned(),
+            });
+        }
+        if reclaims == MAX_RECLAIMS_PER_CREATE
+            || !reclaim_enabled(state)
+            || !reclaim_slot(state, machine_id).await
+        {
+            return Err(capacity_refusal(state, machine_id, max_sessions));
+        }
+        reclaims += 1;
+    }
+}
+
+fn capacity_refusal(state: &AppState, machine_id: &str, max_sessions: usize) -> String {
+    let mut idle = candidates(state, machine_id)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.holds_slot
+                && candidate.status == Status::Running
+                && !candidate.in_flight
+                && !candidate.system
+        })
+        .collect::<Vec<_>>();
+    idle.sort_by_key(|candidate| std::cmp::Reverse(candidate.idle_for));
+    let titles = state
+        .hub
+        .session_list()
+        .into_iter()
+        .map(|session| (session.id, session.title))
+        .collect::<std::collections::HashMap<_, _>>();
+    let listed = idle
+        .iter()
+        .take(REFUSAL_IDLE_LISTED)
+        .map(|candidate| {
+            let title = titles
+                .get(&candidate.id)
+                .map_or(candidate.id.as_str(), String::as_str);
+            format!("{title:?} (idle {}m)", candidate.idle_for.as_secs() / 60)
+        })
+        .collect::<Vec<_>>();
+    let mut message =
+        format!("machine {machine_id:?} is draining or at capacity: {max_sessions} live sessions");
+    if listed.is_empty() {
+        message.push_str("; none is idle, so wait for one to finish");
+    } else {
+        message.push_str("; hibernate an idle one to free a slot: ");
+        message.push_str(&listed.join(", "));
+    }
+    message
 }
 
 /// Try to free one slot on `machine_id`. Returns whether a slot was released
@@ -275,6 +425,34 @@ pub(super) async fn reclaim_slot(state: &Arc<AppState>, machine_id: &str) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reservation_counts_until_dropped() {
+        let machine = "reservation-test-machine";
+        let take = || {
+            *RESERVED.lock().entry(machine.to_owned()).or_default() += 1;
+            SlotReservation {
+                machine_id: machine.to_owned(),
+            }
+        };
+        let first = take();
+        let second = take();
+        assert_eq!(reserved(machine), 2);
+        drop(first);
+        assert_eq!(reserved(machine), 1);
+        drop(second);
+        assert_eq!(reserved(machine), 0);
+        assert!(!RESERVED.lock().contains_key(machine));
+    }
+
+    #[test]
+    fn a_full_machine_is_schedulable_only_with_something_to_reclaim() {
+        let hour = Duration::from_hours(1);
+        let sessions = [idle("fresh", 10), idle("stale", 90)];
+        assert!(reclaimable(true, hour, &sessions));
+        assert!(!reclaimable(false, hour, &sessions));
+        assert!(!reclaimable(true, hour, &sessions[..1]));
+    }
 
     fn idle(id: &str, minutes: u64) -> Candidate {
         Candidate {

@@ -212,15 +212,9 @@ async fn create_checked(
             .unwrap_or_default(),
     )
     .unwrap_or_default();
-    let active = state
-        .hub
-        .session_list()
-        .iter()
-        .filter(|meta| meta.machine_id == runtime.id && meta.status != Status::Exited)
-        .count();
-    if capacity.draining || active >= capacity.max_sessions as usize {
-        return Err("Runtime Machine is draining or at capacity".into());
-    }
+    // The session runs on the runtime Machine (`meta.machine_id`), so its
+    // live worker slot is counted there, exactly as for a direct create.
+    let _slot = crate::server::session_reclaim::reserve_slot(state, &runtime.id, &capacity).await?;
     let workspaces: Vec<MachineWorkspace> = serde_json::from_value(
         target
             .inventory
