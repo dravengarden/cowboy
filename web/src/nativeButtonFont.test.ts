@@ -12,6 +12,6 @@ test("the native button font default never outranks component font sizes", () =>
     theme.indexOf("MuiButtonBase"),
   );
   assert(
-    baseline.includes('":where(button)": { fontSize: desktopSize(40 / 3) }'),
+    baseline.includes('":where(button)": { fontSize: `${(40 / 3) / 16}rem` }'),
   );
 });

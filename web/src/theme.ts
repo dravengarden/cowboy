@@ -176,12 +176,12 @@ export function useThemeMode(): ThemeControls {
               // A native <button> takes the browser's fixed 13.33px, which
               // ignores the global font size: text and `em` glyphs in raw
               // ButtonBase controls stayed one size at every scale. Same size
-              // at 100%, scaled on Desktop (Mobile keeps pixels). This must be
+              // at 100%, scaled with the root font on both surfaces. This must be
               // a zero-specificity element default: nested under ButtonBase's
               // class (`.css-x:where(button)`) it kept class specificity and,
               // emitted after the base rule, beat every Button, IconButton and
               // `sx` font size (e.g. the Mobile sync pill stayed 13.33px).
-              ":where(button)": { fontSize: desktopSize(40 / 3) },
+              ":where(button)": { fontSize: `${(40 / 3) / 16}rem` },
             },
           },
           // Session-sheet dismiss is a ButtonBase, not an IconButton. Clear a
