@@ -1059,12 +1059,10 @@ function RecommendedPresetControls({
   presets,
   options,
   sessionId,
-  disabled,
 }: {
   presets: readonly RunConfigPreset[];
   options: readonly ConfigOption[];
   sessionId: string;
-  disabled: boolean;
 }): React.JSX.Element {
   const active = activeRunConfigPreset(presets, options);
   return (
@@ -1092,7 +1090,6 @@ function RecommendedPresetControls({
             <ButtonBase
               key={preset.id}
               data-config-preset={index}
-              disabled={disabled}
               aria-pressed={selected}
               onClick={(): void => {
                 for (const change of runConfigPresetChanges(preset, options)) {
@@ -1168,7 +1165,7 @@ function RecommendedPresetControls({
               </Box>
               <Kbd
                 keys={String(index + 1)}
-                availability={disabled ? "inactive" : "available"}
+                availability="available"
               />
             </ButtonBase>
           );
@@ -1951,7 +1948,6 @@ export function DesktopTopBarControls({
                 presets={recommendedPresets}
                 options={options}
                 sessionId={sessionId}
-                disabled={dead}
               />
             )}
             {options.map((option) => (
@@ -2311,7 +2307,7 @@ export function DesktopTopBarControls({
                 aria-label={contextRefreshing
                   ? "Compact conversation, context usage updating"
                   : compactTooltip(contextUsed, contextSize)}
-                disabled={dead || compacting}
+                disabled={compacting}
                 onClick={(): void => setOpenSurface("compact")}
                 sx={desktopSessionActionSx({
                   open: compactConfirm,
@@ -2322,7 +2318,7 @@ export function DesktopTopBarControls({
                   label="Compact"
                   keyLabel="C"
                   accent={compactConfirm}
-                  available={!dead && !compacting}
+                  available={!compacting}
                   density={density}
                 />
               </Button>
@@ -2348,7 +2344,6 @@ export function DesktopTopBarControls({
                     }}
                   />
                 }
-                disabled={dead}
                 aria-label="Clear conversation"
                 onClick={(): void => setOpenSurface("clear")}
                 sx={{
@@ -2366,7 +2361,7 @@ export function DesktopTopBarControls({
                   label="Clear"
                   keyLabel="X"
                   accent={clearConfirm}
-                  available={!dead}
+                  available
                   density={density}
                 />
               </Button>

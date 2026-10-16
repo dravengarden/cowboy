@@ -51,7 +51,12 @@ export function providerConfigOptionPresentations(
   );
 }
 
-/** Apply a closed lifecycle policy without teaching Cowboy any Provider ids. */
+/**
+ * Apply a closed lifecycle policy without teaching Cowboy any Provider ids.
+ * A stopped session accepts every option: the Service saves it as a session
+ * preference and replays it before the next launch's first prompt, without
+ * waking a hibernated worker to apply it.
+ */
 export function providerConfigOptionDisabled(
   status: Status,
   presentation: ProviderConfigOptionPresentation | undefined,
@@ -59,8 +64,7 @@ export function providerConfigOptionDisabled(
   if (presentation?.availability === "idle_or_stopped") {
     return status === "busy" || status === "starting";
   }
-  return status === "exited" || status === "crashed" ||
-    status === "interrupted";
+  return false;
 }
 
 export function providerConfigOptionOrder(

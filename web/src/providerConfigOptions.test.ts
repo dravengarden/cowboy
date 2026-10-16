@@ -48,5 +48,7 @@ test("signed option policy controls layout order and lifecycle without Provider 
     ),
     false,
   );
-  assertEquals(providerConfigOptionDisabled("interrupted", undefined), true);
+  // Stopped sessions save the value and apply it at the next launch.
+  assertEquals(providerConfigOptionDisabled("interrupted", undefined), false);
+  assertEquals(providerConfigOptionDisabled("exited", undefined), false);
 });

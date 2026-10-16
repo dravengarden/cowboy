@@ -447,10 +447,15 @@ impl Supervisor {
                 option_id,
             } => runtime.permission(session_id, request_id, option_id),
             AgentCommand::SetConfigOption { config_id, value } => {
-                // A config change may arrive from a second device while this
-                // session is dormant after a restart. Ensure the worker exists
-                // before routing the command; the runtime will coalesce this
-                // with the persisted session preference replay.
+                // The caller saved the value as a session preference, and every
+                // launch replays preferences before its first prompt. A dormant
+                // session therefore keeps sleeping: the change costs its Device
+                // nothing until the next prompt wakes it.
+                if self.is_dormant(&runtime, session_id) {
+                    return Ok(());
+                }
+                // A live (or crashed) session gets the value now; ensuring first
+                // coalesces it with the persisted preference replay.
                 runtime.ensure(self.start_session(session_id)?);
                 runtime.set_config_option(session_id, &config_id, value);
             }
@@ -661,6 +666,14 @@ impl Supervisor {
     /// its permanent-delete tombstone cannot poison the replacement launch.
     pub fn reset_session(&self, session_id: &str) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        // A dormant session has no worker to replace. Its native id is already
+        // forgotten, so the next prompt's wake starts a fresh context.
+        if self
+            .runtime_for_session(session_id)
+            .is_ok_and(|runtime| self.is_dormant(&runtime, session_id))
+        {
+            return Ok(());
+        }
         if self.prepare_session_inner(session_id)? {
             Ok(())
         } else {
@@ -848,10 +861,11 @@ impl Supervisor {
             &preferences,
             &value,
         )?;
-        self.runtime_for_session(session_id)?;
+        let runtime = self.runtime_for_session(session_id)?;
         self.hub
             .set_config_preference(session_id, config_id.to_owned(), value)?;
-        if unchanged {
+        // A dormant session's next launch reads the new preference.
+        if unchanged || self.is_dormant(&runtime, session_id) {
             return Ok(true);
         }
         self.resolve_and_persist_cwd(session_id)?;
@@ -1315,6 +1329,56 @@ mod tests {
         )));
         assert_eq!(hub.status("s"), Some(Status::Starting));
         assert_eq!(woken.lock().as_slice(), ["s".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn settings_and_clear_on_a_dormant_session_do_not_wake_it() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
+
+        hub.set_config_preference("s", "model".to_owned(), serde_json::json!("gpt-test"))
+            .expect("save preference");
+        supervisor
+            .send(
+                "s",
+                AgentCommand::SetConfigOption {
+                    config_id: "model".to_owned(),
+                    value: serde_json::json!("gpt-test"),
+                },
+            )
+            .expect("config change on a dormant session");
+        hub.prepare_context_reset("s");
+        supervisor
+            .reset_session("s")
+            .expect("clear a dormant session");
+
+        assert!(
+            runtime.pending_for_test().is_empty(),
+            "a setting or clear launched a worker"
+        );
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["model"],
+            serde_json::json!("gpt-test")
+        );
+
+        // The next prompt wakes it fresh and replays the preference first.
+        supervisor
+            .send(
+                "s",
+                AgentCommand::Prompt(Vec::new(), Some("c1".to_owned()), None),
+            )
+            .expect("prompt wakes the session");
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session }
+                if session.session_id == "s" && session.agent_session_id.is_none()
+        )));
     }
 
     #[tokio::test]

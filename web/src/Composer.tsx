@@ -1474,10 +1474,13 @@ export function ComposerWorkspace({
   // transcript empty state) — NOT by restructuring this toolbar. Every action
   // keeps its slot while the agent boots and only loses `enabled`, so the row
   // never reflows on the ready edge and the affordances stay discoverable.
-  // Blocked here are exactly the actions that need a LIVE worker; attaching,
-  // clearing the editor, saving a draft and sending (→ queue) are local/daemon
-  // work and stay usable — the placeholder promises the user can start writing.
-  const agentActionsDisabled = dead || preparing;
+  // Blocked here are exactly the actions that need a prepared workspace;
+  // attaching, clearing the editor, saving a draft and sending (→ queue) are
+  // local/daemon work and stay usable — the placeholder promises the user can
+  // start writing. A stopped session is NOT blocked: Compact goes down the
+  // prompt path, which wakes it, and Clear resets a hibernated session without
+  // starting a worker, so neither needs a throwaway message first.
+  const agentActionsDisabled = preparing;
   // Force-push interrupts an in-flight turn or jumps a held queue. While the
   // session is still starting there is no turn to interrupt and the queue drains
   // on its own the moment the agent reports Running, so ⚡ is meaningless.
@@ -6757,7 +6760,6 @@ export function SessionControls({
           options={options}
           loading={showSkeleton}
           status={status}
-          dead={dead}
           compacting={status === "busy" && timelineState.compactingTail}
           compactAction={compactAction}
           clearAction={clearAction}
@@ -6878,7 +6880,6 @@ function ComposerSheet({
   options,
   loading,
   status,
-  dead,
   compacting,
   compactAction,
   clearAction,
@@ -6895,7 +6896,6 @@ function ComposerSheet({
   options: ConfigOption[];
   loading: boolean;
   status: Status;
-  dead: boolean;
   compacting: boolean;
   compactAction: SessionAction | null;
   clearAction: SessionAction | null;
@@ -7085,7 +7085,6 @@ function ComposerSheet({
           compactAction={compactAction}
           clearAction={clearAction}
           compacting={compacting}
-          dead={dead}
           actionsExpanded={sessionActionsExpanded}
           onActionsExpandedChange={setSessionActionsExpanded}
           onSessionAction={setCmdConfirm}
@@ -7255,7 +7254,7 @@ function ComposerSheet({
                             preset={preset}
                             selected={authoritativeActivePreset?.id ===
                               preset.id}
-                            disabled={dead || presetAction.pending}
+                            disabled={presetAction.pending}
                             pending={pendingPresetId === preset.id}
                             progress={pendingPresetId === preset.id &&
                               presetAction.progress}
@@ -7373,7 +7372,6 @@ function SessionInfoSection({
   compactAction,
   clearAction,
   compacting,
-  dead,
   actionsExpanded,
   onActionsExpandedChange,
   onSessionAction,
@@ -7390,7 +7388,6 @@ function SessionInfoSection({
   compactAction: SessionAction | null;
   clearAction: SessionAction | null;
   compacting: boolean;
-  dead: boolean;
   actionsExpanded: boolean;
   onActionsExpandedChange: (expanded: boolean) => void;
   onSessionAction: (action: SessionAction) => void;
@@ -7697,7 +7694,7 @@ function SessionInfoSection({
                   fullWidth
                   variant="outlined"
                   startIcon={<Compress />}
-                  disabled={dead || compacting}
+                  disabled={compacting}
                   aria-label="compact conversation from session settings"
                   onClick={(event): void => {
                     event.currentTarget.blur();
@@ -7714,7 +7711,6 @@ function SessionInfoSection({
                   variant="outlined"
                   color="error"
                   startIcon={<CleaningServices />}
-                  disabled={dead}
                   aria-label="clear conversation from session settings"
                   onClick={(event): void => {
                     event.currentTarget.blur();
