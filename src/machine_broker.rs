@@ -60,11 +60,15 @@ const LAUNCH_RESERVE_BYTES: u64 = 512 << 20;
 const LAUNCH_FLOOR_BYTES: u64 = 512 << 20;
 /// Cold launches that may be starting at once.
 const LAUNCH_CONCURRENCY: usize = 2;
-/// How long a launch waits for headroom before proceeding anyway: the
+/// How long a launch waits for headroom before it is refused: the
 /// Controller's own startup deadlines are 150-180 s, and its memory reclaim
 /// acts within a heartbeat or two of headroom falling below 1 GiB.
 const LAUNCH_ADMISSION_WAIT: Duration = Duration::from_secs(60);
 const LAUNCH_ADMISSION_POLL: Duration = Duration::from_secs(1);
+/// Launch refusal detail. The Controller classifies "out of memory" as
+/// resource exhaustion, and a memory refusal never quarantines a generation.
+const LAUNCH_REFUSED_FOR_MEMORY: &str =
+    "worker launch refused: out of memory headroom on this Device";
 
 static LAUNCH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(LAUNCH_CONCURRENCY);
 static LAUNCHES_ADMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -96,29 +100,49 @@ fn launch_fits(headroom: u64, admitted: u64) -> bool {
     headroom >= (admitted + 1) * LAUNCH_RESERVE_BYTES + LAUNCH_FLOOR_BYTES
 }
 
-/// Wait until the Device's memory headroom (see
-/// `host_resources::memory_headroom_bytes`) fits one more launch, at most
-/// `wait`. A Device without a limited cgroup is admitted at once. Returns
-/// whether the launch had to wait and whether it timed out.
-async fn wait_for_launch_headroom(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchHeadroom {
+    /// Reserved in `admitted`; `waited` when headroom was short at first.
+    Reserved { waited: bool },
+    Cancelled,
+    /// Headroom stayed short for the whole wait; nothing was reserved.
+    Exhausted,
+}
+
+/// Wait at most `wait` until the Device's memory headroom (see
+/// `host_resources::memory_headroom_bytes`) fits one more launch, then
+/// reserve it in `admitted`. The check and the reservation are one
+/// compare-and-swap, so concurrent launches never both count the same
+/// headroom. A Device without a limited cgroup is admitted at once.
+async fn reserve_launch_headroom(
+    admitted: &std::sync::atomic::AtomicU64,
     headroom: impl Fn() -> Option<u64>,
     stop: impl Fn() -> bool,
     wait: Duration,
     poll: Duration,
-) -> (bool, bool) {
+) -> LaunchHeadroom {
+    use std::sync::atomic::Ordering::SeqCst;
     let deadline = tokio::time::Instant::now() + wait;
     let mut waited = false;
     loop {
-        let admitted = LAUNCHES_ADMITTED.load(std::sync::atomic::Ordering::SeqCst);
-        match headroom() {
-            None => return (waited, false),
-            Some(bytes) if launch_fits(bytes, admitted) => return (waited, false),
-            Some(_) if stop() || tokio::time::Instant::now() >= deadline => return (waited, true),
-            Some(_) => {
-                waited = true;
-                tokio::time::sleep(poll).await;
-            }
+        if stop() {
+            return LaunchHeadroom::Cancelled;
         }
+        let current = admitted.load(SeqCst);
+        if headroom().is_none_or(|bytes| launch_fits(bytes, current)) {
+            if admitted
+                .compare_exchange(current, current + 1, SeqCst, SeqCst)
+                .is_ok()
+            {
+                return LaunchHeadroom::Reserved { waited };
+            }
+            continue;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return LaunchHeadroom::Exhausted;
+        }
+        waited = true;
+        tokio::time::sleep(poll).await;
     }
 }
 const PROVIDER_INSTALL_LAUNCH_POLL: Duration = Duration::from_millis(250);
@@ -134,6 +158,8 @@ fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
         // missing ACP resource cannot be repaired by selecting an older
         // worker, which may not even understand the exact Provider package.
         && !detail.contains("acp connection: Resource not found:")
+        // Memory is the Device's, not the generation's.
+        && !detail.contains(LAUNCH_REFUSED_FOR_MEMORY)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2252,31 +2278,47 @@ impl Broker {
     /// (bounded) until the Device has headroom for its startup peak. The
     /// Controller's memory reclaim frees headroom meanwhile. The reservation
     /// lasts until the worker is ready or the launch ends.
-    async fn admit_launch(&self, session_id: &str) -> Option<LaunchAdmission> {
-        let slot = LAUNCH_SLOTS.acquire().await.ok()?;
+    async fn admit_launch(&self, session_id: &str) -> Result<LaunchAdmission> {
+        let slot = LAUNCH_SLOTS
+            .acquire()
+            .await
+            .context("launch admission is closed")?;
         let started = Instant::now();
-        let (waited, timed_out) = wait_for_launch_headroom(
+        let outcome = reserve_launch_headroom(
+            &LAUNCHES_ADMITTED,
             launch_headroom,
             || self.cancelled_sessions.lock().contains(session_id),
             LAUNCH_ADMISSION_WAIT,
             LAUNCH_ADMISSION_POLL,
         )
         .await;
-        if timed_out {
-            tracing::warn!(
-                session = session_id,
-                waited_ms = started.elapsed().as_millis(),
-                "worker launch proceeding without memory headroom"
-            );
-        } else if waited {
-            tracing::info!(
-                session = session_id,
-                waited_ms = started.elapsed().as_millis(),
-                "worker launch admitted after waiting for memory headroom"
-            );
+        let waited_ms = started.elapsed().as_millis();
+        match outcome {
+            LaunchHeadroom::Reserved { waited } => {
+                if waited {
+                    tracing::info!(
+                        session = session_id,
+                        waited_ms,
+                        "worker launch admitted after waiting for memory headroom"
+                    );
+                }
+                Ok(LaunchAdmission { _slot: slot })
+            }
+            LaunchHeadroom::Cancelled => {
+                anyhow::bail!("session {session_id} was deleted during launch")
+            }
+            LaunchHeadroom::Exhausted => {
+                tracing::warn!(
+                    session = session_id,
+                    waited_ms,
+                    "worker launch refused without memory headroom"
+                );
+                anyhow::bail!(
+                    "{LAUNCH_REFUSED_FOR_MEMORY} after waiting {}s; retry once idle sessions hibernate",
+                    LAUNCH_ADMISSION_WAIT.as_secs()
+                )
+            }
         }
-        LAUNCHES_ADMITTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Some(LaunchAdmission { _slot: slot })
     }
 
     async fn spawn_and_wait_ready(&self, session: &StartSession) -> Result<()> {
@@ -2287,7 +2329,7 @@ impl Broker {
         self.session_states
             .lock()
             .insert(session.session_id.clone(), WorkerState::Starting);
-        let _admission = self.admit_launch(&session.session_id).await;
+        let _admission = self.admit_launch(&session.session_id).await?;
         let mut worker_exit = self.spawn_worker(session).await?;
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         loop {
@@ -4314,9 +4356,15 @@ pub(crate) use tests::dispatch_trace_fixture;
 
 #[cfg(test)]
 mod launch_admission_tests {
-    use super::{LAUNCH_FLOOR_BYTES, LAUNCH_RESERVE_BYTES, launch_fits, wait_for_launch_headroom};
+    use super::{
+        LAUNCH_FLOOR_BYTES, LAUNCH_REFUSED_FOR_MEMORY, LAUNCH_RESERVE_BYTES, LaunchHeadroom,
+        launch_fits, reserve_launch_headroom, worker_generation_failure_allows_fallback,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+
+    const WAIT: Duration = Duration::from_secs(60);
+    const POLL: Duration = Duration::from_secs(1);
 
     #[test]
     fn a_launch_needs_its_reservation_beside_every_admitted_one_plus_the_floor() {
@@ -4328,10 +4376,12 @@ mod launch_admission_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_launch_waits_until_reclaim_frees_headroom() {
+    async fn a_launch_waits_until_reclaim_frees_headroom_and_reserves_it() {
+        let admitted = AtomicU64::new(0);
         let headroom = AtomicU64::new(LAUNCH_FLOOR_BYTES);
         let polls = AtomicU64::new(0);
-        let (waited, timed_out) = wait_for_launch_headroom(
+        let outcome = reserve_launch_headroom(
+            &admitted,
             || {
                 // Reclaim frees memory after a few polls.
                 if polls.fetch_add(1, Ordering::SeqCst) == 3 {
@@ -4340,46 +4390,53 @@ mod launch_admission_tests {
                 Some(headroom.load(Ordering::SeqCst))
             },
             || false,
-            Duration::from_secs(60),
-            Duration::from_secs(1),
+            WAIT,
+            POLL,
         )
         .await;
-        assert!(waited && !timed_out);
+        assert_eq!(outcome, LaunchHeadroom::Reserved { waited: true });
+        assert_eq!(admitted.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_launch_proceeds_after_the_bound_or_when_cancelled_or_unmeasured() {
-        let short = || Some(0);
+    async fn headroom_for_one_launch_admits_only_one_of_two() {
+        let admitted = AtomicU64::new(0);
+        let one = || Some(LAUNCH_RESERVE_BYTES + LAUNCH_FLOOR_BYTES);
+        let first = reserve_launch_headroom(&admitted, one, || false, WAIT, POLL).await;
+        let second = reserve_launch_headroom(&admitted, one, || false, WAIT, POLL).await;
+        assert_eq!(first, LaunchHeadroom::Reserved { waited: false });
+        assert_eq!(second, LaunchHeadroom::Exhausted);
+        assert_eq!(admitted.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_launch_is_refused_after_the_bound_and_stops_when_cancelled() {
+        let admitted = AtomicU64::new(0);
         assert_eq!(
-            wait_for_launch_headroom(
-                short,
-                || false,
-                Duration::from_secs(5),
-                Duration::from_secs(1)
-            )
-            .await,
-            (true, true)
+            reserve_launch_headroom(&admitted, || Some(0), || false, WAIT, POLL).await,
+            LaunchHeadroom::Exhausted
         );
         assert_eq!(
-            wait_for_launch_headroom(
-                short,
-                || true,
-                Duration::from_secs(60),
-                Duration::from_secs(1)
-            )
-            .await,
-            (false, true)
+            reserve_launch_headroom(&admitted, || Some(0), || true, WAIT, POLL).await,
+            LaunchHeadroom::Cancelled
         );
+        assert_eq!(admitted.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unmeasured_device_is_admitted_at_once() {
+        let admitted = AtomicU64::new(5);
         assert_eq!(
-            wait_for_launch_headroom(
-                || None,
-                || false,
-                Duration::from_secs(60),
-                Duration::from_secs(1)
-            )
-            .await,
-            (false, false)
+            reserve_launch_headroom(&admitted, || None, || false, WAIT, POLL).await,
+            LaunchHeadroom::Reserved { waited: false }
         );
+        assert_eq!(admitted.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn a_memory_refusal_never_falls_back_to_another_generation() {
+        let error = anyhow::anyhow!("{LAUNCH_REFUSED_FOR_MEMORY} after waiting 60s");
+        assert!(!worker_generation_failure_allows_fallback(&error));
     }
 }
 
