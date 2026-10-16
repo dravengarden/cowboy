@@ -294,17 +294,21 @@ impl Drop for SlotReservation {
 }
 
 /// Live worker slots on `machine_id`: sessions holding a worker plus creates
-/// reserved but not yet registered.
+/// reserved but not yet registered. The reservations stay locked while the
+/// sessions are read: a create registers as `Starting` before it drops its
+/// reservation, so it is counted at least once (at worst twice, which only
+/// refuses or reclaims conservatively for that instant), never zero times.
 fn occupied(state: &AppState, machine_id: &str) -> usize {
-    state
+    let reserved = RESERVED.lock();
+    let live = state
         .hub
         .session_list()
         .iter()
         .filter(|session| {
             session.machine_id == machine_id && holds_worker_slot(&state.runtime_router, session)
         })
-        .count()
-        + reserved(machine_id)
+        .count();
+    live + reserved.get(machine_id).copied().unwrap_or(0)
 }
 
 /// Whether a full Machine could still take a session: capacity reclaim is on
