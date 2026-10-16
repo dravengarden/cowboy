@@ -24,7 +24,7 @@ use crate::agent_api::{
     API_VERSION, MAX_BROKER_BYTES, MAX_CALLS, MAX_LOG_BYTES, MAX_REPLY_BYTES, MAX_RESULT_BYTES,
 };
 use crate::core::{Envelope, Event, QueuedMessage, SessionInfo, SessionMeta};
-use crate::managed_calls::protocol::Action;
+use crate::managed_calls::protocol::{Action, Grant};
 use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
@@ -47,18 +47,27 @@ fn error(code: &str) -> Value {
 }
 
 /// The compact status: no program, no runtime start.
-pub(super) async fn status(state: &Arc<AppState>, meta: &SessionMeta, _ledger: &Ledger) -> Value {
+pub(super) fn status(state: &Arc<AppState>, meta: &SessionMeta, grant: &Grant) -> Value {
     let Some(info) = state.hub.session_info(&meta.id) else {
         return error("not_found");
     };
+    status_view(
+        &info,
+        super::agent_tools::effective(state, meta).calls.enabled,
+        grant,
+    )
+}
+
+fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value {
     json!({
         "schema": 1,
         "state": "ok",
         "api": API_VERSION,
-        "actions": state.machine_control.connection_protocol(&meta.machine_id)
-            .is_some_and(|(_, protocol)| protocol >= crate::machine_protocol::AGENT_ACTION_PROTOCOL_VERSION),
-        "session": session_view(&info),
-        "calls": {"enabled": super::agent_tools::effective(state, meta).calls.enabled},
+        // The authenticated grant describes the execution Machine. The
+        // session's runtime Machine can have a different protocol version.
+        "actions": grant.agent_actions,
+        "session": session_view(info),
+        "calls": {"enabled": calls_enabled},
     })
 }
 

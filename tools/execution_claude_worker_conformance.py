@@ -557,6 +557,7 @@ def context_phases(args, api, client, checks):
             "\n\nCurrent branch: " in text and "\n\nMain branch (you will usually use this for PRs): " in text and
             "\n\nStatus:\n" in text and "\n\nRecent commits:\n" in text,
             "git status block differs from native's: " + text[max(0, text.find("Codebase and user")):][-3000:])
+    require(text.count("# gitStatus\n") == 1, "target Git snapshot must occur exactly once")
     checks.append("target_environment_and_git_blocks_render_as_native")
 
     issued = {}

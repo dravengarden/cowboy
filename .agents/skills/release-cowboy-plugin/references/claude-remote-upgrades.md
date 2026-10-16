@@ -117,8 +117,9 @@ and on `$.session.receive` staying unavailable (re-measure: if a later CLI
 offers a native notification injection, prefer it over the waiter task);
 the `*notification*` checks cover these. Session context relies on native's
 instruction discovery (no AGENTS.md; CLAUDE.md, rules, imports, nested files),
-on `prompt.context` rendering `instructionFiles`, on the `session_context`
-attachment's `# gitStatus` section and on the `tool.call hook additional
+on `prompt.context` rendering `instructionFiles` and the target `# gitStatus`
+block even when the runtime is not a repository, on stripping the runtime's
+Git section from `session_context`, and on the `tool.call hook additional
 context:` label this module removes; re-measure them per CLI (the
 `*instruction*` and `*git*` checks).
 `tools/claude_context_native_baseline.json` (probe

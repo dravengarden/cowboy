@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn advertised_actions_follow_the_authorized_grant_for_remote_sessions() {
+    use crate::core::{Hub, SessionOrigin, SessionRegistration};
+    let hub = Hub::new();
+    hub.create_session(SessionRegistration {
+        id: "parent".into(),
+        provider: "codex".into(),
+        provider_version: String::new(),
+        provider_generation_digest: String::new(),
+        provider_auth_generation: None,
+        provider_behavior: None,
+        machine_id: "runtime".into(),
+        workspace_id: None,
+        workspace_name: None,
+        workspace_source_path: None,
+        execution_binding: Some(crate::execution_environment::fixture()),
+        cwd: "/runtime/session".into(),
+        title: String::new(),
+        origin: SessionOrigin::Web,
+        system: false,
+        owner_user_id: Some("owner".into()),
+        owner_username: None,
+    });
+    let info = hub.session_info("parent").unwrap();
+    let mut grant: Grant = serde_json::from_value(json!({
+        "grant_id":"grant-test", "parent_session_id":"parent", "agent_api":true,
+    }))
+    .unwrap();
+    // An old execution Machine cannot gain writes through a newer runtime.
+    assert_eq!(status_view(&info, true, &grant)["actions"], false);
+    // A new execution Machine can expose writes even with an older runtime.
+    grant.agent_actions = true;
+    let status = status_view(&info, false, &grant);
+    assert_eq!(status["actions"], true);
+    assert_eq!(status["calls"]["enabled"], false);
+    assert_eq!(status["session"]["id"], "parent");
+}
+
+#[test]
 fn large_text_pages_preserve_unicode_and_signal_the_exact_continuation() {
     let original = "a中🙂b".repeat(100_000);
     let mut value = json!({"body":original});

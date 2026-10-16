@@ -895,6 +895,12 @@ function instructions(_$, event) {
     blocks: [
       claudeMd,
       ...event.blocks.filter((block) => block.name === "currentDate"),
+      // prompt.context runs even when the runtime has no repository and
+      // native emits no session_context attachment. Keep this snapshot in
+      // the first message, once, instead of relying on runtime discovery.
+      ...(context.git === null
+        ? []
+        : [{ name: "cowboyTargetGit", text: `# gitStatus\n${context.git}` }]),
     ],
     instructionFiles: context.instructionFiles,
   };
@@ -1759,10 +1765,10 @@ export function register(on) {
     { origin: { kind: "plugin" } },
     (_$, event, next) => next({ ...event, text: unlabeledContext(event.text) }),
   );
-  // Native's session context describes the runtime checkout; its Git status
-  // becomes the target's, in native's own framing.
+  // The target Git snapshot is supplied by prompt.context above. Drop the
+  // runtime's section while retaining any other native session context.
   on("prompt.attachment", { type: "session_context" }, (_$, event) => ({
-    text: targetSessionContext(event.text, context ? context.git : null),
+    text: targetSessionContext(event.text, null),
   })).catch(() => ({ text: null }));
   on("prompt.context", instructions).catch(instructions);
   on("prompt.section", { name: "env_info" }, environment).catch(environment);

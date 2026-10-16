@@ -327,7 +327,7 @@ pub(in crate::server) async fn handle(
         // Authorization precedes admission, so a refusal proves non-admission.
         Err(code) => return error(code, "not_submitted"),
     };
-    dispatch(state, &meta, &ledger, action).await
+    dispatch(state, &meta, &ledger, &grant, action).await
 }
 
 /// Act for an already authorized parent: Agent API actions, then calls.
@@ -335,10 +335,11 @@ async fn dispatch(
     state: &Arc<AppState>,
     meta: &crate::core::SessionMeta,
     ledger: &Ledger,
+    grant: &Grant,
     action: Action,
 ) -> Value {
     match action {
-        Action::AgentStatus {} => super::super::agent_api::status(state, meta, ledger).await,
+        Action::AgentStatus {} => super::super::agent_api::status(state, meta, grant),
         Action::AgentInvoke {
             action,
             arguments,
