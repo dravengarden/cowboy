@@ -24,10 +24,9 @@ test("session settings exposes confirmed compact and clear actions", () => {
     true,
   );
   assertEquals(composerSource.includes("event.currentTarget.blur();"), true);
-  assertEquals(
-    composerSource.includes("disabled={dead || compacting}"),
-    true,
-  );
+  // A stopped session keeps both actions: Compact wakes it, Clear does not.
+  assertEquals(composerSource.includes("disabled={compacting}"), true);
+  assertEquals(composerSource.includes("disabled={dead || compacting}"), false);
   assertEquals(
     composerSource.includes('color={action.destructive ? "error" : "primary"}'),
     true,
