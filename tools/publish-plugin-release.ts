@@ -48,10 +48,12 @@ const release = JSON.parse(
 ) as PluginRelease;
 if (
   release.plugin_id !== pluginId ||
-  ![1, 2, 3, 4].includes(release.release_schema) ||
+  ![1, 2, 3, 4, 5].includes(release.release_schema) ||
   (release.release_schema === 3 &&
     release.plugin_kind !== "workspace_extension") ||
-  (release.release_schema === 4 && release.plugin_kind !== "agent_provider")
+  (release.release_schema === 4 && release.plugin_kind !== "agent_provider") ||
+  (release.release_schema === 5 &&
+    !["memory_backend", "call_profile"].includes(release.plugin_kind))
 ) {
   throw new Error("release identity or schema mismatch");
 }

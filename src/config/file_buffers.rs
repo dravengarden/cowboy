@@ -36,7 +36,15 @@ pub fn projection(config: &Config) -> serde_json::Value {
 /// When the file cannot be written or renamed.
 pub fn publish(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+    // A fresh Machine publishes before anything else has created its state
+    // directory.
+    if let Some(parent) = path.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let written = (|| {
         let mut file = std::fs::OpenOptions::new()
@@ -104,5 +112,18 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(read, value);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_fresh_state_directory_is_created_privately() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("fresh-machine-state");
+        publish(&path(&state), &serde_json::json!({"schema": 1})).unwrap();
+        assert!(path(&state).is_file());
+        assert_eq!(
+            std::fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }
