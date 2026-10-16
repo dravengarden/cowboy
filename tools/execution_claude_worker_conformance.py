@@ -1558,8 +1558,12 @@ def main():
                           tool("Read", {"file_path": "lost-write-receipt.txt"})])
         client.prompt(timeout=90)
         write_results = list(outputs(api.requests[-1]))[-2:]
-        require(len(write_results) == 2 and not any(block.get("is_error") for block in write_results),
-                "retained write result did not reach native Claude")
+        # The write publishes through the target's apply helper. A lost
+        # completion recovered in time reports success; otherwise the
+        # target's digest decides, and the later change makes it stale.
+        require(len(write_results) == 2 and not write_results[1].get("is_error")
+                and (not write_results[0].get("is_error") or "modified since read" in json.dumps(write_results[0])),
+                "retained write result did not reach native Claude: " + json.dumps(write_results)[:1500])
         require("external-write-after-commit" in json.dumps(write_results[-1]),
                 "native Read did not observe the independent post-write change")
         require((args.target / "lost-write-receipt.txt").read_text() == "external-write-after-commit\n",
@@ -1667,11 +1671,24 @@ def main():
             blocks = list(outputs(api.requests[-1]))
             first_result = next(block for block in blocks if block.get("tool_use_id") == first[0]["id"])
             second_result = next(block for block in blocks if block.get("tool_use_id") == second[0]["id"])
-            require(not first_result.get("is_error") and second_result.get("is_error")
-                    and "modified since read" in json.dumps(second_result), "aliased edits silently overwrote each other")
-            require(source.read_text() == "first\n" and alias.read_text() == "first\n"
-                    and source.stat().st_ino == alias.stat().st_ino, "aliased edit changed file identity or lost content")
-            checks.append(f"native_{kind}_alias_edit_rejects_stale_read")
+            shown = json.dumps([first_result, second_result])[:1500]
+            if kind == "symlink":
+                require(not first_result.get("is_error") and second_result.get("is_error")
+                        and "modified since read" in json.dumps(second_result),
+                        "aliased edits silently overwrote each other: " + shown)
+                require(source.read_text() == "first\n" and alias.read_text() == "first\n"
+                        and alias.is_symlink(), "aliased edit replaced the link or lost content")
+                checks.append("native_symlink_alias_edit_rejects_stale_read")
+            else:
+                # A write replaces the file by a new inode, as natively
+                # (docs/remote-file-buffers.md): the other name keeps its
+                # bytes, so its own edit is not stale.
+                require(not first_result.get("is_error") and not second_result.get("is_error"),
+                        "hard-link edits did not both apply: " + shown)
+                require(source.read_text() == "first\n" and alias.read_text() == "second\n"
+                        and source.stat().st_ino != alias.stat().st_ino,
+                        "hard-link edit did not replace the edited name only")
+                checks.append("native_hardlink_edit_replaces_only_its_name")
         context_checked(api.requests)
         # Each search reads a FIFO. Its writer supplies content only after BOTH
         # readers have opened their pipes: sequential native/facade dispatch

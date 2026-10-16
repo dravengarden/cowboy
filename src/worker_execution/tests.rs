@@ -92,6 +92,23 @@ async fn reconnect_preserves_effect_identity_and_fences_replies() {
 }
 
 #[cfg(feature = "machine-host")]
+/// Whether a completed reply ends its operation: a process read must carry
+/// the helper's end line (`\x1e`) on stdout; any other reply is whole.
+fn helper_finished(reply: &serde_json::Value) -> bool {
+    use base64::Engine as _;
+    let Some(chunks) = reply.get("chunks").and_then(serde_json::Value::as_array) else {
+        return true;
+    };
+    chunks.iter().any(|chunk| {
+        chunk["stream"] == "stdout"
+            && chunk["chunk"]
+                .as_str()
+                .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok())
+                .is_some_and(|bytes| bytes.contains(&0x1e))
+    })
+}
+
+#[cfg(feature = "machine-host")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires pinned native binaries and an isolated PID/network namespace"]
 async fn native_worker_execution() {
@@ -247,6 +264,9 @@ async fn native_worker_execution() {
     let outage = Arc::new(parking_lot::Mutex::new(None::<tokio::time::Instant>));
     let relay_outage = Arc::clone(&outage);
     let write_operation = Arc::new(parking_lot::Mutex::new(None::<String>));
+    // Since file buffers, native Write publishes through the target's
+    // `apply` helper process; its completion arrives in an output read.
+    let write_process = Arc::new(parking_lot::Mutex::new(None::<String>));
     let write_reply_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let relay_write_reply_lost = Arc::clone(&write_reply_lost);
     let image_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -300,6 +320,33 @@ async fn native_worker_execution() {
                     let filename = invocation.params["path"]
                         .as_str()
                         .and_then(|path| std::path::Path::new(path).file_name());
+                    let argv = &invocation.params["argv"];
+                    if invocation.method == "process/start"
+                        && argv[5]
+                            .as_str()
+                            .is_some_and(|path| path.ends_with("/cowboy-execution-host"))
+                        && argv[6] == "apply"
+                        && argv[7] == "--request"
+                        && argv[8]
+                            .as_str()
+                            .and_then(|request| {
+                                use base64::Engine as _;
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(request)
+                                    .ok()
+                            })
+                            .and_then(|request| {
+                                serde_json::from_slice::<serde_json::Value>(&request).ok()
+                            })
+                            .is_some_and(|request| {
+                                request["path"]
+                                    .as_str()
+                                    .is_some_and(|path| path.ends_with("/lost-write-receipt.txt"))
+                            })
+                    {
+                        *write_process.lock() =
+                            invocation.params["processId"].as_str().map(str::to_owned);
+                    }
                     if invocation.method == "fs/writeFile"
                         && filename.is_some_and(|name| name == "lost-write-receipt.txt")
                     {
@@ -344,6 +391,10 @@ async fn native_worker_execution() {
                 let write_reply = match &request.command {
                     Command::Invoke { invocation, .. } => {
                         write_operation.lock().as_ref() == Some(&invocation.operation_id)
+                            || (invocation.method == "process/read"
+                                && write_process.lock().as_ref().is_some_and(|id| {
+                                    invocation.params["processId"] == id.as_str()
+                                }))
                     }
                     Command::Observe { operation_id, .. } => {
                         write_operation.lock().as_ref() == Some(operation_id)
@@ -393,7 +444,7 @@ async fn native_worker_execution() {
                         return;
                     }
                     if write_reply
-                        && matches!(&response, MachineResponse::Call { response: Response::Operation { outcome: Outcome::Completed { reply } } } if reply.get("error").is_none())
+                        && matches!(&response, MachineResponse::Call { response: Response::Operation { outcome: Outcome::Completed { reply } } } if reply.get("error").is_none() && helper_finished(reply))
                         && !write_reply_lost.swap(true, std::sync::atomic::Ordering::SeqCst)
                     {
                         let path = std::path::Path::new(&request.binding.workspace.cwd).join("lost-write-receipt.txt");
