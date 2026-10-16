@@ -33,6 +33,100 @@ fn applied(result: DraftResult) -> DraftDocument {
 #[allow(clippy::too_many_lines)] // One revision/CAS/history contract shared by SQLite and PostgreSQL.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();
+    // Text-only agent edits preserve attachments. Receipts commit with the
+    // edit; replay cannot reapply stale content after a human's later edit.
+    let attachment =
+        serde_json::json!({"id":"attachment-test","type":"image","url":"attachment:test"});
+    let with_attachment = mutation(
+        "attachment-doc",
+        "attachment-create",
+        0,
+        DraftChange::Create {
+            kind: DraftKind::Document,
+            title: "Attached".into(),
+            parent_id: None,
+            body: "Before".into(),
+            attachments: vec![attachment.clone()],
+        },
+    );
+    applied(
+        store
+            .mutate_draft_document("writer", &with_attachment)
+            .await
+            .unwrap(),
+    );
+    let text_edit = mutation(
+        "attachment-doc",
+        "text-edit",
+        1,
+        DraftChange::WriteText {
+            body: "Agent".into(),
+        },
+    );
+    let edited_text = applied(
+        store
+            .mutate_draft_document("writer", &text_edit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(edited_text.attachments, vec![attachment]);
+    assert_eq!(
+        store
+            .draft_operation_document("writer", "text-edit")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("attachment-doc")
+    );
+    assert!(
+        store
+            .draft_operation_document("other", "text-edit")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .draft_operation_document("writer", "unknown")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let later = applied(
+        store
+            .mutate_draft_document(
+                "writer",
+                &mutation("attachment-doc", "later-text", 2, write("Human")),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        applied(
+            store
+                .mutate_draft_document("writer", &text_edit)
+                .await
+                .unwrap()
+        ),
+        later
+    );
+    assert!(matches!(
+        store
+            .mutate_draft_document(
+                "writer",
+                &mutation(
+                    "attachment-doc",
+                    "text-edit",
+                    1,
+                    DraftChange::WriteText {
+                        body: "Changed".into()
+                    }
+                )
+            )
+            .await
+            .unwrap(),
+        DraftResult::Invalid(_)
+    ));
     let folder = mutation(
         "folder",
         "create-folder",

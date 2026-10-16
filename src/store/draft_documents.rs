@@ -66,6 +66,10 @@ pub(crate) enum DraftChange {
         #[serde(default)]
         attachments: Vec<serde_json::Value>,
     },
+    /// A text edit that retains attachments, including on idempotent replay.
+    WriteText {
+        body: String,
+    },
     Rename {
         title: String,
     },
@@ -140,7 +144,7 @@ fn apply(
     now: i64,
     shared: &[crate::session_folders::SessionFolder],
 ) -> DraftResult {
-    use DraftChange::{Create, Move, Rename, Restore, Trash, Write};
+    use DraftChange::{Create, Move, Rename, Restore, Trash, Write, WriteText};
     if !valid_id(&mutation.document_id)
         || !valid_id(&mutation.operation_id)
         || mutation.expected_revision < 0
@@ -150,7 +154,7 @@ fn apply(
     let current = entries.iter().find(|d| d.id == mutation.document_id);
     let expected = match (&mutation.change, current) {
         (Create { .. }, _) => 0,
-        (Write { .. }, Some(d)) => d.body_revision,
+        (Write { .. } | WriteText { .. }, Some(d)) => d.body_revision,
         (Move { .. } | Rename { .. }, Some(d)) => d.metadata_revision,
         (_, Some(d)) => d.revision,
         (_, None) => return DraftResult::Conflict(None),
@@ -195,12 +199,14 @@ fn apply(
             next.body_revision = 1;
             next.metadata_revision = 1;
         }
-        Write { body, attachments } => {
+        Write { body, .. } | WriteText { body } => {
             if next.kind != DraftKind::Document {
                 return DraftResult::Invalid("Folders have no text".to_owned());
             }
             next.body.clone_from(body);
-            next.attachments.clone_from(attachments);
+            if let Write { attachments, .. } = &mutation.change {
+                next.attachments.clone_from(attachments);
+            }
             next.body_revision += 1;
         }
         Rename { title } => {
@@ -400,6 +406,23 @@ impl Store {
             .collect::<Vec<_>>();
         self.mutate_draft_document_in_workspace(owner, mutation, &shared)
             .await
+    }
+
+    /// Receipts survive a lost response and do not depend on the code sandbox.
+    /// The row commits in the same transaction as its document mutation.
+    pub(crate) async fn draft_operation_document(
+        &self,
+        owner: &str,
+        operation: &str,
+    ) -> Result<Option<String>> {
+        macro_rules! read { ($db:expr) => {
+            sqlx::query_scalar::<_,String>("SELECT document_id FROM draft_document_operations WHERE owner_user_id = $1 AND operation_id = $2")
+                .bind(owner).bind(operation).fetch_optional(&$db.pool).await
+        }; }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => read!(db)?,
+            StorageBackend::Sqlite(db) => read!(db)?,
+        })
     }
 
     pub(crate) async fn mutate_draft_document_in_workspace(

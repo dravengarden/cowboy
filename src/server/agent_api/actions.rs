@@ -1,0 +1,444 @@
+//! Explicit effects. Generated read programs cannot reach this dispatcher.
+//! Each domain retains its own durable identity and recovery contract.
+use super::*;
+use crate::managed_calls::Request;
+use crate::store::draft_documents::{DraftChange, DraftMutation, DraftResult};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallInput {
+    #[serde(default = "auto")]
+    provider: String,
+    #[serde(default)]
+    instruction: Option<String>,
+    #[serde(default)]
+    focus: Option<String>,
+    #[serde(default)]
+    design: bool,
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
+}
+
+fn auto() -> String {
+    "auto".into()
+}
+
+fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'static str> {
+    let input: CallInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+    let review = action == "review.start";
+    if (review && (input.instruction.is_some() || input.purpose.is_some()))
+        || (!review && (input.focus.is_some() || input.design))
+    {
+        return Err("invalid_argument");
+    }
+    let purpose = if review {
+        if input.design {
+            "design_review"
+        } else {
+            "review"
+        }
+        .to_owned()
+    } else {
+        input.purpose.unwrap_or_else(|| "analysis".into())
+    };
+    let instruction = if review {
+        crate::managed_calls::review_instruction(input.design, input.focus.as_deref().unwrap_or(""))
+    } else {
+        input.instruction.ok_or("invalid_argument")?
+    };
+    let request = Request::parse(
+        serde_json::to_string(&json!({
+            "schema":1,"request_id":operation,"purpose":purpose,"instruction":instruction,
+            "context":{"scope":"current-worktree","files":input.files,"root":input.root},
+            "access":"read-only","conversation":{"mode":"fresh"}
+        }))
+        .map_err(|_| "invalid_argument")?
+        .as_bytes(),
+    )
+    .map_err(|_| "invalid_argument")?;
+    let action = Action::Start {
+        provider: input.provider,
+        request: Box::new(request),
+        wait_ms: 0,
+        preset: input.preset,
+    };
+    action.validate().map_err(|_| "invalid_argument")?;
+    Ok(action)
+}
+
+fn document_operation(parent: &str, operation: &str) -> String {
+    format!(
+        "agent-{}",
+        crate::admin::hex_sha256(
+            &serde_json::to_vec(&(parent, operation)).expect("strings serialize")
+        )
+    )
+}
+
+fn success(value: Value) -> Value {
+    json!({"schema":1,"state":"ok","value":value})
+}
+
+fn call_result(mut value: Value) -> Value {
+    if let Some(map) = value.as_object_mut() {
+        map.remove("schema");
+        map.remove("next");
+    }
+    if value["state"] == "error" && value.get("call_id").is_none() {
+        value
+    } else {
+        success(value)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentInput {
+    document_id: String,
+    expected_revision: i64,
+    change: DraftChange,
+}
+
+fn document_input(args: Value) -> Result<DocumentInput, &'static str> {
+    // The legacy product writer defaults omitted attachments to an empty list.
+    // Agent replacement must be explicit; ordinary edits use write_text.
+    if args["change"]["type"] == "write" && args["change"].get("attachments").is_none() {
+        return Err("invalid_argument");
+    }
+    serde_json::from_value(args).map_err(|_| "invalid_argument")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptInput {
+    domain: String,
+    operation: String,
+}
+
+/// Derive the current product permission; a session owner id alone is not a
+/// grant to write and a disabled/deleted user must never retain access.
+async fn document_owner(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    meta: &SessionMeta,
+) -> Result<String, &'static str> {
+    let owner = meta.owner_user_id.as_deref().ok_or("permission_denied")?;
+    let store = store.ok_or("unavailable")?;
+    let user = store
+        .user_by_id(owner)
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("permission_denied")?;
+    let principal = super::super::product_principal(hub, &user);
+    if meta.system
+        || user.disabled_at_ms.is_some()
+        || !principal.can_reorder()
+        || hub
+            .session_info(&meta.id)
+            .is_none_or(|info| info.meta.closing || info.meta.owner_user_id != meta.owner_user_id)
+    {
+        return Err("permission_denied");
+    }
+    Ok(owner.to_owned())
+}
+
+pub(in crate::server) async fn invoke(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    ledger: &Ledger,
+    action: &str,
+    args: Value,
+    operation: Option<&str>,
+) -> Value {
+    match execute(state, meta, ledger, action, args, operation).await {
+        Ok(value) => value,
+        Err(code) => error(code),
+    }
+}
+
+async fn execute(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    ledger: &Ledger,
+    action: &str,
+    args: Value,
+    operation: Option<&str>,
+) -> Result<Value, &'static str> {
+    if action == "receipts.get" {
+        if operation.is_some() {
+            return Err("invalid_argument");
+        }
+        let input: ReceiptInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+        if !crate::managed_calls::valid_id(&input.operation) {
+            return Err("invalid_argument");
+        }
+        return match input.domain.as_str() {
+            "calls" => {
+                let record = ledger
+                    .observe(&input.operation)
+                    .await
+                    .map_err(|_| "unavailable")?;
+                let record = match record {
+                    Some(record) => Some(record),
+                    None => ledger
+                        .inspect(&input.operation)
+                        .await
+                        .map_err(|_| "unavailable")?,
+                };
+                match record {
+                    Some(record) => Ok(call_result(
+                        super::super::managed_calls::dispatch_calls(
+                            state,
+                            meta,
+                            ledger,
+                            Action::Inspect {
+                                call_id: record.call_id,
+                            },
+                        )
+                        .await,
+                    )),
+                    None => Ok(success(json!({"status":"unknown"}))),
+                }
+            }
+            "documents" => {
+                let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
+                let id = state
+                    .store
+                    .as_ref()
+                    .ok_or("unavailable")?
+                    .draft_operation_document(
+                        &owner,
+                        &document_operation(&meta.id, &input.operation),
+                    )
+                    .await
+                    .map_err(|_| "unavailable")?;
+                Ok(success(match id {
+                    Some(id) => json!({"status":"committed","document_id":id}),
+                    None => json!({"status":"unknown"}),
+                }))
+            }
+            _ => Err("invalid_argument"),
+        };
+    }
+    let operation = operation
+        .filter(|id| crate::managed_calls::valid_id(id))
+        .ok_or("invalid_operation")?;
+    match action {
+        "calls.start" | "review.start" => {
+            let action = call_action(action, args, operation)?;
+            Ok(call_result(
+                super::super::managed_calls::dispatch_calls(state, meta, ledger, action).await,
+            ))
+        }
+        "calls.cancel" => {
+            only_keys(&args, &["call_id"]).map_err(|_| "invalid_argument")?;
+            let id = arg_str(&args, "call_id").map_err(|_| "invalid_argument")?;
+            // Cancellation's idempotent identity is the immutable call itself.
+            if operation != id {
+                return Err("operation_must_be_call_id");
+            }
+            Ok(call_result(
+                super::super::managed_calls::dispatch_calls(
+                    state,
+                    meta,
+                    ledger,
+                    Action::Cancel { call_id: id.into() },
+                )
+                .await,
+            ))
+        }
+        "documents.mutate" => {
+            let input = document_input(args)?;
+            let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
+            let mutation = DraftMutation {
+                operation_id: document_operation(&meta.id, operation),
+                document_id: input.document_id,
+                expected_revision: input.expected_revision,
+                change: input.change,
+            };
+            let folders = state.hub.sync_value("folders")["folders"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| {
+                    serde_json::from_value::<crate::session_folders::SessionFolder>(v).ok()
+                })
+                .filter(|f| f.owner_user_id.as_deref().is_none_or(|id| id == owner))
+                .collect::<Vec<_>>();
+            match state
+                .store
+                .as_ref()
+                .ok_or("unavailable")?
+                .mutate_draft_document_in_workspace(&owner, &mutation, &folders)
+                .await
+                .map_err(|_| "outcome_unknown")?
+            {
+                DraftResult::Applied(document) => {
+                    let view = document_view(&document, false);
+                    // Use the existing product notification projection, including tombstones.
+                    let mut notification = view.clone();
+                    notification["deleted"] = json!(document.deleted);
+                    state.hub.announce_draft(&owner, notification);
+                    Ok(success(
+                        json!({"status":"committed","document":view,"deleted":document.deleted}),
+                    ))
+                }
+                DraftResult::Conflict(current) => Ok(
+                    json!({"state":"error","error":{"code":"revision_conflict"},"current":current.as_ref().map(|d|document_view(d,false))}),
+                ),
+                DraftResult::Invalid(message) => Ok(
+                    json!({"state":"error","error":{"code":"invalid_mutation","message":message}}),
+                ),
+            }
+        }
+        _ => Err("unknown_operation"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_replacement_requires_an_explicit_list() {
+        let mut input = json!({"document_id":"doc","expected_revision":1,
+            "change":{"type":"write","body":"edited"}});
+        assert!(document_input(input.clone()).is_err());
+        input["change"]["attachments"] = json!([]);
+        assert!(document_input(input).is_ok());
+        assert!(
+            document_input(json!({"document_id":"doc","expected_revision":1,
+            "change":{"type":"write_text","body":"edited"}}))
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn document_permission_uses_current_account_role_and_parent_ownership() {
+        use crate::admin::{AdminRole, PERMISSIONS_SETTING, PermissionPolicy};
+        use crate::core::{Hub, SessionOrigin, SessionRegistration};
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let user = crate::store::ProductUser {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            username: "writer".into(),
+            password_algo: "fixture".into(),
+            password_hash: "unused".into(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "parent".into(),
+            provider: "codex".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "machine".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tasks/project".into(),
+            title: String::new(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some(user.id.clone()),
+            owner_username: Some(user.username.clone()),
+        });
+        let mut meta = hub.session_info("parent").unwrap().meta;
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        let mut policy = PermissionPolicy::default();
+        policy.upsert_grant(&user.username, AdminRole::Operator);
+        hub.set_setting(
+            PERMISSIONS_SETTING.into(),
+            serde_json::to_value(&policy).unwrap(),
+        );
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await.unwrap(),
+            user.id
+        );
+        store.set_user_disabled_at(&user.id, Some(2)).await.unwrap();
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        store.set_user_disabled_at(&user.id, None).await.unwrap();
+        meta.id = "other-parent".into();
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        meta.id = "parent".into();
+        meta.owner_user_id = Some("other-owner".into());
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        meta.owner_user_id = None;
+        assert_eq!(
+            document_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+    }
+    #[test]
+    fn call_inputs_never_supply_authority_or_change_read_only_profile() {
+        for args in [
+            json!({"instruction":"inspect","parent":"victim"}),
+            json!({"instruction":"inspect","access":"write"}),
+            json!({"focus":"inspect","purpose":"analysis"}),
+        ] {
+            assert!(call_action("review.start", args, "op").is_err());
+        }
+        let Action::Start {
+            request, wait_ms, ..
+        } = call_action(
+            "review.start",
+            json!({"focus":"check ownership","root":"/tasks/example"}),
+            "op",
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(wait_ms, 0);
+        assert_eq!(request.request_id, "op");
+        assert!(request.instruction.contains("check ownership"));
+        assert!(matches!(
+            request.access,
+            crate::managed_calls::Access::ReadOnly
+        ));
+    }
+    #[test]
+    fn document_operation_identity_is_parent_scoped_and_stable() {
+        assert_eq!(
+            document_operation("a", "one"),
+            document_operation("a", "one")
+        );
+        assert_ne!(
+            document_operation("a", "one"),
+            document_operation("b", "one")
+        );
+        assert_ne!(
+            document_operation("a", "one"),
+            document_operation("a", "two")
+        );
+    }
+}

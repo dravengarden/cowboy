@@ -28,6 +28,8 @@ use crate::managed_calls::protocol::Action;
 use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
+mod actions;
+pub(super) use actions::invoke;
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.
@@ -53,6 +55,8 @@ pub(super) async fn status(state: &Arc<AppState>, meta: &SessionMeta, _ledger: &
         "schema": 1,
         "state": "ok",
         "api": API_VERSION,
+        "actions": state.machine_control.connection_protocol(&meta.machine_id)
+            .is_some_and(|(_, protocol)| protocol >= crate::machine_protocol::AGENT_ACTION_PROTOCOL_VERSION),
         "session": session_view(&info),
         "calls": {"enabled": super::agent_tools::effective(state, meta).calls.enabled},
     })
@@ -157,15 +161,17 @@ impl Host for SessionHost<'_> {
                 only_keys(&args, &[])?;
                 self.calls(Action::Capabilities {}).await
             }
-            "calls.inspect" | "calls.result" => {
+            "calls.inspect" => {
                 only_keys(&args, &["call_id"])?;
                 let call_id = arg_str(&args, "call_id")?.to_owned();
-                self.calls(if op == "calls.inspect" {
-                    Action::Inspect { call_id }
-                } else {
-                    Action::Result { call_id }
-                })
-                .await
+                self.calls(Action::Inspect { call_id }).await
+            }
+            "calls.result" => {
+                only_keys(&args, &["call_id", "offset", "chars"])?;
+                let call_id = arg_str(&args, "call_id")?.to_owned();
+                let mut value = self.calls(Action::Result { call_id }).await?;
+                text_window(&mut value["result"], "text", &args)?;
+                Ok(value)
             }
             "calls.wait" => {
                 only_keys(&args, &["call_id", "timeout_ms"])?;
@@ -233,28 +239,43 @@ impl Host for SessionHost<'_> {
                 let owner = self.meta.owner_user_id.as_deref().ok_or("unavailable")?;
                 let store = self.state.store.as_ref().ok_or("unavailable")?;
                 if op == "documents.list" {
-                    only_keys(&args, &[])?;
-                    let documents = store
+                    only_keys(&args, &["after", "limit", "include_deleted"])?;
+                    let after = args
+                        .get("after")
+                        .map(|_| arg_str(&args, "after"))
+                        .transpose()?;
+                    let deleted = optional_bool(&args, "include_deleted")?;
+                    let limit =
+                        usize::try_from(arg_u64(&args, "limit", 10_000, 200)?).unwrap_or(200);
+                    let mut documents = store
                         .draft_documents(owner)
                         .await
                         .map_err(|_| "unavailable")?;
+                    documents.sort_by(|a, b| a.id.cmp(&b.id));
                     Ok(Value::Array(
                         documents
                             .iter()
-                            .filter(|document| !document.deleted)
+                            .filter(|document| deleted || !document.deleted)
+                            .filter(|document| {
+                                after.is_none_or(|after| document.id.as_str() > after)
+                            })
+                            .take(limit)
                             .map(|document| document_view(document, false))
                             .collect(),
                     ))
                 } else {
-                    only_keys(&args, &["id"])?;
+                    only_keys(&args, &["id", "offset", "chars", "include_deleted"])?;
                     let id = arg_str(&args, "id")?;
+                    let deleted = optional_bool(&args, "include_deleted")?;
                     let document = store
                         .draft_document(owner, id)
                         .await
                         .map_err(|_| "unavailable")?
-                        .filter(|document| !document.deleted)
+                        .filter(|document| deleted || !document.deleted)
                         .ok_or("not_found")?;
-                    Ok(document_view(&document, true))
+                    let mut value = document_view(&document, true);
+                    text_window(&mut value, "body", &args)?;
+                    Ok(value)
                 }
             }
             _ => Err("unknown_operation".into()),
@@ -329,7 +350,6 @@ fn document_view(document: &crate::store::draft_documents::DraftDocument, body: 
             .remove("attachments")
             .and_then(|value| value.as_array().map(Vec::len))
             .unwrap_or(0);
-        object.remove("deleted");
         if body {
             object.insert("attachments".into(), json!(attachments));
         } else {
@@ -337,6 +357,38 @@ fn document_view(document: &crate::store::draft_documents::DraftDocument, body: 
         }
     }
     view
+}
+
+fn optional_bool(args: &Value, key: &str) -> Result<bool, String> {
+    match args.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err("invalid_argument".into()),
+    }
+}
+
+/// Unicode scalar offsets, never byte slices. Explicit windows let a program
+/// read a large retained value without first exceeding the broker's budget.
+fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), String> {
+    if args.get("offset").is_none() && args.get("chars").is_none() {
+        return Ok(());
+    }
+    let offset = usize::try_from(arg_u64(args, "offset", 0, u64::from(u32::MAX))?)
+        .map_err(|_| "invalid_argument")?;
+    let count =
+        usize::try_from(arg_u64(args, "chars", 1000, 4000)?).map_err(|_| "invalid_argument")?;
+    if count == 0 {
+        return Err("invalid_argument".into());
+    }
+    if let Some(text) = value[field].as_str() {
+        let total = text.chars().count();
+        let offset = offset.min(total);
+        let body: String = text.chars().skip(offset).take(count).collect();
+        let end = offset + body.chars().count();
+        value[field] = json!(body);
+        value["range"] = json!({"offset":offset,"next":(end<total).then_some(end),"total":total});
+    }
+    Ok(())
 }
 
 fn content_text(content: &[Value]) -> String {

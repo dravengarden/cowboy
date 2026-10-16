@@ -5,7 +5,9 @@ const MAX_LOG = 4096;
 const out = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
 // The final frame must be flushed before exit, or a pipe truncates it.
 const finish = (frame) =>
-  new Promise((resolve) => process.stdout.write(JSON.stringify(frame) + "\n", resolve))
+  new Promise((resolve) =>
+    process.stdout.write(JSON.stringify(frame) + "\n", resolve)
+  )
     .then(() => process.exit(0));
 const lines = console[Symbol.asyncIterator]();
 const pending = new Map();
@@ -80,11 +82,14 @@ const cowboy = Object.freeze({
     capabilities: none,
     inspect: callId,
     wait: (call_id, timeout_ms) => ({ call_id, timeout_ms }),
-    result: callId,
+    result: (call_id, q) => ({ ...q, call_id }),
     observe: (request_id) => ({ request_id }),
   }),
   sessions: namespace("sessions", { list: query, info: id }),
-  documents: namespace("documents", { list: none, read: id }),
+  documents: namespace("documents", {
+    list: query,
+    read: (id, q) => ({ ...q, id }),
+  }),
 });
 
 function failure(error, code) {

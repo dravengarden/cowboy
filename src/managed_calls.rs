@@ -26,6 +26,24 @@ pub mod service;
 
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 
+/// Shared by the CLI and MCP; neither surface may silently weaken a review.
+pub fn review_instruction(design: bool, focus: &str) -> String {
+    let task = if design {
+        "Review the design documents changed in this worktree for gaps, contradictions and risks."
+    } else {
+        "Review this worktree's change (uncommitted work and commits not yet on the default branch). Read surrounding code as needed."
+    };
+    let focus = focus.trim();
+    let focus = if focus.is_empty() {
+        String::new()
+    } else {
+        format!("\nFocus: {focus}")
+    };
+    format!(
+        "{task}{focus}\nReport actionable correctness, security, data-loss or contract problems, most severe first. Each finding needs path:line, trigger, impact and a concrete fix. Be concise; omit praise, restated diff and style nits. Do not omit distinct serious findings to meet a count or length target. If blocked or incomplete, say so and identify the missing evidence. Only after completing the requested review with no findings, reply exactly: No findings."
+    )
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {

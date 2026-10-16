@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn large_text_pages_preserve_unicode_and_signal_the_exact_continuation() {
+    let original = "a中🙂b".repeat(100_000);
+    let mut value = json!({"body":original});
+    text_window(&mut value, "body", &json!({"offset":1,"chars":2})).unwrap();
+    assert_eq!(value["body"], "中🙂");
+    assert_eq!(value["range"], json!({"offset":1,"next":3,"total":400_000}));
+    let mut result = json!({"text":"a中🙂b","truncated":true});
+    text_window(&mut result, "text", &json!({"offset":3,"chars":2})).unwrap();
+    assert_eq!(result["text"], "b");
+    assert_eq!(result["range"]["next"], Value::Null);
+    assert_eq!(result["truncated"], true);
+    assert!(text_window(&mut result, "text", &json!({"chars":0})).is_err());
+    assert!(text_window(&mut result, "text", &json!({"offset":-1})).is_err());
+}
+
 fn envelope(seq: u64, event: Event) -> Envelope {
     Envelope {
         session_id: "s".into(),

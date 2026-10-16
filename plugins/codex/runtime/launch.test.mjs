@@ -118,9 +118,16 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
   });
   assert.match(prompt, /Other delegation: `cowboy claude --help`/);
   assert.doesNotMatch(prompt, /\{\{|cowboy codex/);
-  // Only the order of the hidden commands differs from the built-in text.
-  const normalize = (text) => text.replace(/Never run .*? yourself/, "");
-  assert.equal(normalize(prompt), normalize(AGENT_CALLS_PROMPT));
+  assert.equal(
+    prompt,
+    guidance.replaceAll("{{peer_command}}", "claude").replaceAll(
+      "{{peer}}",
+      "Claude",
+    ),
+  );
+  assert.match(prompt, /at most once per task/);
+  assert.match(prompt, /cowboy review --ask/);
+  assert.ok(prompt.length < 650);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   const added = agentCallsConfiguration([], "", prompt);
   assert.equal(

@@ -18,7 +18,9 @@ use super::super::AppState;
 use super::super::agent_tools;
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution;
-use crate::machine_protocol::{AGENT_API_PROTOCOL_VERSION, MANAGED_CALL_PROTOCOL_VERSION};
+use crate::machine_protocol::{
+    AGENT_ACTION_PROTOCOL_VERSION, AGENT_API_PROTOCOL_VERSION, MANAGED_CALL_PROTOCOL_VERSION,
+};
 use crate::managed_calls::authority::Authority;
 use crate::managed_calls::lifecycle::{Record, State};
 use crate::managed_calls::protocol::{Action, Grant};
@@ -138,13 +140,13 @@ fn reconcile(state: &Arc<AppState>) {
                 continue;
             }
             let agent_api = protocol >= AGENT_API_PROTOCOL_VERSION;
+            let agent_actions = protocol >= AGENT_ACTION_PROTOCOL_VERSION;
             // An older Machine refuses a grant carrying the flag, and an
             // upgraded one refuses Agent API actions under a grant without
             // it, so a reconnect at another protocol replaces the grant.
-            if grants
-                .get(&parent)
-                .is_some_and(|entry| entry.grant.agent_api != agent_api)
-                && let Some(entry) = grants.remove(&parent)
+            if grants.get(&parent).is_some_and(|entry| {
+                entry.grant.agent_api != agent_api || entry.grant.agent_actions != agent_actions
+            }) && let Some(entry) = grants.remove(&parent)
             {
                 revoked.push((entry.grant, machine.clone()));
             }
@@ -153,6 +155,7 @@ fn reconcile(state: &Arc<AppState>) {
                     grant_id: random_id("grant"),
                     parent_session_id: parent.clone(),
                     agent_api,
+                    agent_actions,
                 },
                 authority,
                 installed_on: None,
@@ -316,6 +319,9 @@ pub(in crate::server) async fn handle(
     if action.validate().is_err() {
         return error("invalid_contract", "not_submitted");
     }
+    if matches!(action, Action::AgentInvoke { .. }) && !grant.agent_actions {
+        return error("unsupported_capability", "not_submitted");
+    }
     let (meta, ledger) = match authorize(state, connection, &grant) {
         Ok(authorized) => authorized,
         // Authorization precedes admission, so a refusal proves non-admission.
@@ -333,6 +339,21 @@ async fn dispatch(
 ) -> Value {
     match action {
         Action::AgentStatus {} => super::super::agent_api::status(state, meta, ledger).await,
+        Action::AgentInvoke {
+            action,
+            arguments,
+            operation,
+        } => {
+            super::super::agent_api::invoke(
+                state,
+                meta,
+                ledger,
+                &action,
+                arguments,
+                operation.as_deref(),
+            )
+            .await
+        }
         Action::AgentRead {
             code,
             language,
@@ -417,7 +438,7 @@ pub(in crate::server) async fn dispatch_calls(
             Err(_) => error("capacity", "not_submitted"),
         },
         Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
-        Action::AgentStatus {} | Action::AgentRead { .. } => {
+        Action::AgentStatus {} | Action::AgentRead { .. } | Action::AgentInvoke { .. } => {
             error("invalid_contract", "not_submitted")
         }
     }

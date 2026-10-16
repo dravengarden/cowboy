@@ -321,6 +321,10 @@ async fn submit(
 /// printed byte is read back into the caller's context, so nothing else is.
 #[derive(Args)]
 pub struct ReviewArgs {
+    /// Absolute Git worktree to review on the execution target. Defaults to
+    /// the current Git worktree; the target validates registration.
+    #[arg(long)]
+    root: Option<std::path::PathBuf>,
     /// Review design documents (specs, plans) instead of code.
     #[arg(long)]
     design: bool,
@@ -340,24 +344,23 @@ pub struct ReviewArgs {
     timeout_min: u64,
 }
 
-/// The reviewer's reply format, appended to every request: findings only,
-/// bounded, and an exact empty answer so a clean review costs a few tokens.
-const REVIEW_REPLY: &str = "Report only concrete problems worth fixing: bugs, security or data-loss risks, broken contracts, missing error handling. One line each, most severe first, at most 10: `path:line - problem - fix`. No praise, summary, restated diff or style nits. If nothing is worth fixing, reply exactly: No findings.";
-
-const DEFAULT_CODE_REVIEW: &str = "Review this worktree's change (uncommitted work and commits not yet on the default branch). Read the surrounding code you need to judge it.";
-const DEFAULT_DESIGN_REVIEW: &str =
-    "Review the design documents changed in this worktree for gaps, contradictions and risks.";
-
 fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
-    let focus = focus.trim();
-    let task = if focus.is_empty() {
-        if args.design {
-            DEFAULT_DESIGN_REVIEW
-        } else {
-            DEFAULT_CODE_REVIEW
+    let root = match &args.root {
+        Some(root) => root.clone(),
+        None => {
+            let output = std::process::Command::new("git")
+                .args(["rev-parse", "--show-toplevel"])
+                .output()
+                .map_err(|_| "worktree unavailable".to_owned())?;
+            if !output.status.success() {
+                return Err("not a Git worktree".into());
+            }
+            PathBuf::from(
+                String::from_utf8(output.stdout)
+                    .map_err(|_| "invalid worktree path".to_owned())?
+                    .trim_end_matches('\n'),
+            )
         }
-    } else {
-        focus
     };
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -366,8 +369,8 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
         "schema": 1,
         "request_id": format!("review-{millis}-{}", std::process::id()),
         "purpose": if args.design { "design_review" } else { "review" },
-        "instruction": format!("{task}\n\n{REVIEW_REPLY}"),
-        "context": {"scope": "current-worktree"},
+        "instruction": super::review_instruction(args.design, focus),
+        "context": {"scope": "current-worktree", "root": root},
         "access": "read-only",
         "conversation": {"mode": "fresh"},
     });
@@ -376,6 +379,14 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
 
 /// One line for an outcome that has no findings to show.
 fn review_line(value: &Value) -> String {
+    if value.pointer("/error/admission").and_then(Value::as_str) == Some("unknown")
+        && let Some(request) = value
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|id| valid_id(id))
+    {
+        return format!("review outcome unknown; inspect with: cowboy call observe {request}");
+    }
     let code = value
         .pointer("/error/code")
         .and_then(Value::as_str)
@@ -452,7 +463,14 @@ async fn run_review(context: &Wiring, args: &ReviewArgs, focus: &str) -> Result<
     };
     match settled.get("state").and_then(Value::as_str) {
         Some("completed") => {}
-        Some(state) if state != "error" => return Err(format!("review {state}; call {call_id}")),
+        Some(state) if state != "error" => {
+            let code = settled
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .filter(|code| valid_id(code));
+            let detail = code.map(|code| format!(" ({code})")).unwrap_or_default();
+            return Err(format!("review {state}{detail}; call {call_id}"));
+        }
         _ => return Err(review_line(&settled)),
     }
     let result = exchange(
@@ -468,9 +486,12 @@ async fn run_review(context: &Wiring, args: &ReviewArgs, focus: &str) -> Result<
         .and_then(Value::as_str)
         .ok_or_else(|| review_line(&result))?;
     let mut text = text.trim().to_owned();
+    if text.is_empty() {
+        return Err(format!("review incomplete: empty result; call {call_id}"));
+    }
     if result.pointer("/result/truncated") == Some(&Value::Bool(true)) {
         text.push_str(&format!(
-            "\n(truncated; full result: cowboy call result {call_id})"
+            "\nReview incomplete: retained output was truncated; call {call_id}."
         ));
     }
     Ok(text)
@@ -557,6 +578,7 @@ pub async fn call(args: CallArgs) -> anyhow::Result<()> {
         Action::Capabilities {}
         | Action::Start { .. }
         | Action::AgentStatus {}
+        | Action::AgentInvoke { .. }
         | Action::AgentRead { .. } => None,
         Action::Observe { request_id } => Some(request_id),
         Action::Inspect { call_id }
@@ -660,6 +682,7 @@ mod tests {
 
     fn review_args(design: bool) -> ReviewArgs {
         ReviewArgs {
+            root: Some("/tasks/review".into()),
             design,
             ask: false,
             agent: "auto".into(),
@@ -672,7 +695,12 @@ mod tests {
     fn a_review_request_is_valid_bounded_and_asks_for_findings_only() {
         let request = review_request(&review_args(false), "  \n").unwrap();
         assert_eq!(request.purpose, super::super::Purpose::Review);
-        assert!(request.instruction.starts_with(DEFAULT_CODE_REVIEW));
+        assert!(
+            request
+                .instruction
+                .starts_with("Review this worktree's change")
+        );
+        assert_eq!(request.context.root.as_deref(), Some("/tasks/review"));
         assert!(request.instruction.ends_with("reply exactly: No findings."));
         assert!(valid_id(&request.request_id));
         let focused = review_request(&review_args(true), "Check the migration order").unwrap();
@@ -680,7 +708,7 @@ mod tests {
         assert!(
             focused
                 .instruction
-                .starts_with("Check the migration order\n\n")
+                .contains("Focus: Check the migration order\n")
         );
         assert!(review_request(&review_args(false), &"x".repeat(200 * 1024)).is_err());
     }

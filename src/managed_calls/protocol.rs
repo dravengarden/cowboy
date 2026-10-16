@@ -39,6 +39,15 @@ pub enum Action {
     },
     /// Agent API: the parent's compact status, without a program.
     AgentStatus {},
+    /// One explicit domain action. The Controller owns validation, authority,
+    /// idempotency and effects; this never runs caller-supplied code.
+    AgentInvoke {
+        action: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation: Option<String>,
+    },
     /// Agent API: one read-only program run beside the Controller's state.
     AgentRead {
         code: String,
@@ -113,6 +122,22 @@ impl Action {
                 }
             }
             Self::AgentStatus {} => Ok(()),
+            Self::AgentInvoke {
+                action,
+                arguments,
+                operation,
+            } => {
+                if !crate::agent_api::INVOKE_OPERATIONS.contains(&action.as_str())
+                    || !arguments.is_object()
+                    || operation.as_ref().is_some_and(|id| !valid_id(id))
+                    || (action == "receipts.get") != operation.is_none()
+                    || serde_json::to_vec(arguments)
+                        .map_or(true, |v| v.len() > crate::agent_api::MAX_SOURCE_BYTES)
+                {
+                    return Err(InputError::InvalidContract);
+                }
+                Ok(())
+            }
             Self::AgentRead {
                 code,
                 language,
@@ -152,15 +177,25 @@ impl Action {
     /// Agent API actions need a Controller that understands them; the grant
     /// says so (see [`Grant::agent_api`]).
     pub fn agent_api(&self) -> bool {
-        matches!(self, Self::AgentStatus {} | Self::AgentRead { .. })
+        matches!(
+            self,
+            Self::AgentStatus {} | Self::AgentRead { .. } | Self::AgentInvoke { .. }
+        )
     }
 }
 
 impl Action {
-    /// Starting a call is the only action whose lost reply leaves admission
-    /// uncertain; every other action is an observation or an idempotent stop.
+    /// Call starts and explicit effects may commit before a reply is lost.
+    /// Report uncertainty so callers observe receipts or retry the same identity.
     pub fn submits(&self) -> bool {
-        matches!(self, Self::Start { .. })
+        matches!(
+            self,
+            Self::Start { .. }
+                | Self::AgentInvoke {
+                    operation: Some(_),
+                    ..
+                }
+        )
     }
 }
 
@@ -178,6 +213,8 @@ pub struct Grant {
     /// Controller never receives an event it cannot decode.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_api: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_actions: bool,
 }
 
 impl Grant {

@@ -1,6 +1,6 @@
 # Review call profile
 
-Review 1.0.0 is a Cowboy `call_profile` Plugin. It declares the purposes of
+Review 1.0.1 is a Cowboy `call_profile` Plugin. It declares the purposes of
 Cowboy managed agent calls (code review, design review, analysis) and the
 agent-facing guidance that tells a session when and how to request a
 read-only review from the other agent family. `{{peer}}` and

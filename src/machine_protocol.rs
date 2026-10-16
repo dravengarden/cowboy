@@ -22,7 +22,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 30;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 31;
 pub const EXECUTION_RECOVERY_PROTOCOL_VERSION: u16 = 27;
 /// Machines host parent-scoped managed-call gateways and managed child rounds.
 pub const MANAGED_CALL_PROTOCOL_VERSION: u16 = 28;
@@ -31,6 +31,8 @@ pub const MANAGED_CALL_PROTOCOL_VERSION: u16 = 28;
 pub const MANAGED_ENVIRONMENT_PROTOCOL_VERSION: u16 = 29;
 /// Machines accept `Grant::agent_api` and forward Agent API gateway actions.
 pub const AGENT_API_PROTOCOL_VERSION: u16 = 30;
+/// Explicit scoped actions and operation receipts, without executing writable code.
+pub const AGENT_ACTION_PROTOCOL_VERSION: u16 = 31;
 /// Machines report host memory, swap, load and disk, and accept a
 /// non-destructive session hibernation that stops only the live worker.
 pub const HOST_RESOURCES_PROTOCOL_VERSION: u16 = 26;

@@ -1,23 +1,30 @@
 # Agent API: Cowboy as a token-frugal MCP surface
 
-Status: Stage 0 (read-only) implemented, 2026-10-15. Later stages are design.
+Status: read composition and explicit scoped actions implemented, 2026-10-16.
+Activation follows the Controller and Machine compatibility gates below.
 
 ## Problem
 
-An agent inside a Cowboy session reaches Cowboy only through shell commands:
-`cowboy codex`, `cowboy call capabilities|wait|result`. One review is four or
-five Bash round trips, each returning a JSON envelope, and the system prompt
-carries a paragraph of CLI instructions on every turn. The agent cannot see its
-own queue, drafts, retained transcript or sibling sessions at all.
+Cowboy owns live session state; Matrix owns durable historical evidence. Native
+agents own execution and conversation state. The MCP surface gives an agent
+bounded access to Cowboy's sessions, queue, documents and managed calls. The
+`cowboy review` CLI remains a single-command shortcut to the same review
+contract. Neither surface creates a second review engine or memory store.
 
 The goal is the smallest resident surface that still lets one tool call do a
 multi-step job, as Matrix CodeAct does for memory:
 
 - resident cost (tool descriptions and instructions) under 1.5 KiB, enforced
   by a unit test; the full declaration is a resource read only when needed;
-- one program per job, returning at most 16 KiB that the program selected;
+- one read program per composition, returning at most 16 KiB it selected;
 - zero idle traffic: no notification stream, no polling, no open connection;
 - stable error codes instead of stack traces or transcript dumps.
+
+The four complete tool definitions, including JSON schemas and annotations,
+plus initialization instructions measure 2,203 UTF-8 bytes on 2026-10-16.
+The discovery test enforces a 4 KiB ceiling for that complete surface, in addition
+to the description budget. This is a serialization measurement, not a provider
+token count, prompt-cache measurement or successful-task cost comparison.
 
 ## Native coverage and the residual gap
 
@@ -42,7 +49,7 @@ from the live parent worker. Each `tools/call` is one gateway exchange; the
 server holds nothing open between calls, so an idle server costs nothing even
 through the Claude remote MCP relay.
 
-Gateway actions `agent_status` and `agent_read` extend the closed managed-call
+Gateway actions `agent_status`, `agent_read` and `agent_invoke` extend the closed managed-call
 `Action` enum. Compatibility is explicit:
 
 - Machine protocol 30 adds `Grant.agent_api`. A Controller sets it only for a
@@ -52,6 +59,10 @@ Gateway actions `agent_status` and `agent_read` extend the closed managed-call
 - A Machine refuses Agent API actions locally (`unsupported_capability`)
   under a grant without the flag, so an older Controller never receives an
   event it cannot decode.
+- Protocol 31 adds `Grant.agent_actions` for explicit actions and receipts.
+  Both the Machine and Controller check it; reconnecting at a different floor
+  replaces the grant. Protocol-30 peers keep the two read tools. An older
+  Controller never receives an unknown action variant.
 - `cowboy mcp` probes `agent_status` once at startup and advertises no tools
   or resources when it fails. Outside a Cowboy session, or before both
   components are updated, a registered server therefore costs no tokens.
@@ -64,6 +75,13 @@ Managed child sessions have no grant and no Agent API.
 |---|---|---|
 | `cowboy_status` | none | Session view and whether managed calls are enabled |
 | `cowboy_read` | TS/JS | Read-only composition over the operations below |
+| `cowboy_execute` | none | One explicit domain action with a stable operation ID |
+| `cowboy_receipt` | none | Inspect a call or document receipt without a sandbox |
+
+`cowboy_read({help:"index"})` discovers namespaces; `help:"read"` and
+`help:"actions"` return declarations without starting a program. Help and code
+are mutually exclusive. Definitions stay stable for the MCP process; an
+unavailable capability is reported instead of silently falling back.
 
 Resource `cowboy://sdk/v1` serves the strict declaration
 ([`src/agent_api.rs`](../src/agent_api.rs) `SDK`). `cowboy_read` runs CODE
@@ -73,9 +91,9 @@ with `format: "module"`; `language: "js"` selects JavaScript.
 | Namespace | Operations |
 |---|---|
 | `session` | `info()`, `queue()`, `drafts()`, `events({after?, before?, limit?, chars?, kinds?})` |
-| `calls` | `capabilities()`, `inspect(id)`, `wait(id, ms?)`, `result(id)`, `observe(request_id)` |
+| `calls` | `capabilities()`, `inspect(id)`, `wait(id, ms?)`, `result(id, window?)`, `observe(request_id)` |
 | `sessions` | `list({status?, limit?})`, `info(id)`: sessions of the same owner, never system sessions |
-| `documents` | `list()`, `read(id)`: the owner's Draft documents |
+| `documents` | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents |
 
 `session.events` projects the retained hot log: message chunks coalesce,
 tool-call updates fold into their call, thoughts are omitted and text is
@@ -83,6 +101,45 @@ truncated per item. `calls.*` uses the exact managed-call dispatcher, minus
 the CLI-only `schema` and `next` fields; a program can observe calls but not
 start or cancel them. `calls.wait` is clamped to the program's remaining
 budget. A failed operation throws an `Error` whose `code` is stable.
+
+Large document bodies and call-result text can be read with
+`{offset:0,chars:1000}`. Offsets count Unicode scalars; `range.next` is the next
+offset, or null at the end. Paging never clears a retained result's `truncated`
+flag. Document pages carry revision clocks: restart a read if the body revision
+changes. List pages use the last document id as `after`, at most 200 requested
+items. These are live observations, not a cross-page snapshot.
+
+## Explicit effects and recovery
+
+`cowboy_execute({action,arguments,operation})` invokes one existing domain
+writer. It does not evaluate code or promise atomicity across domains.
+
+| Action | Contract |
+|---|---|
+| `review.start` | Focus, design/code choice, files/root and optional provider/preset; shared CLI review instruction, immutable worktree snapshot, read-only child |
+| `calls.start` | Self-contained instruction and existing managed-call policy/approval/admission |
+| `calls.cancel` | `call_id`; operation must equal that id; requesting cancellation does not prove termination |
+| `documents.mutate` | Create, text write, attachment replacement, rename, move, trash or restore; existing owner-scoped store transaction and revision CAS |
+
+Call start uses the operation as the durable request id. Document operations
+are additionally namespaced by the parent session; their receipt commits in
+the same SQL transaction as the mutation. Reusing an id with changed input is
+refused. A receipt query is scoped to the live parent and domain. `unknown` is
+not proof that the write failed: retry identical input under the same id or
+continue observing, never mint a new id to resolve uncertainty.
+
+Document writes recheck the active product account, operator role and current
+parent owner. They use `body_revision` for `write_text`/`write`,
+`metadata_revision` for rename/move, full `revision` for trash/restore and zero
+for create. `write_text` retains attachments; `write` replaces them explicitly.
+Conflict replies return current metadata for an intentional retry. Normal
+product notifications and recovery history are preserved.
+
+Review remains optional and normally skipped. The reply contract asks for
+actionable findings with location, trigger, impact and fix, with no fixed count
+or one-line cap. An incomplete, failed or truncated review is not a clean
+review. The CLI resolves its current Git root (or explicit `--root`), and an
+unresolved admission prints the original request id for `cowboy call observe`.
 
 ## Contained runtime
 
@@ -105,20 +162,20 @@ JSON; console output is returned up to 4 KiB, and a thrown error returns
 only a bounded identifier code and a message of at most 2000 characters. The Nix build pins Bubblewrap,
 util-linux `prlimit` and Bun; a missing runtime yields `runtime_unavailable`,
 never an unsandboxed fallback. Compared with Matrix CodeAct this omits the
-seccomp filter and cgroup memory accounting; both are Stage 1 hardening gates
-before any program may mutate state.
+seccomp filter and cgroup memory accounting. They remain hardening gates before
+any generated program may mutate state. Explicit actions bypass the program
+runtime and reach only the closed, authorized domain dispatcher.
 
 ## Stages
 
 0. **Read-only (implemented).** Protocol 30, `cowboy_status`, `cowboy_read`,
    the operations above, `cowboy mcp`. Activation needs a Controller release
-   and a Machine maintenance release; the worker generation is unchanged.
-1. **Writes.** `cowboy_execute(code, operation)` and `cowboy_receipt`, with
-   Matrix's staged, atomic, operation-identified semantics: `calls.start` and
-   `cancel` (keeping the existing approval flow), queue add/edit/remove with
-   `cmid` idempotency, Draft document writes with `body_revision` CAS. Queue
-   and documents default on; seccomp and cgroup limits land first.
-2. **Delivery.** Provider Plugins register the server through the session
+   and a Machine maintenance release with an accepted worker pin for the wire floor.
+1. **Explicit writes (implemented).** Protocol 31, four tools, calls and
+   documents with their own receipts. Matrix's in-memory staged batch is not
+   copied over remote call launches. Queue mutation still needs a durable
+   receipt tied atomically to dispatch/CAS; queue reads remain available.
+2. **Automatic delivery.** Provider Plugins register the server through the session
    extension descriptor (`docs/session-extension-plugins.md`) and replace the
    CLI paragraph in the system prompt with one line. Acceptance compares one
    review flow's tokens and round trips with the CLI baseline.

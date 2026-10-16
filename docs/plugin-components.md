@@ -83,6 +83,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.54.0 records app-shell 1.1.28 for UI sources already present on
+main but missing from the 3.53.0 digest. It changes no UI behavior. Review 1.0.1
+shortens its optional review guidance; Codex 3.4.8 and Claude Code 3.19.37 update
+the tests of that delivered guidance while retaining their runtime pins and
+production adapter code. All historical releases and unrelated Plugin versions
+remain unchanged. Source validation does not establish publication or activation.
+
 Component release 3.49.0 records provider-runtime 1.1.14: Claude Code 2.1.296,
 Claude Agent ACP 0.89.1, Codex CLI 0.160.1, Codex ACP 2.2.2, Gemini CLI 0.63.0
 and Grok 1.0.50. Node and both DeepSeek gateways keep their exact pins. All six

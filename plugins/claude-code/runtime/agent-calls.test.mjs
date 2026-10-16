@@ -19,7 +19,7 @@ test("the agent-calls prompt routes reviews through Cowboy", () => {
   assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
 });
 
-test("the Review Plugin renders exactly Claude's built-in guidance", () => {
+test("the installed Review Plugin owns guidance while legacy sessions retain their fallback", () => {
   const { guidance } = JSON.parse(
     readFileSync(
       new URL("../../review/contract.json", import.meta.url),
@@ -30,8 +30,18 @@ test("the Review Plugin renders exactly Claude's built-in guidance", () => {
     schema: 1,
     calls: { profiles: [{ guidance }] },
   });
-  // Changing either text without the other is a visible drift.
-  assert.equal(prompt, AGENT_CALLS_PROMPT);
+  assert.equal(
+    prompt,
+    guidance.replaceAll("{{peer_command}}", "codex").replaceAll(
+      "{{peer}}",
+      "Codex",
+    ),
+  );
+  assert.match(prompt, /optional/);
+  assert.match(prompt, /at most once per task/);
+  assert.match(prompt, /cowboy review --ask/);
+  assert.match(prompt, /skips\/missing commands silent/);
+  assert.ok(prompt.length < 650);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   assert.equal(
     agentCallsPrompt({ schema: 1, calls: null }),

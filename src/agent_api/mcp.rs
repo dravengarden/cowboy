@@ -9,7 +9,10 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::sync::Mutex;
 
-use super::{INSTRUCTIONS, READ_DESCRIPTION, SDK, STATUS_DESCRIPTION};
+use super::{
+    EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, SDK,
+    STATUS_DESCRIPTION,
+};
 use crate::managed_calls::cli::{exchange, wiring};
 use crate::managed_calls::protocol::Action;
 
@@ -20,8 +23,8 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 #[derive(clap::Args)]
 pub struct McpArgs {}
 
-fn tools() -> Value {
-    json!([
+fn tools(actions: bool) -> Value {
+    let mut tools = json!([
         {
             "name": "cowboy_status",
             "description": STATUS_DESCRIPTION,
@@ -35,27 +38,63 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "code": {"type": "string"},
+                    "help": {"type":"string"},
                     "language": {"enum": ["ts", "js"]},
                     "format": {"enum": ["body", "module"]},
                     "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000},
                 },
-                "required": ["code"],
                 "additionalProperties": false,
             },
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
-    ])
+        {
+            "name":"cowboy_execute","description":EXECUTE_DESCRIPTION,
+            "inputSchema":{"type":"object","properties":{
+                "action":{"type":"string"},"arguments":{"type":"object"},"operation":{"type":"string"}
+            },"required":["action","arguments","operation"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"cowboy_receipt","description":RECEIPT_DESCRIPTION,
+            "inputSchema":{"type":"object","properties":{
+                "domain":{"enum":["calls","documents"]},"operation":{"type":"string"}
+            },"required":["domain","operation"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+    ]);
+    if !actions {
+        tools.as_array_mut().unwrap().truncate(2);
+    }
+    tools
+}
+
+#[derive(Clone, Copy, Default)]
+struct Surface {
+    enabled: bool,
+    actions: bool,
+}
+
+impl From<bool> for Surface {
+    fn from(enabled: bool) -> Self {
+        Self {
+            enabled,
+            actions: enabled,
+        }
+    }
 }
 
 /// Whether this process can reach a Controller that serves the Agent API.
 /// Decided once at startup: a grant can change later, and a call then reports
 /// its own error, but the advertised surface stays stable for the session.
-async fn available() -> bool {
+async fn available() -> Surface {
     let Ok(context) = wiring() else {
-        return false;
+        return Surface::default();
     };
     let reply = exchange(context, Action::AgentStatus {}, 0).await;
-    reply.get("state").and_then(Value::as_str) == Some("ok")
+    Surface {
+        enabled: reply.get("state").and_then(Value::as_str) == Some("ok"),
+        actions: reply["actions"] == true,
+    }
 }
 
 fn action(name: &str, arguments: &Value) -> Result<Action, String> {
@@ -66,9 +105,25 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
         _ => return Err("invalid arguments".into()),
     };
     let mut tagged = arguments;
+    if name == "cowboy_receipt" {
+        if tagged.as_object().is_none_or(|map| map.len() != 2)
+            || !matches!(tagged["domain"].as_str(), Some("calls" | "documents"))
+            || tagged["operation"]
+                .as_str()
+                .is_none_or(|id| !crate::managed_calls::valid_id(id))
+        {
+            return Err("invalid receipt arguments".into());
+        }
+        return Ok(Action::AgentInvoke {
+            action: "receipts.get".into(),
+            arguments: tagged,
+            operation: None,
+        });
+    }
     tagged["kind"] = json!(match name {
         "cowboy_status" => "agent_status",
         "cowboy_read" => "agent_read",
+        "cowboy_execute" => "agent_invoke",
         _ => return Err(format!("unknown tool {name}")),
     });
     let action: Action =
@@ -100,7 +155,12 @@ fn tool_result(mut reply: Value) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": failed})
 }
 
-async fn handle(method: &str, params: &Value, enabled: bool) -> Result<Value, (i64, String)> {
+async fn handle(
+    method: &str,
+    params: &Value,
+    surface: impl Into<Surface>,
+) -> Result<Value, (i64, String)> {
+    let Surface { enabled, actions } = surface.into();
     match method {
         "initialize" => {
             let requested = params.get("protocolVersion").and_then(Value::as_str);
@@ -115,7 +175,7 @@ async fn handle(method: &str, params: &Value, enabled: bool) -> Result<Value, (i
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools": if enabled { tools() } else { json!([]) }})),
+        "tools/list" => Ok(json!({"tools": if enabled { tools(actions) } else { json!([]) }})),
         "resources/list" => Ok(json!({"resources": if enabled {
             json!([{"uri": SDK_URI, "name": "Cowboy agent SDK", "mimeType": "text/typescript"}])
         } else {
@@ -138,6 +198,31 @@ async fn handle(method: &str, params: &Value, enabled: bool) -> Result<Value, (i
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if !actions && matches!(name, "cowboy_execute" | "cowboy_receipt") {
+                return Ok(tool_result(
+                    json!({"state":"error","error":{"code":"unsupported_capability"}}),
+                ));
+            }
+            if name == "cowboy_read" && params["arguments"].get("help").is_some() {
+                let args = &params["arguments"];
+                let result = args
+                    .as_object()
+                    .filter(|v| v.len() == 1)
+                    .and_then(|_| args["help"].as_str())
+                    .and_then(super::help);
+                return Ok(match result {
+                    Some(mut value) => {
+                        if !actions {
+                            value["available_actions"] = json!([]);
+                            if value.get("actions").is_some() {
+                                value["actions"] = json!([]);
+                            }
+                        }
+                        tool_result(json!({"state":"ok","value":value}))
+                    }
+                    None => tool_result(json!({"state":"error","error":{"code":"invalid_help"}})),
+                });
+            }
             let action = match action(name, params.get("arguments").unwrap_or(&Value::Null)) {
                 Ok(action) => action,
                 Err(message) => {
@@ -272,5 +357,82 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn discovery_is_local_and_older_machines_keep_only_read_tools() {
+        let old = Surface {
+            enabled: true,
+            actions: false,
+        };
+        let list = handle("tools/list", &Value::Null, old).await.unwrap();
+        assert_eq!(list["tools"].as_array().unwrap().len(), 2);
+        let modern = handle("tools/list", &Value::Null, true).await.unwrap();
+        assert_eq!(modern["tools"].as_array().unwrap().len(), 4);
+        let bytes = serde_json::to_vec(&modern["tools"]).unwrap().len() + INSTRUCTIONS.len();
+        assert!(bytes < 4096, "resident definitions: {bytes} UTF-8 bytes");
+        eprintln!("Cowboy resident definitions and instructions: {bytes} UTF-8 bytes (not tokens)");
+        let help = handle(
+            "tools/call",
+            &json!({"name":"cowboy_read","arguments":{"help":"index"}}),
+            old,
+        )
+        .await
+        .unwrap();
+        let index: Value =
+            serde_json::from_str(help["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(index["actions"], json!([]));
+        let unavailable = handle("tools/call", &json!({"name":"cowboy_execute","arguments":{"action":"review.start","arguments":{},"operation":"test"}}), old).await.unwrap();
+        assert_eq!(unavailable["isError"], true);
+        let help = handle(
+            "tools/call",
+            &json!({"name":"cowboy_read","arguments":{"help":"actions"}}),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(help["isError"], false);
+        for arguments in [
+            json!({"help":"actions","code":"return 1"}),
+            json!({"help":"missing"}),
+        ] {
+            assert_eq!(
+                handle(
+                    "tools/call",
+                    &json!({"name":"cowboy_read","arguments":arguments}),
+                    true
+                )
+                .await
+                .unwrap()["isError"],
+                true
+            );
+        }
+        assert!(matches!(
+            action(
+                "cowboy_execute",
+                &json!({"action":"review.start","arguments":{},"operation":"review-1"})
+            ),
+            Ok(Action::AgentInvoke {
+                operation: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            action(
+                "cowboy_receipt",
+                &json!({"domain":"documents","operation":"edit-1"})
+            ),
+            Ok(Action::AgentInvoke {
+                operation: None,
+                ..
+            })
+        ));
+        for arguments in [
+            json!({"action":"shell","arguments":{},"operation":"x"}),
+            json!({"action":"review.start","arguments":{},"operation":"../x"}),
+            json!({"action":"review.start","arguments":[],"operation":"x"}),
+        ] {
+            assert!(action("cowboy_execute", &arguments).is_err());
+        }
     }
 }

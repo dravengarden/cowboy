@@ -238,6 +238,9 @@ impl CallHost {
         if action.agent_api() && !grant.agent_api {
             return refusal("unsupported_capability", "not_submitted");
         }
+        if matches!(action, Action::AgentInvoke { .. }) && !grant.agent_actions {
+            return refusal("unsupported_capability", "not_submitted");
+        }
         let submits = action.submits();
         let unknown = if submits {
             refusal("outcome_unknown", "unknown")
@@ -316,6 +319,7 @@ mod tests {
             grant_id: "grant-1".into(),
             parent_session_id: "parent-1".into(),
             agent_api: false,
+            agent_actions: false,
         };
         host.install(&grant).unwrap();
         host.install(&grant).unwrap();
@@ -347,6 +351,9 @@ mod tests {
         let refused = request(&context, json!({"kind":"agent_status"})).await;
         assert_eq!(refused["error"]["code"], "unsupported_capability");
         assert!(rx.try_recv().is_err());
+        let refused = request(&context, json!({"kind":"agent_invoke","action":"review.start","arguments":{},"operation":"test"})).await;
+        assert_eq!(refused["error"]["code"], "unsupported_capability");
+        assert!(rx.try_recv().is_err());
         // A Start whose uplink disappears has an unknown outcome.
         let waiting = tokio::spawn({
             let context = context.clone();
@@ -368,6 +375,7 @@ mod tests {
             grant_id: "grant-2".into(),
             parent_session_id: "parent-1".into(),
             agent_api: false,
+            agent_actions: false,
         };
         host.install(&replacement).unwrap();
         assert_ne!(std::fs::read(&context).unwrap(), old_wiring);
