@@ -197,4 +197,27 @@ async fn budgets_and_failures_are_explicit() {
     .await
     .unwrap();
     assert_eq!(value["error"], json!({"code":"mine","message":"boom"}));
+    let value = run(
+        "throw Object.assign(new Error('x'.repeat(100000)), { code: 'c'.repeat(100000), extra: 'y'.repeat(100000) });",
+        false,
+        10_000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["error"]["code"], "program_error");
+    assert!(value.to_string().len() < 4096);
+    // Scratch space is bounded host memory, not an unlimited tmpfs.
+    let value = run(
+        r#"const fs = require("fs"); const out = {};
+        for (const dir of ["/tmp", "/dev"]) {
+          try { for (let i = 0; i < 4; i++) fs.writeFileSync(`${dir}/f${i}`, Buffer.alloc(600000)); out[dir] = "unbounded"; }
+          catch (e) { out[dir] = e.code; }
+        }
+        return out;"#,
+        false,
+        10_000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["value"], json!({"/tmp":"ENOSPC","/dev":"EROFS"}));
 }
