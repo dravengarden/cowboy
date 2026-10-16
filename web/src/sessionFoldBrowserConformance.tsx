@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { Box, CssBaseline } from "@mui/material";
+import { Box, CssBaseline, IconButton } from "@mui/material";
+import { Add, Close, InfoOutlined, Settings } from "@mui/icons-material";
 import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
-import { useSessionFoldControl } from "./SessionFoldControl";
+import { SessionFoldIcon, useSessionFoldControl } from "./SessionFoldControl";
 import { CreateDialog } from "./App";
 import {
   SESSION_FOLDER_CREATED_EVENT,
@@ -176,6 +177,46 @@ export async function runSessionFoldBrowserConformance(): Promise<string[]> {
     await tick();
   };
   try {
+    const html = document.documentElement;
+    const previousSize = html.style.fontSize;
+    const previousScale = html.style.getPropertyValue("--cowboy-font-scale");
+    try {
+      flushSync(() => root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <MobileSheetActionGroup actions={[
+            { key: "new", label: "Create", onPress: () => {}, icon: <Add sx={{ fontSize: "1.35em" }} /> },
+            { key: "fold", label: "Fold", onPress: () => {}, icon: <SessionFoldIcon action="focus" /> },
+            { key: "close", label: "Close", onPress: () => {}, icon: <Close sx={{ fontSize: "1.25em" }} /> },
+            { key: "info", label: "About", onPress: () => {}, icon: <InfoOutlined sx={{ fontSize: "1.25em" }} /> },
+            { key: "settings", label: "Settings", onPress: () => {}, icon: <Settings sx={{ fontSize: "1.25em" }} /> },
+          ]} />
+          <IconButton data-reference-icon aria-label="Reference"><Settings /></IconButton>
+        </BrowserProductTheme>,
+      ));
+      for (const scale of [0.65, 1, 1.25]) {
+        html.style.fontSize = `${scale * 100}%`;
+        html.style.setProperty("--cowboy-font-scale", String(scale));
+        await tick();
+        const reference = container.querySelector("[data-reference-icon] svg")!
+          .getBoundingClientRect().height;
+        check(Math.abs(reference - 24 * scale) < 0.1, `reference size at ${scale}: ${reference}`);
+        for (const button of container.querySelectorAll("[data-mobile-sheet-footer-shield] button")) {
+          const glyph = button.querySelector("svg")!.getBoundingClientRect();
+          check(
+            Math.abs(glyph.height - reference) < 0.1 && Math.abs(glyph.width - reference) < 0.1,
+            `${button.getAttribute("aria-label")} differs from IconButton at ${scale}: ${glyph.width}x${glyph.height} vs ${reference}`,
+          );
+          check(button.getBoundingClientRect().height === 46, "reading scale changed the touch target");
+        }
+      }
+    } finally {
+      html.style.fontSize = previousSize;
+      if (previousScale) html.style.setProperty("--cowboy-font-scale", previousScale);
+      else html.style.removeProperty("--cowboy-font-scale");
+    }
+    results.push("all five footer glyphs match IconButton at 65%, 100% and 125% with stable touch targets");
+
     render(nested, "s20-1");
     await tick();
     check(!inView("s20-1"), "fixture current row starts off screen");

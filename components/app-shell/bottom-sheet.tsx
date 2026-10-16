@@ -434,6 +434,15 @@ export function MobileSheetActionGroup(
                       alignItems: "center",
                       justifyContent: "center",
                       fontWeight: 650,
+                      // Match IconButton glyphs at every reading scale. Inline
+                      // em sizes otherwise inherit the smaller native button
+                      // font. Explicit SVG geometry also avoids minimum-font
+                      // clamping on mobile browsers.
+                      "& .MuiSvgIcon-root": {
+                        fontSize: "calc(24px * var(--cowboy-font-scale, 1))",
+                        width: "calc(24px * var(--cowboy-font-scale, 1))",
+                        height: "calc(24px * var(--cowboy-font-scale, 1))",
+                      },
                       transition: [
                         "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
                         "background-color 160ms ease",
