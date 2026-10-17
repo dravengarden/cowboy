@@ -5,6 +5,7 @@ import {
   OPEN_SESSION_SETTINGS_EVENT,
   openSessionSettings,
   sessionSettingsFocusFromEvent,
+  sessionSettingsEventMatches,
 } from "./sessionSettingsOpen.ts";
 
 const transcriptSource = await readFile(
@@ -20,7 +21,7 @@ test("empty-state chips open the session settings switcher", () => {
     true,
   );
   assertEquals(
-    transcriptSource.includes('openSessionSettings("agent")'),
+    transcriptSource.includes('openSessionSettings("agent", sessionId)'),
     true,
   );
   assertEquals(
@@ -47,4 +48,10 @@ test("session settings open events keep an explicit focus", () => {
     "session",
   );
   assertEquals(typeof openSessionSettings, "function");
+});
+
+test("a settings action targets its session in a split workspace", () => {
+  const event = new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus: "agent", sessionId: "one" } });
+  assertEquals(sessionSettingsEventMatches(event, "one"), true);
+  assertEquals(sessionSettingsEventMatches(event, "two"), false);
 });

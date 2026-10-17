@@ -14,6 +14,7 @@ const endpoint = process.argv.slice(2)[0] ?? "";
 const suite = process.argv.slice(2)[1] ?? "desktop-composer";
 const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
+  "about-layout": ["runAboutLayoutBrowserConformance", 10],
   "desktop-composer": ["runDesktopComposerBrowserConformance", 13],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],
@@ -25,6 +26,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 11],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
+  "dormant-session": ["runDormantSessionBrowserConformance", 7],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

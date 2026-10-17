@@ -97,6 +97,7 @@ with `format: "module"`; `language: "js"` selects JavaScript.
 | `calls` | `capabilities()`, `inspect(id)`, `wait(id, ms?)`, `result(id, window?)`, `observe(request_id)` |
 | `sessions` | `list({status?, limit?})`, `info(id)`: sessions of the same owner, never system sessions |
 | `documents` | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents |
+| `preferences` | `schema()`, `get("about")`: typed account preferences and compact ordering choices |
 
 `session.events` projects the retained hot log: message chunks coalesce,
 tool-call updates fold into their call, thoughts are omitted and text is
@@ -123,6 +124,46 @@ writer. It does not evaluate code or promise atomicity across domains.
 | `calls.start` | Self-contained instruction and existing managed-call policy/approval/admission |
 | `calls.cancel` | `call_id`; operation must equal that id; requesting cancellation does not prove termination |
 | `documents.mutate` | Create, text write, attachment replacement, rename, move, trash or restore; existing owner-scoped store transaction and revision CAS |
+| `preferences.update` | `{scope,expected_revision,changes}`; typed partial update of the current user's DB preferences, with atomic revision and receipt |
+
+### User preferences and configuration coverage
+
+About's Usage Provider order and Machine order are account-owned DB state, shared
+by mobile, desktop and agents. `cowboy_read({help:"preferences"})` discovers the
+contract without loading unrelated declarations. `preferences.get("about")`
+returns the revision, values and compact ID/name choices, without usage details
+or resource metrics. `usage_order` and `machine_order` are unique ID arrays:
+listed items appear first, unlisted items retain their default order, unavailable
+IDs stay dormant, and empty arrays restore defaults. An omitted field is unchanged.
+
+`preferences.update` revalidates the live parent account, applies both fields in
+one transaction, and persists the exact result alongside the operation receipt.
+A revision conflict returns `current`; retry only after reconciling the user's
+intent. An uncertain write reuses identical input and operation, or queries
+`cowboy_receipt({domain:"preferences",operation})`. Receipts are parent-scoped.
+WebSocket invalidations contain only scope/revision and reach only that user.
+UI writes bind the dataset observed by the editor; switching accounts cannot
+redirect an old proposal into the new account.
+
+The authenticated CLI can use `cowboy api` against `GET /api/preferences/about`
+and `PUT /api/preferences`, supplying the returned dataset ID as the body field
+`dataset` (or HTTP header `x-cowboy-dataset`) and an `operation` alongside the update fields. UI, CLI and MCP
+reach the same typed domain writer. Display changes are immediate; no Service
+or Device restart is needed for subsequent preference edits. Codex and Claude
+share this surface. Initial feature rollout requires the updated Controller,
+Machine gateway and MCP binary: older gateways retain their closed action list
+and refuse `preferences.update`. The authenticated HTTP/CLI path remains the
+fallback until those components are updated; restart MCP discovery when adopting
+its new help and receipt domain. Retain accepted worker generations during a
+resident Machine update.
+
+Future Cowboy settings should expose AI-readable schema and an explicit MCP
+action by default, with a documented reason for any exception. Keep storage
+ownership: UI-edited user state belongs in DB; Service/Device configuration
+remains in the unified configuration framework and retains its validation,
+permission and activation contract. Extend domain operations behind the four
+existing tools, discover schemas on demand, and return only selected fields or
+compact receipts. Do not expose arbitrary file/DB writes as a configuration API.
 
 Call start uses the operation as the durable request id. Document operations
 are additionally namespaced by the parent session; their receipt commits in

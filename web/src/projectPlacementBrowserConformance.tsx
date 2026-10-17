@@ -18,6 +18,8 @@ import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
 import { createSessionFolder, removeSessionFolder, setSessionFolderDefault } from "./store";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
+import { runDirectoryUxBrowserChecks } from "./directoryUxBrowserChecks";
+export { renderDirectoryUxPreview } from "./directoryUxBrowserChecks";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
   string[]
@@ -381,13 +383,14 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     setSessionFolderDefault(parentFolder, "provider", "claude-code");
     flushSync(() => root.render(<SurfaceProvider><BrowserProductTheme><CssBaseline /><FolderDefaultsSheet id={childFolder} onClose={() => {}} /></BrowserProductTheme></SurfaceProvider>));
     await new Promise((resolve) => setTimeout(resolve, 180));
-    const providerField = () => document.querySelectorAll<HTMLElement>('[role="combobox"]')[3]!;
-    check(providerField()?.textContent?.includes("Inherit"), "directory settings show inheritance as an explicit choice");
+    const providerField = () => document.querySelector<HTMLElement>('[data-default-field="provider"]')!;
+    check(providerField()?.textContent?.includes("Inherited"), "directory settings show inheritance as an explicit choice");
     check(document.body.textContent?.includes("Inherited from Defaults parent"), "directory settings show the source of the effective value");
     const chooseDefault = async (value: string) => {
-      flushSync(() => providerField().dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+      flushSync(() => providerField().click());
       await new Promise((resolve) => setTimeout(resolve, 50));
-      const option = document.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
+      check(document.querySelectorAll('[role="dialog"]').length === 1, "default choice stays inside one sheet");
+      const option = document.querySelector<HTMLElement>(value === "inherit" ? '[data-default-mode="inherit"]' : `[data-default-value="${value.slice(6)}"]`);
       check(option, `directory default option ${value} is available`);
       flushSync(() => option!.click());
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -401,6 +404,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     flushSync(() => root.render(<></>));
     removeSessionFolder(childFolder);
     removeSessionFolder(parentFolder);
+    await runDirectoryUxBrowserChecks();
     let picked = 0;
     let inspected = 0;
     function SessionRow({ cwd = "/runtime" }: { cwd?: string }) {

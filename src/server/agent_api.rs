@@ -146,6 +146,17 @@ impl Host for SessionHost<'_> {
                     .ok_or("not_found")?;
                 Ok(session_view(&info))
             }
+            "preferences.schema" => {
+                only_keys(&args, &[])?;
+                Ok(crate::store::preferences::schema())
+            }
+            "preferences.get" => {
+                only_keys(&args, &["scope"])?;
+                let owner = actions::preference_owner(self.state, self.meta).await?;
+                super::preferences::read_value(self.state, &owner, arg_str(&args, "scope")?)
+                    .await
+                    .map_err(str::to_owned)
+            }
             "session.queue" | "session.drafts" => {
                 only_keys(&args, &[])?;
                 let (queue, drafts) = self

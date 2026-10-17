@@ -258,7 +258,7 @@ test("page roots and delivery bubbles use one shared optimistic key", async () =
     true,
   );
   assertEquals(
-    transcript.includes('status !== "exited" || optimisticMsgs.length === 0'),
+    transcript.includes('status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)'),
     true,
   );
   assertEquals(

@@ -23,7 +23,7 @@ primary phone/desktop product path.
 - [`execution-environments.md`](execution-environments.md) — Native remote execution, ownership, staged acceptance and OVH egress/context audit
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat head-of-line blocking, native handshake recovery and same-identity creation recovery
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
-- [`agent-api.md`](agent-api.md) — Cowboy MCP: lazy discovery, contained reads, explicit calls/documents, domain receipts and protocol 30/31 compatibility
+- [`agent-api.md`](agent-api.md) — Cowboy MCP: lazy discovery, contained reads, account layout preferences, explicit actions, domain receipts and protocol 30/31 compatibility
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Implementation design for parent-scoped cross-Provider calls, AI-facing CLI, Suger integration and desktop/mobile lifecycle UI; not yet shipped
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
@@ -197,7 +197,7 @@ primary phone/desktop product path.
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
 - [`offline-first-sync.md`](offline-first-sync.md) — Offline-first design: local replica boot, prioritized hydration, one sync status, outbox classes, conflict catalog and required server changes
-- [`sessions-folders.md`](sessions-folders.md) — Sessions sidebar folders: project filing, inherited creation defaults, CLI, Mobile and Desktop UX, keyboard contract
+- [`sessions-folders.md`](sessions-folders.md) — Sessions folders: inherited defaults, searchable project tree, scoped batch deletion, CLI and keyboard UX
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
 - [`machine-plugin-membership.md`](machine-plugin-membership.md) — Service-side declaration of which Plugins a Machine runs, and why a declared Machine has no client lifecycle actions
 - [`machine-component-convergence.md`](machine-component-convergence.md) — Continuous convergence of signed automatic Machine components: authority, drain, backoff and reported state

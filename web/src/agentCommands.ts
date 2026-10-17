@@ -81,7 +81,7 @@ const CLEAR_ACTION: SessionAction = {
     // surfaces render it inside the consequence block (ConfirmConsequence), in
     // the destructive colour, where it is the last thing read before the tap —
     // not the tail of a three-line paragraph.
-    "Start the agent on a fresh context, discarding the conversation so far — it won't remember anything above. The transcript stays on screen (a divider marks the cut) so you keep the record.",
+    "Clear this conversation and use a fresh context for your next message. Your settings and workspace are kept.",
   destructive: true,
 };
 

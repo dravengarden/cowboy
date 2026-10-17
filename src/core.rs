@@ -631,6 +631,19 @@ fn projected_config_options(
     crate::managed_config::projected_options(&configuration, preferences, options)
 }
 
+fn display_config_options(session: &Session) -> Option<serde_json::Value> {
+    if let Some(options) = &session.config_options {
+        return Some(options.clone());
+    }
+    let mut options = session.initial_config_options.clone()?;
+    if let Some(preferences) = session.config_preferences.as_object() {
+        for (id, value) in preferences {
+            set_config_option_current_value(&mut options, id, value);
+        }
+    }
+    Some(options)
+}
+
 /// Immutable attributes assigned when a Cowboy session is registered.
 pub struct SessionRegistration {
     pub id: String,
@@ -841,6 +854,9 @@ struct Session {
     /// new client on connect so the composer dropdowns populate from a fresh
     /// reload.
     config_options: Option<serde_json::Value>,
+    /// Signed defaults/presets before the first ACP snapshot. A preview is
+    /// never persisted or treated as an agent acknowledgement.
+    initial_config_options: Option<serde_json::Value>,
     /// Session-owned config values. This is deliberately separate from the
     /// latest agent snapshot: an agent's startup defaults must not erase a
     /// user's choice before the service has re-applied it.
@@ -1756,6 +1772,7 @@ struct HubInner {
     /// the `"drafts"` announcement state. Documents converge over HTTP; this
     /// only tells the owner's other devices which revision to fetch.
     draft_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
+    preference_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     /// One immutable frame is shared by the Web Push observer and every socket:
@@ -1945,6 +1962,7 @@ impl Hub {
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 workspace_orders: Mutex::new(HashMap::new()),
                 draft_announcements: Mutex::new(HashMap::new()),
+                preference_announcements: Mutex::new(HashMap::new()),
                 tx,
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
@@ -2184,6 +2202,26 @@ impl Hub {
     /// Announce one owner's changed draft `metadata` (no body) to that owner's
     /// devices. The live patch carries only this document; a reconnect resync
     /// carries every document announced this lifetime.
+    pub(crate) fn announce_preferences(&self, owner: &str, scope: &str, revision: i64) {
+        {
+            let mut all = self.inner.preference_announcements.lock();
+            let scopes = all.entry(owner.to_owned()).or_default();
+            if scopes
+                .get(scope)
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|old| old >= revision)
+            {
+                return;
+            }
+            scopes.insert(scope.to_owned(), revision.into());
+        }
+        self.sync_emit(
+            "preferences",
+            serde_json::json!({owner:{scope:revision}}),
+            Vec::new(),
+        );
+    }
+
     pub(crate) fn announce_draft(&self, owner: &str, metadata: serde_json::Value) {
         let Some(id) = metadata.get("id").and_then(serde_json::Value::as_str) else {
             return;
@@ -2407,6 +2445,7 @@ impl Hub {
                         next_seq,
                         last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
+                        initial_config_options: None,
                         config_preferences,
                         queue,
                         drafts,
@@ -2814,8 +2853,14 @@ impl Hub {
             .get(session_id)
             .copied();
         failed_at.is_some_and(|failed_at| {
-            self.session_idle_for(session_id)
-                .is_some_and(|idle| failed_at.elapsed() <= idle)
+            // Compare the recorded instants. Two elapsed() calls observe
+            // different "now"s; a scheduling pause between them could lift
+            // this hold even though no session activity occurred.
+            self.inner
+                .sessions
+                .lock()
+                .get(session_id)
+                .is_some_and(|session| session.last_activity <= failed_at)
         })
     }
 
@@ -3175,6 +3220,7 @@ impl Hub {
                     next_seq: 0,
                     last_activity: std::time::Instant::now(),
                     config_options: None,
+                    initial_config_options: None,
                     config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
                     drafts: Vec::new(),
@@ -3724,6 +3770,8 @@ impl Hub {
                 .expect("workspace orders serialize"),
             "drafts" => serde_json::to_value(&*self.inner.draft_announcements.lock())
                 .expect("draft announcements serialize"),
+            "preferences" => serde_json::to_value(&*self.inner.preference_announcements.lock())
+                .expect("preference announcements serialize"),
             _ if state.starts_with("mobile-review:") => {
                 let session_id = &state["mobile-review:".len()..];
                 let sessions = self.inner.sessions.lock();
@@ -4349,6 +4397,7 @@ impl Hub {
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
             session.provider_generation_missing = false;
+            session.initial_config_options = None;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
             session.meta.clone()
         };
@@ -4420,6 +4469,7 @@ impl Hub {
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
+            session.initial_config_options = None;
             // Auth generation owns the native runtime home. Never replace it
             // with the active installation's credential generation here.
             session.meta.status = Status::Starting;
@@ -4934,9 +4984,29 @@ impl Hub {
                 &session.meta.provider,
                 session.meta.provider_behavior.as_ref(),
                 &session.config_preferences,
-                session.config_options.clone(),
+                display_config_options(session),
             )
         })
+    }
+
+    /// Supply a preview without allocating a worker or claiming an ACP reply.
+    pub(crate) fn set_initial_config_options(
+        &self,
+        expected: &SessionMeta,
+        options: serde_json::Value,
+    ) {
+        let mut sessions = self.inner.sessions.lock();
+        if let Some(session) = sessions.get_mut(&expected.id)
+            && session.meta.provider == expected.provider
+            && session.meta.provider_generation_digest == expected.provider_generation_digest
+            && session.meta.provider_version == expected.provider_version
+            && session.meta.provider_auth_generation == expected.provider_auth_generation
+            && session.meta.machine_id == expected.machine_id
+            && session.meta.owner_user_id == expected.owner_user_id
+            && session.config_options.is_none()
+        {
+            session.initial_config_options = Some(options);
+        }
     }
 
     /// Return only the last agent-backed options snapshot. Unlike
@@ -4979,7 +5049,7 @@ impl Hub {
         ) {
             return Err("configuration values must be a string id or boolean".to_owned());
         }
-        let (preferences, options) = {
+        let (preferences, options, persist_options) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(session) = sessions.get_mut(session_id) else {
                 return Err(format!("unknown session {session_id:?}"));
@@ -5005,16 +5075,22 @@ impl Hub {
                 &session.meta.provider,
                 session.meta.provider_behavior.as_ref(),
                 &session.config_preferences,
-                session.config_options.clone(),
+                display_config_options(session),
             );
             let options = options.as_mut().and_then(|options| {
                 set_config_option_current_value(options, &config_id, &value)
                     .then(|| options.clone())
             });
-            if let Some(options) = &options {
+            if let Some(options) = &options
+                && session.config_options.is_some()
+            {
                 session.config_options = Some(options.clone());
             }
-            (session.config_preferences.clone(), options)
+            (
+                session.config_preferences.clone(),
+                options,
+                session.config_options.is_some(),
+            )
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateConfigPreferences {
@@ -5023,7 +5099,9 @@ impl Hub {
             });
         }
         if let Some(options) = options {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
+            if let Some(tx) = self.inner.store_tx.as_ref()
+                && persist_options
+            {
                 let _ = tx.send(StoreWrite::UpdateConfigOptions {
                     session_id: session_id.to_owned(),
                     options: options.clone(),
@@ -5062,9 +5140,10 @@ impl Hub {
                     .cloned()
             })
         };
-        let model_pending = pending.keys().any(|config_id| {
+        let model_pending = pending.iter().any(|(config_id, (value, _))| {
             find(options, config_id).is_some_and(|option| {
                 option.get("category").and_then(serde_json::Value::as_str) == Some("model")
+                    && config_option_accepts(&option, value)
             })
         });
         pending.retain(|config_id, (value, set_at)| {
@@ -6846,6 +6925,49 @@ mod session_order_merge_tests {
 #[cfg(test)]
 mod config_preference_tests {
     use super::*;
+
+    #[test]
+    fn prelaunch_configuration_keeps_durable_selections_separate_from_agent_snapshots() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "Preview".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let meta = hub.session_info("s").unwrap().meta;
+        let preview = serde_json::json!([{
+            "id":"model", "category":"model", "currentValue":"gpt-6.1-sol",
+            "options":[{"value":"gpt-6.1-sol"},{"value":"chosen"}]
+        }]);
+        hub.set_initial_config_options(&meta, preview.clone());
+        hub.set_config_preference("s", "model".into(), serde_json::json!("chosen"))
+            .unwrap();
+        // Reloading the preview cannot erase the saved selection. No synthetic
+        // options may masquerade as a worker response during native hydration.
+        hub.set_initial_config_options(&meta, preview.clone());
+        assert_eq!(
+            hub.config_options("s").unwrap()[0]["currentValue"],
+            "chosen"
+        );
+        assert_eq!(hub.config_preferences("s").unwrap()["model"], "chosen");
+        assert_eq!(hub.persisted_config_options("s"), None);
+        hub.set_config_options(
+            "s",
+            serde_json::json!([{
+                "id":"model", "category":"model", "currentValue":"replacement",
+                "options":[{"value":"replacement"}]
+            }]),
+        );
+        hub.set_initial_config_options(&meta, preview);
+        assert_eq!(
+            hub.config_options("s").unwrap()[0]["currentValue"],
+            "replacement"
+        );
+        assert_eq!(hub.config_preferences("s").unwrap()["model"], "replacement");
+    }
 
     #[test]
     fn new_codex_sessions_start_with_sol_6_1_medium_preferences() {

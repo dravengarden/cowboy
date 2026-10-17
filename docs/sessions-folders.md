@@ -5,7 +5,7 @@ drawer, Desktop rail). "Implementation notes" below records where the shipped
 behaviour deviates from the first design.
 Scope: the Sessions sidebar on Mobile (spatial drawer) and Desktop (rail),
 the `"folders"` synced state, and its Controller persistence.
-Non-goal: search/filter of sessions, multi-selection, tags or colors.
+Non-goal: global session search/filter, tags or colors.
 
 2026-10-05: independent Draft documents now share this tree and ordinary
 entry selection; see [Workspace documents](workspace-documents.md) for
@@ -274,7 +274,7 @@ model used by Obsidian-style trees:
 
 ## Not in v1
 
-Multi-selection and bulk move, a search/filter box, folder icons or colors,
+Bulk move, a global search/filter box, folder icons or colors,
 machine-based grouping, and dragging folders themselves (folders reorder via
 Order mode and Move to…).
 
@@ -381,3 +381,42 @@ editing a machine does not overwrite another client's project edit. Mutations
 use existing folder sync persistence and owner checks. PostgreSQL migration 0059
 and SQLite migration 0033 add `defaults_json` without changing deployed migrations.
 This behavior is shared by Codex and Claude through the Provider contract.
+
+### Directory settings and batch deletion UX
+
+The defaults overview groups Workspace and Agent settings and shows effective
+values with their inheritance source. Each field opens a searchable choice page
+inside the same sheet. Inherit and clear/global-default controls stay above the
+choices; Back returns to the overview. Registered canonical paths on the same
+Machine establish project ancestry, never slash-separated labels or filesystem
+paths used as identities. Parent projects remain selectable; their disclosure
+button independently expands descendants. Search also finds collapsed children.
+Machine choices indicate project availability and offline state; incompatible
+Agent presets have an inline correction action. These are presentation changes
+over the existing defaults schema and writer, so no additional MCP operation or
+resident tool description is introduced.
+
+Folder actions expose **Select sessions** (`S` in the Desktop folder menu).
+The selection sheet initially includes only direct sessions; Include
+subdirectories explicitly broadens scope and resets the selection. Search scopes
+Select results, while the footer counts all selected sessions and reports hidden
+selections. New arrivals never join a selection automatically. Shift-click
+selects a contiguous range; native menu navigation, checkbox semantics, Tab and
+the shared confirmation shortcut remain available to keyboard users.
+
+Deletion requires one confirmation listing the exact session identities. The
+existing authenticated session deletion writer receives at most four concurrent
+requests. Acknowledgement of `closing` is pending, not success: only authoritative
+removal counts as deleted. Retained or failed sessions stay selected, with errors
+and a retry action; successful removals are never included in a retry. Closing
+the selection panel while requests run still reports failures globally. This is
+client orchestration of the existing single-session operation, not a new deletion
+policy or protocol. No directories or Drafts are included in the session batch.
+
+**Delete folder only** uses the shared compact confirmation surface and explains
+the destination of explicitly placed sessions, Drafts and immediate subdirectories,
+which are preserved. Sessions filed only by the deleted project's binding return
+to Global, matching the existing derived-placement rule. It also explains that
+inherited defaults follow the new parent, and
+offers a separate route to select sessions for deletion. Folder confirmations
+stay in the keyboard-resized App host instead of adding a body-level portal.

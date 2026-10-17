@@ -126,6 +126,7 @@ export function ConfirmSheet({
   children,
   actions,
   wide = false,
+  portal = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -133,6 +134,8 @@ export function ConfirmSheet({
   children: ReactNode;
   actions?: ReactNode;
   wide?: boolean;
+  /** Folder sheets already live in the keyboard-resized App host. */
+  portal?: boolean;
 }): ReactNode {
   const forceSheet = useConfirmSheetSurface();
   return (
@@ -142,7 +145,7 @@ export function ConfirmSheet({
       title={title}
       actions={actions}
       wide={wide}
-      portal
+      portal={portal}
       forceSheet={forceSheet}
       mobileDismiss={actions == null ? "footer" : "none"}
     >

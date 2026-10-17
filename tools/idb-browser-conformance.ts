@@ -27,11 +27,16 @@ if (
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "editor-plugin-sandbox" &&
-  suite !== "managed-calls" && suite !== "session-maintenance"
+  suite !== "managed-calls" && suite !== "session-maintenance" &&
+  suite !== "dormant-session" && suite !== "about-layout"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "session-maintenance"
+const entry = suite === "dormant-session"
+  ? "runDormantSessionBrowserConformance"
+  : suite === "about-layout"
+  ? "runAboutLayoutBrowserConformance"
+  : suite === "session-maintenance"
   ? "runSessionMaintenanceBrowserConformance"
   : suite === "managed-calls"
   ? "runManagedCallsBrowserConformance"
@@ -260,10 +265,12 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
       (suite === "sign-in" || suite === "session-move" ||
           suite === "editor-plugin-sandbox"
         ? 4
-        : suite === "session-fold"
+        : suite === "session-fold" || suite === "dormant-session"
         ? 7
         : suite === "managed-calls"
         ? 12
+        : suite === "about-layout"
+        ? 10
         : suite === "session-maintenance"
         ? 8
         : suite === "project-placement"
@@ -346,5 +353,5 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }
   await server?.shutdown();
   // Only the exact directory exclusively created by this runner.
-  await rm(temporary, { recursive: true });
+  await rm(temporary, { recursive: true, force: true });
 }

@@ -1,4 +1,5 @@
 import { desktopSize } from "./surface/desktopSize";
+import { ChecklistOutlined } from "@mui/icons-material";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
 import { SegmentedTabs } from "./SegmentedTabs";
@@ -214,6 +215,7 @@ import {
 } from "./SessionFolderUi";
 import { useSessionFoldControl } from "./SessionFoldControl";
 import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
+import { DirectorySessionsSheet } from "./DirectorySessionsSheet";
 import { resolveFolderDefaults } from "./folderDefaults";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
@@ -932,6 +934,7 @@ function SessionList({
     const [movedRow, setMovedRow] = useState<string | null>(null);
     const [projectPicker, setProjectPicker] = useState<SessionFolder | null>(null);
     const [defaultsFolder, setDefaultsFolder] = useState<string | null>(null);
+    const [selectFolderSessions, setSelectFolderSessions] = useState<string | null>(null);
     const [deleteFolder, setDeleteFolder] = useState<SessionFolder | null>(null);
     const unboundProjects = unboundProjectLabels(sessions, sessionFolders);
     const projectLabels = ((): string[] => {
@@ -1613,7 +1616,7 @@ function SessionList({
         ? tree.rows.find((r) => r.kind === "folder" && r.folder.id === folderMenuFolder.id)
         : undefined;
     const deleteFolderCount = deleteFolder
-        ? [...tree.folderOf.entries()].filter(([, f]) => f === deleteFolder.id).length
+        ? sessions.filter((session) => tree.folderOf.get(session.id) === deleteFolder.id).length
         : 0;
     return (
         <Stack
@@ -2619,6 +2622,10 @@ function SessionList({
                     <ListItemIcon><SettingsIcon fontSize="medium" /></ListItemIcon>
                     <ListItemText primary="Directory defaults…" />
                 </MenuItem>
+                <MenuItem onClick={(): void => { if (folderMenuFolder) setSelectFolderSessions(folderMenuFolder.id); setFolderMenu(null); }}>
+                    <ListItemIcon><ChecklistOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Select sessions…" secondary="Delete several sessions" />
+                </MenuItem>
                 <MenuItem
                     onClick={(): void => {
                         if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id });
@@ -2750,6 +2757,9 @@ function SessionList({
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{folderMenuFolder?.project ? `Auto-file: ${folderMenuFolder.project}` : "Auto-file project sessions…"}</Box>
                             <Kbd keys="B" />
                         </Button>
+                        <Button data-folder-shortcut="s" fullWidth startIcon={<ChecklistOutlined />} onClick={(): void => { if (folderMenuFolder) setSelectFolderSessions(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Select sessions…</Box><Kbd keys="S" />
+                        </Button>
                         <Divider sx={{ my: 0.5 }} />
                         <Button data-folder-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { setDeleteFolder(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete folder</Box>
@@ -2819,6 +2829,7 @@ function SessionList({
                 />
             )}
             {defaultsFolder && <FolderDefaultsSheet id={defaultsFolder} onClose={(): void => setDefaultsFolder(null)} />}
+            {selectFolderSessions && <DirectorySessionsSheet id={selectFolderSessions} onClose={(): void => setSelectFolderSessions(null)} />}
             {projectPicker && (
                 <ProjectPickerShell
                     folder={projectPicker}
@@ -2834,6 +2845,9 @@ function SessionList({
                 <DeleteFolderShell
                     folder={deleteFolder}
                     sessionCount={deleteFolderCount}
+                    draftCount={drafts.filter((draft) => draft.parent_id === deleteFolder.id).length}
+                    childCount={sessionFolders.folders.filter((folder) => folder.parent === deleteFolder.id).length}
+                    onSelectSessions={(): void => { setSelectFolderSessions(deleteFolder.id); setDeleteFolder(null); }}
                     destination={deleteFolder.parent
                         ? sessionFolderById(sessionFolders, deleteFolder.parent)?.name ?? null
                         : null}
