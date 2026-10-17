@@ -192,7 +192,8 @@ export function SessionStartSettings(
       <Box
         data-start-core
         sx={{
-          border: options.length || presets.length ? "1px solid" : undefined,
+          display: core.length || presets.length ? "block" : "none",
+          border: "1px solid",
           borderColor: "divider",
           borderRadius: "12px",
           py: 0.25,
