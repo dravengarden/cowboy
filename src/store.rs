@@ -6061,6 +6061,9 @@ impl PostgresStorage {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin tx")?;
         workspace_documents::reparent_workspace_documents!(tx, owner_user_id, folders);
+        let previous: std::collections::HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, defaults_json FROM session_folders WHERE owner_user_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+        ).bind(owner_user_id).fetch_all(&mut *tx).await?.into_iter().collect();
         let keep: Vec<String> = folders.iter().map(|folder| folder.id.clone()).collect();
         sqlx::query(
             "DELETE FROM session_folders \
@@ -6085,7 +6088,7 @@ impl PostgresStorage {
             .bind(folder.parent.as_deref())
             .bind(folder.project.as_deref())
             .bind(folder.position)
-            .bind(serde_json::to_string(&folder.defaults)?)
+            .bind(crate::session_folders::defaults::stored_json(&folder.defaults, previous.get(&folder.id).map(String::as_str))?)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("UPSERT session_folder {}", folder.id))?;
@@ -8796,7 +8799,7 @@ impl SessionFolderRow {
             parent: self.parent_id,
             position: self.position,
             project: self.project,
-            defaults: crate::session_folders::defaults::parse(&serde_json::from_str(
+            defaults: crate::session_folders::defaults::parse_stored(&serde_json::from_str(
                 &self.defaults_json,
             )?)
             .map_err(anyhow::Error::msg)?,
@@ -10489,6 +10492,52 @@ mod storage_contract_tests {
         assert!(folders[2].owner_user_id.is_none());
         assert_eq!(folders[2].project.as_deref(), Some("cowboy"));
         assert_eq!(folders[2].defaults, folder("f-root", None, 0).defaults);
+
+        // Simulate a newer writer, then rename with this older reader. Unknown
+        // keys must neither fail startup nor disappear from durable storage.
+        let mut future = serde_json::to_value(&folders[2].defaults)?;
+        future["future_directory"] = serde_json::json!({"path":"/next/checkout"});
+        macro_rules! inject_future {
+            ($db:expr) => {
+                sqlx::query("UPDATE session_folders SET defaults_json=$1 WHERE id='f-root'")
+                    .bind(future.to_string())
+                    .execute(&$db.pool)
+                    .await?;
+            };
+        }
+        match &store.backend {
+            StorageBackend::Postgres(db) => {
+                inject_future!(db);
+            }
+            StorageBackend::Sqlite(db) => {
+                inject_future!(db);
+            }
+        }
+        let mut older = store
+            .load_session_folders()
+            .await?
+            .into_iter()
+            .filter(|f| f.owner_user_id.is_none())
+            .collect::<Vec<_>>();
+        older.iter_mut().find(|f| f.id == "f-root").unwrap().name = "Older reader rename".into();
+        store.replace_session_folders(None, &older).await?;
+        macro_rules! read_future {
+            ($db:expr) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT defaults_json FROM session_folders WHERE id='f-root'",
+                )
+                .fetch_one(&$db.pool)
+                .await?
+            };
+        }
+        let saved = match &store.backend {
+            StorageBackend::Postgres(db) => read_future!(db),
+            StorageBackend::Sqlite(db) => read_future!(db),
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved)?["future_directory"],
+            future["future_directory"]
+        );
 
         let mut reloaded = restored.meta.clone();
         reloaded.provider_version = "new-version".to_owned();

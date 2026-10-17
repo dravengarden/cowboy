@@ -12,9 +12,42 @@ pub enum DefaultKey {
     Provider,
     /// Provider-qualified preset identity: `provider/preset`.
     Preset,
+    ReviewDirectory,
 }
 
 pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
+
+/// Stored preferences may come from a newer Controller. Validate known fields
+/// strictly, but leave future keys opaque to this reader. Input APIs stay closed.
+pub(crate) fn parse_stored(value: &serde_json::Value) -> Result<FolderDefaults, String> {
+    let mut fields = value
+        .as_object()
+        .cloned()
+        .ok_or("invalid stored directory defaults")?;
+    fields.retain(|key, _| serde_json::from_value::<DefaultKey>(serde_json::json!(key)).is_ok());
+    parse(&serde_json::Value::Object(fields))
+}
+
+/// Updating known fields (including restoring inheritance) must not erase
+/// settings introduced by a newer writer during a rollback.
+pub(crate) fn stored_json(
+    defaults: &FolderDefaults,
+    previous: Option<&str>,
+) -> Result<String, serde_json::Error> {
+    let mut value: serde_json::Map<String, serde_json::Value> = previous
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or_default();
+    value.retain(|key, _| serde_json::from_value::<DefaultKey>(serde_json::json!(key)).is_err());
+    let known = serde_json::to_value(defaults)?;
+    value.extend(
+        known
+            .as_object()
+            .expect("defaults serialize as an object")
+            .clone(),
+    );
+    serde_json::to_string(&value)
+}
 
 /// Validate the complete sparse draft before creating any directory.
 pub(super) fn parse_create(args: &serde_json::Value) -> Result<FolderDefaults, String> {
@@ -33,6 +66,12 @@ pub fn parse(value: &serde_json::Value) -> Result<FolderDefaults, String> {
         .map_err(|error| format!("invalid directory defaults: {error}"))?;
     for (key, value) in &defaults {
         if let Some(value) = value {
+            if *key == DefaultKey::ReviewDirectory {
+                if !crate::review_directory::valid(value) {
+                    return Err("invalid Zed default directory identity".into());
+                }
+                continue;
+            }
             if matches!(key, DefaultKey::Machine | DefaultKey::RuntimeMachine) && value == "local" {
                 return Err("directory defaults require an enrolled Machine id, not the legacy local sentinel".into());
             }
@@ -56,6 +95,26 @@ mod tests {
     use super::*;
     use crate::session_folders::{FolderActor, SessionFolders};
     use serde_json::json;
+
+    #[test]
+    fn stored_future_defaults_are_opaque_and_survive_older_writes() {
+        let saved = json!({"project":"cowboy","future_directory":"workspace::hawk::cowboy","future":{"nested":true}});
+        assert!(
+            parse(&saved).is_err(),
+            "new writes must still reject unknown keys"
+        );
+        let mut older = parse_stored(&saved).unwrap();
+        assert_eq!(older.len(), 1);
+        older.remove(&DefaultKey::Project);
+        older.insert(DefaultKey::Provider, Some("codex".into()));
+        let written: serde_json::Value =
+            serde_json::from_str(&stored_json(&older, Some(&saved.to_string())).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            json!({"provider":"codex","future_directory":"workspace::hawk::cowboy","future":{"nested":true}})
+        );
+        assert!(parse_stored(&json!({"project":42,"future":"x"})).is_err());
+    }
 
     fn tree() -> SessionFolders {
         let mut tree = SessionFolders::default();
