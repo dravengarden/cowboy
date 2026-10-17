@@ -346,7 +346,10 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         verdict: "needs-attention",
         finding_count: 2,
       }),
-      summary("call-tests", "failed", "test-coverage"),
+      summary("call-tests", "failed", "test-coverage", {
+        input_revision: null,
+        error: { code: "unsupported_input", detail: "symlink_unsupported" },
+      }),
     ];
     render(<ManagedCallsDock sessionId="parent" desktop />);
     await until(
@@ -436,6 +439,24 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     check(text().includes("Input snapshot"), "snapshot identity missing");
     tests.push("desktop-modal-shows-transcript-and-details");
+
+    (rows[2] as HTMLElement).click();
+    const failed = await until(
+      () => document.querySelector("[data-call-conversation='call-tests']"),
+      "failed call did not open",
+    );
+    check(
+      failed.querySelector("[role='alert']")?.textContent?.includes(
+        "unsupported_input: symlink_unsupported",
+      ),
+      "launch refusal must show its cause in the conversation pane",
+    );
+    check(
+      !failed.querySelector("[data-call-transcript]") &&
+        failed.textContent?.includes("No conversation was started"),
+      "a pre-snapshot failure must not try to restore a nonexistent child",
+    );
+    tests.push("pre-snapshot-failure-shows-cause-without-transcript");
 
     (rows[0] as HTMLElement).click();
     await until(
@@ -581,6 +602,28 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     await until(
       () => backButton() ? null : true,
       "back did not return to the list",
+    );
+    const failedRow = await until(
+      () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")].find((
+          node,
+        ) => node.getAttribute("aria-label")?.includes("test coverage")),
+      "mobile failed call missing",
+    );
+    failedRow.click();
+    await until(
+      () => document.querySelector("[data-call-conversation='call-tests']"),
+      "mobile failed call did not open",
+    );
+    check(
+      text().includes("unsupported_input: symlink_unsupported") &&
+        !document.querySelector("[data-call-transcript]"),
+      "mobile must show the launch cause without a restoration skeleton",
+    );
+    backButton()!.click();
+    await until(
+      () => backButton() ? null : true,
+      "failed call back did not return to list",
     );
     // Like every Cowboy cover sheet, the page closes from the frosted
     // floating island, not from a header control.

@@ -6037,16 +6037,15 @@ impl PostgresStorage {
     /// If the SELECT fails.
     pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
         let rows: Vec<SessionFolderRow> = sqlx::query_as::<_, SessionFolderRow>(
-            "SELECT id, owner_user_id, name, parent_id, project, position \
+            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json \
              FROM session_folders ORDER BY position ASC, created_at ASC, id ASC",
         )
         .fetch_all(&self.pool)
         .await
         .context("SELECT session_folders")?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(SessionFolderRow::into_folder)
-            .collect())
+            .collect()
     }
 
     /// Persist one owner's whole sidebar folder set: upsert every folder, then
@@ -6074,11 +6073,11 @@ impl PostgresStorage {
         .context("DELETE stale session_folders")?;
         for folder in folders {
             sqlx::query(
-                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6) \
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position, defaults_json) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
                  ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
                  name = excluded.name, parent_id = excluded.parent_id, \
-                 project = excluded.project, position = excluded.position, updated_at = now()",
+                 project = excluded.project, position = excluded.position, defaults_json = excluded.defaults_json, updated_at = now()",
             )
             .bind(&folder.id)
             .bind(folder.owner_user_id.as_deref())
@@ -6086,6 +6085,7 @@ impl PostgresStorage {
             .bind(folder.parent.as_deref())
             .bind(folder.project.as_deref())
             .bind(folder.position)
+            .bind(serde_json::to_string(&folder.defaults)?)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("UPSERT session_folder {}", folder.id))?;
@@ -8784,18 +8784,23 @@ struct SessionFolderRow {
     parent_id: Option<String>,
     project: Option<String>,
     position: i64,
+    defaults_json: String,
 }
 
 impl SessionFolderRow {
-    fn into_folder(self) -> SessionFolder {
-        SessionFolder {
+    fn into_folder(self) -> Result<SessionFolder> {
+        Ok(SessionFolder {
             id: self.id,
             owner_user_id: self.owner_user_id,
             name: self.name,
             parent: self.parent_id,
             position: self.position,
             project: self.project,
-        }
+            defaults: crate::session_folders::defaults::parse(&serde_json::from_str(
+                &self.defaults_json,
+            )?)
+            .map_err(anyhow::Error::msg)?,
+        })
     }
 }
 
@@ -10394,6 +10399,10 @@ mod storage_contract_tests {
             parent: parent.map(str::to_owned),
             position,
             project: (id == "f-root").then(|| "cowboy".to_owned()),
+            defaults: crate::session_folders::defaults::parse(
+                &serde_json::json!({"machine":"hawk","preset":"claude-code/opus-default"}),
+            )
+            .unwrap(),
         };
         store
             .replace_session_folders(
@@ -10479,6 +10488,7 @@ mod storage_contract_tests {
         assert_eq!(folders[1].parent.as_deref(), Some("f-root"));
         assert!(folders[2].owner_user_id.is_none());
         assert_eq!(folders[2].project.as_deref(), Some("cowboy"));
+        assert_eq!(folders[2].defaults, folder("f-root", None, 0).defaults);
 
         let mut reloaded = restored.meta.clone();
         reloaded.provider_version = "new-version".to_owned();

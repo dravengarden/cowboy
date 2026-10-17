@@ -880,6 +880,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removed_build_link_no_longer_blocks_snapshot_or_copies_ignored_target() {
+        let base = root();
+        let source = base.join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("a"), "source\n").unwrap();
+        let artifact = base.join("build-artifact");
+        std::fs::write(&artifact, "not review input\n").unwrap();
+        std::os::unix::fs::symlink(&artifact, source.join("sl-rel-machine")).unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-qm", "accidental build link"]);
+        let managed = base.join("managed");
+        let roots = crate::session_workspace::WorktreeRoots::single(base.clone());
+        assert_eq!(
+            prepare(
+                &managed,
+                "hawk",
+                &round(&source, "before", vec![]),
+                &roots,
+                &[]
+            )
+            .await
+            .unwrap_err(),
+            "symlink_unsupported"
+        );
+        git(&source, &["rm", "--cached", "sl-rel-machine"]);
+        std::fs::write(source.join(".gitignore"), "/sl-rel-machine\n").unwrap();
+        let prepared = prepare(
+            &managed,
+            "hawk",
+            &round(&source, "after", vec![]),
+            &roots,
+            &[],
+        )
+        .await
+        .unwrap();
+        let workspace = PathBuf::from(prepared.cwd);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a")).unwrap(),
+            "source\n"
+        );
+        assert!(std::fs::symlink_metadata(workspace.join("sl-rel-machine")).is_err());
+        assert!(source.join("sl-rel-machine").is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(artifact).unwrap(),
+            "not review input\n"
+        );
+        close(&managed, "child-1").unwrap();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
     async fn refuses_sources_outside_roots_escaping_links_and_filters() {
         let base = root();
         let source = base.join("source");

@@ -59,7 +59,7 @@ export const SESSION_FOLDER_SHEET_HOST = "data-session-folder-sheets";
 
 /** Render in App's root beside the session shells. A React portal commits in
  *  the same pass, so a prompt's in-tap focus (iOS keyboard) still holds. */
-function InAppRoot({ children }: { children: ReactNode }): ReactNode {
+export function InAppRoot({ children }: { children: ReactNode }): ReactNode {
   const host = globalThis.document?.querySelector(
     `[${SESSION_FOLDER_SHEET_HOST}]`,
   );
@@ -362,6 +362,7 @@ export function FolderPickerShell({
         >
           Current: {sessionFolderLocation(value, current)}
         </Typography>
+        {exclude && <Typography variant="body2" color="text.secondary" sx={{ my: 1 }}>Inherited defaults will follow the new parent. Explicit overrides and existing sessions keep their settings.</Typography>}
         {rows.length > 8 && (
           <TextField
             size="small"
@@ -489,7 +490,7 @@ export function ProjectPickerShell({
         forceSheet={navbarAtBottom}
         open
         onClose={onClose}
-        title={`Bind ${folder.name} to a project`}
+        title={`Auto-file project sessions in ${folder.name}`}
         mobileDismiss="none"
         actions={
           <Button onClick={onClose} color="inherit">

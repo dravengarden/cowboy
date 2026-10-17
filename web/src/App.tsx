@@ -213,6 +213,8 @@ import {
     withFoldersCollapsed,
 } from "./SessionFolderUi";
 import { useSessionFoldControl } from "./SessionFoldControl";
+import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
+import { resolveFolderDefaults } from "./folderDefaults";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { type SortableDrag, useSortable } from "./useSortable";
@@ -929,6 +931,7 @@ function SessionList({
     const [movePicker, setMovePicker] = useState<{ kind: "session" | "folder"; id: string } | null>(null);
     const [movedRow, setMovedRow] = useState<string | null>(null);
     const [projectPicker, setProjectPicker] = useState<SessionFolder | null>(null);
+    const [defaultsFolder, setDefaultsFolder] = useState<string | null>(null);
     const [deleteFolder, setDeleteFolder] = useState<SessionFolder | null>(null);
     const unboundProjects = unboundProjectLabels(sessions, sessionFolders);
     const projectLabels = ((): string[] => {
@@ -2612,6 +2615,10 @@ function SessionList({
                         <ListItemText primary="New session here" />
                     </MenuItem>
                 )}
+                <MenuItem onClick={(): void => { if (folderMenuFolder) setDefaultsFolder(folderMenuFolder.id); setFolderMenu(null); }}>
+                    <ListItemIcon><SettingsIcon fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Directory defaults…" />
+                </MenuItem>
                 <MenuItem
                     onClick={(): void => {
                         if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id });
@@ -2654,7 +2661,7 @@ function SessionList({
                 >
                     <ListItemIcon><LabelOutlined fontSize="medium" /></ListItemIcon>
                     <ListItemText
-                        primary={folderMenuFolder?.project ? "Change project…" : "Bind project…"}
+                        primary="Auto-file project sessions…"
                         secondary={folderMenuFolder?.project ?? undefined}
                     />
                 </MenuItem>
@@ -2736,8 +2743,11 @@ function SessionList({
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to…</Box>
                             <Kbd keys="M" />
                         </Button>
+                        <Button data-folder-shortcut="d" fullWidth startIcon={<SettingsIcon />} onClick={(): void => { if (folderMenuFolder) setDefaultsFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Directory defaults…</Box><Kbd keys="D" />
+                        </Button>
                         <Button data-folder-shortcut="b" fullWidth startIcon={<LabelOutlined />} onClick={(): void => { setProjectPicker(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
-                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{folderMenuFolder?.project ? `Project: ${folderMenuFolder.project}` : "Bind project…"}</Box>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{folderMenuFolder?.project ? `Auto-file: ${folderMenuFolder.project}` : "Auto-file project sessions…"}</Box>
                             <Kbd keys="B" />
                         </Button>
                         <Divider sx={{ my: 0.5 }} />
@@ -2808,6 +2818,7 @@ function SessionList({
                     onClose={(): void => setMovePicker(null)}
                 />
             )}
+            {defaultsFolder && <FolderDefaultsSheet id={defaultsFolder} onClose={(): void => setDefaultsFolder(null)} />}
             {projectPicker && (
                 <ProjectPickerShell
                     folder={projectPicker}
@@ -2899,7 +2910,12 @@ export function CreateDialog({
     // same session to the daemon instead of creating a second one.
     const createKeyRef = useRef("");
     const machines = useStoreSelector((snapshot) => snapshot.machines);
-    const placement = useProjectPlacement(open, machines);
+    const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const [directory, setDirectory] = useState(initialFolder ?? "");
+    const directoryDefaults = resolveFolderDefaults(sessionDirectories, directory || null);
+    const placement = useProjectPlacement(open, machines, directoryDefaults.values);
+    const [presetOverride, setPresetOverride] = useState<string | undefined>();
+    const selectedPreset = presetOverride ?? directoryDefaults.values.preset ?? "";
     const fullInstallation = placement.installations.find((installation) => installation.full);
     const machineId = placement.machineId;
     const cwd = placement.project?.projectId ?? "";
@@ -2909,10 +2925,8 @@ export function CreateDialog({
     // everything else is Normal, where the shared modal grammar runs (digits
     // and H/L pick the type, J/K move, I edits). Drives the visible slots.
     const [focusZone, setFocusZone] = useState<"tabs" | "text" | "other">("text");
-    const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
     // Session and Folder share one Sessions-tree location: both place an
     // item in the same tree, so switching between them keeps the choice.
-    const [directory, setDirectory] = useState("");
     const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories), [sessionDirectories]);
     const [folderName, setFolderName] = useState("");
     const allSessions = useStoreSelector((snapshot) => snapshot.sessions);
@@ -2928,6 +2942,7 @@ export function CreateDialog({
     } : undefined;
     const selectedProviderEntry = placement.installation?.entry;
     const selectedInstalledProvider = placement.installation?.installed;
+    const presetAvailable = !selectedPreset || Boolean(selectedProviderEntry?.manifest.configuration.presets.some((preset) => `${provider}/${preset.id}` === selectedPreset));
     const providerAvailable = (candidate: string): boolean => Boolean(candidate && placement.ready && candidate === provider);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find((item) => item.id === workItemId);
     // Editable session title. Empty on Create → renameSession no-ops → the
@@ -2955,6 +2970,7 @@ export function CreateDialog({
         createKeyRef.current = newUuid();
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setDirectory(initialFolder ?? "");
+        setPresetOverride(undefined);
         setFolderName("");
         setWorkItemId("");
         setCreating(false);
@@ -3017,7 +3033,7 @@ export function CreateDialog({
                 });
             return;
         }
-        if (creating || !placement.ready || !providerAvailable(provider) || !machineId || !cwd) return;
+        if (creating || !placement.ready || !providerAvailable(provider) || !presetAvailable || !machineId || !cwd) return;
         if (directory && !sessionDirectories.folders.some((folder) => folder.id === directory)) {
             setCreateError("The Sessions directory was removed. Choose another directory or Global.");
             return;
@@ -3040,8 +3056,10 @@ export function CreateDialog({
                     body: JSON.stringify({
                         provider,
                         machine_id: machineId,
-                        ...(placement.separate ? { runtime_machine_id: placement.runtimeMachineId } : {}),
+                        runtime_machine_id: placement.runtimeMachineId,
                         cwd,
+                        folder_id: directory,
+                        preset: selectedPreset,
                         origin: "web",
                         initial_prompt: selectedWorkItem
                             ? `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native agent goal when supported. Keep plan, progress, review, and session state in the active agent runtime.`
@@ -3164,6 +3182,7 @@ export function CreateDialog({
                 }}
             >
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
+                {variant === "session" && !presetAvailable && <Alert severity="warning">The inherited preset is unavailable for this agent. Choose a compatible preset or Agent default.</Alert>}
                 <CreateVariantPicker
                     value={variant}
                     disabled={creating}
@@ -3288,6 +3307,7 @@ export function CreateDialog({
                             </Button>
                         ) : null}
                     </> : <>
+                        {directory && <Typography variant="caption" color="text.secondary">Directory defaults: {Object.entries(directoryDefaults.sources).map(([key, source]) => `${key.replaceAll("_", " ")} from ${sessionFolderById(sessionDirectories, source)?.name ?? source}`).join(" · ") || "Global defaults"}. Your selections override these defaults.</Typography>}
                         <WorkspacePicker
                             label="Project"
                             entries={placement.projects}
@@ -3322,6 +3342,11 @@ export function CreateDialog({
                         <Typography variant="caption" color="text.secondary">
                             Git projects open in a session worktree. Other directories are shared in place.
                         </Typography>
+                        <TextField select label="Model and reasoning preset" value={selectedPreset} onChange={(event): void => setPresetOverride(event.target.value)} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"}>
+                            <MenuItem value="">Agent default</MenuItem>
+                            {selectedPreset && !selectedProviderEntry?.manifest.configuration.presets.some((preset) => `${provider}/${preset.id}` === selectedPreset) && <MenuItem value={selectedPreset}>{selectedPreset} · Unavailable or incompatible</MenuItem>}
+                            {selectedProviderEntry?.manifest.configuration.presets.map((preset) => <MenuItem key={preset.id} value={`${provider}/${preset.id}`}>{preset.name} · {preset.detail}</MenuItem>)}
+                        </TextField>
                         {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
                             <TextField
                                 select
@@ -3344,7 +3369,7 @@ export function CreateDialog({
     );
     const canCreate = !creating && (variant === "draft" ||
         (variant === "folder" ? normalizeSessionFolderName(folderName) !== null
-            : placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
+            : placement.ready && providerAvailable(provider) && presetAvailable && Boolean(provider && machineId && cwd)));
     const createLabel = variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
     // The cover sheet is the touch presentation. A Desktop window below the
     // lg breakpoint is still Desktop: it keeps the dialog whose Esc, Mod+Enter
@@ -5861,7 +5886,7 @@ export function App({
                     newSessionFolderRef.current = null;
                     setDialogOpen(false);
                 }}
-                onCreated={(session, folder): void => {
+                onCreated={(session): void => {
                     // The daemon returns a durable Starting session before its
                     // Machine workspace and worker are ready. Select it now so
                     // preparation belongs to the destination page, not to the
@@ -5869,8 +5894,9 @@ export function App({
                     // animation: the id already names a real persisted session.
                     setPendingCreatedSession(session);
                     setActiveId(session.id);
-                    // Explicit Global overrides automatic project binding.
-                    placeSessions([session.id], folder);
+                    // Creation already records placement on the Controller.
+                    // Do not enqueue a second move to a directory which may
+                    // have been removed while the workspace was preparing.
                     newSessionFolderRef.current = null;
                     if (mobile && settleMobileDrawerRef.current) {
                         settleMobileDrawerRef.current(false, 0);

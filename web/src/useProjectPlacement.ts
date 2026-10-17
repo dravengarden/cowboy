@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { projectAgentPluginInventory } from "@cowboy/provider-ui";
 import type { MachineSummary } from "./protocol";
 import { defaultNewSessionProvider } from "./newSessionProvider";
+import type { FolderDefaults } from "./folderDefaults";
 import {
   joinProviderInstallations,
   useProviderCatalog,
@@ -29,6 +30,7 @@ interface Placements {
 export function useProjectPlacement(
   open: boolean,
   machines: readonly MachineSummary[],
+  defaults: FolderDefaults = {},
 ) {
   const [policies, setPolicies] = useState<ProjectPolicies>();
   const [projectKey, setProjectKey] = useState("");
@@ -41,11 +43,18 @@ export function useProjectPlacement(
     [machines, policies],
   );
   const preferredProject = usePreference(newSessionProjectPreference);
-  const defaultProject = defaultNewSessionProject(
-    projects,
-    machines,
-    preferredProject,
+  const folderProjects = projects.filter((project) =>
+    (!defaults.machine || project.machineId === defaults.machine) &&
+    (!defaults.project || project.projectId === defaults.project ||
+      project.name === defaults.project)
   );
+  const defaultProject = defaults.project === null
+    ? undefined
+    : defaultNewSessionProject(
+      folderProjects,
+      machines,
+      defaults.project || defaults.machine ? "" : preferredProject,
+    );
   const project = projectKey
     ? projects.find((p) => p.value === projectKey)
     : defaultProject;
@@ -122,13 +131,18 @@ export function useProjectPlacement(
       }];
     });
   }, [availability, machineId, machines, catalog]);
-  const preferredInstallations = installations.filter((i) =>
-    i.runtime_machine_id === availability?.default_runtime_machine_id &&
+  const eligibleInstallations = installations.filter((i) =>
+    !defaults.provider || i.provider === defaults.provider
+  );
+  const preferredRuntime = defaults.runtime_machine ??
+    availability?.default_runtime_machine_id;
+  const preferredInstallations = eligibleInstallations.filter((i) =>
+    i.runtime_machine_id === preferredRuntime &&
     !i.full
   );
-  const defaultCandidates = availability?.default_runtime_machine_id
+  const defaultCandidates = preferredRuntime
     ? preferredInstallations
-    : installations.filter((i) => !i.full);
+    : eligibleInstallations.filter((i) => !i.full);
   const defaultProvider = defaultNewSessionProvider(
     defaultCandidates.map((i) => i.provider),
   );
