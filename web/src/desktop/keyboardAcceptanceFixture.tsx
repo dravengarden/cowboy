@@ -65,6 +65,10 @@ function desktopPointer(): void {
 
 export function mountDesktopKeyboardAcceptance(): void {
   desktopPointer();
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => String(input) === "/api/plugins"
+    ? Promise.resolve(Response.json({ providers: [], authentications: [], authentication_executors: [] }))
+    : nativeFetch(input, init);
   const container = document.createElement("div");
   container.style.cssText = "height:100vh;display:flex";
   document.body.append(container);
