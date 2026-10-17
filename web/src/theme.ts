@@ -203,14 +203,14 @@ export function useThemeMode(): ThemeControls {
               root: {
                 WebkitTapHighlightColor: "transparent",
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
-                  "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
+                  "&:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected).Mui-focusVisible":
                     {
                       backgroundColor: "transparent",
                     },
                 },
                 "@media (hover: none), (pointer: coarse), (any-pointer: coarse)":
                   {
-                    "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
+                    "&:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected).Mui-focusVisible":
                       {
                         backgroundColor: "transparent",
                       },

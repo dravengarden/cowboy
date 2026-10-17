@@ -512,6 +512,14 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       open.getBoundingClientRect().height >= 44,
       "mobile header must be a large touch target",
     );
+    const previewRail = container.querySelector<HTMLElement>("[data-call-preview-rail]")!;
+    check(previewRail && getComputedStyle(previewRail).overflowX === "auto", "mobile previews provide a horizontal scroller");
+    check(!previewRail.closest("button"), "preview buttons must not nest inside the overview button");
+    const preview = previewRail.querySelector<HTMLButtonElement>("[data-call-preview]")!;
+    preview.click();
+    await until(() => document.querySelector("[data-call-transcript]"), "preview opens the call directly");
+    document.querySelector<HTMLButtonElement>("[data-mobile-sheet-footer-shield] button[aria-label='Close']")!.click();
+    await until(() => document.querySelector("[data-call-transcript]") ? null : true, "preview closes cleanly");
     open.click();
     const row = await until(
       () =>
@@ -988,6 +996,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
 /** Leave one realistic state rendered for visual inspection (screenshots). */
 export async function renderManagedCallsPreview(
   surface: "desktop" | "mobile",
+  railOnly = false,
 ): Promise<void> {
   const calls = [
     summary("call-security", "running", "security"),
@@ -1089,6 +1098,10 @@ export async function renderManagedCallsPreview(
     );
     rows[1]!.click();
   } else {
+    if (railOnly) {
+      await until(() => button("Open calls"), "mobile preview rail");
+      return;
+    }
     (await until(() => button("Open calls"), "mobile header")).click();
     (await until(() => button("correctness"), "mobile row")).click();
     await until(

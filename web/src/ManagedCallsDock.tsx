@@ -852,6 +852,69 @@ function CallList({
 
 /** Parent-scoped managed calls above the Prompt: a compact summary that opens
  * an inline list and detail on Desktop and a full-height page on Mobile. */
+function CallPreview({ call, onOpen }: {
+  call: ManagedCallSummary;
+  onOpen: () => void;
+}): React.JSX.Element {
+  const tap = useReliableTouchTap<HTMLButtonElement>(onOpen);
+  const active = callActive(call.state);
+  const tone = callTone(call.state);
+  return (
+    <ButtonBase {...tap} data-call-preview={call.call_id}
+      aria-label={`Open ${displayTitle(call)}: ${callStateLabel(call)}`}
+      sx={{
+        flex: "0 0 8.5rem", minWidth: 0, minHeight: 44, px: 1, py: 0.5,
+        borderLeft: 1, borderColor: "divider", textAlign: "left",
+        justifyContent: "flex-start",
+        "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
+      }}
+    >
+      <Stack spacing={0.25} sx={{ minWidth: 0, width: "100%" }}>
+        <Typography variant="caption" noWrap sx={{ fontWeight: 600 }}>{displayTitle(call)}</Typography>
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+          {active ? <CircularProgress size="0.75rem" /> : <ProviderIcon provider={call.provider} sx={{ fontSize: "0.75rem" }} />}
+          <Typography variant="caption" noWrap sx={{
+            color: tone === "error" ? "error.main" : active ? "primary.main" : "text.secondary",
+            fontSize: "0.6875rem",
+          }}>
+            {callStateLabel(call)} · {elapsedLabel(call.created_at_ms, active ? Date.now() : call.updated_at_ms)}
+          </Typography>
+        </Stack>
+      </Stack>
+    </ButtonBase>
+  );
+}
+
+function MobileCallRail({ calls, onOverview, onOpen, stale }: {
+  calls: ManagedCallSummary[];
+  onOverview: () => void;
+  onOpen: (id: string) => void;
+  stale: boolean;
+}): React.JSX.Element {
+  const tap = useReliableTouchTap<HTMLButtonElement>(onOverview);
+  const overview = callsOverview(calls);
+  const ordered = [...calls].sort((a, b) => {
+    const rank = (call: ManagedCallSummary): number => callActive(call.state) ? 0 : callTone(call.state) === "error" ? 1 : 2;
+    return rank(a) - rank(b) || b.created_at_ms - a.created_at_ms;
+  });
+  return (
+    <Stack direction="row" alignItems="stretch" sx={{ minWidth: 0 }}>
+      <ButtonBase {...tap} aria-label="Open calls" sx={{ flexShrink: 0, px: 1, minHeight: 44 }}>
+        <Stack alignItems="center" spacing={0.25}>
+          <Typography variant="caption" sx={{ fontWeight: 600 }}>Calls</Typography>
+          <Typography variant="caption" color={stale ? "warning.main" : "text.secondary"}>
+            {stale ? "offline" : `${overview.total - overview.active}/${overview.total}`}
+          </Typography>
+        </Stack>
+      </ButtonBase>
+      <Box data-call-preview-rail data-mobile-drawer-ignore role="group" aria-label="Call previews"
+        sx={{ display: "flex", minWidth: 0, flex: 1, overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "thin" }}>
+        {ordered.map((call) => <CallPreview key={call.call_id} call={call} onOpen={() => onOpen(call.call_id)} />)}
+      </Box>
+    </Stack>
+  );
+}
+
 export const ManagedCallsDock = memo(function ManagedCallsDock({
   sessionId,
   desktop,
@@ -886,6 +949,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
   const openCall = (call: string): void => {
     setRoute({ call, level: "transcript" });
     if (desktop) setDesktopOpen(true);
+    else setMobileOpen(true);
   };
   const back = (): void =>
     setRoute(
@@ -945,7 +1009,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
         overflow: "hidden",
       }}
     >
-      <ButtonBase
+      {!desktop ? <MobileCallRail calls={calls} onOverview={toggle} onOpen={openCall} stale={stale} /> : <ButtonBase
         {...toggleTap}
         aria-label={desktop
           ? (expanded ? "Collapse calls" : "Expand calls")
@@ -1053,7 +1117,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             {overview.total - overview.active}/{overview.total}
           </Typography>
         </Stack>
-      </ButtonBase>
+      </ButtonBase>}
       {desktop && (
         <Collapse in={expanded}>
           {
