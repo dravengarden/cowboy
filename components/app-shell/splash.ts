@@ -16,7 +16,7 @@
 //   //   html.replace("</head>", head + "</head>")
 //   //       .replace('<div id="root"></div>', `<div id="root">${body}</div>`)
 
-import { splashLoadingCss } from "./loading-wave";
+import { splashLoadingCss } from "./loading";
 
 export interface SplashOptions {
   /** App name shown under the spinner. */

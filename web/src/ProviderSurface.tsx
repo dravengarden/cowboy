@@ -642,14 +642,6 @@ const assetSignalMotion = keyframes`
   from { -webkit-mask-position: 120% 0; mask-position: 120% 0; }
   to { -webkit-mask-position: -20% 0; mask-position: -20% 0; }
 `;
-const terminalPromptMotion = keyframes`
-  0%, 100% { transform: translateX(0); opacity: 0.55; }
-  50% { transform: translateX(1.5px); opacity: 1; }
-`;
-const terminalCaretMotion = keyframes`
-  0%, 45% { opacity: 1; }
-  55%, 100% { opacity: 0.24; }
-`;
 const assetPulseMotion = keyframes`
   0%, 100% { opacity: 0.46; }
   50% { opacity: 0.92; }
@@ -772,47 +764,20 @@ function ProviderActivity({
         );
       case "terminal_prompt":
         return (
-          <Box
-            component="svg"
-            viewBox="0 0 18 18"
+          <CircularProgress
+            className="provider-terminal-prompt"
+            data-session-activity="true"
+            size={markBox}
+            color="inherit"
             aria-hidden
             sx={{
-              width: markBox,
-              height: markBox,
-              display: "block",
-              flexShrink: 0,
-              overflow: "visible",
               color: primary,
-              "& .provider-terminal-prompt": {
-                animation: reducedMotion
-                  ? "none"
-                  : `${terminalPromptMotion} ${node.indicator.interval_ms}ms ease-in-out infinite`,
-              },
-              "& .provider-terminal-caret": {
-                animation: reducedMotion
-                  ? "none"
-                  : `${terminalCaretMotion} ${node.indicator.interval_ms}ms ease-in-out infinite`,
+              "&::after": {
+                animationDuration: `${node.indicator.interval_ms}ms`,
+                ...(reducedMotion ? { animation: "none" } : {}),
               },
             }}
-          >
-            <path
-              className="provider-terminal-prompt"
-              d="M3.5 5.5 7 9l-3.5 3.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              className="provider-terminal-caret"
-              d="M9.5 12.5h5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-            />
-          </Box>
+          />
         );
       case "asset_signal": {
         const asset = assets.get(node.indicator.asset);

@@ -415,14 +415,14 @@ test("Provider activity renderer consumes only typed generic strategies", () => 
   }
 });
 
-test("terminal activity keeps its Provider-defined prompt geometry", () => {
+test("terminal activity shares the work glyph and preserves Provider cadence", () => {
   assertEquals(
     surfaceSource.includes("const ACTIVITY_TERMINAL_SIZE = 17"),
     true,
   );
   assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
-  assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
-  assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
+  assertEquals(surfaceSource.includes('data-session-activity="true"'), true);
+  assertEquals(surfaceSource.includes('animationDuration: `${node.indicator.interval_ms}ms`'), true);
 });
 
 test("Provider Transcript renderer consumes only closed presentation variants", () => {

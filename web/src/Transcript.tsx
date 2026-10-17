@@ -939,7 +939,7 @@ function ThinkingIndicator({
         providerVersion={providerVersion}
         providerDigest={providerDigest}
         slot="loading"
-        fallback={<CircularProgress size={desktopSize(13)} thickness={5} />}
+        fallback={<CircularProgress data-session-activity="true" size="1rem" />}
       />
       <Typography
         data-agent-waiting-label

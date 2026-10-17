@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { splashLoadingCss } from "../components/app-shell/loading-wave";
+import { splashLoadingCss } from "../components/app-shell/loading";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -110,7 +110,7 @@ export default defineConfig({
   },
   plugins: [
     {
-      name: "cowboy-loading-wave",
+      name: "cowboy-splash-loading",
       transformIndexHtml: () => [{ tag: "style", children: splashLoadingCss, injectTo: "head" as const }],
     },
     {

@@ -32,10 +32,15 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
         <Stack direction="row" spacing={2} alignItems="center">
           {[12, 16, 24, 40].map((size) => <CircularProgress key={size} size={size} aria-label={`Loading ${size}`} />)}
         </Stack>
+        <Stack direction="row" spacing={2} alignItems="center">
+          {[12, 14, 16, 24].map((size) => <CircularProgress key={size} data-session-activity="true" size={size} aria-label={`Working ${size}`} />)}
+        </Stack>
         <CircularProgress variant="determinate" value={65} size={24} aria-label="Progress" />
         <Box sx={mobileCompositorFlattenSx}>
           <Box data-mobile-drawer-surface>
             <CircularProgress data-session-activity="true" size={16} aria-label="Paused during swipe" />
+            <CircularProgress data-session-starting="true" size={16} aria-label="Paused startup" />
+            <CircularProgress size={16} aria-label="Paused loading" />
           </Box>
         </Box>
       </Stack>
@@ -55,20 +60,29 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     const determinate = container.querySelector<HTMLElement>('[aria-label="Progress"]')!;
     check(determinate.getAttribute("aria-valuenow") === "65" && getComputedStyle(determinate).width === "24px" && getComputedStyle(determinate.querySelector("svg")!).display !== "none", "Determinate progress retains value, geometry and visible SVG");
     const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
+    const pausedStartup = container.querySelector('[aria-label="Paused startup"]')!;
+    const pausedRing = container.querySelector('[aria-label="Paused loading"]')!;
     check(getComputedStyle(paused).animationPlayState === "paused" &&
-      getComputedStyle(paused, "::before").animationPlayState === "paused" &&
       getComputedStyle(paused, "::after").animationPlayState === "paused" &&
-      getComputedStyle(paused.querySelector("svg")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
+      getComputedStyle(pausedStartup, "::before").animationPlayState === "paused" &&
+      getComputedStyle(pausedStartup, "::after").animationPlayState === "paused" &&
+      getComputedStyle(pausedStartup.querySelector("svg")!).animationPlayState === "paused" &&
+      getComputedStyle(pausedRing).animationPlayState === "paused" &&
+      getComputedStyle(pausedRing.querySelector("circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
-    const bars = (node: Element) => [getComputedStyle(node, "::before"), getComputedStyle(node.querySelector("svg, span")!), getComputedStyle(node, "::after")];
-    check([busy, numeric].every((node) => bars(node).every((style) => style.animationName === "cowboy-loading-wave") && new Set(bars(node).map((style) => style.animationDelay)).size === 3), "Session and general loaders share three staggered bars");
+    const starting = container.querySelector('[aria-label="Starting…"]')!;
+    check(getComputedStyle(busy, "::after").animationName === "cowboy-terminal-cursor" &&
+      getComputedStyle(busy.querySelector("svg")!).display === "none" &&
+      getComputedStyle(numeric.querySelector("circle")!).display !== "none" &&
+      getComputedStyle(starting.querySelector("circle")!).display === "none" &&
+      getComputedStyle(starting, "::before").animationName === "cowboy-starting-wave", "Work uses a terminal, startup uses bars, and general waits use MUI rings");
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;
     document.body.append(shell);
     try {
       const mark = shell.querySelector(".app-splash-spinner")!;
-      check(bars(mark).every((style, i) => style.animationName === bars(busy)[i]!.animationName && style.animationDuration === bars(busy)[i]!.animationDuration && style.animationDelay === bars(busy)[i]!.animationDelay), "Pre-mount splash shares the app loading cadence");
+      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor === "rgba(0, 0, 0, 0)", "Pre-mount splash uses a circular wait indicator");
     } finally {
       shell.remove();
     }
