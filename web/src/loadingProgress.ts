@@ -9,9 +9,12 @@ function loadingSize(size: number | string): string {
 
 // Agent work and general waits use MUI's native ring; startup keeps its blue bars.
 export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
-  defaultProps: { disableShrink: true },
+  defaultProps: { disableShrink: true, enableTrackSlot: true },
   styleOverrides: {
     root: ({ ownerState }) => ({
+      ...(ownerState.variant === "determinate" && {
+        "& .MuiCircularProgress-track": { display: "none" },
+      }),
       ...(ownerState.variant !== "determinate" && {
         width: `${loadingSize(ownerState.size ?? 40)} !important`,
         height: `${loadingSize(ownerState.size ?? 40)} !important`,
@@ -49,7 +52,7 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           "&::before": { content: '""', left: "12%", animationDelay: "-300ms" },
           "& .MuiCircularProgress-svg": { display: "block", left: "41%", animationDelay: "-150ms" },
           "&::after": { content: '""', left: "70%" },
-          "& .MuiCircularProgress-circle": { display: "none" },
+          "& .MuiCircularProgress-circle, & .MuiCircularProgress-track": { display: "none" },
           "@media (prefers-reduced-motion: reduce)": {
             "&::before, &::after, & .MuiCircularProgress-svg": { animation: "none" },
             "& .MuiCircularProgress-svg": { transform: "scaleY(0.8)" },

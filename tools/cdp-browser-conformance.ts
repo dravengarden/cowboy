@@ -14,7 +14,7 @@ const endpoint = process.argv.slice(2)[0] ?? "";
 const suite = process.argv.slice(2)[1] ?? "desktop-composer";
 const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
-  "loading-progress": ["runLoadingProgressBrowserConformance", 7],
+  "loading-progress": ["runLoadingProgressBrowserConformance", 8],
   "review-context": ["runReviewContextBrowserConformance", 7],
   "info-metrics": ["runInfoMetricsBrowserConformance", 20],
   "about-layout": ["runAboutLayoutBrowserConformance", 10],
