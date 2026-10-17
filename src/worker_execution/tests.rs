@@ -206,16 +206,21 @@ async fn native_worker_execution() {
             version: input["version"].as_str().unwrap().to_owned(),
         },
     };
-    let manager = Arc::new(
-        Manager::new(
-            Some(service.clone()),
-            "target".into(),
-            &state,
-            Some(configuration.clone()),
-            false,
-        )
-        .unwrap(),
-    );
+    let mut manager = Manager::new(
+        Some(service.clone()),
+        "target".into(),
+        &state,
+        Some(configuration.clone()),
+        false,
+    )
+    .unwrap();
+    if input["require_cowboy_mcp_tools"] == true {
+        // Model discovery must work before the Controller installs a grant.
+        // Match production's context injection without granting any authority.
+        std::fs::create_dir_all(&state).unwrap();
+        manager = manager.with_calls(crate::managed_calls::host::CallHost::new(&state).unwrap());
+    }
+    let manager = Arc::new(manager);
     let workspaces = vec![crate::machine_protocol::MachineWorkspace {
         id: "fixture".into(),
         display_name: "Fixture".into(),
@@ -239,7 +244,7 @@ async fn native_worker_execution() {
     };
     assert_ne!(binding.workspace.cwd, binding.workspace.source_path);
     // Machine restart reconnects to the same detached keeper and exact worktree.
-    let restarted = Manager::new(
+    let mut restarted = Manager::new(
         Some(service.clone()),
         "target".into(),
         &state,
@@ -247,6 +252,9 @@ async fn native_worker_execution() {
         false,
     )
     .unwrap();
+    if let Some(calls) = manager.calls() {
+        restarted = restarted.with_calls(Arc::clone(calls));
+    }
     assert_eq!(
         restarted.request(prepare, &workspaces).await,
         MachineResponse::Prepared {

@@ -1440,6 +1440,11 @@ def main():
                     "automatic target Cowboy MCP did not connect")
             if "automatic_target_cowboy_mcp_connects_without_grant" not in checks:
                 checks.append("automatic_target_cowboy_mcp_connects_without_grant")
+            if inputs.get("require_cowboy_mcp_tools"):
+                expected = {"mcp__cowboy__" + name for name in
+                            ("cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt")}
+                require(any(expected <= {tool["name"] for tool in request.get("tools", [])}
+                            for request in requests), "automatic Cowboy MCP definitions did not reach the model")
         for request in [*api.token_requests, *api.title_requests]:
             require(str(args.runtime) not in json.dumps(request) and
                     str(args.runtime.parent / "claude-home") not in json.dumps(request),

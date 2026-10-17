@@ -39,14 +39,15 @@ def complete_turn(client, thread, prompt="Run the fixture."):
     raise ProbeFailure("native turn timed out")
 
 
-def cowboy_mcp_connected(client, thread):
+def cowboy_mcp_connected(client, thread, require_tools=False):
     inventory = client.request("mcpServerStatus/list", {"threadId": thread})
     server = next((item for item in inventory["data"] if item["name"] == "cowboy"), {})
-    advertised = set(server.get("tools") or {})
+    advertised = {tool["name"] for tool in (server.get("tools") or {}).values()}
+    expected = {"cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt"}
     require((server.get("serverInfo") or {}).get("name") == "cowboy"
             and server.get("runtimeStatus") == "connected"
             and server.get("toolsError") is None
-            and advertised in (set(), {"cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt"})
+            and (advertised == expected if require_tools else advertised in (set(), expected))
             and server.get("httpOrigin") is None,
             "automatic Cowboy MCP did not connect with its compact surface")
 
@@ -216,7 +217,7 @@ def main():
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted API failed")
         if inputs.get("require_cowboy_mcp"):
-            cowboy_mcp_connected(client, thread)
+            cowboy_mcp_connected(client, thread, inputs.get("require_cowboy_mcp_tools", False))
             checks.append("automatic_cowboy_mcp_registration")
         require(child_counts == {"none": 2, "all": 2}, "both native children must execute and complete")
         for mode, requests in child_requests.items():
@@ -262,7 +263,7 @@ def main():
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted resume failed")
         if inputs.get("require_cowboy_mcp"):
-            cowboy_mcp_connected(client, thread)
+            cowboy_mcp_connected(client, thread, inputs.get("require_cowboy_mcp_tools", False))
             checks.append("cold_resume_retains_cowboy_mcp_registration")
         require((args.target / "once.txt").read_text() == "once", "cold resume repeated a command")
         resumed_outputs = [item for request in api.requests for item in request.get("input", [])
