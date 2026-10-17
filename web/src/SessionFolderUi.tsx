@@ -48,7 +48,7 @@ import {
   sessionFolderLocation,
   type SessionFoldersValue,
 } from "./sessionFolders";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useDialogFocus, useDialogInputFocus } from "./useDialogInputFocus";
@@ -556,28 +556,32 @@ export function ProjectPickerShell({
 export function DeleteFolderShell({
   folder,
   sessionCount,
+  draftCount = 0,
+  childCount = 0,
+  onSelectSessions,
   destination,
   onClose,
   onConfirm,
 }: {
   folder: SessionFolder;
   sessionCount: number;
+  draftCount?: number;
+  childCount?: number;
+  onSelectSessions?: () => void;
   /** Name of the folder that receives the contents, or `null` = top level. */
   destination: string | null;
   onClose: () => void;
   onConfirm: () => void;
 }): React.JSX.Element {
-  const navbarAtBottom = useNavbarAtBottom();
   useConfirmEnter(true, onConfirm);
   const target = destination ? `"${destination}"` : "the top level";
   return (
     <InAppRoot>
-      <Sheet
-        forceSheet={navbarAtBottom}
+      <ConfirmSheet
+        portal={false}
         open
         onClose={onClose}
         title={`Delete folder "${folder.name}"?`}
-        mobileDismiss="none"
         actions={
           <>
             <Button onClick={onClose} color="inherit">
@@ -585,7 +589,7 @@ export function DeleteFolderShell({
               <Kbd keys="Esc" />
             </Button>
             <Button onClick={onConfirm} color="error" variant="contained">
-              Delete folder
+              Delete folder only
               <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
             </Button>
           </>
@@ -593,19 +597,17 @@ export function DeleteFolderShell({
       >
         <Stack spacing={1}>
           <Typography variant="body2" color="text.secondary">
-            {sessionCount === 0
-              ? `Nothing is deleted but the folder; its subfolders move to ${target}.`
-              : `No session is deleted. Its ${sessionCount} ${
-                sessionCount === 1 ? "session" : "sessions"
-              } and any subfolders move to ${target}.`}
+            Only this folder is removed. Its {sessionCount} sessions, {draftCount} Drafts and {childCount} subdirectories move to {target}. Nothing inside is deleted.
           </Typography>
+          <Typography variant="body2" color="text.secondary">Subdirectories will inherit defaults from their new parent. Existing sessions keep their settings.</Typography>
+          {onSelectSessions && <Button onClick={onSelectSessions} sx={{ alignSelf: "flex-start" }}>Select sessions to delete instead…</Button>}
           {folder.project && (
             <Typography variant="caption" color="text.secondary">
               Sessions of "{folder.project}" stop filing themselves here.
             </Typography>
           )}
         </Stack>
-      </Sheet>
+      </ConfirmSheet>
     </InAppRoot>
   );
 }

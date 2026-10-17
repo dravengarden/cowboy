@@ -1004,7 +1004,7 @@ function reportRetainedClosures(sessions: readonly SessionMeta[]): void {
  * busy, until the authoritative `sessions` broadcast drops it or marks it
  * `closing`; a closing row stays busy until its environment stop resolves. A
  * lost round-trip restores the row and toasts instead of hanging forever. */
-export function deleteSession(sessionId: string): Promise<void> {
+export function deleteSession(sessionId: string, options: { quiet?: boolean } = {}): Promise<void> {
   if (state.deletingSessionIds.has(sessionId)) return Promise.resolve();
   markDeletingSession(sessionId, true);
   return sendWithAck(
@@ -1016,7 +1016,7 @@ export function deleteSession(sessionId: string): Promise<void> {
       closingDeletes.add(sessionId);
     }
   }).catch((error: unknown) => {
-    notify(deleteSessionFailureMessage(error));
+    if (!options.quiet) notify(deleteSessionFailureMessage(error));
     throw error;
   }).finally(() => {
     markDeletingSession(sessionId, false);
