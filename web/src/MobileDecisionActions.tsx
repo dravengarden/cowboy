@@ -2,6 +2,8 @@ import { desktopSize } from "./surface/desktopSize";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Box, Button, CircularProgress } from "@mui/material";
 import type { ButtonProps } from "@mui/material";
+import { SheetKeyboardDismiss } from "./SheetKeyboardDismiss";
+import { beginDecisionPress } from "./decisionPress";
 import {
   decisionActionEmphasis,
   decisionShelfSurface,
@@ -29,6 +31,7 @@ export function MobileDecisionActions({
   preserveFocus = false,
   shelf = false,
   flat = false,
+  keyboardOpen,
 }: {
   readonly cancelLabel?: string | undefined;
   readonly onCancel: () => void;
@@ -44,6 +47,7 @@ export function MobileDecisionActions({
   readonly shelf?: boolean | undefined;
   /** Quiet, shadow-free actions for full-screen forms. */
   readonly flat?: boolean | undefined;
+  readonly keyboardOpen?: boolean | undefined;
 }): React.JSX.Element {
   const preserveInput = preserveFocus
     ? (event: ReactPointerEvent): void => event.preventDefault()
@@ -51,14 +55,14 @@ export function MobileDecisionActions({
   const actions = (
     <Box
       data-mobile-decision-actions
+      onPointerDownCapture={beginDecisionPress}
       sx={(theme) => ({
         width: "100%",
         display: "flex",
-        alignItems: "center",
+        alignItems: "stretch",
         justifyContent: "space-between",
         gap: 1,
-        // An overlay (unshelved) footer floats on its own, so it still wants the
-        // accent glow even without the plate.
+        // Shared stationary feedback, with or without a reserved footer plate.
         ...decisionActionEmphasis(theme),
         ...(flat ? flatDecisionActions(theme) : {}),
       })}
@@ -85,6 +89,7 @@ export function MobileDecisionActions({
       >
         {confirmLabel}
       </Button>
+      <SheetKeyboardDismiss keyboardOpen={keyboardOpen} />
     </Box>
   );
   if (!shelf) return actions;

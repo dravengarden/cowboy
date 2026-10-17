@@ -52,27 +52,22 @@ test("the decision plate lifts with a gradient, never an upward shadow", () => {
   assertEquals(/linear-gradient\([^)]*transparent/.test(surface), false);
 });
 
-test("the hairline carries the app accent; the glow carries the decision's", () => {
+test("decision feedback preserves stationary targets and semantic button colors", () => {
   assert(shelf.includes("const accent = t.palette.primary.main;"));
   assert(/borderTop: `1px solid \$\{\s*alpha\(accent/.test(surface));
-  // The lift takes the BUTTON's colour: a destructive confirm glowing in the
-  // app accent was decoration; in error red it repeats the warning.
-  assert(/boxShadow: `0 6px 16px -8px \$\{\s*alpha\(color/.test(emphasis));
-  assert(emphasis.includes("lift(t.palette.primary.main)"));
-  assert(emphasis.includes("lift( t.palette.error.main, )"));
+  // State paint inherits each button's foreground; destructive variants keep
+  // their MUI palette instead of acquiring an unrelated primary-color glow.
+  assert(emphasis.includes('backgroundColor: "currentColor"'));
   // Two choices, two equal columns.
   assert(/"& > \.MuiButton-root": \{ flex: 1,/.test(emphasis));
-  assert(emphasis.includes('"@media (pointer: coarse)": { minHeight: 44 }'));
-  // Press physics: the cap settles AND its glow collapses; either alone reads
-  // as a colour change rather than contact.
-  assert(emphasis.includes('transform: "translateY(1px)"'));
-  // A disabled action must not advertise depth it cannot deliver.
-  assert(emphasis.includes('"&.Mui-disabled": { boxShadow: "none"'));
+  assert(emphasis.includes("minHeight: 44"));
+  assertEquals(emphasis.includes("translateY"), false);
+  assert(emphasis.includes('&:active:not(.Mui-disabled)::after'));
   assert(emphasis.includes("prefers-reduced-motion"));
   // Doubled selectors: `actions` children come from foreign call sites
   // (ConfirmSheet's NetworkButton), so this must outrank MUI's own rules
   // regardless of stylesheet order.
-  assert(emphasis.includes(".MuiButton-contained.MuiButton-contained"));
+  assert(emphasis.includes(".MuiButton-root.MuiButton-root"));
   assert(emphasis.includes(".MuiButton-text.MuiButton-text"));
 });
 

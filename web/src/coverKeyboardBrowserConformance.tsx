@@ -5,16 +5,20 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { DetentSheet } from "@cowboy/app-shell";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { inferKeyboardOpen } from "./keyboardGeometry";
+import { ObsidianSheet } from "./ObsidianSheet";
+import { Button, CssBaseline, Stack, TextField, Typography } from "@mui/material";
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
 }
-export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
+export async function runCoverKeyboardBrowserConformance(keepFixture = false): Promise<string[]> {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const style = document.documentElement.style;
   const previous = style.getPropertyValue("--kb-inset");
+  let confirmed = 0;
+  let cancelled = 0;
   function render(
     layoutHeight: number,
     visualHeight: number,
@@ -31,6 +35,7 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       root.render(
         <BrowserProductTheme>
+          <CssBaseline />
           <DetentSheet
             open
             onClose={() => {}}
@@ -39,17 +44,23 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
             ariaLabel="Keyboard fixture"
             haptic={false}
             animateOnOpen={false}
+            header={<Typography sx={{ px: 2, pb: 1, fontWeight: 700 }}>Create</Typography>}
             footer={
               <MobileDecisionActions
                 shelf
                 flat
+                preserveFocus
+                keyboardOpen={keyboardOpen}
                 confirmLabel="Create"
-                onConfirm={() => {}}
-                onCancel={() => {}}
+                onConfirm={() => { confirmed++; }}
+                onCancel={() => { cancelled++; }}
               />
             }
           >
-            <input aria-label="Title" defaultValue="New session" />
+            <Stack spacing={2} sx={{ p: 2 }}>
+              <TextField label="Title" slotProps={{ htmlInput: { "aria-label": "Title" } }} defaultValue="New session" helperText="Clear to auto-name from the first message" />
+              <TextField label="Project" value="Hawk/columbus" slotProps={{ input: { readOnly: true } }} />
+            </Stack>
           </DetentSheet>
         </BrowserProductTheme>,
       )
@@ -69,6 +80,20 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
       getComputedStyle(footer()).paddingBottom === "8px",
       "overlay keyboard needs only compact spacing",
     );
+    const title = document.querySelector<HTMLInputElement>('[aria-label="Title"]')!;
+    title.focus();
+    title.value = "Keep my draft";
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const hide = footer().querySelector<HTMLButtonElement>('[aria-label="Hide keyboard"]')!;
+    check(hide.getBoundingClientRect().width >= 44, "keyboard dismiss must be visible with a thumb-sized target");
+    const down = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerType: "touch" });
+    hide.dispatchEvent(down);
+    check(down.defaultPrevented && document.activeElement === title, "pointer-down must preserve the input until activation");
+    hide.click();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    check(document.activeElement !== title && title.value === "Keep my draft", "keyboard dismissal must blur without losing the draft");
+    check(confirmed === 0 && cancelled === 0, "keyboard dismissal must not submit or cancel");
+    check(hide.getBoundingClientRect().width === 0, "keyboard utility must disappear after editing ends");
     render(430, 430, true, 0);
     check(
       getComputedStyle(footer()).paddingBottom === "8px",
@@ -98,14 +123,56 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
       "confirm retains its glow",
     );
     check(button.getBoundingClientRect().height >= 44, "confirm target shrank");
+    check(getComputedStyle(button).transform === "none", "decision motion must not move the target");
+    check(getComputedStyle(button, "::after").transitionProperty === "opacity", "decision feedback must use the shared state layer");
+    const beforePress = button.getBoundingClientRect();
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 91 }));
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    check(Number(getComputedStyle(button, "::after").opacity) >= 0.1, "touch press feedback must survive focus-preserving pointer-down");
+    check(button.getBoundingClientRect().y === beforePress.y, "press must not displace the target");
+    document.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 91 }));
+    check(!button.hasAttribute("data-decision-pressed") && confirmed === 0, "cancelled pointer must clear feedback without submitting");
+    const vv = window.visualViewport!;
+    const heightDescriptor = Object.getOwnPropertyDescriptor(vv, "height");
+    Object.defineProperty(vv, "height", { configurable: true, value: window.innerHeight - 300 });
+    try {
+      for (const actions of [<><Button>Cancel</Button><Button variant="contained">Save</Button></>, undefined]) {
+        flushSync(() => root.render(
+          <BrowserProductTheme>
+            <div role="dialog" aria-label="Underlying form">
+            <MobileDecisionActions keyboardOpen confirmLabel="Underlying save" onConfirm={() => { confirmed++; }} onCancel={() => { cancelled++; }} />
+            <ObsidianSheet open title="Rename" onClose={() => { cancelled++; }} actions={actions}>
+              <input aria-label="Rename title" defaultValue="Retain me" />
+            </ObsidianSheet>
+            </div>
+          </BrowserProductTheme>,
+        ));
+        const rename = document.querySelector<HTMLInputElement>('[aria-label="Rename title"]')!;
+        rename.focus();
+        vv.dispatchEvent(new Event("resize"));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const utilities = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Hide keyboard"]')].filter((node) => node.getBoundingClientRect().width > 0);
+        check(utilities.length === 1, "compact forms must have exactly one keyboard utility with or without actions");
+        utilities[0]!.click();
+        check(document.activeElement !== rename && rename.value === "Retain me" && cancelled === 0, "compact keyboard dismissal must preserve the sheet and value");
+      }
+    } finally {
+      if (heightDescriptor) Object.defineProperty(vv, "height", heightDescriptor);
+      else Reflect.deleteProperty(vv, "height");
+    }
     return [
       "overlay and resized keyboards retain identical compact footer spacing",
       "keyboard dismissal restores home-indicator clearance",
-      "flat New session actions have no gradient riser or button shadow",
+      "form actions use stationary state feedback; keyboard dismissal preserves the form without submitting or cancelling",
     ];
   } finally {
-    flushSync(() => root.unmount());
-    container.remove();
-    style.setProperty("--kb-inset", previous);
+    if (keepFixture) {
+      render(844, 430, true, 0);
+      document.querySelector<HTMLInputElement>('[aria-label="Title"]')?.focus();
+    } else {
+      flushSync(() => root.unmount());
+      container.remove();
+      style.setProperty("--kb-inset", previous);
+    }
   }
 }

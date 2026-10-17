@@ -33,6 +33,8 @@ import {
 } from "./obsidianSheetMotion";
 import { useBackdropDismiss } from "./useBackdropDismiss";
 import { isImeKeyEvent } from "./imeKey";
+import { SheetActionKeyboardScope, SheetKeyboardDismiss } from "./SheetKeyboardDismiss";
+import { beginDecisionPress } from "./decisionPress";
 
 const Z = 1250;
 const PROJECTION_MS = 110;
@@ -462,14 +464,20 @@ export function ObsidianSheet({
             </Box>
           )
           : null}
-        {actions == null ? null : (
+        {actions == null ? <SheetKeyboardDismiss standalone /> : (
           <Box
             data-mobile-decision-footer-shelf
+            onPointerDownCapture={beginDecisionPress}
+            onPointerDown={(event) => {
+              // Keep the keyboard and its action targets stationary until the
+              // selected click runs. Dismiss keyboard owns the explicit blur.
+              if (event.target instanceof Element && event.target.closest("button") && sheetRef.current?.contains(document.activeElement)) event.preventDefault();
+            }}
             sx={(theme) => ({
               flexShrink: 0,
               display: "flex",
               justifyContent: "space-between",
-              alignItems: "center",
+              alignItems: "stretch",
               flexWrap: "nowrap",
               gap: 1,
               px: 2.25,
@@ -481,7 +489,7 @@ export function ObsidianSheet({
               ...decisionShelfSurface(theme, { riser: bodyScrolls }),
             })}
           >
-            {actions}
+            <SheetActionKeyboardScope>{actions}</SheetActionKeyboardScope>
           </Box>
         )}
       </Paper>

@@ -110,7 +110,7 @@ export function StatusDot({
   const indicator = active
     ? (
       <CircularProgress
-        size={desktopSize(11)}
+        size="0.875rem"
         thickness={6}
         disableShrink
         color="inherit"
@@ -124,6 +124,9 @@ export function StatusDot({
         sx={[
           {
             fontSize: desktopSize(10),
+            // Reserve the same inline slot as the activity glyph so titles
+            // remain aligned when a session starts or finishes work.
+            width: "0.875rem",
             flexShrink: 0,
             color: statusColor(shown),
           },

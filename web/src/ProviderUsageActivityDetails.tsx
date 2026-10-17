@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { decisionActionEmphasis } from "./decisionShelf";
+import { beginDecisionPress } from "./decisionPress";
 import {
   activityAvailableAgents,
   activityCacheProtectionStats,
@@ -632,10 +633,11 @@ export function ProviderUsageActivityDetails(
             direction="row"
             spacing={1}
             justifyContent="space-between"
-            // Same accent glow / tonal Cancel as every sheet footer. Only the
+            // Same stationary press / tonal Cancel as every sheet footer. Only the
             // PLATE is footer-only chrome; the decision buttons are one design
             // everywhere (decisionShelf.ts).
             sx={(theme) => decisionActionEmphasis(theme)}
+            onPointerDownCapture={beginDecisionPress}
           >
             <Stack direction="row" spacing={0.5}>
               <Button
