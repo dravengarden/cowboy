@@ -50,8 +50,9 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         '&[data-session-activity="true"]': {
           animation: "none",
           "@keyframes cowboy-session-breathe": {
-            "0%, 100%": { opacity: 0.25, transform: "scale(0.85)" },
-            "50%": { opacity: 0.8, transform: "scale(1)" },
+            "0%, 100%": { opacity: 0.18, transform: "scale(0.82)" },
+            "40%": { opacity: 0.78, transform: "scale(1.06)" },
+            "55%": { opacity: 0.72, transform: "scale(1.04)" },
           },
           "&::before": {
             // 52% of the 1rem slot matches the idle SVG's visible circle.
@@ -63,11 +64,12 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           "&::after": {
             content: '""',
             position: "absolute",
-            inset: 0,
+            inset: "-6%",
             borderRadius: "50%",
             background: "radial-gradient(circle, currentColor 35%, transparent 72%)",
             opacity: 0.45,
-            animation: "cowboy-session-breathe 2200ms ease-in-out infinite",
+            // A gentle crest and longer exhale avoid a mechanical blink.
+            animation: "cowboy-session-breathe 2600ms cubic-bezier(0.45, 0, 0.25, 1) infinite",
             animationPlayState: "inherit",
           },
           "@media (prefers-reduced-motion: reduce)": {
