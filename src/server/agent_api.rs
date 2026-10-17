@@ -29,6 +29,7 @@ use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
+mod review_defaults;
 pub(super) use actions::invoke;
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
@@ -153,6 +154,11 @@ impl Host for SessionHost<'_> {
             "preferences.get" => {
                 only_keys(&args, &["scope"])?;
                 let owner = actions::preference_owner(self.state, self.meta).await?;
+                if args["scope"] == "zed" {
+                    return review_defaults::read(self.state, self.meta, &owner)
+                        .await
+                        .map_err(str::to_owned);
+                }
                 super::preferences::read_value(self.state, &owner, arg_str(&args, "scope")?)
                     .await
                     .map_err(str::to_owned)

@@ -1,4 +1,5 @@
 import { createBootstrapPresentation } from "./bootstrapPresentation";
+import { validReviewDirectory } from "./reviewDirectoryIdentity";
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 import { createAuthoredSendGate } from "./authoredSendGate";
@@ -10,7 +11,7 @@ import { createAuthoredSendGate } from "./authoredSendGate";
 // session index and live tail. Only the focused session hydrates its recent log
 // over HTTP. We dedup by (session_id, seq), so HTTP/live overlap is harmless.
 
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { createConnectionStore } from "@cowboy/app-shell";
 import {
   type ArgsOf,
@@ -280,10 +281,12 @@ export interface State {
   // state-sync channel (docs/sessions-folders.md). Overlaid onto the session
   // list by `buildSessionTree` in the sidebar; never mutates `sessions`.
   sessionFolders: SessionFoldersValue;
+  sessionFoldersReady: boolean;
   workspaceOrder: readonly string[];
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
   mobileReviewStates: Record<string, MobileReviewState>;
+  mobileReviewReady: ReadonlySet<string>;
   // Session ids whose Delete command has left this client but has not yet
   // disappeared from the authoritative list. Rows stay visible, disabled, and
   // busy until the sessions broadcast drops them or the acknowledgement times out.
@@ -325,8 +328,10 @@ let state: State = {
   optimisticMessages: new Map(),
   titleOverrides: {},
   sessionFolders: EMPTY_SESSION_FOLDERS,
+  sessionFoldersReady: false,
   workspaceOrder: [],
   mobileReviewStates: {},
+  mobileReviewReady: new Set(),
   deletingSessionIds: new Set(),
   sessionsSource: "none",
   transcriptSources: new Map(),
@@ -3206,9 +3211,11 @@ function registerSync<T, M extends Mutators<T>>(
   mutators: M,
   initial: T,
   onChange: () => void = commitSessions,
-): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
+): { view: () => T; ready: () => boolean; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
   if (productSessionAbandoned) throw new Error("product sync owner is closed");
   const previews = new Map<string, (value: T) => T>();
+  let ready = false;
+  const local = syncDatabase.outbox<T>(datasetScope);
   const store = replicatedStore<T, M>({
     clientId: `${syncBase}:${syncState}`,
     mutators,
@@ -3226,10 +3233,17 @@ function registerSync<T, M extends Mutators<T>>(
     // as a forced resync and overwrites stale base, while any unconfirmed
     // mutation re-sends. Each transaction merges only this client's mutation
     // delta into the shared outbox; a peer's pending additions/removals survive.
-    local: syncDatabase.outbox<T>(datasetScope),
+    local: {
+      ...local,
+      acceptLoadedSnapshot: (value) => {
+        local.acceptLoadedSnapshot?.(value);
+        if (value !== null) ready = true;
+      },
+    },
   });
   syncClients.set(syncState, {
     applyPatch: (version, value, confirmed, resync): void => {
+      ready = true;
       store.applyPatch(snapshotPatch(version, value as T, confirmed), { force: resync });
     },
     resend: (): void => {
@@ -3249,6 +3263,7 @@ function registerSync<T, M extends Mutators<T>>(
     });
   }
   return {
+    ready: () => ready,
     view: (): T => {
       let value = store.get();
       for (const project of previews.values()) value = project(value);
@@ -3300,6 +3315,7 @@ export interface MobileReviewTabState {
 }
 
 export interface MobileReviewState {
+  readonly directory?: string | null;
   readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
   readonly remote_selected?: boolean;
   readonly mode: "files" | "git";
@@ -3319,6 +3335,13 @@ const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
 };
 
 const mobileReviewMutators = {
+  setDirectory: (value: MobileReviewState, args: { directory?: string | null; inherit?: boolean }): MobileReviewState => {
+    if ((args.inherit && args.directory !== undefined) || (!args.inherit && args.directory !== null && !validReviewDirectory(args.directory))) throw new Error("Invalid Zed default directory");
+    const next = { ...value };
+    if (args.inherit) delete next.directory;
+    else if (args.directory !== undefined) return { ...value, directory: args.directory };
+    return next;
+  },
   setRemoteReview: (
     value: MobileReviewState,
     args: { binding: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null },
@@ -3338,12 +3361,10 @@ const mobileReviewMutators = {
   close: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
     const tabs = value.tabs.filter((tab) => tab.path !== args.path);
     const active = value.active === args.path ? tabs.at(-1)?.path : value.active;
+    const { active: _active, ...rest } = value;
     return {
-      ...value,
-      mode: value.mode,
+      ...rest,
       tabs,
-      progress: value.progress,
-      positions: value.positions,
       ...(active === undefined ? {} : { active }),
     };
   },
@@ -3369,16 +3390,15 @@ const mobileReviewMutators = {
   activate: (
     value: MobileReviewState,
     args: { path: string | null },
-  ): MobileReviewState => ({
-    ...value,
-    mode: value.mode,
-    tabs: value.tabs,
-    progress: value.progress,
-    positions: value.positions,
-    ...(args.path && value.tabs.some((tab) => tab.path === args.path)
-      ? { active: args.path }
-      : {}),
-  }),
+  ): MobileReviewState => {
+    const { active: _active, ...rest } = value;
+    return {
+      ...rest,
+      ...(args.path && value.tabs.some((tab) => tab.path === args.path)
+        ? { active: args.path }
+        : {}),
+    };
+  },
   setMode: (
     value: MobileReviewState,
     args: { mode: "files" | "git" },
@@ -3439,10 +3459,14 @@ function commitMobileReview(sessionId: string): void {
   setState({
     ...state,
     mobileReviewStates: { ...state.mobileReviewStates, [sessionId]: value },
+    mobileReviewReady: mobileReviewClient(sessionId).ready() ? new Set([...state.mobileReviewReady, sessionId]) : state.mobileReviewReady,
   });
 }
 
 export function useMobileReviewState(sessionId: string | undefined): MobileReviewState {
+  useEffect(() => {
+    if (sessionId && !sessionId.startsWith("workspace::") && !productSessionAbandoned) mobileReviewClient(sessionId);
+  }, [sessionId]);
   return useStoreSelector((snapshot) =>
     sessionId
       ? snapshot.mobileReviewStates[sessionId] ?? EMPTY_MOBILE_REVIEW_STATE
@@ -3508,6 +3532,7 @@ function commitSessions(): void {
     sessions: deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
     titleOverrides: titles,
     sessionFolders: foldersSync.view(),
+    sessionFoldersReady: foldersSync.ready(),
     workspaceOrder: syncedKeyList(workspaceOrderSync.view()),
   });
 }
