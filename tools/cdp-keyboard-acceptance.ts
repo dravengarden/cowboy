@@ -905,15 +905,31 @@ try {
       "Escape returns to the same default field",
     );
     await shot("3c-folder-defaults");
-    await page.evaluate("document.querySelector('[data-default-field=review_directory]').focus()");
+    await page.evaluate(
+      "document.querySelector('[data-default-field=review_directory]').focus()",
+    );
     await key("Enter");
-    await until("document.activeElement?.getAttribute('aria-label') === 'Find a Zed directory'", "Zed defaults focus search");
-    check(await page.evaluate<boolean>("document.querySelectorAll('[role=dialog]').length === 1"), "Zed defaults stay in the create dialog");
+    await until(
+      "document.activeElement?.getAttribute('aria-label') === 'Find a Zed directory'",
+      "Zed defaults focus search",
+    );
+    check(
+      await page.evaluate<boolean>(
+        "document.querySelectorAll('[role=dialog]').length === 1",
+      ),
+      "Zed defaults stay in the create dialog",
+    );
     await shot("3d-zed-defaults");
     await key("Escape");
-    await until("document.activeElement?.hasAttribute('data-desktop-field-cursor')", "Zed search leaves Insert");
+    await until(
+      "document.activeElement?.hasAttribute('data-desktop-field-cursor')",
+      "Zed search leaves Insert",
+    );
     await key("Escape");
-    await until("document.activeElement?.getAttribute('data-default-field') === 'review_directory'", "Zed picker restores field focus");
+    await until(
+      "document.activeElement?.getAttribute('data-default-field') === 'review_directory'",
+      "Zed picker restores field focus",
+    );
     results.push(
       "Folder defaults: Enter expands and opens a field; Escape leaves search, returns to the field, then closes",
     );
