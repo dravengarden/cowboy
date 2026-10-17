@@ -80,7 +80,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     check([busy, numeric].every((node) => {
       const track = node.querySelector(".MuiCircularProgress-track");
       return track !== null && getComputedStyle(track).display !== "none" &&
-        Number.parseFloat(getComputedStyle(track).opacity) > 0;
+        Number.parseFloat(getComputedStyle(track).opacity) >= 0.55;
     }) && getComputedStyle(determinate.querySelector(".MuiCircularProgress-track")!).display === "none" &&
       getComputedStyle(starting.querySelector(".MuiCircularProgress-track")!).display === "none",
       "Native full tracks show for waits without changing startup or determinate progress");
@@ -90,7 +90,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     document.body.append(shell);
     try {
       const mark = shell.querySelector(".app-splash-spinner")!;
-      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor === "rgba(0, 0, 0, 0)", "Pre-mount splash uses a circular wait indicator");
+      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor !== "rgba(0, 0, 0, 0)", "Pre-mount splash uses a complete circular wait indicator");
     } finally {
       shell.remove();
     }

@@ -2,7 +2,8 @@
 export const splashLoadingCss = `
 #app-splash .app-splash-spinner {
   width: 2.125rem; height: 2.125rem; box-sizing: border-box;
-  border: .1875rem solid currentColor; border-right-color: transparent;
+  border: .1875rem solid currentColor;
+  border-right-color: color-mix(in srgb, currentColor 55%, transparent);
   border-radius: 50%; animation: cowboy-splash-rotate 1400ms linear infinite;
 }
 #app-splash .app-splash-spinner > span { display: none; }
@@ -12,7 +13,8 @@ export const splashLoadingCss = `
 }
 @media (forced-colors: active) {
   #app-splash .app-splash-spinner {
-    forced-color-adjust: none; border-color: CanvasText; border-right-color: transparent;
+    forced-color-adjust: none; border-color: CanvasText;
+    border-right-color: color-mix(in srgb, CanvasText 55%, transparent);
   }
 }
 `;

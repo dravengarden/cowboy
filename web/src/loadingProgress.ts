@@ -20,6 +20,8 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         height: `${loadingSize(ownerState.size ?? 40)} !important`,
         flexShrink: 0,
         verticalAlign: "middle",
+        // The full ring must remain readable in the 12–16px status slots.
+        "& .MuiCircularProgress-track": { opacity: 0.55 },
         "& .MuiCircularProgress-svg, & .MuiCircularProgress-circle": {
           animationPlayState: "inherit",
         },
