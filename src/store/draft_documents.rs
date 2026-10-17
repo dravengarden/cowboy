@@ -297,6 +297,43 @@ fn validate_next(
 }
 
 impl Store {
+    /// Bounded metadata-only keyset page. Filtering tombstones in SQL keeps
+    /// a page full even when earlier rows were trashed, without loading the
+    /// owner's entire document index into the Controller for each MCP call.
+    pub(crate) async fn draft_documents_page(
+        &self,
+        owner: &str,
+        after: Option<&str>,
+        limit: i64,
+        include_deleted: bool,
+    ) -> Result<Vec<DraftDocument>> {
+        anyhow::ensure!((1..=200).contains(&limit), "invalid document page limit");
+        macro_rules! read {
+            ($db:expr, $deleted:literal) => {
+                sqlx::query_scalar::<_, String>(concat!(
+                    "SELECT metadata FROM draft_documents WHERE owner_user_id = $1 ",
+                    "AND id > $2 AND ($3 OR ",
+                    $deleted,
+                    ") ORDER BY id LIMIT $4"
+                ))
+                .bind(owner)
+                .bind(after.unwrap_or(""))
+                .bind(include_deleted)
+                .bind(limit)
+                .fetch_all(&$db.pool)
+                .await?
+            };
+        }
+        let values = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db, "(metadata::jsonb->>'deleted') = 'false'"),
+            StorageBackend::Sqlite(db) => read!(db, "json_extract(metadata, '$.deleted') = 0"),
+        };
+        values
+            .iter()
+            .map(|v| serde_json::from_str(v).map_err(Into::into))
+            .collect()
+    }
+
     pub(crate) async fn draft_documents(&self, owner: &str) -> Result<Vec<DraftDocument>> {
         macro_rules! read {
             ($db:expr) => {

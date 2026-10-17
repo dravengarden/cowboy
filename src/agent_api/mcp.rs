@@ -6,7 +6,9 @@
 //! keeps a globally registered server free of per-turn token cost.
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::{
+    AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader,
+};
 use tokio::sync::Mutex;
 
 use super::{
@@ -16,9 +18,10 @@ use super::{
 use crate::managed_calls::cli::{exchange, wiring};
 use crate::managed_calls::protocol::Action;
 
-const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SDK_URI: &str = "cowboy://sdk/v1";
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_IN_FLIGHT: usize = 16;
 
 #[derive(clap::Args)]
 pub struct McpArgs {}
@@ -184,6 +187,7 @@ async fn handle(
         } else {
             json!([])
         }})),
+        "resources/templates/list" => Ok(json!({"resourceTemplates":[]})),
         "resources/read" => {
             if enabled && params.get("uri").and_then(Value::as_str) == Some(SDK_URI) {
                 Ok(
@@ -201,6 +205,12 @@ async fn handle(
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if !matches!(
+                name,
+                "cowboy_status" | "cowboy_read" | "cowboy_execute" | "cowboy_receipt"
+            ) {
+                return Err((-32602, "unknown tool".into()));
+            }
             if !actions && matches!(name, "cowboy_execute" | "cowboy_receipt") {
                 return Ok(tool_result(
                     json!({"state":"error","error":{"code":"unsupported_capability"}}),
@@ -228,8 +238,10 @@ async fn handle(
             }
             let action = match action(name, params.get("arguments").unwrap_or(&Value::Null)) {
                 Ok(action) => action,
-                Err(message) => {
-                    return Ok(json!({"content":[{"type":"text","text":message}],"isError":true}));
+                Err(_) => {
+                    return Ok(tool_result(
+                        json!({"state":"error","error":{"code":"invalid_argument"}}),
+                    ));
                 }
             };
             let Ok(context) = wiring() else {
@@ -240,14 +252,36 @@ async fn handle(
             let timeout = action.wait_ms();
             Ok(tool_result(exchange(context, action, timeout).await))
         }
-        _ => Err((-32601, format!("method not found: {method}"))),
+        _ => Err((-32601, "method not found".into())),
     }
 }
 
 pub async fn serve(_args: McpArgs) -> anyhow::Result<()> {
-    let enabled = available().await;
-    let output = std::sync::Arc::new(Mutex::new(tokio::io::stdout()));
-    let mut lines = BufReader::new(tokio::io::stdin());
+    serve_io(tokio::io::stdin(), tokio::io::stdout(), available().await).await
+}
+
+fn rpc_error(id: Value, code: i64, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+}
+
+async fn write_reply(
+    output: &Mutex<impl AsyncWrite + Unpin>,
+    reply: &Value,
+) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_vec(reply)?;
+    bytes.push(b'\n');
+    let mut output = output.lock().await;
+    output.write_all(&bytes).await?;
+    output.flush().await
+}
+
+async fn serve_io(
+    input: impl AsyncRead + Unpin,
+    output: impl AsyncWrite + Unpin + Send + 'static,
+    surface: Surface,
+) -> anyhow::Result<()> {
+    let output = std::sync::Arc::new(Mutex::new(output));
+    let mut lines = BufReader::new(input);
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         let mut line = Vec::new();
@@ -258,43 +292,190 @@ pub async fn serve(_args: McpArgs) -> anyhow::Result<()> {
         if read == 0 {
             break;
         }
+        if read > MAX_MESSAGE_BYTES {
+            // Drain this frame, without buffering it. Its suffix must never
+            // become a new request (and could otherwise execute an action).
+            while !line.ends_with(b"\n") {
+                line.clear();
+                if (&mut lines)
+                    .take(MAX_MESSAGE_BYTES as u64 + 1)
+                    .read_until(b'\n', &mut line)
+                    .await?
+                    == 0
+                {
+                    break;
+                }
+            }
+            write_reply(
+                &output,
+                &rpc_error(Value::Null, -32600, "message too large"),
+            )
+            .await?;
+            continue;
+        }
         let Ok(message) = serde_json::from_slice::<Value>(&line) else {
+            write_reply(&output, &rpc_error(Value::Null, -32700, "parse error")).await?;
             continue;
         };
-        // Notifications (no id) need no reply; cancellation of a read program
-        // has no effect to fence, so it is ignored.
+        let valid_id = message
+            .get("id")
+            .is_none_or(|id| id.is_string() || id.is_i64() || id.is_u64());
+        if !message.is_object()
+            || message["jsonrpc"] != "2.0"
+            || !message["method"].is_string()
+            || !valid_id
+        {
+            write_reply(&output, &rpc_error(Value::Null, -32600, "invalid request")).await?;
+            continue;
+        }
+        // Notifications never have replies. Cancellation does not roll back
+        // domain writes; their original operation/receipt remains authoritative.
         let Some(id) = message.get("id").cloned() else {
             continue;
         };
+        if message
+            .get("params")
+            .is_some_and(|params| !params.is_object())
+        {
+            write_reply(&output, &rpc_error(id, -32602, "invalid params")).await?;
+            continue;
+        }
         let method = message
             .get("method")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
+        // Backpressure bounds both running requests and completed replies
+        // waiting for stdout; idle servers still hold no gateway connection.
+        while let Some(result) = tasks.try_join_next() {
+            result??;
+        }
+        if tasks.len() >= MAX_IN_FLIGHT
+            && let Some(result) = tasks.join_next().await
+        {
+            result??;
+        }
         let output = std::sync::Arc::clone(&output);
         tasks.spawn(async move {
-            let reply = match handle(&method, &params, enabled).await {
+            let reply = match handle(&method, &params, surface).await {
                 Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
                 Err((code, message)) => {
                     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
                 }
             };
-            let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
-            bytes.push(b'\n');
-            let mut output = output.lock().await;
-            let _ = output.write_all(&bytes).await;
-            let _ = output.flush().await;
+            write_reply(&output, &reply).await
         });
-        while tasks.try_join_next().is_some() {}
     }
-    while tasks.join_next().await.is_some() {}
+    while let Some(result) = tasks.join_next().await {
+        result??;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn rpc_exchange(input: Vec<u8>) -> Vec<Value> {
+        let (mut client, output) = tokio::io::duplex(4096);
+        let server = tokio::spawn(serve_io(
+            std::io::Cursor::new(input),
+            output,
+            Surface::from(true),
+        ));
+        let mut bytes = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut bytes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap().unwrap();
+        bytes
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn oversized_frames_cannot_turn_their_suffix_into_another_request() {
+        let mut input = vec![b' '; MAX_MESSAGE_BYTES + 1];
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":\"suffix\",\"method\":\"ping\"}\n");
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":\"next\",\"method\":\"ping\"}\n");
+        let replies = rpc_exchange(input).await;
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["error"]["code"], -32600);
+        assert_eq!(replies[1], json!({"jsonrpc":"2.0","id":"next","result":{}}));
+    }
+
+    #[tokio::test]
+    async fn malformed_requests_reply_and_notifications_stay_silent() {
+        let mut input = b"{broken\n".to_vec();
+        for value in [
+            json!([]),
+            json!({"id":1,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":null,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":{},"method":"ping"}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"ping","params":[]}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"unknown"}}),
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cowboy_read","arguments":{}}}),
+        ] {
+            input.extend(serde_json::to_vec(&value).unwrap());
+            input.push(b'\n');
+        }
+        let replies = rpc_exchange(input).await;
+        assert_eq!(replies.len(), 8);
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(
+            replies
+                .iter()
+                .filter(|r| r["error"]["code"] == -32600)
+                .count(),
+            4
+        );
+        for id in [2, 3] {
+            assert_eq!(
+                replies.iter().find(|r| r["id"] == id).unwrap()["error"]["code"],
+                -32602
+            );
+        }
+        let result = &replies.iter().find(|r| r["id"] == 4).unwrap()["result"];
+        assert_eq!(result["isError"], true);
+        let value: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_argument");
+    }
+
+    #[tokio::test]
+    async fn pipelined_requests_keep_every_response_under_backpressure() {
+        let mut input = Vec::new();
+        for id in 0..MAX_IN_FLIGHT * 4 {
+            input.extend(
+                serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":"ping"})).unwrap(),
+            );
+            input.push(b'\n');
+        }
+        let mut replies = rpc_exchange(input).await;
+        replies.sort_by_key(|v| v["id"].as_u64().unwrap());
+        assert_eq!(replies.len(), MAX_IN_FLIGHT * 4);
+        for (id, reply) in replies.iter().enumerate() {
+            assert_eq!(reply, &json!({"jsonrpc":"2.0","id":id,"result":{}}));
+        }
+        let init = handle("initialize", &json!({"protocolVersion":"2025-11-25"}), true)
+            .await
+            .unwrap();
+        assert_eq!(init["protocolVersion"], "2025-11-25");
+        assert_eq!(
+            handle("resources/templates/list", &json!({}), true)
+                .await
+                .unwrap(),
+            json!({"resourceTemplates":[]})
+        );
+    }
 
     #[test]
     fn tool_arguments_become_validated_gateway_actions() {
