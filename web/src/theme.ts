@@ -172,7 +172,10 @@ export function useThemeMode(): ThemeControls {
           // document root before any control can inherit the default grey.
           MuiCssBaseline: {
             styleOverrides: {
-              html: { WebkitTapHighlightColor: "transparent" },
+              html: {
+                WebkitTapHighlightColor: "transparent",
+                "--cowboy-activity-color": dark ? "#22d3ee" : "#0891b2",
+              },
               body: { WebkitTapHighlightColor: "transparent" },
               "#root": { WebkitTapHighlightColor: "transparent" },
               // A native <button> takes the browser's fixed 13.33px, which

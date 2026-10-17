@@ -50,8 +50,8 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         '&[data-session-activity="true"]': {
           animation: "none",
           "@keyframes cowboy-session-breathe": {
-            "0%, 100%": { opacity: 0.25 },
-            "50%": { opacity: 0.8 },
+            "0%, 100%": { opacity: 0.25, transform: "scale(0.85)" },
+            "50%": { opacity: 0.8, transform: "scale(1)" },
           },
           "&::before": {
             // 52% of the 1rem slot matches the idle SVG's visible circle.
