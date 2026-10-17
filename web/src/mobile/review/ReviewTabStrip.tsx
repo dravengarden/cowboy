@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
 import { isImeKeyEvent } from "../../imeKey";
+import { isPairedTouchClick } from "../../touchGestures";
 import { type ReviewTab, reviewTabKey } from "./reviewTabs";
 
 function basename(path: string): string {
@@ -32,6 +33,7 @@ export function ReviewTabStrip({
   allowReorder = true,
   allowPin = true,
   onReorder,
+  beforeTouchActivate,
 }: {
   tabs: ReviewTab[];
   activeKey: string | undefined;
@@ -44,6 +46,7 @@ export function ReviewTabStrip({
   allowReorder?: boolean;
   allowPin?: boolean;
   onReorder?: (movingKey: string, targetKey: string) => void;
+  beforeTouchActivate?: () => void;
 }): React.JSX.Element | null {
   const strip = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -140,9 +143,17 @@ export function ReviewTabStrip({
               role="tab"
               tabIndex={0}
               aria-selected={active}
-              onClick={() => {
-                if (suppressClick.current) {
-                  suppressClick.current = false;
+              onClick={(event) => {
+                const suppress = isPairedTouchClick(
+                  suppressClick.current,
+                  event.detail,
+                  "pointerType" in event.nativeEvent
+                    ? String(event.nativeEvent.pointerType)
+                    : "",
+                );
+                suppressClick.current = false;
+                if (suppress) {
+                  event.preventDefault();
                   return;
                 }
                 onActivate(tab);
@@ -211,6 +222,9 @@ export function ReviewTabStrip({
                 const current = press.current;
                 if (current && !current.dragging && !current.moved) {
                   suppressClick.current = true;
+                  // Activation can remove the strip and reveal a file row
+                  // under this finger. Its owner guards the paired click.
+                  beforeTouchActivate?.();
                   onActivate(tab);
                 }
                 finishPress(true);

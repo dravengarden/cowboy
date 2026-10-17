@@ -442,7 +442,7 @@ export function ReviewChanges({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: compact ? 2 : 8,
+          pb: compact ? 2 : "calc(80px + env(safe-area-inset-bottom, 0px))",
           ...mobileNativeYScrollSx,
         }}
       >

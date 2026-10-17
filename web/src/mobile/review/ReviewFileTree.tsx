@@ -6,7 +6,6 @@ import {
   MyLocation,
   Refresh,
   Search,
-  Settings as SettingsIcon,
   UnfoldLess,
   UnfoldMore,
 } from "@mui/icons-material";
@@ -25,8 +24,6 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MobileSheetActionGroup } from "@cowboy/app-shell";
-import { openAppSettings } from "../../appSettings";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
@@ -45,6 +42,7 @@ import {
 } from "./directoryTreeModel";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { useReviewRecovery } from "./useReviewRecovery";
+import { ReviewNavigationActions } from "./ReviewNavigationActions";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 
@@ -214,6 +212,7 @@ export function ReviewFileTree({
   refreshToken,
   contextLabel = "Worktree",
   embedded = false,
+  actionsContainer,
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
@@ -223,6 +222,7 @@ export function ReviewFileTree({
   refreshToken: number;
   contextLabel?: string;
   embedded?: boolean;
+  actionsContainer?: HTMLElement | null;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
     apiVersion: 1,
@@ -672,27 +672,6 @@ export function ReviewFileTree({
             {cwd ?? "No active session"}
           </Typography>
         </Box>
-        {embedded && (
-          <>
-            <IconButton
-              size="small"
-              aria-label={rootExpanded ? "Collapse folders" : "Expand folders"}
-              onClick={toggleRootDirectories}
-              disabled={rootDirectories.length === 0}
-            >
-              {rootExpanded
-                ? <UnfoldLess fontSize="small" />
-                : <UnfoldMore fontSize="small" />}
-            </IconButton>
-            <NetworkIconButton
-              size="small"
-              aria-label="Refresh files"
-              networkAction={() => load(true)}
-            >
-              <Refresh fontSize="small" />
-            </NetworkIconButton>
-          </>
-        )}
       </Stack>
       <TextField
         value={query}
@@ -737,7 +716,7 @@ export function ReviewFileTree({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: embedded ? 2 : 12,
+          pb: embedded ? 2 : "calc(80px + env(safe-area-inset-bottom, 0px))",
           ...mobileNativeYScrollSx,
         }}
       >
@@ -833,52 +812,34 @@ export function ReviewFileTree({
             </List>
           )}
       </Box>
-      {!embedded && (
-        <Box
-          sx={{
-            position: "absolute",
-            zIndex: 2,
-            left: 0,
-            right: 0,
-            bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-            px: 2,
-            pointerEvents: "none",
-          }}
-        >
-          <MobileSheetActionGroup
-            actions={[
-              {
-                key: "settings",
-                label: "Settings",
-                icon: <SettingsIcon fontSize="small" />,
-                onPress: (): void => openAppSettings({ section: "code" }),
-              },
-              {
-                key: "close",
-                label: `Close ${contextLabel.toLowerCase()}`,
-                icon: <Close fontSize="small" />,
-                onPress: onClose,
-              },
-              {
-                key: "expand",
-                label: rootExpanded ? "Collapse folders" : "Expand folders",
-                icon: rootExpanded
-                  ? <UnfoldLess fontSize="small" />
-                  : <UnfoldMore fontSize="small" />,
-                onPress: toggleRootDirectories,
-                disabled: rootDirectories.length === 0,
-              },
-              {
-                key: "locate",
-                label: "Reveal current file",
-                icon: <MyLocation fontSize="small" />,
-                onPress: () => void revealCurrentFile(),
-                disabled: !currentPath,
-              },
-            ]}
-          />
-        </Box>
-      )}
+      <ReviewNavigationActions
+        embedded={embedded}
+        container={actionsContainer}
+        label="File tree controls"
+        refreshLabel="Refresh files"
+        onRefresh={() => load(true)}
+        disabled={!sessionId}
+        closeLabel={`Close ${contextLabel.toLowerCase()}`}
+        onClose={onClose}
+        actions={[
+          {
+            key: "expand",
+            label: rootExpanded ? "Collapse folders" : "Expand folders",
+            icon: rootExpanded
+              ? <UnfoldLess fontSize="small" />
+              : <UnfoldMore fontSize="small" />,
+            onPress: toggleRootDirectories,
+            disabled: rootDirectories.length === 0 || !!query.trim(),
+          },
+          {
+            key: "locate",
+            label: "Reveal current file",
+            icon: <MyLocation fontSize="small" />,
+            onPress: () => void revealCurrentFile(),
+            disabled: !currentPath,
+          },
+        ]}
+      />
     </Stack>
   );
 }

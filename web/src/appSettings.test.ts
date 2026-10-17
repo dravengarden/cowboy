@@ -15,6 +15,9 @@ const reviewSettingsSource = await readFile(
 const fileTreeSource = await readFile(
   new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url), "utf8",
 );
+const reviewActionsSource = await readFile(
+  new URL("./mobile/review/ReviewNavigationActions.tsx", import.meta.url), "utf8",
+);
 const appSource = await readFile(
   new URL("./App.tsx", import.meta.url), "utf8",
 );
@@ -166,7 +169,8 @@ test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(
     reviewSettingsSource.includes("export function ReviewSettingsContent"),
   );
-  assert(fileTreeSource.includes('openAppSettings({ section: "code" })'));
+  assert(fileTreeSource.includes("<ReviewNavigationActions"));
+  assert(reviewActionsSource.includes('openAppSettings({ section: "code" })'));
 });
 
 test("Context tabs use the shared segmented tabs", () => {

@@ -79,6 +79,8 @@ export function ReviewDrawerShell({
   toggleRequest = 0,
   navigationInline = false,
   inlineContainer,
+  onPointerDownCapture,
+  onClickCapture,
 }: {
   drawer: React.ReactNode;
   children: React.ReactNode;
@@ -87,6 +89,8 @@ export function ReviewDrawerShell({
   toggleRequest?: number;
   navigationInline?: boolean;
   inlineContainer?: HTMLElement | null;
+  onPointerDownCapture?: React.PointerEventHandler<HTMLDivElement>;
+  onClickCapture?: React.MouseEventHandler<HTMLDivElement>;
 }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -158,6 +162,8 @@ export function ReviewDrawerShell({
   return (
     <Box
       ref={rootRef}
+      onPointerDownCapture={onPointerDownCapture}
+      onClickCapture={onClickCapture}
       data-mobile-drawer-presented={open ? "true" : undefined}
       data-review-navigation-inline={navigationInline ? "true" : undefined}
       sx={{

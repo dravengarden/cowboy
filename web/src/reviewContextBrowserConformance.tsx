@@ -260,6 +260,12 @@ export function renderReviewContextPreview(dense = false) {
                 kind: "file",
                 ignored: false,
               },
+              ...Array.from({ length: dense ? 35 : 0 }, (_, index) => ({
+                name: `file-${index}.ts`,
+                path: `file-${index}.ts`,
+                kind: "file",
+                ignored: false,
+              })),
             ],
         });
       }
@@ -338,6 +344,38 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     [...root.querySelectorAll("button, [role='button'], [role='tab']")].find((
       element,
     ) => element.textContent?.trim() === label);
+  const bottomActions = (label: string, inline: boolean) => {
+    const group = labelled(label);
+    check(group instanceof HTMLElement, `Missing ${label}`);
+    check(
+      group.dataset.reviewNavigationActions === (inline ? "inline" : "sidebar"),
+      `${label} used the wrong bottom surface`,
+    );
+    if (inline) {
+      check(
+        group.closest('[aria-label="Code Review controls"]'),
+        "Overview actions should share its existing bottom bar",
+      );
+    }
+    const page = fixture.container.getBoundingClientRect();
+    const rect = group.getBoundingClientRect();
+    check(
+      rect.top >= page.bottom - 100 && rect.bottom <= page.bottom,
+      `${label} must stay at the bottom`,
+    );
+    for (const button of group.querySelectorAll("button")) {
+      const hit = button.getBoundingClientRect();
+      check(
+        hit.width >= 44 && hit.height >= 44,
+        "Bottom actions need 44px touch targets",
+      );
+      check(
+        hit.left >= page.left && hit.right <= page.right,
+        "Bottom action was clipped",
+      );
+    }
+    return rect.top;
+  };
   try {
     await until(
       () => !!overview()?.textContent?.includes("app.ts"),
@@ -364,6 +402,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     );
 
     await wait(800);
+    const actionsTop = bottomActions("Repository controls", true);
     const navigator = overview()!.firstElementChild;
     const list = overview()!.querySelector<HTMLElement>(
       "[data-mobile-overflow-layer]",
@@ -372,6 +411,10 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     list.scrollTop = 140;
     const scrollTop = list.scrollTop;
     check(scrollTop > 0, "Changes fixture must overflow");
+    check(
+      bottomActions("Repository controls", true) === actionsTop,
+      "Scrolling changes moved the bottom actions",
+    );
     const repositories = fixture.requests.filter((request) =>
       request.endsWith("/repository")
     ).length;
@@ -389,6 +432,8 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       () => navigator?.closest('[aria-hidden="false"]') !== null,
       "Sidebar should expose the same navigator",
     );
+    await wait(400);
+    bottomActions("Repository controls", false);
     check(
       list.scrollTop === scrollTop,
       "Moving navigation lost the reading position",
@@ -399,14 +444,37 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       "Moving navigation repeated repository loading",
     );
     await click(labelled("Close repository"));
-    await click(
-      fixture.container.querySelector(
-        '[data-review-tab-key][aria-selected="true"]',
-      ),
+    const activeTab = fixture.container.querySelector<HTMLElement>(
+      '[data-review-tab-key][aria-selected="true"]',
+    )!;
+    // Synthetic pointers cannot acquire native capture. Exercise the real
+    // pointerup activation and its click retargeting after the strip unmounts.
+    activeTab.setPointerCapture = () => {};
+    const pointer = {
+      bubbles: true,
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+    };
+    flushSync(() =>
+      activeTab.dispatchEvent(new PointerEvent("pointerdown", pointer))
+    );
+    flushSync(() =>
+      activeTab.dispatchEvent(new PointerEvent("pointerup", pointer))
     );
     await until(
       () => overview()?.firstElementChild === navigator,
       "Return to the original overview",
+    );
+    const revealedFile = textButton(overview()!, "app.tsM")!;
+    flushSync(() =>
+      revealedFile.dispatchEvent(
+        new PointerEvent("click", { ...pointer, detail: 1 }),
+      )
+    );
+    check(
+      overview(),
+      "Returning to navigation activated a file through the paired touch click",
     );
     check(
       list.scrollTop === scrollTop,
@@ -420,7 +488,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       fixture.requests.filter((request) => request.endsWith("/changes"))
         .length > changeRequests, "Refresh must revalidate changes too");
     tests.push(
-      "opening a file preserves one navigator and does not repeat repository requests",
+      "bottom actions stay reachable and returning to one preserved navigator rejects retargeted touch clicks",
     );
 
     // A saved project context is independent from the Agent session.
@@ -469,11 +537,47 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     );
 
     const tree = files()!.firstElementChild;
-    await click(files()!.querySelector('[data-code-tree-path="src"]'));
+    const filesActionsTop = bottomActions("File tree controls", true);
+    check(
+      !files()!.querySelector('[aria-label="Refresh files"]'),
+      "Files still has header actions",
+    );
+    const treeList = files()!.querySelector<HTMLElement>(
+      "[data-mobile-overflow-layer]",
+    )!;
+    treeList.scrollTop = treeList.scrollHeight;
+    check(treeList.scrollTop > 0, "Tree fixture must overflow");
+    check(
+      bottomActions("File tree controls", true) === filesActionsTop,
+      "Scrolling files moved the bottom actions",
+    );
+    check(
+      files()!.querySelector('[data-code-tree-path="file-34.ts"]')!
+        .getBoundingClientRect().bottom <= filesActionsTop,
+      "The last file is hidden behind bottom controls",
+    );
+    treeList.scrollTop = 0;
+    await click(labelled("Expand folders"));
     await until(
       () =>
         !!files()?.querySelector('[data-code-tree-path="src/app.ts"]'),
       "Expanded directory",
+    );
+    await click(labelled("Collapse folders"));
+    check(
+      files()!.querySelector('[data-code-tree-path="src"]')?.getAttribute(
+        "aria-expanded",
+      ) === "false",
+      "Bottom collapse action did not collapse the tree",
+    );
+    await click(labelled("Expand folders"));
+    const treeRequests = () =>
+      fixture.requests.filter((request) => request.endsWith("/tree")).length;
+    const beforeTreeRefresh = treeRequests();
+    await click(labelled("Refresh files"));
+    await until(
+      () => treeRequests() > beforeTreeRefresh,
+      "Bottom refresh did not revalidate files",
     );
     const src = files()!.querySelector('[data-code-tree-path="src"]');
     await click(files()!.querySelector('[data-code-tree-path="README.md"]'));
@@ -482,13 +586,34 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       "Read project file",
     );
     await click(labelled("Open file tree sidebar"));
+    await wait(400);
+    bottomActions("File tree controls", false);
     check(
       tree?.isConnected && src?.getAttribute("aria-expanded") === "true",
       "Opening source lost the expanded tree",
     );
+    const beforeSidebarRefresh = treeRequests();
+    await click(labelled("Refresh files"));
+    await until(
+      () => treeRequests() > beforeSidebarRefresh,
+      "Sidebar refresh did not revalidate files",
+    );
+    treeList.scrollTop = treeList.scrollHeight;
+    const sidebarActionsTop = bottomActions("File tree controls", false);
+    check(
+      tree!.querySelector('[data-code-tree-path="file-34.ts"]')!
+        .getBoundingClientRect().bottom <= sidebarActionsTop,
+      "The sidebar footer hides the last file",
+    );
+    await click(labelled("Reveal current file"));
+    await until(() => {
+      const current = tree!.querySelector('[data-code-tree-path="README.md"]')!
+        .getBoundingClientRect();
+      return current.top > 0 && current.bottom < sidebarActionsTop;
+    }, "Bottom locate action should reveal the current file");
     await click(labelled("Close project code"));
     tests.push(
-      "opening project source retains tree expansion and uses the existing read-only data plane",
+      "bottom file controls expand, refresh and reveal files without losing tree state or hiding the last row",
     );
 
     fixture.select("project");

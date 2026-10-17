@@ -1,13 +1,11 @@
 import {
   AccountTreeOutlined,
-  Close,
   CommitOutlined,
   DescriptionOutlined,
   ExpandLess,
   ExpandMore,
   History,
   Refresh,
-  Settings as SettingsIcon,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -22,9 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { SegmentedTabs } from "../../SegmentedTabs";
-import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
@@ -41,6 +37,7 @@ import {
 } from "./reviewHistoryPaging";
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
+import { ReviewNavigationActions } from "./ReviewNavigationActions";
 import { HintTooltip } from "../../HintTooltip";
 import type { SessionMeta } from "../../protocol";
 import type { PullSummary } from "../../extensions/api";
@@ -357,6 +354,7 @@ export function ReviewRepository({
   onOpenSession,
   onOpenPull,
   embedded = false,
+  actionsContainer,
   onBrowseFiles,
 }: {
   sessionId: string | undefined;
@@ -379,6 +377,7 @@ export function ReviewRepository({
   /** Review a pull request of this repository in place of the worktree. */
   onOpenPull?: (choice: Choice, pull: PullSummary) => void;
   embedded?: boolean;
+  actionsContainer?: HTMLElement | null;
   onBrowseFiles?: () => void;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
@@ -601,27 +600,15 @@ export function ReviewRepository({
               />
             )}
             {embedded && (
-              <>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  noWrap
-                  title={projectPath}
-                  sx={{ flex: 1, minWidth: 0 }}
-                >
-                  {projectPath}
-                </Typography>
-                <NetworkIconButton
-                  size="small"
-                  aria-label="Refresh repository"
-                    networkAction={async () => {
-                      await load();
-                      setChangesRefresh((value) => value + 1);
-                    }}
-                >
-                  <Refresh fontSize="small" />
-                </NetworkIconButton>
-              </>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                title={projectPath}
+                sx={{ flex: 1, minWidth: 0 }}
+              >
+                {projectPath}
+              </Typography>
             )}
           </Stack>
           {!embedded && projectPath && (
@@ -757,7 +744,9 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 0.75,
-                pb: embedded ? 2 : 10,
+                pb: embedded
+                  ? 2
+                  : "calc(80px + env(safe-area-inset-bottom, 0px))",
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -854,7 +843,9 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 1.25,
-                pb: embedded ? 2 : 10,
+                pb: embedded
+                  ? 2
+                  : "calc(80px + env(safe-area-inset-bottom, 0px))",
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -967,47 +958,19 @@ export function ReviewRepository({
             </Box>
           )}
       </Box>
-      {!embedded && (
-        <Box
-          sx={{
-            position: "absolute",
-            zIndex: 3,
-            left: 0,
-            right: 0,
-            bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-            display: "flex",
-            justifyContent: "flex-start",
-            px: 2,
-            pointerEvents: "none",
-            "& > [data-mobile-sheet-footer-shield]": {
-              width: "auto",
-              flex: "0 0 auto",
-            },
-          }}
-        >
-          <MobileSheetActionGroup
-            actions={[
-              {
-                key: "settings",
-                label: "Settings",
-                icon: <SettingsIcon fontSize="small" />,
-                onPress: (): void => openAppSettings({ section: "code" }),
-              },
-              {
-                key: "close",
-                label: "Close repository",
-                icon: (
-                  <Close
-                    fontSize="small"
-                    sx={{ transform: "translate(-0.75px, -0.5px)" }}
-                  />
-                ),
-                onPress: onClose,
-              },
-            ]}
-          />
-        </Box>
-      )}
+      <ReviewNavigationActions
+        embedded={embedded}
+        container={actionsContainer}
+        label="Repository controls"
+        refreshLabel="Refresh repository"
+        onRefresh={async () => {
+          await load();
+          setChangesRefresh((value) => value + 1);
+        }}
+        disabled={!sessionId}
+        closeLabel="Close repository"
+        onClose={onClose}
+      />
     </Stack>
   );
 }

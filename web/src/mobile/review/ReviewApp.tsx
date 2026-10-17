@@ -16,7 +16,6 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
-  SettingsOutlined,
   Undo,
   VisibilityOutlined,
   WrapText,
@@ -61,7 +60,7 @@ import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsB
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
-import { openAppSettings } from "../../appSettings";
+import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
 import {
   mutateMobileReview,
   notify,
@@ -2205,7 +2204,9 @@ export function ReviewApp({
   );
   const [contextProjectKey, setContextProjectKey] = useState<string>();
   const [inlineNavigationContainer, setInlineNavigationContainer] = useState<HTMLElement | null>(null);
+  const [inlineActionsContainer, setInlineActionsContainer] = useState<HTMLElement | null>(null);
   const navigationInline = !!workspace && target.kind === "changes" && !commitTarget;
+  const navigationTouchGuard = useRetargetedTouchClickGuard<HTMLDivElement>();
   const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -3191,6 +3192,8 @@ export function ReviewApp({
       toggleRequest={toggleDrawerRequest}
       navigationInline={navigationInline}
       inlineContainer={inlineNavigationContainer}
+      onPointerDownCapture={navigationTouchGuard.onPointerDownCapture}
+      onClickCapture={navigationTouchGuard.onClickCapture}
       drawer={mode === "files"
         ? (
           <ReviewFileTree
@@ -3203,6 +3206,7 @@ export function ReviewApp({
             refreshToken={dataRevision}
             contextLabel={contextLabel}
             embedded={navigationInline}
+            actionsContainer={inlineActionsContainer}
           />
         )
         : (
@@ -3224,6 +3228,7 @@ export function ReviewApp({
             machineId={currentMachineId}
             onOpenSession={switchSession}
             embedded={navigationInline}
+            actionsContainer={inlineActionsContainer}
             onBrowseFiles={() => activateReviewMode("files")}
             {...(workspace?.sessionId && !projectCodeContext &&
                 typeof syncedReview.remote_selected === "boolean"
@@ -3543,6 +3548,7 @@ export function ReviewApp({
               : modeTabs}
             activeKey={activeTabKey}
             onActivate={activateOrCollapseTab}
+            beforeTouchActivate={navigationTouchGuard.arm}
             onClose={requestCloseTab}
             onCloseOthers={(key, anchor) => {
               navigationHaptic();
@@ -3706,9 +3712,7 @@ export function ReviewApp({
                 </IconButton>
               )}
               {navigationInline ? (
-                <IconButton aria-label="Review settings" onClick={() => openAppSettings({ section: "code" })}>
-                  <SettingsOutlined />
-                </IconButton>
+                <Box ref={setInlineActionsContainer} sx={{ display: "flex", alignItems: "center" }} />
               ) : <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen

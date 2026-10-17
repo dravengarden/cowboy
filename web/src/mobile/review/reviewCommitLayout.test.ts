@@ -3,16 +3,24 @@ import { test } from "bun:test";
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
 const appSource = await readFile(
-  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
+  new URL("./ReviewApp.tsx", import.meta.url),
+  "utf8",
 );
 const repositorySource = await readFile(
-  new URL("./ReviewRepository.tsx", import.meta.url), "utf8",
+  new URL("./ReviewRepository.tsx", import.meta.url),
+  "utf8",
+);
+const actionsSource = await readFile(
+  new URL("./ReviewNavigationActions.tsx", import.meta.url),
+  "utf8",
 );
 const commitSource = await readFile(
-  new URL("./ReviewCommit.tsx", import.meta.url), "utf8",
+  new URL("./ReviewCommit.tsx", import.meta.url),
+  "utf8",
 );
 const codeViewerSource = await readFile(
-  new URL("./CodeViewer.tsx", import.meta.url), "utf8",
+  new URL("./CodeViewer.tsx", import.meta.url),
+  "utf8",
 );
 
 test("repository history pages older commits instead of a 128-commit wall", () => {
@@ -61,14 +69,18 @@ test("repository header identifies the Machine and actual review root", () => {
   assertStringIncludes(repositorySource, "label={machineLabel}");
   assertStringIncludes(repositorySource, "data-repository-project-path");
   assertStringIncludes(appSource, "{ projectPath: reviewRootPath }");
-  assertStringIncludes(appSource, "const reviewRootPath = workspace?.cwd || (projectCodeContext ? currentProjectPath : undefined);");
+  assertStringIncludes(
+    appSource,
+    "const reviewRootPath = workspace?.cwd || (projectCodeContext ? currentProjectPath : undefined);",
+  );
   assertStringIncludes(appSource, "currentRegisteredWorkspace?.canonical_path");
 });
 
 test("repository footer keeps Settings and close in one capsule", () => {
-  assertStringIncludes(repositorySource, 'key: "settings"');
-  assertStringIncludes(repositorySource, 'key: "close"');
-  assertStringIncludes(repositorySource, 'justifyContent: "flex-start"');
+  assertStringIncludes(repositorySource, "<ReviewNavigationActions");
+  assertStringIncludes(actionsSource, 'key: "settings"');
+  assertStringIncludes(actionsSource, 'key: "close"');
+  assertStringIncludes(actionsSource, 'justifyContent: "flex-start"');
   if (repositorySource.includes("MobileSheetDismiss")) {
     throw new Error("Repository close belongs in the Settings capsule");
   }
