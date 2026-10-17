@@ -72,6 +72,7 @@ const id = (id) => ({ id });
 const callId = (call_id) => ({ call_id });
 const query = (q) => q ?? {};
 const cowboy = Object.freeze({
+  preferences: namespace("preferences", { schema: none, get: (scope) => ({ scope }) }),
   session: namespace("session", {
     info: none,
     queue: none,

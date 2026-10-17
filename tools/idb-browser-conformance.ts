@@ -27,11 +27,14 @@ if (
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "editor-plugin-sandbox" &&
-  suite !== "managed-calls" && suite !== "session-maintenance"
+  suite !== "managed-calls" && suite !== "session-maintenance" &&
+  suite !== "about-layout"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "session-maintenance"
+const entry = suite === "about-layout"
+  ? "runAboutLayoutBrowserConformance"
+  : suite === "session-maintenance"
   ? "runSessionMaintenanceBrowserConformance"
   : suite === "managed-calls"
   ? "runManagedCallsBrowserConformance"
@@ -264,6 +267,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 7
         : suite === "managed-calls"
         ? 11
+        : suite === "about-layout"
+        ? 10
         : suite === "session-maintenance"
         ? 8
         : suite === "project-placement"

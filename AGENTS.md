@@ -82,6 +82,12 @@ require the exact successful build receipt and published SideStore version.
   scoped to the enforcing process). Never add a behavioural environment
   variable or a separate JSON policy file; validate edits with
   `cowboy config check` before applying or rolling out.
+- New configurable behavior must expose typed discovery and scoped AI control
+  through Cowboy MCP by default, or document a concrete exception. Reuse its
+  existing read/execute/receipt surface and domain writers; discover schemas on
+  demand rather than expanding resident tool prompts. Preserve each setting's
+  DB or Service/Device config ownership, permissions and activation rules. See
+  `docs/agent-api.md` for the account preference contract.
 - The normative Provider-platform contract is `docs/requirements.md`. The
   canonical dependency-audit and release workflow is the repository-owned
   `.agents/skills/release-cowboy-plugin/`; keep it versioned with Cowboy and

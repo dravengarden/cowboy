@@ -149,6 +149,36 @@ async fn document_owner(
     Ok(owner.to_owned())
 }
 
+pub(super) async fn preference_owner(
+    state: &AppState,
+    meta: &SessionMeta,
+) -> Result<String, &'static str> {
+    active_preference_owner(&state.hub, state.store.as_ref(), meta).await
+}
+
+async fn active_preference_owner(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    meta: &SessionMeta,
+) -> Result<String, &'static str> {
+    let owner = meta.owner_user_id.as_deref().ok_or("permission_denied")?;
+    let user = store
+        .ok_or("unavailable")?
+        .user_by_id(owner)
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("permission_denied")?;
+    if meta.system
+        || user.disabled_at_ms.is_some()
+        || hub
+            .session_info(&meta.id)
+            .is_none_or(|info| info.meta.closing || info.meta.owner_user_id != meta.owner_user_id)
+    {
+        return Err("permission_denied");
+    }
+    Ok(owner.to_owned())
+}
+
 pub(in crate::server) async fn invoke(
     state: &Arc<AppState>,
     meta: &SessionMeta,
@@ -180,6 +210,20 @@ async fn execute(
             return Err("invalid_argument");
         }
         return match input.domain.as_str() {
+            "preferences" => {
+                let owner = preference_owner(state, meta).await?;
+                let receipt = state
+                    .store
+                    .as_ref()
+                    .ok_or("unavailable")?
+                    .preference_receipt(&owner, &document_operation(&meta.id, &input.operation))
+                    .await
+                    .map_err(|_| "unavailable")?;
+                Ok(success(match receipt {
+                    Some(prefs) => json!({"status":"committed","preferences":prefs}),
+                    None => json!({"status":"unknown"}),
+                }))
+            }
             "calls" => {
                 let record = ledger
                     .observe(&input.operation)
@@ -231,6 +275,23 @@ async fn execute(
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
     match action {
+        "preferences.update" => {
+            let input: crate::store::preferences::PreferenceChange =
+                serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            let owner = preference_owner(state, meta).await?;
+            let value = super::super::preferences::update_value(
+                state,
+                &owner,
+                &document_operation(&meta.id, operation),
+                &input,
+            )
+            .await?;
+            if value.get("error").is_some() {
+                Ok(json!({"state":"error","error":value["error"],"current":value["current"]}))
+            } else {
+                Ok(success(value))
+            }
+        }
         "calls.start" | "review.start" => {
             let action = call_action(action, args, operation)?;
             Ok(call_result(
@@ -361,6 +422,13 @@ mod tests {
             owner_username: Some(user.username.clone()),
         });
         let mut meta = hub.session_info("parent").unwrap().meta;
+        // Every active product account may arrange its own display, even a viewer.
+        assert_eq!(
+            active_preference_owner(&hub, Some(&store), &meta)
+                .await
+                .unwrap(),
+            user.id
+        );
         assert_eq!(
             document_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")
@@ -377,17 +445,29 @@ mod tests {
         );
         store.set_user_disabled_at(&user.id, Some(2)).await.unwrap();
         assert_eq!(
+            active_preference_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        assert_eq!(
             document_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")
         );
         store.set_user_disabled_at(&user.id, None).await.unwrap();
         meta.id = "other-parent".into();
         assert_eq!(
+            active_preference_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        assert_eq!(
             document_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")
         );
         meta.id = "parent".into();
         meta.owner_user_id = Some("other-owner".into());
+        assert_eq!(
+            active_preference_owner(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
         assert_eq!(
             document_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")

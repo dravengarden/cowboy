@@ -90,6 +90,7 @@ mod operator_approval;
 #[cfg(test)]
 mod persistence_tests;
 mod plugin_install;
+mod preferences;
 mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
@@ -5143,6 +5144,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || path.starts_with("/api/code/navigations/")
     {
         return RouteAuth::ProductOperator;
+    }
+    if path == "/api/preferences" || path.starts_with("/api/preferences/") {
+        return RouteAuth::Product;
     }
     if path == "/api/drafts" || path.starts_with("/api/drafts/") {
         return if matches!(*method, Method::GET | Method::HEAD) {
@@ -10281,6 +10285,8 @@ async fn serve_axum(
         .route("/api/metrics", get(api_metrics))
         .route("/api/sync/dataset", get(sync_dataset::get_dataset))
         .route("/api/drafts", get(draft_documents::list))
+        .route("/api/preferences/{scope}", get(preferences::read))
+        .route("/api/preferences", put(preferences::update).layer(DefaultBodyLimit::max(64 * 1024)))
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route("/api/drafts/{id}", get(draft_documents::read))
         .route("/api/drafts/{id}/history", get(draft_documents::history))
@@ -19413,7 +19419,7 @@ fn fanout_sends_shared_frame(principal: &ProductPrincipal, outbound: &Outbound) 
 }
 
 fn principal_owned_sync_state(state: &str) -> bool {
-    state == "workspace-order" || state == "drafts"
+    state == "workspace-order" || state == "drafts" || state == "preferences"
 }
 
 fn project_outbound(
@@ -19482,7 +19488,7 @@ fn project_outbound(
                     confirmed,
                     resync,
                 })
-            } else if state == "drafts" {
+            } else if state == "drafts" || state == "preferences" {
                 // Another user's document change is not even announced.
                 value
                     .get(&principal.user_id)
@@ -21451,6 +21457,37 @@ mod bootstrap_tests {
             value,
             serde_json::json!({"d2": {"id": "d2", "revision": 5}})
         );
+    }
+
+    #[test]
+    fn preferences_routes_and_announcements_are_account_scoped() {
+        use super::{RouteAuth, classify_route};
+        use axum::http::Method;
+        assert_eq!(
+            classify_route(&Method::GET, "/api/preferences/about"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::PUT, "/api/preferences"),
+            RouteAuth::Product
+        );
+        let hub = Hub::new();
+        let owner = test_owner_principal();
+        let mut events = hub.subscribe();
+        hub.announce_preferences("other", "about", 1);
+        let patch = events.try_recv().unwrap().outbound().clone();
+        assert!(!fanout_sends_shared_frame(&owner, &patch));
+        assert!(project_outbound(&hub, &owner, &HashSet::new(), patch).is_none());
+        hub.announce_preferences("owner", "about", 5);
+        hub.announce_preferences("owner", "about", 2);
+        let patch = events.try_recv().unwrap().outbound().clone();
+        let Some(Outbound::SyncPatch { value, .. }) =
+            project_outbound(&hub, &owner, &HashSet::new(), patch)
+        else {
+            panic!("missing preference announcement")
+        };
+        assert_eq!(value, serde_json::json!({"about":5}));
+        assert!(events.try_recv().is_err());
     }
 
     #[test]

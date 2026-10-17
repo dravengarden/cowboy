@@ -1939,6 +1939,8 @@ function handle(msg: Outbound): void {
         applyQueuePatch(msg.state.slice("queue:".length), msg.version, msg.value, msg.confirmed, resync);
         const queueSession = msg.state.slice("queue:".length);
         retireEchoedRecoveryDrafts(queueSession, state.timelines.get(queueSession) ?? []);
+      } else if (msg.state === "preferences") {
+        window.dispatchEvent(new CustomEvent("cowboy:preferences-changed", { detail: msg.value }));
       } else if (msg.state === "drafts") {
         // Independent documents converge over HTTP; this only announces which
         // ones changed so open editors merge them in without polling.

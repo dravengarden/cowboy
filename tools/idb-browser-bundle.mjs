@@ -18,7 +18,8 @@ if (
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
-  suite !== "managed-calls" && suite !== "session-maintenance"
+  suite !== "managed-calls" && suite !== "session-maintenance" &&
+  suite !== "about-layout"
 ) {
   throw new Error("unknown suite");
 }
@@ -47,7 +48,7 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "session-maintenance"
+        suite === "session-maintenance" || suite === "about-layout"
         ? "development"
         : "production",
     ),
@@ -92,7 +93,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "session-maintenance"
+        suite === "about-layout"
+          ? "../web/src/aboutLayoutBrowserConformance.tsx"
+          : suite === "session-maintenance"
           ? "../web/src/sessionMaintenanceBrowserConformance.tsx"
           : suite === "editor-plugin-sandbox"
           ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"

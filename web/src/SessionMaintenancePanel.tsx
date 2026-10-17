@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { orderedItems } from "./aboutPreferences";
 import { Alert, Box, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
 import { expectHttpOk } from "./httpResponse";
 import { lowPriorityInterval } from "./network/bandwidth";
@@ -29,7 +30,7 @@ const controls: [keyof MaintenancePolicy, string][] = [
   ["auto_update_idle_sessions", "Update idle Providers automatically"],
 ];
 
-export function SessionMaintenancePanel(): React.JSX.Element {
+export function SessionMaintenancePanel({ order = [] }: { order?: string[] } = {}): React.JSX.Element {
   const [rows, setRows] = useState<MaintenanceMachine[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
@@ -82,7 +83,7 @@ export function SessionMaintenancePanel(): React.JSX.Element {
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
       {!rows.length && !error && <Typography variant="body2">{loaded ? "No Machines enrolled." : "Loading…"}</Typography>}
-      {rows.map((row) => (
+      {orderedItems(rows, order, (row) => row.machine.id).map((row) => (
         <Stack key={row.machine.id} spacing={0.5} data-machine-resources={row.machine.id}
           sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, p: 1.25, minWidth: 0 }}>
           <Typography variant="body2" fontWeight={650}>{row.machine.display_name}</Typography>

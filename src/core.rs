@@ -1756,6 +1756,7 @@ struct HubInner {
     /// the `"drafts"` announcement state. Documents converge over HTTP; this
     /// only tells the owner's other devices which revision to fetch.
     draft_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
+    preference_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     /// One immutable frame is shared by the Web Push observer and every socket:
@@ -1945,6 +1946,7 @@ impl Hub {
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 workspace_orders: Mutex::new(HashMap::new()),
                 draft_announcements: Mutex::new(HashMap::new()),
+                preference_announcements: Mutex::new(HashMap::new()),
                 tx,
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
@@ -2184,6 +2186,26 @@ impl Hub {
     /// Announce one owner's changed draft `metadata` (no body) to that owner's
     /// devices. The live patch carries only this document; a reconnect resync
     /// carries every document announced this lifetime.
+    pub(crate) fn announce_preferences(&self, owner: &str, scope: &str, revision: i64) {
+        {
+            let mut all = self.inner.preference_announcements.lock();
+            let scopes = all.entry(owner.to_owned()).or_default();
+            if scopes
+                .get(scope)
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|old| old >= revision)
+            {
+                return;
+            }
+            scopes.insert(scope.to_owned(), revision.into());
+        }
+        self.sync_emit(
+            "preferences",
+            serde_json::json!({owner:{scope:revision}}),
+            Vec::new(),
+        );
+    }
+
     pub(crate) fn announce_draft(&self, owner: &str, metadata: serde_json::Value) {
         let Some(id) = metadata.get("id").and_then(serde_json::Value::as_str) else {
             return;
@@ -3716,6 +3738,8 @@ impl Hub {
                 .expect("workspace orders serialize"),
             "drafts" => serde_json::to_value(&*self.inner.draft_announcements.lock())
                 .expect("draft announcements serialize"),
+            "preferences" => serde_json::to_value(&*self.inner.preference_announcements.lock())
+                .expect("preference announcements serialize"),
             _ if state.starts_with("mobile-review:") => {
                 let session_id = &state["mobile-review:".len()..];
                 let sessions = self.inner.sessions.lock();
