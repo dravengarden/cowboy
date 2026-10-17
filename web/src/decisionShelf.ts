@@ -4,8 +4,7 @@
 //
 // The look: two equal columns on a plate the form scrolls UNDER, lit by the
 // colour of the decision itself — a theme-tinted hairline, an accent riser
-// fading up into the content, and a glow under the confirm button in that
-// button's own palette colour.
+// fading up into the content, and quiet, stationary press feedback shared by both choices.
 //
 // ⚠️ The plate is deliberately NOT a `box-shadow`. A wide upward shadow was
 // tried here before (`0 -8px 18px` on a 1px strip) and iOS WebKit composited it
@@ -13,16 +12,13 @@
 // `fix(mobile): flatten new session action footer` and the guard in
 // MobileDecisionActions.test.ts. A gradient is ordinary paint with no
 // shadow/backdrop-filter compositing interaction, so it cannot regress that way,
-// and it fades softer than a shadow anyway. The confirm button keeps a REAL
-// shadow because a small opaque button is the ordinary shadow case (and MUI
-// already ships elevation there); the app-wide `disableElevation` default means
-// this glow stays scoped to the decision shelf and nowhere else.
+// and it fades softer than a shadow anyway. Button feedback is paint-only.
 import { alpha, type Theme } from "@mui/material/styles";
 
 /** How far the accent riser reaches up into the scrolling body. */
 export const DECISION_RISER_PX = 22;
 
-/** Accent glow + press physics for whatever buttons a caller puts on the shelf.
+/** Quiet, shadow-free form variant; press feedback comes from decisionActionEmphasis.
  *  Selectors are doubled so this wins over MUI's own contained/text rules
  *  regardless of stylesheet order — `actions` children come from foreign
  *  call sites (ConfirmSheet's NetworkButton), not just this module's JSX. */
@@ -54,62 +50,38 @@ export function flatDecisionShelf(t: Theme): Record<string, unknown> {
 
 export function decisionActionEmphasis(t: Theme): Record<string, unknown> {
   const dark = t.palette.mode === "dark";
-  // The glow is the BUTTON's colour, not the app accent. A destructive confirm
-  // lit purple was the tell that the lift was decoration rather than meaning;
-  // Clear now rises in red, so the elevation carries the same warning the fill
-  // does.
-  const lift = (color: string): Record<string, unknown> => ({
-    // Tight geometry on purpose: the glow hugs the button instead of washing
-    // the strip, which is what makes it read as LIFTED rather than blurry.
-    boxShadow: `0 6px 16px -8px ${alpha(color, dark ? 0.9 : 0.55)}, ` +
-      `0 2px 6px -4px ${alpha(color, dark ? 0.7 : 0.4)}`,
-    transition: t.transitions.create(["box-shadow", "transform"], {
-      duration: t.transitions.duration.shortest,
-    }),
-    "&:active": {
-      // Press = settle onto the surface. The pair (shadow collapses AND the cap
-      // moves down 1px) is what sells contact; either alone reads as a colour
-      // change.
-      boxShadow: `0 1px 4px -3px ${alpha(color, dark ? 0.8 : 0.5)}`,
-      transform: "translateY(1px)",
-    },
-    // An unavailable action must not advertise depth it cannot deliver.
-    "&.Mui-disabled": { boxShadow: "none", transform: "none" },
-    "@media (prefers-reduced-motion: reduce)": { transition: "none" },
-  });
   return {
-    // Two choices read as two columns, not two islands with a void between
-    // them. Equal halves fill the row, enlarge both targets, and stop the
-    // confirm from looking like an afterthought pinned to the edge.
-    "& > .MuiButton-root": {
-      flex: 1,
-      // One thumb-sized target each. Left to MUI's defaults the pair could end
-      // up a text button and a contained button at two different heights.
-      "@media (pointer: coarse)": { minHeight: 44 },
+    "& > .MuiButton-root": { flex: 1, minWidth: 0, minHeight: 44 },
+    // Stable targets: feedback changes paint, never position, scale or shadow.
+    // Both choices use the same 120ms state layer, including the flat variant.
+    "& .MuiButton-root.MuiButton-root": {
+      position: "relative",
+      boxShadow: "none",
+      transform: "none",
+      overflowWrap: "anywhere",
+      transition: "background-color 120ms ease-out, color 120ms ease-out",
+      // The shared state layer replaces ripple on both pointer models.
+      "& .MuiTouchRipple-root": { display: "none" },
+      "&:hover, &:active, &.Mui-disabled": { boxShadow: "none", transform: "none" },
+      "&::after": {
+        content: '""',
+        position: "absolute",
+        inset: 0,
+        borderRadius: "inherit",
+        pointerEvents: "none",
+        backgroundColor: "currentColor",
+        opacity: 0,
+        transition: "opacity 120ms ease-out",
+      },
+      "&:active:not(.Mui-disabled)::after, &[data-decision-pressed]:not(.Mui-disabled)::after": { opacity: 0.12, transitionDuration: "60ms" },
+      "&.Mui-focusVisible": { outline: `2px solid ${t.palette.primary.main}`, outlineOffset: 2 },
+      "@media (prefers-reduced-motion: reduce)": {
+        transition: "none",
+        "&::after": { transition: "none" },
+      },
     },
-    "& .MuiButton-contained.MuiButton-contained": lift(t.palette.primary.main),
-    "& .MuiButton-containedError.MuiButton-containedError": lift(
-      t.palette.error.main,
-    ),
-    "& .MuiButton-containedWarning.MuiButton-containedWarning": lift(
-      t.palette.warning.main,
-    ),
-    "& .MuiButton-containedSuccess.MuiButton-containedSuccess": lift(
-      t.palette.success.main,
-    ),
-    "& .MuiButton-containedInfo.MuiButton-containedInfo": lift(
-      t.palette.info.main,
-    ),
-    "& .MuiButton-containedSecondary.MuiButton-containedSecondary": lift(
-      t.palette.secondary.main,
-    ),
-    // The quiet half of the pair: a tonal pill, so Cancel is still one of two
-    // controls rather than stray text next to a button.
     "& .MuiButton-text.MuiButton-text": {
       backgroundColor: alpha(t.palette.text.primary, dark ? 0.08 : 0.05),
-      "&:active": {
-        backgroundColor: alpha(t.palette.text.primary, dark ? 0.14 : 0.09),
-      },
       "&.Mui-disabled": { backgroundColor: "transparent" },
     },
   };

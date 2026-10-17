@@ -3437,6 +3437,7 @@ export function CreateDialog({
                             onConfirm={create}
                             confirmDisabled={!canCreate}
                             confirmBusy={creating}
+                            keyboardOpen={keyboardOpen}
                             preserveFocus
                         />
                     </Box>
