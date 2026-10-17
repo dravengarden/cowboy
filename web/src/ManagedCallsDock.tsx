@@ -859,25 +859,30 @@ function CallPreview({ call, onOpen }: {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOpen);
   const active = callActive(call.state);
   const tone = callTone(call.state);
+  const title = (call.labels["title"] || call.labels["aspect"] || call.purpose).replace(/[-_]/g, " ");
+  const end = active ? Date.now() : call.updated_at_ms;
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${displayTitle(call)}: ${callStateLabel(call)}`}
       sx={{
-        flex: "0 0 8.5rem", minWidth: 0, minHeight: 44, px: 1, py: 0.5,
-        borderLeft: 1, borderColor: "divider", textAlign: "left",
+        flex: "1 0 9rem", minWidth: 0, minHeight: 44, px: 1, py: 0.75,
+        borderRadius: 1, bgcolor: "action.hover", textAlign: "left",
         justifyContent: "flex-start",
         "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
       }}
     >
       <Stack spacing={0.25} sx={{ minWidth: 0, width: "100%" }}>
-        <Typography variant="caption" noWrap sx={{ fontWeight: 600 }}>{displayTitle(call)}</Typography>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+          <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
+          <Typography variant="caption" noWrap sx={{ fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+        </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-          {active ? <CircularProgress size="0.75rem" /> : <ProviderIcon provider={call.provider} sx={{ fontSize: "0.75rem" }} />}
+          {active && <CircularProgress size="0.6875rem" />}
           <Typography variant="caption" noWrap sx={{
             color: tone === "error" ? "error.main" : active ? "primary.main" : "text.secondary",
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
           }}>
-            {callStateLabel(call)} · {elapsedLabel(call.created_at_ms, active ? Date.now() : call.updated_at_ms)}
+            {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
         </Stack>
       </Stack>
@@ -898,7 +903,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
     return rank(a) - rank(b) || b.created_at_ms - a.created_at_ms;
   });
   return (
-    <Stack direction="row" alignItems="stretch" sx={{ minWidth: 0 }}>
+    <Stack direction="row" alignItems="stretch" sx={{ minWidth: 0, gap: 0.5, py: 0.5 }}>
       <ButtonBase {...tap} aria-label="Open calls" sx={{ flexShrink: 0, px: 1, minHeight: 44 }}>
         <Stack alignItems="center" spacing={0.25}>
           <Typography variant="caption" sx={{ fontWeight: 600 }}>Calls</Typography>
@@ -908,7 +913,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
         </Stack>
       </ButtonBase>
       <Box data-call-preview-rail data-mobile-drawer-ignore role="group" aria-label="Call previews"
-        sx={{ display: "flex", minWidth: 0, flex: 1, overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "thin" }}>
+        sx={{ display: "flex", minWidth: 0, flex: 1, gap: 0.5, overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
         {ordered.map((call) => <CallPreview key={call.call_id} call={call} onOpen={() => onOpen(call.call_id)} />)}
       </Box>
     </Stack>
@@ -1000,7 +1005,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             transition: "background-color 120ms ease, border-color 120ms ease",
             "&:focus-within": { borderColor: "primary.main" },
           }
-          : { ...mobileComposerPanelFrameSx, bgcolor: "background.default" }),
+          : { ...mobileComposerPanelFrameSx, border: 0, bgcolor: "transparent" }),
         mb: desktop ? 0.5 : 0,
         // Own the text color and typography: rows and details are rendered in
         // ButtonBase/Sheet surfaces that would otherwise inherit the page's.
