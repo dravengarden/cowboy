@@ -431,15 +431,25 @@ dispatcher.
    copied over remote call launches. Queue mutation still needs a durable
    receipt tied atomically to dispatch/CAS; queue reads remain available.
 2. **Automatic delivery (implemented in candidate Provider releases).** Ordinary
-   Codex and Claude sessions register the reserved `cowboy` MCP name without
-   changing user configuration or copying gateway credentials. Local sessions
-   inherit `COWBOY_CALL_CONTEXT`; Codex Remote uses native MCP `environment_id`,
-   and Claude Remote uses its existing target MCP relay. Managed children omit
-   registration and retain their existing read-only isolation. Every operation
-   still requires the live core grant. Publishing these Plugin versions is
-   separate from installing them on a Machine; existing sessions retain their
-   pinned generation. The CLI review guidance remains until measured
-   complete-flow acceptance justifies replacing it.
+   Codex and Claude sessions register the session Cowboy MCP without changing
+   user configuration or copying gateway credentials. Local sessions inherit
+   `COWBOY_CALL_CONTEXT`; Codex Remote uses native MCP `environment_id`, and
+   Claude Remote uses its existing target MCP relay. Codex asks native for
+   configured server names once and uses `cowboy`, or a free `cowboy_session`
+   suffix when that name exists; it disables the old reserved `cowboy` entry for
+   this process so native table merging cannot retain its URL or wiring.
+   The pinned native CLI restarts its `mcp-stdio-N` process counter after a cold
+   resume; the target executor retains those IDs. A bounded authenticated
+   loopback relay namespaces only these temporary MCP handles per native process,
+   retaining the namespace across transport reconnects. Other process handles,
+   effect requests and recovery remain native-owned. Remove this compatibility
+   layer when the native MCP launcher allocates IDs unique across cold resumes.
+   Claude's native session override replaces the reserved name. Managed children
+   omit registration and retain their existing read-only isolation. Every
+   operation still requires the live core grant. Publishing these Plugin
+   versions is separate from installing them on a Machine; existing sessions
+   retain their pinned generation. The CLI review guidance remains until
+   measured complete-flow acceptance justifies replacing it.
 3. **Cross-session actions.** `sessions.prompt` and `sessions.new` (off by
    default, approved like calls), project listing and `cowboy logs` queries.
 

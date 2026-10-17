@@ -41,15 +41,21 @@ def complete_turn(client, thread, prompt="Run the fixture."):
 
 def cowboy_mcp_connected(client, thread, require_tools=False):
     inventory = client.request("mcpServerStatus/list", {"threadId": thread})
-    server = next((item for item in inventory["data"] if item["name"] == "cowboy"), {})
+    server = next((item for item in inventory["data"]
+                   if (item.get("serverInfo") or {}).get("name") == "cowboy"), {})
     advertised = {tool["name"] for tool in (server.get("tools") or {}).values()}
     expected = {"cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt"}
+    observed = [{"name": item["name"], "status": item.get("runtimeStatus"),
+                 "server": (item.get("serverInfo") or {}).get("name"),
+                 "error": item.get("toolsError"),
+                 "tools": [tool["name"] for tool in (item.get("tools") or {}).values()]}
+                for item in inventory["data"]]
     require((server.get("serverInfo") or {}).get("name") == "cowboy"
             and server.get("runtimeStatus") == "connected"
             and server.get("toolsError") is None
             and (advertised == expected if require_tools else advertised in (set(), expected))
             and server.get("httpOrigin") is None,
-            "automatic Cowboy MCP did not connect with its compact surface")
+            "automatic Cowboy MCP did not connect with its compact surface: " + json.dumps(observed)[:3000])
 
 
 def main():

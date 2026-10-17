@@ -17,14 +17,36 @@ test("Cowboy MCP follows native execution placement without copying credentials"
   assert.deepEqual(agentApiConfiguration(), []);
   const remote = agentApiConfiguration({
     environmentId: "fixture-target",
+    cwd: "/target/project",
     callContext: "/runtime/must-not-copy",
   });
   assert.match(remote[1], /environment_id="fixture-target"/);
+  assert.match(remote[1], /cwd="\/target\/project"/);
+  assert.match(remote[1], /env=\{COWBOY_CALL_CONTEXT=""\}/);
   assert.doesNotMatch(remote[1], /runtime\/must-not-copy|env_vars/);
   const local = agentApiConfiguration({ callContext: "/private/context" });
   assert.match(local[1], /env_vars=\["COWBOY_CALL_CONTEXT"\]/);
   assert.doesNotMatch(local[1], /private\/context|environment_id/);
   assert.match(local[1], /command="cowboy",args=\["mcp"\]/);
+  assert.throws(
+    () => agentApiConfiguration({ environmentId: "target" }),
+    /working directory/,
+  );
+});
+
+test("Cowboy MCP avoids native table merges with existing server configuration", () => {
+  const args = agentApiConfiguration({
+    environmentId: "target",
+    cwd: "/project",
+    servers: ["cowboy", "cowboy_session", "cowboy_session_2", "other"],
+  });
+  assert.deepEqual(args.slice(0, 2), [
+    "-c",
+    "mcp_servers.cowboy.enabled=false",
+  ]);
+  assert.match(args[3], /^mcp_servers.cowboy_session_3=\{/);
+  assert.doesNotMatch(args.join(" "), /mcp_servers.other|\.url=|\.env=/);
+  assert.deepEqual(agentApiConfiguration({ servers: ["cowboy"] }), []);
 });
 
 test("managed profile refuses sandbox-bypassing allow rules", () => {

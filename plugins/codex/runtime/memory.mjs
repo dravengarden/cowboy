@@ -1,6 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { namespaceMcpProcesses } from "./execution-mcp.mjs";
 // The runtime build rewrites only this file's package import, so the
 // launcher reaches the memory client through these re-exports.
 import {
@@ -14,14 +18,36 @@ export { callGuidance, memoryConfiguration, sessionExtensions };
 
 // Core MCP uses the parent's gateway on the execution target. Native Codex
 // owns environment placement; no runtime-host command or copied credential.
-export function agentApiConfiguration({ environmentId, callContext } = {}) {
+export function agentApiConfiguration(
+  { environmentId, cwd, callContext, servers = [] } = {},
+) {
   if (!environmentId && !callContext) return [];
+  if (environmentId && (typeof cwd !== "string" || !cwd.startsWith("/"))) {
+    throw new Error("Remote Cowboy MCP requires its target working directory");
+  }
+  // Native config layers merge tables, including obsolete URL/env fields.
+  // Use a fresh name instead of mixing transports or inheriting stale wiring.
+  const names = new Set(servers);
+  let name = "cowboy";
+  const configuration = [];
+  if (names.has(name)) {
+    configuration.push("-c", "mcp_servers.cowboy.enabled=false");
+    name = "cowboy_session";
+    for (let suffix = 2; names.has(name); suffix++) {
+      name = `cowboy_session_${suffix}`;
+    }
+  }
+  // An executor MCP needs an explicit target cwd. The empty context slot makes
+  // native send an env object; the keeper replaces it with its own wiring.
   const placement = environmentId
-    ? `environment_id=${JSON.stringify(environmentId)}`
+    ? `environment_id=${JSON.stringify(environmentId)},cwd=${
+      JSON.stringify(cwd)
+    },env={COWBOY_CALL_CONTEXT=""}`
     : 'env_vars=["COWBOY_CALL_CONTEXT"]';
   return [
+    ...configuration,
     "-c",
-    `mcp_servers.cowboy={command="cowboy",args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
+    `mcp_servers.${name}={command="cowboy",args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
   ];
 }
 
@@ -73,18 +99,60 @@ async function send(stream, message) {
 
 export async function memoryNative(args) {
   const execution = await import("./cowboy-execution.mjs");
-  const config = await memoryConfiguration("codex");
+  const original = process.env.COWBOY_EXECUTION_DESCRIPTOR;
   const descriptor = process.env.COWBOY_EXECUTION_DESCRIPTOR
     ? await execution.readExecutionDescriptor(
       process.env.COWBOY_EXECUTION_DESCRIPTOR,
     )
     : undefined;
+  if (!descriptor) return await runNative(args, execution);
+  const relay = await namespaceMcpProcesses(descriptor);
+  let directory;
+  try {
+    directory = await mkdtemp(join(tmpdir(), "cowboy-codex-mcp-"));
+    const path = join(directory, "execution.json");
+    await writeFile(path, JSON.stringify(relay.descriptor), { mode: 0o600 });
+    process.env.COWBOY_EXECUTION_DESCRIPTOR = path;
+    return await runNative(args, execution, descriptor);
+  } finally {
+    process.env.COWBOY_EXECUTION_DESCRIPTOR = original;
+    relay.close();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function runNative(args, execution, descriptor) {
+  const config = await memoryConfiguration("codex");
   const configuration = JSON.parse(
     process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS ?? "[]",
   );
+  let servers = [];
+  if (descriptor || process.env.COWBOY_CALL_CONTEXT) {
+    // Ask native to resolve its configuration; keep credentials/config files
+    // where they belong and retain only server names from the bounded reply.
+    const listing = spawnSync(
+      process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE,
+      [...configuration, "mcp", "list", "--json"],
+      { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
+    );
+    if (listing.status !== 0) {
+      throw new Error("Cowboy MCP could not enumerate native server names");
+    }
+    const entries = JSON.parse(listing.stdout);
+    if (
+      !Array.isArray(entries) ||
+      entries.some((entry) => typeof entry?.name !== "string")
+    ) {
+      throw new Error("Cowboy MCP received an invalid native server list");
+    }
+    servers = entries.map((entry) => entry.name);
+    if (config?.tools) servers.push(config.server);
+  }
   configuration.push(...agentApiConfiguration({
     environmentId: descriptor?.binding.environment.id,
+    cwd: descriptor?.binding.workspace.cwd,
     callContext: process.env.COWBOY_CALL_CONTEXT,
+    servers,
   }));
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (!config) return await execution.main(args);

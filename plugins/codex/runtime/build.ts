@@ -3,6 +3,7 @@
 import { readdirSync } from "node:fs";
 import {
   copyFile,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -90,6 +91,12 @@ for (const key of ["TMPDIR", "TMP", "TEMP"]) buildEnvironment[key] = temporary;
 const matrixPath = `${output}/runtime-artifacts.json`;
 let bindingComplete = false;
 try {
+  const glue = `${stage}/glue`;
+  await mkdir(glue);
+  for (const name of ["package.json", "package-lock.json"]) {
+    await copyFile(`${root}/${name}`, `${glue}/${name}`);
+  }
+  await run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], glue);
   const sourceRoot = `${stage}/source`;
   await mkdir(sourceRoot);
   await run("tar", ["-xzf", archive, "--strip-components=1", "-C", sourceRoot]);
@@ -147,6 +154,13 @@ try {
       `${targetRoot}/app/cowboy-launch.mjs`,
     );
     await copyFile(
+      `${root}/execution-mcp.mjs`,
+      `${targetRoot}/app/execution-mcp.mjs`,
+    );
+    await cp(`${glue}/node_modules/ws`, `${targetRoot}/app/node_modules/ws`, {
+      recursive: true,
+    });
+    await copyFile(
       `${repository}/components/provider-runtime/packages/codex-acp/launch.mjs`,
       `${targetRoot}/app/cowboy-execution.mjs`,
     );
@@ -168,6 +182,10 @@ try {
       patch_sha256: await sha256(`${root}/adapter.patch`),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
       memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
+      mcp_process_bridge_sha256: await sha256(
+        `${targetRoot}/app/execution-mcp.mjs`,
+      ),
+      glue_lock_sha256: await sha256(`${root}/package-lock.json`),
       memory_client_sha256: await sha256(`${targetRoot}/app/matrix-client.mjs`),
       execution_bridge_sha256: await sha256(
         `${targetRoot}/app/cowboy-execution.mjs`,
