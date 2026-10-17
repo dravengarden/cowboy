@@ -27,7 +27,6 @@ use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
-mod review_defaults;
 pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
 mod product_permissions;
 pub(crate) use product_permissions::ProductPermissionObservation;
@@ -969,12 +968,6 @@ struct MobileReviewPosition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MobileReviewState {
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::review_directory::deserialize_override"
-    )]
-    directory: Option<Option<String>>,
     // Preserve opaque settings when an older Controller reads and rewrites
     // state produced by a newer release. Mutations remain a closed protocol.
     #[serde(default, flatten)]
@@ -1002,7 +995,6 @@ fn default_mobile_review_mode() -> String {
 impl Default for MobileReviewState {
     fn default() -> Self {
         Self {
-            directory: None,
             future: std::collections::BTreeMap::new(),
             remote_review: None,
             remote_selected: false,
@@ -1018,14 +1010,6 @@ impl Default for MobileReviewState {
 impl MobileReviewState {
     fn from_stored(value: serde_json::Value) -> Self {
         let mut state = serde_json::from_value::<Self>(value).unwrap_or_default();
-        if state
-            .directory
-            .as_ref()
-            .and_then(Option::as_deref)
-            .is_some_and(|value| !crate::review_directory::valid(value))
-        {
-            state.directory = None;
-        }
         if state
             .remote_review
             .as_ref()
@@ -1816,9 +1800,6 @@ struct HubInner {
     /// Per-state arbiters for the generic optimistic-sync channel, keyed by
     /// state name (`"title"`, `"order"`, …). See [`SyncArbiter`].
     sync: Mutex<HashMap<String, SyncArbiter>>,
-    /// Serialize read/compare/apply and ordered write-behind snapshots.
-    sync_apply_gate: Mutex<()>,
-    review_default_receipts: Mutex<review_defaults::Receipts>,
     /// Monotonic source of queued/draft message ids (`q1`, `q2`, …). Seeded from
     /// the wall-clock-free counter; uniqueness across a daemon lifetime is all
     /// that's required (ids are list-local keys, not persisted-across-restart
@@ -1993,8 +1974,6 @@ impl Hub {
                 dispatch_tx: Mutex::new(None),
                 scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
-                sync_apply_gate: Mutex::new(()),
-                review_default_receipts: Mutex::new(review_defaults::Receipts::default()),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
             }),
@@ -3617,25 +3596,6 @@ impl Hub {
                 .ok_or_else(|| "unknown mobile review session".to_owned())?;
             let state = &mut session.mobile_review;
             match mutation {
-                "setDirectory" => {
-                    state.directory = if args.get("inherit") == Some(&serde_json::Value::Bool(true))
-                    {
-                        if args.get("directory").is_some() {
-                            return Err("inherit cannot also set a directory".into());
-                        }
-                        None
-                    } else {
-                        match args.get("directory") {
-                            Some(serde_json::Value::Null) => Some(None),
-                            Some(serde_json::Value::String(value))
-                                if crate::review_directory::valid(value) =>
-                            {
-                                Some(Some(value.clone()))
-                            }
-                            _ => return Err("invalid Zed default directory".into()),
-                        }
-                    };
-                }
                 "setRemoteReview" => {
                     let binding = match args.get("binding") {
                         Some(serde_json::Value::Null) => None,
@@ -3917,18 +3877,6 @@ impl Hub {
         name: &str,
         args: &serde_json::Value,
     ) -> Result<(), String> {
-        let _guard = self.inner.sync_apply_gate.lock();
-        self.sync_apply_as_locked(actor, state, id, name, args)
-    }
-
-    fn sync_apply_as_locked(
-        &self,
-        actor: &crate::session_folders::FolderActor,
-        state: &str,
-        id: String,
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Result<(), String> {
         enum Op {
             WorkspaceOrder {
                 owner: String,
@@ -4043,7 +3991,6 @@ impl Hub {
                 if !matches!(
                     name,
                     "open"
-                        | "setDirectory"
                         | "setRemoteReview"
                         | "selectRemoteReview"
                         | "close"
@@ -4064,7 +4011,7 @@ impl Hub {
             }
             _ => return Err(format!("unknown sync mutation {state}/{name}")),
         };
-        if self.sync_already_seen(state, &id) {
+        if !self.sync_first_seen(state, &id) {
             // Duplicate delivery/retry: already applied. Confirm it again so a
             // client that missed the original patch retires its outbox entry.
             self.sync_broadcast(state, vec![id]);
@@ -4101,7 +4048,6 @@ impl Hub {
         // Op-log: the client INTENT behind a state change (who/what), paired with
         // the `op=change` line sync_emit writes for the authoritative version bump.
         tracing::info!(target: "cowboy::oplog", op = "mutation", %state, name, args = %args);
-        self.sync_first_seen(state, &id);
         self.sync_broadcast(state, vec![id]);
         Ok(())
     }
@@ -7860,129 +7806,6 @@ mod core_tests {
         assert_eq!(
             value["positions"]["strategies/README.md"]["revision"],
             "abc123"
-        );
-    }
-
-    #[test]
-    fn review_directory_overrides_persist_null_and_inherit_without_touching_execution() {
-        let hub = hub_with_session("zed-defaults");
-        let state = "mobile-review:zed-defaults";
-        for (index, args) in [
-            serde_json::json!({"directory":"workspace::hawk::cowboy"}),
-            serde_json::json!({"directory":null}),
-            serde_json::json!({"inherit":true}),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            hub.sync_apply(state, format!("zed-{index}"), "setDirectory", &args)
-                .unwrap();
-            let value = hub.sync_value(state);
-            let restored = super::MobileReviewState::from_stored(value.clone());
-            assert_eq!(serde_json::to_value(restored).unwrap(), value);
-            assert_eq!(value.get("directory"), args.get("directory"));
-            assert_eq!(hub.session_info("zed-defaults").unwrap().meta.cwd, "/tmp");
-        }
-        assert!(
-            hub.sync_apply(
-                state,
-                "retry-invalid".into(),
-                "setDirectory",
-                &serde_json::json!({"directory":"/etc"})
-            )
-            .is_err()
-        );
-        // A rejected mutation must not burn the id and acknowledge a later retry.
-        assert!(
-            hub.sync_apply(
-                state,
-                "retry-invalid".into(),
-                "setDirectory",
-                &serde_json::json!({"directory":"/etc"})
-            )
-            .is_err()
-        );
-        hub.sync_apply(
-            state,
-            "retry-invalid".into(),
-            "setDirectory",
-            &serde_json::json!({"directory":"project"}),
-        )
-        .unwrap();
-        assert_eq!(hub.sync_value(state)["directory"], "project");
-    }
-
-    #[test]
-    fn review_directory_agent_compare_replay_and_owner_scope() {
-        use crate::session_folders::FolderActor;
-        let hub = hub_with_session("zed-agent");
-        let actor = FolderActor::local();
-        let mut input: crate::review_directory::Change = serde_json::from_value(
-            serde_json::json!({"scope":"zed","expected":{},"change":{"directory":"project"}}),
-        )
-        .unwrap();
-        hub.review_directory_update(&actor, "zed-agent", "one", &input)
-            .unwrap();
-        hub.review_directory_update(&actor, "zed-agent", "one", &input)
-            .unwrap();
-        assert!(hub.review_default_receipt("one"));
-        let remembered = std::mem::take(&mut *hub.inner.review_default_receipts.lock());
-        assert_eq!(
-            hub.review_directory_update(&actor, "zed-agent", "one", &input),
-            Err("receipt_expired")
-        );
-        *hub.inner.review_default_receipts.lock() = remembered;
-        assert_eq!(
-            hub.review_directory_update(&actor, "zed-agent", "two", &input),
-            Err("revision_conflict")
-        );
-        input.change = serde_json::json!({"directory":null});
-        assert_eq!(
-            hub.review_directory_update(&actor, "zed-agent", "one", &input),
-            Err("operation_conflict")
-        );
-        input.expected = serde_json::json!({"directory":"project"});
-        assert_eq!(
-            hub.review_directory_update(
-                &FolderActor {
-                    user_id: Some("other".into()),
-                    sees_all: false
-                },
-                "zed-agent",
-                "two",
-                &input
-            ),
-            Err("permission_denied")
-        );
-        hub.review_directory_update(&actor, "zed-agent", "two", &input)
-            .unwrap();
-        hub.sync_apply(
-            "folders",
-            "folder-create".into(),
-            "create",
-            &serde_json::json!({"id":"zed-folder","name":"Zed"}),
-        )
-        .unwrap();
-        input.folder_id = Some("zed-folder".into());
-        input.expected = serde_json::json!({});
-        hub.review_directory_update(&actor, "zed-agent", "three", &input)
-            .unwrap();
-        assert_eq!(
-            hub.folder_defaults(&actor, "zed-folder").unwrap().values
-                [&crate::session_folders::defaults::DefaultKey::ReviewDirectory],
-            None
-        );
-        assert!(
-            hub.review_directory_update(
-                &FolderActor {
-                    user_id: Some("other".into()),
-                    sees_all: false
-                },
-                "zed-agent",
-                "four",
-                &input
-            )
-            .is_err()
         );
     }
 

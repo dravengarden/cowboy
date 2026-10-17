@@ -19,10 +19,10 @@ test("review sheets portal off the product-pager containing block", () => {
   assertStringIncludes(symbolsSheet, "portal");
   assertStringIncludes(symbolsSheet, 'mobileDismiss="footer"');
   const contextAt = source.indexOf(
-    'open={sessionSwitcherOpen}',
+    'title={selectedContextProject?.label ?? "Context"}',
   );
   assertEquals(contextAt >= 0, true);
-  assertStringIncludes(source.slice(contextAt, contextAt + 320), "portal");
+  assertStringIncludes(source.slice(contextAt, contextAt + 180), "portal");
 });
 
 test("symbol navigation disables actions without destinations", () => {
@@ -107,12 +107,12 @@ test("session context list consumes duplicate floating-footer clearance", () => 
 test("project targets do not inherit worktree-only labels", () => {
   assertStringIncludes(
     source,
-    'const contextLabel = projectCodeContext ? projectCodeContext.kind ?? "Project code" : sessionLocation?.kind ?? "Worktree";',
+    'const contextLabel = projectCodeContext ? "Project code" : sessionLocation?.kind ?? "Worktree";',
   );
-  assertStringIncludes(source, "Open context. Current ${contextLabel.toLowerCase()}");
+  assertStringIncludes(source, "Open context. Current project code");
   assertStringIncludes(
     source,
-    "`${contextLabel} · ${projectCodeContext.project}`",
+    "`Project code · ${projectCodeContext.project}`",
   );
   assertStringIncludes(treeSource, 'contextLabel = "Worktree"');
   assertStringIncludes(treeSource, "{contextLabel}");

@@ -1,5 +1,4 @@
 import type { SessionFoldersValue } from "./sessionFolders";
-import { validReviewDirectory } from "./reviewDirectoryIdentity";
 
 export const FOLDER_DEFAULT_FIELDS = {
   project: "Project",
@@ -7,7 +6,6 @@ export const FOLDER_DEFAULT_FIELDS = {
   runtime_machine: "Run agent on",
   provider: "Agent",
   preset: "Model and reasoning preset",
-  review_directory: "Zed default directory",
 } as const;
 export type FolderDefaultKey = keyof typeof FOLDER_DEFAULT_FIELDS;
 export type FolderDefaults = Partial<Record<FolderDefaultKey, string | null>>;
@@ -19,7 +17,6 @@ export function validFolderDefaults(values: unknown): values is FolderDefaults {
   return Object.entries(values).every(([key, value]) => {
     if (!Object.hasOwn(FOLDER_DEFAULT_FIELDS, key)) return false;
     if (value === null) return true;
-    if (key === "review_directory") return validReviewDirectory(value);
     if ((key === "machine" || key === "runtime_machine") && value === "local") {
       return false;
     }

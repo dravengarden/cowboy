@@ -9,12 +9,10 @@ import {
 import { ExpandLess, ExpandMore, Tune } from "@mui/icons-material";
 import { FolderDefaultsEditor } from "./FolderDefaultsEditor";
 import {
-  FOLDER_DEFAULT_FIELDS,
   type FolderDefaultKey,
   type FolderDefaults,
   resolveFolderDefaults,
 } from "./folderDefaults";
-import { reviewDirectoryLabel } from "./reviewDirectoryDefault";
 import { sessionFolderById, type SessionFoldersValue } from "./sessionFolders";
 import { directoryProjects } from "./directoryProjects";
 import {
@@ -23,7 +21,6 @@ import {
 } from "./providerCatalog";
 import type { MachineSummary } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
-import { useStoreSelector } from "./store";
 
 /** The create draft never enters the shared store until the one create mutation. */
 export function FolderCreationDefaults({
@@ -54,7 +51,6 @@ export function FolderCreationDefaults({
   error?: string;
 }): React.JSX.Element {
   const id = useId();
-  const sessions = useStoreSelector((state) => state.sessions);
   const desktop = useSurfaceProfile().kind === "desktop";
   const section = useRef<HTMLDivElement>(null);
   const preview: SessionFoldersValue = {
@@ -87,11 +83,6 @@ export function FolderCreationDefaults({
     preset?.name ?? effective.preset,
     effective.runtime_machine
       ? `Agent on ${machineName(effective.runtime_machine)}`
-      : null,
-    effective.review_directory !== undefined
-      ? `Zed: ${
-        reviewDirectoryLabel(effective.review_directory, machines, sessions)
-      }`
       : null,
   ].filter(Boolean).join(" · ");
   const count = Object.keys(defaults).length;
@@ -158,7 +149,7 @@ export function FolderCreationDefaults({
                   </Box>
                 )}
                 <Box component="span" sx={{ display: "block" }}>
-                  {count === Object.keys(FOLDER_DEFAULT_FIELDS).length
+                  {count === 5
                     ? "All settings chosen for this folder"
                     : count
                     ? `Other settings: ${inheritance.toLowerCase()}`

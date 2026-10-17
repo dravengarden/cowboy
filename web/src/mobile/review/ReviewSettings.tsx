@@ -17,7 +17,6 @@ import {
   useReviewLanguageCapabilities,
   useReviewSettings,
 } from "./reviewSettings";
-import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 
 function SettingToggle({
   label,
@@ -71,7 +70,6 @@ export function ReviewSettingsContent({
   const capabilities = language ?? publishedLanguage;
   return (
     <Stack spacing={3}>
-      <ReviewDirectorySetting />
       <Stack spacing={2}>
         <Typography variant="overline" color="text.secondary">
           Code display

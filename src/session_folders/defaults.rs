@@ -12,7 +12,6 @@ pub enum DefaultKey {
     Provider,
     /// Provider-qualified preset identity: `provider/preset`.
     Preset,
-    ReviewDirectory,
 }
 
 pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
@@ -66,12 +65,6 @@ pub fn parse(value: &serde_json::Value) -> Result<FolderDefaults, String> {
         .map_err(|error| format!("invalid directory defaults: {error}"))?;
     for (key, value) in &defaults {
         if let Some(value) = value {
-            if *key == DefaultKey::ReviewDirectory {
-                if !crate::review_directory::valid(value) {
-                    return Err("invalid Zed default directory identity".into());
-                }
-                continue;
-            }
             if matches!(key, DefaultKey::Machine | DefaultKey::RuntimeMachine) && value == "local" {
                 return Err("directory defaults require an enrolled Machine id, not the legacy local sentinel".into());
             }
