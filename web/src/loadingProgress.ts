@@ -6,6 +6,7 @@ const spokes = [1, 0.24, 0.32, 0.4, 0.5, 0.62, 0.75, 0.88].map((opacity, index) 
   `<path d="M12 3.5v3.5" transform="rotate(${index * 45} 12 12)" opacity="${opacity}"/>`
 ).join("");
 const activityMask = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">${spokes}</g></svg>`)}")`;
+const sessionActivityMask = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" fill="white"/><circle cx="8" cy="8" r="6.25" fill="none" stroke="white" stroke-width="1.5" opacity=".55"/></svg>')}")`;
 
 /** Loading glyphs scale with global text on both touch and Desktop. MUI sets
  * size inline, so these two dimensions intentionally override its pixel style.
@@ -43,6 +44,25 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           WebkitMaskImage: activityMask,
           maskSize: "100% 100%",
           maskRepeat: "no-repeat",
+        },
+        // Persistent session activity needs a quiet, legible status mark at
+        // toolbar sizes. Keep its core and outline visible throughout the
+        // breath; the outline distinguishes active from idle without motion.
+        '&[data-session-activity="true"]': {
+          animationName: "cowboy-session-breathe",
+          animationDuration: "1800ms",
+          animationTimingFunction: "ease-in-out",
+          "@keyframes cowboy-session-breathe": {
+            "0%, 100%": { opacity: 0.6 },
+            "50%": { opacity: 1 },
+          },
+          "&::before": {
+            maskImage: sessionActivityMask,
+            WebkitMaskImage: sessionActivityMask,
+          },
+          "@media (prefers-reduced-motion: reduce)": {
+            animation: "none",
+          },
         },
         "@media (prefers-reduced-motion: reduce)": {
           animation: "none",

@@ -11,12 +11,12 @@ import {
 } from "./backgroundActivity";
 import { desktopSize } from "./surface/desktopSize";
 
-// Status is shown as a single color-coded dot/spinner (no text label), so the
+// Status is shown as a single color-coded activity mark (no text label), so the
 // hue has to carry the whole meaning. The palette tokens are chosen so the
 // colors read the same here and in any future status surface:
 //   green (success)       — live:     running (idle, ready) or busy (a turn in
-//                                      flight). busy renders the green as a spinner.
-//   blue  (info)          — starting:  process spinning up, not ready yet (spinner).
+//                                      flight). busy adds a breathing outline.
+//   blue  (info)          — starting:  process spinning up, not ready yet (breathing).
 //   grey  (text.disabled) — dormant:   exited cleanly + resumable — "asleep, wakes
 //                                       on resume". Deliberately NOT a warning hue.
 //   amber (warning)       — interrupted: a turn was cut off by a daemon restart —
@@ -83,10 +83,10 @@ export function StatusDot({
   }
   // "busy" and "starting" are the *active* states — a turn is in flight, or the
   // process is spinning up — so a static dot would read as idle/stuck. Render the
-  // active states as a tiny spinner sized to the dot, with the stroke following
+  // active states as a breathing dot with a persistent outline, following
   // statusColor for palette continuity. running / exited / crashed are settled,
   // so they stay a color-coded dot. `color="inherit"` lets the sx `color`
-  // (statusColor) drive the stroke instead of a fixed MUI palette slot.
+  // (statusColor) drive the mark instead of a fixed MUI palette slot.
   // An idle session whose agent still waits on its own background work is
   // not settled either: it resumes on that work's result without a prompt.
   const waiting = waitingOnBackground(status, backgroundTasks);
@@ -110,7 +110,8 @@ export function StatusDot({
   const indicator = active
     ? (
       <CircularProgress
-        size="0.875rem"
+        data-session-activity="true"
+        size="1rem"
         thickness={6}
         disableShrink
         color="inherit"
@@ -126,7 +127,7 @@ export function StatusDot({
             fontSize: desktopSize(10),
             // Reserve the same inline slot as the activity glyph so titles
             // remain aligned when a session starts or finishes work.
-            width: "0.875rem",
+            width: "1rem",
             flexShrink: 0,
             color: statusColor(shown),
           },
