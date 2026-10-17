@@ -50,7 +50,8 @@ await build({
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "session-maintenance" || suite === "dormant-session" ||
-        suite === "about-layout" || suite === "info-metrics" || suite === "review-context"
+        suite === "about-layout" || suite === "info-metrics" ||
+        suite === "review-context"
         ? "development"
         : "production",
     ),
@@ -91,7 +92,8 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "dormant-session" || suite === "info-metrics" || suite === "review-context"
+        suite === "dormant-session" || suite === "info-metrics" ||
+        suite === "review-context"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {

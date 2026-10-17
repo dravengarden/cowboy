@@ -25,8 +25,9 @@ use crate::plugin_process::run_plugin_command;
 mod execution;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
-const MANUAL_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
-const TRANSIENT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+// All collection entry points share the same budget, including failed attempts.
+const MANUAL_REFRESH_COOLDOWN: std::time::Duration = AUTO_REFRESH_INTERVAL;
+const TRANSIENT_RETRY_INTERVAL: std::time::Duration = AUTO_REFRESH_INTERVAL;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderRefreshState {
@@ -458,6 +459,11 @@ impl UsageService {
         let mut snapshot = self.snapshot.lock().await.clone();
         align_snapshot_bindings(&mut snapshot, &bindings);
         apply_reset_schedules(&mut snapshot, &reset_schedules);
+        snapshot.providers.retain(|usage| {
+            bindings
+                .iter()
+                .any(|binding| binding.account == usage.provider)
+        });
         self.maybe_warm(&snapshot);
         snapshot.refreshing = self.in_flight.lock().iter().cloned().collect();
         snapshot
@@ -483,7 +489,7 @@ impl UsageService {
         policy: RefreshPolicy,
     ) -> Vec<PluginUsageSpec> {
         let bindings = self.bindings.current();
-        let mut current = self.snapshot.lock().await.clone();
+        let mut current = self.snapshot.lock().await;
         align_snapshot_bindings(&mut current, &bindings);
         let attempted_at_ms = now_ms();
         let claimed: Vec<PluginUsageSpec> = {
@@ -502,6 +508,27 @@ impl UsageService {
                 .collect()
         };
         if !claimed.is_empty() {
+            // Reserve before launching a collector so a restart during an
+            // attempt retains its cooldown. Keep the snapshot lock through
+            // claiming to prevent a stale reader claiming just-completed work.
+            for binding in &claimed {
+                if let Some(provider) = current
+                    .providers
+                    .iter_mut()
+                    .find(|provider| provider.provider == binding.account)
+                {
+                    let stale = provider.refresh.as_ref().is_some_and(|state| state.stale);
+                    provider.refresh =
+                        Some(refresh_state(attempted_at_ms, AUTO_REFRESH_INTERVAL, stale));
+                }
+            }
+            if !self.persist_snapshot(&current) {
+                let mut in_flight = self.in_flight.lock();
+                for binding in &claimed {
+                    in_flight.remove(&binding.account);
+                }
+                return Vec::new();
+            }
             self.notify();
         }
         claimed
@@ -647,11 +674,11 @@ impl UsageService {
         });
     }
 
-    fn persist_snapshot(&self, snapshot: &UsageSnapshot) {
+    fn persist_snapshot(&self, snapshot: &UsageSnapshot) -> bool {
         let Some(path) = self.cache_path.as_ref() else {
-            return;
+            return true;
         };
-        save_cached_snapshot(path, snapshot);
+        save_cached_snapshot(path, snapshot)
     }
 
     /// Refresh one provider adapter without making unrelated cards wait on a
@@ -767,6 +794,14 @@ fn provider_refresh_due(
     let Some(refresh) = usage.and_then(|usage| usage.refresh.as_ref()) else {
         return true;
     };
+    // Old cache files may contain the former 30-second manual cooldown.
+    if current_time_ms
+        < refresh
+            .last_attempt_at_ms
+            .saturating_add(duration_ms(AUTO_REFRESH_INTERVAL))
+    {
+        return false;
+    }
     match policy {
         RefreshPolicy::Manual => current_time_ms >= refresh.manual_refresh_after_ms,
         RefreshPolicy::Background => current_time_ms >= refresh.next_auto_refresh_at_ms,
@@ -1005,6 +1040,23 @@ fn align_snapshot_bindings(snapshot: &mut UsageSnapshot, bindings: &[PluginUsage
                 .unwrap_or_else(|| placeholder_usage(binding)),
         );
     }
+    // A temporarily absent plugin must not erase an unexpired reservation.
+    // snapshot() filters these cache-only rows from the client projection.
+    let current_time_ms = now_ms();
+    for usage in &snapshot.providers {
+        if !bindings
+            .iter()
+            .any(|binding| binding.account == usage.provider)
+            && usage.refresh.as_ref().is_some_and(|refresh| {
+                current_time_ms
+                    < refresh
+                        .last_attempt_at_ms
+                        .saturating_add(duration_ms(AUTO_REFRESH_INTERVAL))
+            })
+        {
+            aligned.push(usage.clone());
+        }
+    }
     snapshot.providers = aligned;
 }
 
@@ -1087,13 +1139,27 @@ fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
     })
 }
 
-fn save_cached_snapshot(path: &Path, snapshot: &UsageSnapshot) {
-    let Ok(bytes) = serde_json::to_vec(snapshot) else {
-        return;
+fn save_cached_snapshot(path: &Path, snapshot: &UsageSnapshot) -> bool {
+    let save = || -> std::io::Result<()> {
+        use std::io::Write as _;
+        let bytes = serde_json::to_vec(snapshot)?;
+        let tmp = path.with_extension("json.tmp");
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        std::fs::rename(tmp, path)?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        std::fs::File::open(parent)?.sync_all()
     };
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(tmp, path);
+    match save() {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "usage cache could not be persisted; refusing new collection");
+            false
+        }
     }
 }
 
@@ -1402,6 +1468,102 @@ mod tests {
         assert!(service.exposes_activity("custom-ds"));
         assert!(!service.exposes_activity("deepseek"));
         assert!(!service.exposes_activity("openai"));
+    }
+
+    #[tokio::test]
+    async fn failed_collection_cannot_be_retried_through_other_entry_points() {
+        let runs = tempfile::NamedTempFile::new().unwrap();
+        let mut binding = openai_usage_binding();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!(
+                "read -r _request || true; echo run >> {}; exit 1",
+                runs.path().display()
+            ),
+        ];
+        let account = binding.account.clone();
+        let service = UsageService::with_bindings(None, None, vec![binding]);
+        service.refresh_provider(&account).await.unwrap();
+        for _ in 0..10 {
+            tokio::join!(service.refresh(), service.refresh_background());
+            service.refresh_provider(&account).await.unwrap();
+            service.request_refresh(Some(&account)).await.unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(runs.path())
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn unwritable_reservation_never_starts_a_collection() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let mut binding = openai_usage_binding();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec!["must-not-run".to_owned()];
+        // Renaming a file over a directory deterministically fails, even as root.
+        let service = UsageService::with_bindings(None, Some(cache), vec![binding.clone()]);
+        assert!(
+            service
+                .claim_due(vec![binding], RefreshPolicy::Manual)
+                .await
+                .is_empty()
+        );
+        assert!(service.in_flight.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn claimed_attempt_survives_restart_and_blocks_every_refresh_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("usage.json");
+        let mut binding = openai_usage_binding();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec!["must-not-run".to_owned()];
+        let service = UsageService::with_bindings(None, Some(cache.clone()), vec![binding.clone()]);
+        assert_eq!(
+            service
+                .claim_due(vec![binding.clone()], RefreshPolicy::Manual)
+                .await
+                .len(),
+            1
+        );
+        let absent = UsageService::with_bindings(None, Some(cache.clone()), Vec::new());
+        assert!(absent.snapshot().await.providers.is_empty());
+        {
+            let snapshot = absent.snapshot.lock().await;
+            assert!(absent.persist_snapshot(&snapshot));
+        }
+        let restarted = UsageService::with_bindings(None, Some(cache), vec![binding.clone()]);
+        for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
+            assert!(
+                restarted
+                    .claim_due(vec![binding.clone()], policy)
+                    .await
+                    .is_empty()
+            );
+        }
+        let snapshot = restarted.snapshot.lock().await;
+        let usage = find_provider(&snapshot, &binding.account).unwrap();
+        let attempted = usage.refresh.as_ref().unwrap().last_attempt_at_ms;
+        for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
+            assert!(!provider_refresh_due(
+                Some(usage),
+                attempted + 299_999,
+                policy
+            ));
+            assert!(provider_refresh_due(
+                Some(usage),
+                attempted + 300_000,
+                policy
+            ));
+        }
     }
 
     #[tokio::test]
@@ -1932,6 +2094,16 @@ mod tests {
             1_000 + duration_ms(AUTO_REFRESH_INTERVAL) - 1,
             RefreshPolicy::Background,
         ));
+        usage.refresh = Some(ProviderRefreshState {
+            last_attempt_at_ms: 1_000,
+            manual_refresh_after_ms: 31_000,
+            next_auto_refresh_at_ms: 61_000,
+            stale: true,
+        });
+        for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
+            assert!(!provider_refresh_due(Some(&usage), 300_999, policy));
+            assert!(provider_refresh_due(Some(&usage), 301_000, policy));
+        }
     }
 
     #[test]
