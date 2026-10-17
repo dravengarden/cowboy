@@ -3523,10 +3523,11 @@ export function createSessionFolder(
   name: string,
   parent: string | null,
   project: string | null = null,
+  defaults: import("./folderDefaults").FolderDefaults = {},
 ): string | null {
   if (normalizeSessionFolderName(name) === null) return null;
   const id = `f-${newUuid()}`;
-  foldersSync.mutate("create", { id, name, parent, project });
+  foldersSync.mutate("create", { id, name, parent, project, defaults });
   return id;
 }
 

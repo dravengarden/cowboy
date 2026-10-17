@@ -380,14 +380,15 @@ impl SessionFolders {
     /// folder for this actor. The sync arbiter's mutation-id dedupe does not
     /// survive a Controller restart, so a client that resends its durable
     /// outbox would otherwise hit "folder id already exists" forever. Any
-    /// difference (owner, name, parent, project) is a genuine conflict and
+    /// difference (owner, name, parent, project, defaults) is a genuine conflict and
     /// still fails through the normal path.
     pub(crate) fn is_replayed_create(&self, actor: &FolderActor, args: &serde_json::Value) -> bool {
-        let (Ok(id), Ok(name), Ok(parent), Ok(project)) = (
+        let (Ok(id), Ok(name), Ok(parent), Ok(project), Ok(defaults)) = (
             key_arg(args, "id"),
             name_arg(args),
             optional_key_arg(args, "parent"),
             project_arg(args),
+            defaults::parse_create(args),
         ) else {
             return false;
         };
@@ -396,6 +397,7 @@ impl SessionFolders {
                 && folder.name == name
                 && folder.parent == parent
                 && folder.project == project
+                && folder.defaults == defaults
         })
     }
 
@@ -408,6 +410,7 @@ impl SessionFolders {
         let name = name_arg(args)?;
         let parent = self.resolve_parent(actor, optional_key_arg(args, "parent")?.as_deref())?;
         let project = project_arg(args)?;
+        let defaults = defaults::parse_create(args)?;
         if self.find(&id).is_some() {
             return Err("folder id already exists".to_owned());
         }
@@ -428,7 +431,7 @@ impl SessionFolders {
             parent,
             position,
             project,
-            defaults: FolderDefaults::default(),
+            defaults,
         });
         Ok(FolderEffects {
             replaced_owner: Some(owner),

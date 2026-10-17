@@ -28,7 +28,7 @@ test("mobile new session actions stay in the non-overlay sheet footer", () => {
   assertEquals(dialog.includes('position: "sticky"'), false);
   assertEquals(dialog.includes("footer={"), true);
   assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), false);
-  assertEquals(dialog.includes('title="Create"'), true);
+  assertEquals(dialog.includes("title={dialogTitle}"), true);
 });
 
 test("new session navigation precedes Machine preparation completion", () => {

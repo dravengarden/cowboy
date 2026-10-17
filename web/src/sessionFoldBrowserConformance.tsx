@@ -8,6 +8,8 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { SessionFoldIcon, useSessionFoldControl } from "./SessionFoldControl";
 import { CreateDialog } from "./App";
+import { runFolderCreationBrowserChecks } from "./folderCreationBrowserChecks";
+export { renderFolderCreationPreview } from "./folderCreationBrowserChecks";
 import {
   SESSION_FOLDER_CREATED_EVENT,
   type SessionFolderCreated,
@@ -26,6 +28,7 @@ const INSET = 84;
 
 /** Real fold hook, tree projection and action island; isolated data. */
 export async function runSessionFoldBrowserConformance(): Promise<string[]> {
+  await runFolderCreationBrowserChecks();
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);

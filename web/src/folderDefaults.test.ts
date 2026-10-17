@@ -28,6 +28,39 @@ test("invalid defaults never appear in the optimistic tree", () => {
   assertEquals(m.defaults(tree, { id: "root", values: { machine: "" } }), tree);
 });
 
+test("creation saves only explicit defaults and rejects malformed drafts atomically", () => {
+  const parent = m.create(EMPTY_SESSION_FOLDERS, {
+    id: "root",
+    name: "Root",
+    parent: null,
+    defaults: { project: "suger", machine: "hawk", provider: "claude-code" },
+  });
+  const overrides = { project: null, provider: "codex" };
+  const tree = m.create(parent, {
+    id: "new",
+    name: "Review",
+    parent: "root",
+    defaults: overrides,
+  });
+  assertEquals(tree.folders.find((f) => f.id === "new")?.defaults, overrides);
+  assertEquals(resolveFolderDefaults(tree, "new"), {
+    values: { project: null, provider: "codex", machine: "hawk" },
+    sources: { project: "new", provider: "new", machine: "root" },
+  });
+  overrides.provider = "later";
+  assertEquals(resolveFolderDefaults(tree, "new").values.provider, "codex");
+  for (
+    const defaults of [{ machine: "local" }, { preset: "opus" }, {
+      project: "",
+    }]
+  ) {
+    assertEquals(
+      m.create(parent, { id: "bad", name: "Bad", parent: "root", defaults }),
+      parent,
+    );
+  }
+});
+
 test("directory defaults inherit independently, block, restore, and track moves", () => {
   let tree = m.create(EMPTY_SESSION_FOLDERS, {
     id: "root",

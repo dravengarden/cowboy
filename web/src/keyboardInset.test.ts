@@ -185,7 +185,7 @@ test("New session is a cover sheet on the mobile navbar so Title clears the PWA 
     appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
-  assertEquals(dialog.includes('ariaLabel="Create"'), true);
+  assertEquals(dialog.includes("ariaLabel={dialogTitle}"), true);
   assertEquals(dialog.includes("cover"), true);
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assertEquals(html.includes("--vv-height"), true);

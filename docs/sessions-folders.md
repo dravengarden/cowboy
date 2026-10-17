@@ -85,7 +85,7 @@ reconnect, projected per principal.
 
 | name | args | rule |
 |---|---|---|
-| `create` | `{id, name, parent, project?}` | client-minted `f-<uuid>`; name trimmed, non-empty, ≤ 80 chars; parent must exist or be null; `project` unique per owner |
+| `create` | `{id, name, parent, project?, defaults?}` | client-minted `f-<uuid>`; name trimmed, non-empty, ≤ 80 chars; parent must exist or be null; `project` unique per owner; sparse defaults validated and saved atomically |
 | `rename` | `{id, name}` | same name rules |
 | `move` | `{id, parent}` | rejects cycles (folder into itself or a descendant); appends last among new siblings |
 | `reorder` | `{parent, order: [id]}` | sibling permutation, same semantics as session order |
@@ -172,10 +172,10 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
   Draft and **Folder** tabs. The Folder tab takes a name (focused, empty,
   contact AutoFill off) and an optional parent from the same Sessions-tree
   picker as Session, so switching between the two keeps the location. It
-  offers **Organize by project instead (N)** while unbound project labels
-  exist: one tap creates one bound folder per project that has none yet,
-  writes no placements, and every current and future session of those
-  projects files itself. Creating closes Create and the list expands the new
+  offers optional **Session defaults** with a collapsed inherited-value summary.
+  **Organize all projects** lives in folder actions, separate from the authored
+  creation draft: it creates or binds one folder per unbound project and writes
+  no placements. Creating closes Create and the list expands the new
   folder's ancestors and scrolls it into view. Folder creation is rare, so it
   costs one extra tap instead of a footer slot; folder kebabs and the Move
   picker keep their in-place "New folder" actions.
@@ -219,7 +219,7 @@ lists the region's live map. Command Palette entries: New Session Folder,
 Move Session to Folder…, Organize Sessions by Project, Collapse/Expand All
 Session Folders, Reveal Current Session. No workspace-prefix continuation is
 added; `Cmd/Alt+K N` still creates a session. With the pointer, Create's
-Folder variant owns new folders and Organize by project; the fold button
+Folder variant owns new folders; folder actions own Organize all projects. The fold button
 beside Create (see Mobile) is the one-click Focus / Expand all toggle.
 
 Pointer: see [Drag into folders](#drag-into-folders). Order mode keeps the
@@ -325,6 +325,29 @@ preference separate from the Project and legacy working-directory pickers.
 
 ### Inherited directory defaults
 
+Create → Folder and the tree's New folder inside shortcut share one editor.
+Session defaults is optional and starts collapsed, showing the effective project,
+placement, agent and preset plus inheritance or override count. Expanding reveals
+the same five fields as the existing defaults editor. A field opens within the
+same dialog; Back or Escape returns without discarding the draft. Desktop keeps
+Mod+Enter for the visible primary action; Mobile keeps its fixed action shelf.
+
+Changing the parent recomputes inherited values and preserves explicit overrides.
+Cancel discards all draft settings. Create sends the name, parent and sparse
+defaults in one mutation; no empty directory is saved first. Repeated submissions
+are latched, and restart replay checks include defaults. Invalid defaults reject
+the entire creation. Incompatible agent/preset combinations expose a repair action
+and prevent UI submission until resolved. Offline inventory is advisory: directory
+creation does not require a live worker or silently change an unavailable binding.
+`POST /api/folders` accepts the same optional `defaults` object as sync Create.
+
+The existing authenticated CLI is the AI fallback for directory controls:
+`cowboy dir new --defaults`, `dir defaults`, and `dir set` use the same scoped
+writers. Directory mutations are an explicit MCP coverage exception in this change:
+they predate the MCP action surface and do not yet have its durable parent-scoped
+operation receipts. Do not expose a generic sync-write action to bypass that
+boundary; add typed directory actions when those receipts are implemented.
+
 Directories store a sparse `defaults` object in the existing owner-scoped synced
 folder state. Supported keys are `project` (registered workspace ID), `machine`
 (files and command execution), `runtime_machine` (agent process), `provider`,
@@ -363,6 +386,7 @@ automatic filing independently. API and CLI share the same arbiter and resolver:
 ```sh
 cowboy dir list
 cowboy dir new Anthropic --parent f-example
+cowboy dir new Review --parent f-example --defaults '{"provider":"codex","preset":null}'
 cowboy dir defaults f-example
 cowboy dir set f-example project suger
 cowboy dir set f-example machine hawk

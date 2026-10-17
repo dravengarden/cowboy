@@ -185,8 +185,9 @@ export function topmostModal(): HTMLElement | null {
 /** A menu, listbox or popover owns its own keys (type-ahead, arrows). */
 export function popupOwnsKeys(): boolean {
   return document.querySelector(
-    // A listbox that is part of a dialog's own layout (Recent) is a region of
-    // that dialog, not a popup over it.
-    ".MuiPopover-root, .MuiAutocomplete-popper, [role='menu'], [role='listbox']:not([role='dialog'] [role='listbox'])",
+    // Inline lists (Recent, directory defaults) are regions of the dialog.
+    // Their native keys are scoped by modalNavigation to focus inside the list;
+    // they must not disable Insert/Normal handling in the adjacent search.
+    ".MuiPopover-root, .MuiAutocomplete-popper, [role='menu']:not([role='dialog'] [role='menu']), [role='listbox']:not([role='dialog'] [role='listbox'])",
   ) !== null;
 }

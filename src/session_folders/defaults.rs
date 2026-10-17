@@ -16,6 +16,12 @@ pub enum DefaultKey {
 
 pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
 
+/// Validate the complete sparse draft before creating any directory.
+pub(super) fn parse_create(args: &serde_json::Value) -> Result<FolderDefaults, String> {
+    args.get("defaults")
+        .map_or_else(|| Ok(FolderDefaults::default()), parse)
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedDefaults {
     pub values: FolderDefaults,
@@ -67,6 +73,75 @@ mod tests {
         .unwrap();
         tree.apply(&FolderActor::local(), "defaults", &json!({"id":"root","values":{"machine":"hawk","provider":"claude-code","preset":"claude-code/opus-default"}})).unwrap();
         tree
+    }
+
+    #[test]
+    fn create_saves_sparse_defaults_atomically_and_replays_exactly() {
+        let mut tree = tree();
+        let actor = FolderActor::local();
+        let args = json!({"id":"new","name":"New","parent":"root","defaults":{"project":null,"provider":"codex","preset":"codex/review"}});
+        tree.apply(&actor, "create", &args).unwrap();
+        let resolved = tree.resolve_defaults(&actor, "new").unwrap();
+        assert_eq!(resolved.values[&DefaultKey::Project], None);
+        assert_eq!(
+            resolved.values[&DefaultKey::Machine].as_deref(),
+            Some("hawk")
+        );
+        assert_eq!(resolved.sources[&DefaultKey::Machine], "root");
+        assert_eq!(resolved.sources[&DefaultKey::Provider], "new");
+        assert_eq!(
+            tree.folders()
+                .iter()
+                .find(|f| f.id == "new")
+                .unwrap()
+                .defaults
+                .len(),
+            3
+        );
+        assert!(tree.is_replayed_create(&actor, &args));
+        let mut changed = args;
+        changed["defaults"]["preset"] = json!("codex/other");
+        assert!(!tree.is_replayed_create(&actor, &changed));
+        changed.as_object_mut().unwrap().remove("defaults");
+        assert!(!tree.is_replayed_create(&actor, &changed));
+    }
+
+    #[test]
+    fn invalid_creation_defaults_leave_no_partial_directory() {
+        let mut tree = tree();
+        let actor = FolderActor::local();
+        let before = tree.value();
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!({"unknown":"x"}),
+            json!({"machine":"local"}),
+            json!({"preset":"opus"}),
+            json!({"project":42}),
+        ] {
+            assert!(
+                tree.apply(
+                    &actor,
+                    "create",
+                    &json!({"id":"new","name":"New","parent":"root","defaults":invalid})
+                )
+                .is_err()
+            );
+            assert_eq!(tree.value(), before);
+        }
+        let foreign = FolderActor {
+            user_id: Some("other".into()),
+            sees_all: false,
+        };
+        assert!(
+            tree.apply(
+                &foreign,
+                "create",
+                &json!({"id":"new","name":"New","parent":"root","defaults":{"project":"suger"}})
+            )
+            .is_err()
+        );
+        assert_eq!(tree.value(), before);
     }
 
     #[test]

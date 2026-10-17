@@ -179,11 +179,13 @@ export const sessionFolderMutators = {
       name: string;
       parent: string | null;
       project?: string | null;
+      defaults?: FolderDefaults;
     },
   ): SessionFoldersValue => {
     const name = normalizeSessionFolderName(a.name);
     if (!name || sessionFolderById(value, a.id)) return value;
     if (a.parent && !sessionFolderById(value, a.parent)) return value;
+    if (a.defaults !== undefined && !validFolderDefaults(a.defaults)) return value;
     const project = a.project?.trim() || null;
     if (project && projectFolderIndex(value).has(project)) return value;
     return withFolders(value, [
@@ -194,6 +196,7 @@ export const sessionFolderMutators = {
         parent: a.parent,
         position: nextPosition(value, a.parent),
         project,
+        defaults: { ...a.defaults },
       },
     ]);
   },

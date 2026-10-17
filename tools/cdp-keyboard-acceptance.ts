@@ -871,6 +871,43 @@ try {
       ),
       "h on the tabs selects Draft",
     );
+    await key("l");
+    await page.evaluate(
+      "document.querySelector('[data-folder-defaults-toggle]').focus()",
+    );
+    await key("Enter");
+    await until(
+      "document.querySelector('[data-default-field=provider]')",
+      "folder defaults expand from keyboard",
+    );
+    await page.evaluate(
+      "document.querySelector('[data-default-field=provider]').focus()",
+    );
+    await key("Enter");
+    await until(
+      "document.activeElement?.getAttribute('aria-label') === 'Search defaults'",
+      "default picker focuses search",
+    );
+    check(
+      await page.evaluate<boolean>(
+        "document.querySelectorAll('[role=dialog]').length === 1",
+      ),
+      "default picker stays in the create dialog",
+    );
+    await key("Escape");
+    await until(
+      "document.activeElement?.hasAttribute('data-desktop-field-cursor')",
+      "Escape leaves picker search for Normal",
+    );
+    await key("Escape");
+    await until(
+      "document.activeElement?.getAttribute('data-default-field') === 'provider'",
+      "Escape returns to the same default field",
+    );
+    await shot("3c-folder-defaults");
+    results.push(
+      "Folder defaults: Enter expands and opens a field; Escape leaves search, returns to the field, then closes",
+    );
     await key("Escape");
     await until(
       "!document.querySelector('[role=tab][aria-label=Draft]')",

@@ -55,6 +55,10 @@ enum DirCommand {
         name: String,
         #[arg(long)]
         parent: Option<String>,
+        /// Sparse defaults JSON: project, machine, runtime_machine, provider, preset.
+        /// Omitted fields inherit; null blocks inheritance. Saved atomically.
+        #[arg(long, value_parser = parse_directory_defaults)]
+        defaults: Option<Value>,
     },
     /// List the visible directory tree and its explicit overrides.
     List,
@@ -76,13 +80,17 @@ enum DirCommand {
 pub async fn run_dir(args: DirArgs) -> Result<()> {
     let client = Client::new(&args.connect)?;
     let response = match args.command {
-        DirCommand::New { name, parent } => {
+        DirCommand::New {
+            name,
+            parent,
+            defaults,
+        } => {
+            let mut body = json!({"name":name,"parent":parent});
+            if let Some(defaults) = defaults {
+                body["defaults"] = defaults;
+            }
             client
-                .expect(
-                    Method::POST,
-                    "/api/folders",
-                    Some(&json!({"name":name,"parent":parent})),
-                )
+                .expect(Method::POST, "/api/folders", Some(&body))
                 .await?
         }
         DirCommand::List => client.expect(Method::GET, "/api/folders", None).await?,
@@ -120,6 +128,13 @@ pub async fn run_dir(args: DirArgs) -> Result<()> {
     };
     println!("{response}");
     Ok(())
+}
+
+fn parse_directory_defaults(input: &str) -> Result<Value, String> {
+    let value: Value =
+        serde_json::from_str(input).map_err(|error| format!("invalid defaults JSON: {error}"))?;
+    crate::session_folders::defaults::parse(&value)?;
+    Ok(value)
 }
 
 fn directory_defaults_path(directory: &str) -> Result<String> {
@@ -763,6 +778,47 @@ mod tests {
     use axum::{Json, Router};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn directory_creation_accepts_sparse_defaults_and_rejects_invalid_fields() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Command {
+            #[command(flatten)]
+            args: DirArgs,
+        }
+        let parsed = Command::try_parse_from([
+            "dir",
+            "new",
+            "Review",
+            "--parent",
+            "f-root",
+            "--defaults",
+            r#"{"project":null,"provider":"codex","preset":"codex/review"}"#,
+        ])
+        .unwrap();
+        let DirCommand::New {
+            parent, defaults, ..
+        } = parsed.args.command
+        else {
+            panic!("expected create");
+        };
+        assert_eq!(parent.as_deref(), Some("f-root"));
+        assert_eq!(
+            defaults,
+            Some(json!({"project":null,"provider":"codex","preset":"codex/review"}))
+        );
+        for invalid in [
+            r#"{"permissions":"all"}"#,
+            r#"{"preset":"opus"}"#,
+            "null",
+            "{",
+        ] {
+            assert!(
+                Command::try_parse_from(["dir", "new", "Review", "--defaults", invalid]).is_err()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn update_confirms_the_planned_release_and_reports_blocked_sessions() {

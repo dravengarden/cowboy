@@ -204,6 +204,7 @@ import {
 import {
     DeleteFolderShell,
     FolderNameShell,
+    InAppRoot,
     FolderPickerShell,
     ProjectPickerShell,
     SESSION_FOLDER_SHEET_HOST,
@@ -216,7 +217,8 @@ import {
 import { useSessionFoldControl } from "./SessionFoldControl";
 import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
 import { DirectorySessionsSheet } from "./DirectorySessionsSheet";
-import { resolveFolderDefaults } from "./folderDefaults";
+import { FOLDER_DEFAULT_FIELDS, resolveFolderDefaults, type FolderDefaultKey, type FolderDefaults } from "./folderDefaults";
+import { FolderCreationDefaults } from "./FolderCreationDefaults";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { type SortableDrag, useSortable } from "./useSortable";
@@ -2669,6 +2671,10 @@ function SessionList({
                     />
                 </MenuItem>
                 <Divider />
+                {unboundProjects.length > 0 && <MenuItem onClick={(): void => { organizeSessionsByProject(); setFolderMenu(null); }}>
+                    <ListItemIcon><LabelOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Organize all projects" secondary={`Create or bind ${unboundProjects.length} project folders`} />
+                </MenuItem>}
                 <MenuItem
                     onClick={(): void => {
                         setDeleteFolder(folderMenuFolder);
@@ -2757,6 +2763,9 @@ function SessionList({
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Select sessions…</Box><Kbd keys="S" />
                         </Button>
                         <Divider sx={{ my: 0.5 }} />
+                        {unboundProjects.length > 0 && <Button data-folder-shortcut="p" fullWidth startIcon={<LabelOutlined />} onClick={(): void => { organizeSessionsByProject(); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Organize all projects ({unboundProjects.length})</Box><Kbd keys="P" />
+                        </Button>}
                         <Button data-folder-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { setDeleteFolder(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete folder</Box>
                             <Kbd keys="X" />
@@ -2764,38 +2773,30 @@ function SessionList({
                     </Stack>
                 </DesktopModalShell>
             )}
-            {namePrompt && (
+            {namePrompt?.mode === "create" && (
+                <InAppRoot>
+                    <CreateDialog
+                        open
+                        initialVariant="folder"
+                        folderOnly
+                        initialFolder={namePrompt.parent}
+                        onClose={(): void => setNamePrompt(null)}
+                        onCreated={(): void => {}}
+                        onFolderCreated={(id, parent): void => {
+                            if (parent) setFolderCollapsed([parent], false);
+                            if (desktop) focusRow(`folder:${id}`);
+                        }}
+                    />
+                </InAppRoot>
+            )}
+            {namePrompt?.mode === "rename" && (
                 <FolderNameShell
-                    title={namePrompt.mode === "rename" ? "Rename folder" : "New folder"}
-                    initial={namePrompt.mode === "rename" ? namePrompt.folder.name : ""}
-                    confirmLabel={namePrompt.mode === "rename" ? "Save" : "Create"}
-                    helperText={namePrompt.mode === "create" && namePrompt.parent
-                        ? `Inside "${sessionFolderById(sessionFolders, namePrompt.parent)?.name ?? ""}".`
-                        : "Move Drafts and Sessions here, or bind a project to organize its Sessions automatically."}
-                    extra={!desktop && namePrompt.mode === "create" && unboundProjects.length > 0
-                        ? (
-                            <Button
-                                fullWidth
-                                variant="text"
-                                startIcon={<LabelOutlined />}
-                                onClick={(): void => {
-                                    organizeSessionsByProject();
-                                    setNamePrompt(null);
-                                }}
-                                sx={{ mt: 1, justifyContent: "flex-start", textTransform: "none" }}
-                            >
-                                Organize by project instead ({unboundProjects.length} {unboundProjects.length === 1 ? "folder" : "folders"})
-                            </Button>
-                        )
-                        : undefined}
+                    title="Rename folder"
+                    initial={namePrompt.folder.name}
+                    confirmLabel="Save"
                     onClose={(): void => setNamePrompt(null)}
                     onConfirm={(name): void => {
-                        if (namePrompt.mode === "rename") renameSessionFolder(namePrompt.folder.id, name);
-                        else {
-                            const id = createSessionFolder(name, namePrompt.parent);
-                            if (id && namePrompt.parent) setFolderCollapsed([namePrompt.parent], false);
-                            if (id && desktop) focusRow(`folder:${id}`);
-                        }
+                        renameSessionFolder(namePrompt.folder.id, name);
                         setNamePrompt(null);
                     }}
                 />
@@ -2902,6 +2903,9 @@ export function CreateDialog({
     onClose,
     onCreated,
     initialFolder = null,
+    initialVariant = "session",
+    folderOnly = false,
+    onFolderCreated,
     onDraftCreated,
 }: {
     open: boolean;
@@ -2909,10 +2913,14 @@ export function CreateDialog({
     /** Called with a local projection so the UI can focus it before the WS list catches up. */
     onCreated: (session: SessionMeta, folder: string | null) => void;
     initialFolder?: string | null;
+    initialVariant?: CreateVariant;
+    /** Folder-tree shortcuts keep one focused task; Create still offers all types. */
+    folderOnly?: boolean;
+    onFolderCreated?: (id: string, parent: string | null) => void;
     onDraftCreated?: (id: string) => void;
 }): React.JSX.Element {
     const keyboardOpen = useKeyboardOpen();
-    const [variant, setVariant] = useState<CreateVariant>("session");
+    const [variant, setVariant] = useState<CreateVariant>(folderOnly ? "folder" : initialVariant);
     const [draftTitle, setDraftTitle] = useState("");
     const selectDraftTitleOnFocus = useRef(true);
     const creatingRef = useRef(false);
@@ -2923,7 +2931,7 @@ export function CreateDialog({
     const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [directory, setDirectory] = useState(initialFolder ?? "");
     const directoryDefaults = resolveFolderDefaults(sessionDirectories, directory || null);
-    const placement = useProjectPlacement(open, machines, directoryDefaults.values);
+    const placement = useProjectPlacement(open && !folderOnly, machines, directoryDefaults.values);
     const [presetOverride, setPresetOverride] = useState<string | undefined>();
     const selectedPreset = presetOverride ?? directoryDefaults.values.preset ?? "";
     const fullInstallation = placement.installations.find((installation) => installation.full);
@@ -2939,8 +2947,14 @@ export function CreateDialog({
     // item in the same tree, so switching between them keeps the choice.
     const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories), [sessionDirectories]);
     const [folderName, setFolderName] = useState("");
-    const allSessions = useStoreSelector((snapshot) => snapshot.sessions);
-    const unboundProjects = variant === "folder" ? unboundProjectLabels(allSessions, sessionDirectories) : [];
+    const [folderDefaults, setFolderDefaults] = useState<FolderDefaults>({});
+    const [folderDefaultsExpanded, setFolderDefaultsExpanded] = useState(false);
+    const [folderDefaultField, setFolderDefaultField] = useState<FolderDefaultKey | null>(null);
+    const editingFolderDefault = variant === "folder" && folderDefaultField !== null;
+    const folderEffective = { ...directoryDefaults.values, ...folderDefaults };
+    const folderPresetMismatch = Boolean(folderEffective.preset && !folderEffective.preset.startsWith(`${folderEffective.provider ?? "claude-code"}/`));
+    const { catalog: folderCatalog, error: folderCatalogError } = useProviderCatalog(open && variant === "folder");
+    const closeLevel = (): void => { if (editingFolderDefault) setFolderDefaultField(null); else onClose(); };
     const [workItemId, setWorkItemId] = useState("");
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
@@ -2973,7 +2987,7 @@ export function CreateDialog({
         if (!open) return undefined;
         installNativeCompositionTracker();
         setFocusZone("text");
-        setVariant("session");
+        setVariant(folderOnly ? "folder" : initialVariant);
         setDraftTitle(defaultDraftTitle());
         selectDraftTitleOnFocus.current = true;
         creatingRef.current = false;
@@ -2982,6 +2996,9 @@ export function CreateDialog({
         setDirectory(initialFolder ?? "");
         setPresetOverride(undefined);
         setFolderName("");
+        setFolderDefaults({});
+        setFolderDefaultsExpanded(false);
+        setFolderDefaultField(null);
         setWorkItemId("");
         setCreating(false);
         setCreateError("");
@@ -3006,7 +3023,9 @@ export function CreateDialog({
     const theme = useTheme();
     const create = (): void => {
         if (creatingRef.current) return;
+        if (editingFolderDefault) { setFolderDefaultField(null); return; }
         if (variant === "folder") {
+            if (folderPresetMismatch) return;
             const name = normalizeSessionFolderName(folderName);
             if (name === null) return;
             if (directory && !sessionDirectories.folders.some((folder) => folder.id === directory)) {
@@ -3016,8 +3035,12 @@ export function CreateDialog({
             // Folders are synced presentation state: the create is optimistic
             // and local, so the sheet closes at once and the Sessions list
             // reveals the new row.
-            const id = createSessionFolder(name, directory || null);
-            if (id) announceSessionFolderCreated(id, directory || null);
+            creatingRef.current = true;
+            const id = createSessionFolder(name, directory || null, null, folderDefaults);
+            if (id) {
+                announceSessionFolderCreated(id, directory || null);
+                onFolderCreated?.(id, directory || null);
+            }
             onClose();
             return;
         }
@@ -3193,7 +3216,8 @@ export function CreateDialog({
             >
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
                 {variant === "session" && !presetAvailable && <Alert severity="warning">The inherited preset is unavailable for this agent. Choose a compatible preset or Agent default.</Alert>}
-                <CreateVariantPicker
+                {!editingFolderDefault && <>
+                {!folderOnly && <CreateVariantPicker
                     value={variant}
                     disabled={creating}
                     keyboard={desktop}
@@ -3224,7 +3248,7 @@ export function CreateDialog({
                             });
                         }
                     }}
-                />
+                />}
                 {desktop ? (
                     // The tablist's status line: it names only the keys of the
                     // current layer and keeps its height so focus never shifts
@@ -3236,12 +3260,15 @@ export function CreateDialog({
                         flexWrap="wrap"
                         sx={{ mt: "4px !important", minHeight: 20, px: 1, color: "text.secondary", typography: "caption" }}
                     >
-                        <DesktopModalKeyHint mode={focusZone === "text" ? "insert" : "normal"} tabs={3} />
+                        <DesktopModalKeyHint mode={focusZone === "text" ? "insert" : "normal"} tabs={folderOnly ? 0 : 3} />
                     </Stack>
                 ) : null}
-                <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
+                </>}
+                <Stack spacing={1.5} id="create-variant-panel" role="tabpanel" aria-labelledby={folderOnly || editingFolderDefault ? undefined : `create-${variant}-tab`} aria-label={folderOnly || editingFolderDefault ? "Folder settings" : undefined}>
+                    <Stack spacing={1.5} sx={{ display: editingFolderDefault ? "none" : "flex" }}>
                     {variant === "session" && placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
                     <TextField
+                        size={desktop ? "small" : "medium"}
                         label={variant === "folder" ? "Folder name" : "Title"}
                         value={variant === "draft" ? draftTitle : variant === "folder" ? folderName : title}
                         onChange={(e): void => {
@@ -3287,7 +3314,7 @@ export function CreateDialog({
                         helperText={variant === "draft"
                             ? "Device local time · replace this name or rename it while editing"
                             : variant === "folder"
-                            ? "Move Drafts and Sessions here, or bind a project to organize its Sessions automatically."
+                            ? "A shared home for sessions and drafts."
                             : "Clear to auto-name from the first message"}
                     />
                     {variant === "draft" ? (
@@ -3301,23 +3328,8 @@ export function CreateDialog({
                             value={directory}
                             onChange={setDirectory}
                         />
-                        {unboundProjects.length > 0 ? (
-                            <Button
-                                fullWidth
-                                variant="text"
-                                startIcon={<LabelOutlined />}
-                                disabled={creating}
-                                onClick={(): void => {
-                                    organizeSessionsByProject();
-                                    onClose();
-                                }}
-                                sx={{ justifyContent: "flex-start", textTransform: "none" }}
-                            >
-                                Organize by project instead ({unboundProjects.length} {unboundProjects.length === 1 ? "folder" : "folders"})
-                            </Button>
-                        ) : null}
                     </> : <>
-                        {directory && <Typography variant="caption" color="text.secondary">Directory defaults: {Object.entries(directoryDefaults.sources).map(([key, source]) => `${key.replaceAll("_", " ")} from ${sessionFolderById(sessionDirectories, source)?.name ?? source}`).join(" · ") || "Global defaults"}. Your selections override these defaults.</Typography>}
+                        {directory && <Typography variant="caption" color="text.secondary">Defaults from {sessionFolderById(sessionDirectories, directory)?.name ?? "directory"} · Change any choice for this session.</Typography>}
                         <WorkspacePicker
                             label="Project"
                             entries={placement.projects}
@@ -3374,13 +3386,32 @@ export function CreateDialog({
                             </TextField>
                         ) : null}
                     </>}
+                    </Stack>
+                    {variant === "folder" && <>
+                        {!editingFolderDefault && folderPresetMismatch && <Alert severity="warning" action={<Button onClick={(): void => { setFolderDefaultsExpanded(true); setFolderDefaultField("preset"); }}>Choose preset</Button>}>The preset belongs to another agent. Choose a compatible preset or use the agent default.</Alert>}
+                        <FolderCreationDefaults
+                            name={folderName}
+                            parent={directory || null}
+                            defaults={folderDefaults}
+                            onChange={setFolderDefaults}
+                            field={folderDefaultField}
+                            onFieldChange={setFolderDefaultField}
+                            expanded={folderDefaultsExpanded}
+                            onExpandedChange={setFolderDefaultsExpanded}
+                            tree={sessionDirectories}
+                            machines={machines}
+                            catalog={folderCatalog}
+                            error={folderCatalogError}
+                        />
+                    </>}
                 </Stack>
             </Stack>
     );
-    const canCreate = !creating && (variant === "draft" ||
-        (variant === "folder" ? normalizeSessionFolderName(folderName) !== null
+    const canCreate = !creating && (editingFolderDefault || variant === "draft" ||
+        (variant === "folder" ? normalizeSessionFolderName(folderName) !== null && !folderPresetMismatch
             : placement.ready && providerAvailable(provider) && presetAvailable && Boolean(provider && machineId && cwd)));
-    const createLabel = variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
+    const createLabel = editingFolderDefault ? "Back to folder" : variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
+    const dialogTitle = editingFolderDefault ? FOLDER_DEFAULT_FIELDS[folderDefaultField!] : folderOnly ? "New folder" : "Create";
     // The cover sheet is the touch presentation. A Desktop window below the
     // lg breakpoint is still Desktop: it keeps the dialog whose Esc, Mod+Enter
     // and leader layers the keyboard contract relies on.
@@ -3389,10 +3420,10 @@ export function CreateDialog({
             <>
             <DetentSheet
                 open={open}
-                onClose={creating ? (): void => {} : onClose}
+                onClose={creating ? (): void => {} : closeLevel}
                 cover
                 frosted
-                ariaLabel="Create"
+                ariaLabel={dialogTitle}
                 keyboardOpen={keyboardOpen}
                 surfaceColor={theme.palette.background.default}
                 footer={
@@ -3413,7 +3444,7 @@ export function CreateDialog({
                 header={
                     <Box sx={{ pl: 2, pr: 2, pb: 1 }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                            Create
+                            {dialogTitle}
                         </Typography>
                     </Box>
                 }
@@ -3428,13 +3459,14 @@ export function CreateDialog({
     return (
         <Sheet
             open={open}
-            onClose={creating ? (): void => {} : onClose}
-            title="Create"
+            onClose={creating ? (): void => {} : closeLevel}
+            title={dialogTitle}
+            wide={desktop}
             actions={
                 <>
                     <Button onClick={onClose} color="inherit" disabled={creating}>
                         Cancel
-                        <Kbd keys="Esc" availability={focusZone === "text" ? "inactive" : "available"} />
+                        {!editingFolderDefault && <Kbd keys="Esc" availability={focusZone === "text" ? "inactive" : "available"} />}
                     </Button>
                     <Button
                         onClick={create}
