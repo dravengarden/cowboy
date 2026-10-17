@@ -124,7 +124,7 @@ export function StatusDot({
         aria-label={label}
         sx={[
           {
-            fontSize: desktopSize(10),
+            fontSize: "0.625rem",
             // Reserve the same inline slot as the activity glyph so titles
             // remain aligned when a session starts or finishes work.
             width: "1rem",

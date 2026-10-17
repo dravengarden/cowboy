@@ -34,7 +34,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
         <CircularProgress variant="determinate" value={65} size={24} aria-label="Progress" />
         <Box sx={mobileCompositorFlattenSx}>
           <Box data-mobile-drawer-surface>
-            <CircularProgress size={16} aria-label="Paused during swipe" />
+            <CircularProgress data-session-activity="true" size={16} aria-label="Paused during swipe" />
           </Box>
         </Box>
       </Stack>
@@ -43,16 +43,18 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
   try {
     const busy = container.querySelector<HTMLElement>('[aria-label="Running…"]')!;
     const numeric = container.querySelector<HTMLElement>('[aria-label="Loading 24"]')!;
+    const idle = container.querySelector<HTMLElement>('[aria-label="Live"]')!;
     for (const unit of ["16px", "1rem"]) {
       document.documentElement.style.setProperty("--cowboy-desktop-size-unit", unit);
       document.documentElement.style.fontSize = "16px";
-      const before = [busy, numeric].map((node) => Number.parseFloat(getComputedStyle(node).width));
+      const before = [busy, numeric, idle].map((node) => Number.parseFloat(getComputedStyle(node).height));
       document.documentElement.style.fontSize = "24px";
-      check([busy, numeric].every((node, i) => Math.abs(Number.parseFloat(getComputedStyle(node).width) / before[i]! - 1.5) < 0.01), `Global font scales loading at surface unit ${unit}`);
+      check([busy, numeric, idle].every((node, i) => Math.abs(Number.parseFloat(getComputedStyle(node).height) / before[i]! - 1.5) < 0.01), `Global font scales loading at surface unit ${unit}`);
     }
     const determinate = container.querySelector<HTMLElement>('[aria-label="Progress"]')!;
     check(determinate.getAttribute("aria-valuenow") === "65" && getComputedStyle(determinate).width === "24px" && getComputedStyle(determinate.querySelector("svg")!).display !== "none", "Determinate progress retains value, geometry and visible SVG");
-    check(getComputedStyle(container.querySelector('[aria-label="Paused during swipe"]')!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
+    const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
+    check(getComputedStyle(paused).animationPlayState === "paused" && getComputedStyle(paused, "::after").animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     return results;
   } finally {

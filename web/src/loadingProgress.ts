@@ -51,10 +51,11 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           animation: "none",
           "@keyframes cowboy-session-breathe": {
             "0%, 100%": { opacity: 0.25 },
-            "50%": { opacity: 0.65 },
+            "50%": { opacity: 0.8 },
           },
           "&::before": {
-            inset: "28%",
+            // 52% of the 1rem slot matches the idle SVG's visible circle.
+            inset: "24%",
             borderRadius: "50%",
             maskImage: "none",
             WebkitMaskImage: "none",
@@ -64,9 +65,9 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
             position: "absolute",
             inset: 0,
             borderRadius: "50%",
-            background: "radial-gradient(circle, currentColor 15%, transparent 72%)",
+            background: "radial-gradient(circle, currentColor 35%, transparent 72%)",
             opacity: 0.45,
-            animation: "cowboy-session-breathe 1800ms ease-in-out infinite",
+            animation: "cowboy-session-breathe 2200ms ease-in-out infinite",
             animationPlayState: "inherit",
           },
           "@media (prefers-reduced-motion: reduce)": {
