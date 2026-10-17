@@ -499,12 +499,13 @@ const tabsFlow = async (): Promise<void> => {
     20_000,
   );
   await expect("alpha?*", "The item on screen has a preview tab");
-  const sizes = await page.evaluate<number[]>(
-    `[...document.querySelectorAll('[data-desktop-tab] svg')].slice(0, 2).map((icon) => Math.round(icon.getBoundingClientRect().width))`,
+  const sizes = await page.evaluate<number[][]>(
+    `[...document.querySelectorAll('[data-desktop-tab] svg')].slice(0, 2).map((icon) => { const rect = icon.getBoundingClientRect(); return [Math.round(rect.width), Math.round(rect.height)]; })`,
   );
   check(
-    sizes[0] === 10 && sizes[1] === 16,
-    `The status dot keeps its own size beside the 16px glyph: ${
+    sizes[0]?.[0] === 16 && sizes[0]?.[1] === 10 &&
+      sizes[1]?.[0] === 16 && sizes[1]?.[1] === 16,
+    `The 10px status dot reserves a 16px slot beside the 16px glyph: ${
       sizes.join(", ")
     }`,
   );

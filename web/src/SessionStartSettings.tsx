@@ -37,12 +37,31 @@ function isCoreOption(option: ConfigOption): boolean {
 }
 
 const compactSelect = {
+  // MUI's standard input adds a top margin after any label, including our inline label.
+  "label + &": { marginTop: 0 },
   minHeight: desktopSize(44),
   maxWidth: "100%",
-  borderRadius: 2,
-  bgcolor: "action.hover",
-  "& select": { py: 1, pl: 1.25, pr: "28px !important" },
+  borderRadius: "6px",
+  bgcolor: "transparent",
+  fontSize: "1rem",
+  "& select": {
+    py: 1,
+    pl: 0.5,
+    pr: "24px !important",
+    textAlign: "right",
+    borderRadius: "6px",
+  },
   "&:focus-within": { outline: "2px solid", outlineColor: "primary.main" },
+};
+
+const coreRow = {
+  minWidth: 0,
+  width: "100%",
+  display: "grid",
+  gridTemplateColumns: "minmax(72px, auto) minmax(0, 1fr)",
+  alignItems: "center",
+  columnGap: 1,
+  px: 1.5,
 };
 
 /** Core choices are direct native pickers; advanced forms mount only on request.
@@ -102,8 +121,18 @@ export function SessionStartSettings(
         key={option.id}
         fullWidth={!compact}
         size="small"
-        sx={{ minWidth: 0, maxWidth: "100%" }}
+        sx={compact ? coreRow : { minWidth: 0, maxWidth: "100%" }}
       >
+        {compact && (
+          <Typography
+            component="label"
+            htmlFor={inputId}
+            variant="body2"
+            color="text.secondary"
+          >
+            {option.name}
+          </Typography>
+        )}
         {!compact && (
           <InputLabel htmlFor={inputId} shrink>{option.name}</InputLabel>
         )}
@@ -137,7 +166,7 @@ export function SessionStartSettings(
           )}
           {option.options.map((item) => (
             <option key={String(item.value)} value={String(item.value)}>
-              {compact ? `${option.name}: ${item.name}` : item.name}
+              {item.name}
             </option>
           ))}
         </Select>
@@ -155,7 +184,7 @@ export function SessionStartSettings(
       onKeyDown={(event): void => event.stopPropagation()}
       sx={{
         width: "100%",
-        maxWidth: 560,
+        maxWidth: 400,
         textAlign: "left",
         cursor: "default",
       }}
@@ -163,21 +192,35 @@ export function SessionStartSettings(
       <Box
         data-start-core
         sx={{
-          display: "flex",
-          justifyContent: "center",
-          flexWrap: "wrap",
-          gap: 0.75,
+          display: core.length || presets.length ? "block" : "none",
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: "12px",
+          py: 0.25,
+          "& > * + *": { borderTop: "1px solid", borderColor: "divider" },
         }}
       >
         {presets.length > 0 && (
-          <FormControl size="small" sx={{ minWidth: 0, maxWidth: "100%" }}>
+          <FormControl size="small" sx={coreRow}>
+            <Typography
+              component="label"
+              htmlFor={`${id}-preset`}
+              variant="body2"
+              color="text.secondary"
+            >
+              Preset
+            </Typography>
             <Select
               native
               variant="standard"
               disableUnderline
               value={active?.id ?? ""}
               disabled={unavailable}
-              inputProps={{ "aria-label": "Preset", "data-start-preset": true }}
+              inputProps={{
+                id: `${id}-preset`,
+                "aria-label": "Preset",
+                "data-start-preset": true,
+              }}
               onChange={(event): void => {
                 const preset = presets.find((item) =>
                   item.id === event.target.value
@@ -194,14 +237,14 @@ export function SessionStartSettings(
               }}
               sx={compactSelect}
             >
-              <option value="" disabled>Preset: Custom</option>
+              <option value="" disabled>Custom</option>
               {presets.map((preset) => (
                 <option
                   key={preset.id}
                   value={preset.id}
                   disabled={presetDisabled(preset)}
                 >
-                  Preset: {preset.name}
+                  {preset.name}
                 </option>
               ))}
             </Select>
