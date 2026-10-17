@@ -4153,29 +4153,37 @@ impl Hub {
     }
 
     /// The session's queued prompts and parked drafts, in order.
+    /// Authorize and copy under the same lock so an ownership change cannot
+    /// expose a different user's messages between admission and observation.
     #[must_use]
-    pub fn queue_and_drafts(
+    pub(crate) fn queue_and_drafts(
         &self,
         session_id: &str,
+        visible: impl FnOnce(&SessionMeta) -> bool,
     ) -> Option<(Vec<QueuedMessage>, Vec<QueuedMessage>)> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
-        Some((s.queue.clone(), s.drafts.clone()))
+        visible(&s.meta).then(|| (s.queue.clone(), s.drafts.clone()))
     }
 
     /// At most `max` hot-log events: the first ones after `after_seq` when it
     /// is given, otherwise the last ones before `before_seq` (or the tail).
     /// The flag reports whether the retained window's start was included.
+    /// Visibility is checked atomically with the read.
     #[must_use]
-    pub fn log_window(
+    pub(crate) fn log_window(
         &self,
         session_id: &str,
         after_seq: Option<u64>,
         before_seq: Option<u64>,
         max: usize,
+        visible: impl FnOnce(&SessionMeta) -> bool,
     ) -> Option<(Vec<Envelope>, bool)> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
+        if !visible(&s.meta) {
+            return None;
+        }
         let end = before_seq.map_or(s.log.len(), |before| {
             s.log.partition_point(|e| e.seq < before)
         });
@@ -8252,7 +8260,9 @@ mod core_tests {
         hub.retry_resource_wait("wait");
         assert!(rx.try_recv().is_err());
         hub.set_paused("wait", false);
-        let id = hub.queue_and_drafts("wait").unwrap().0[0].id.clone();
+        let id = hub.queue_and_drafts("wait", |_| true).unwrap().0[0]
+            .id
+            .clone();
         hub.set_queue_editing("wait", Some(id));
         hub.retry_resource_wait("wait");
         assert!(rx.try_recv().is_err());

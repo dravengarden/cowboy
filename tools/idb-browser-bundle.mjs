@@ -20,7 +20,8 @@ if (
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics" && suite !== "review-context" && suite !== "loading-progress"
+  suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "loading-progress"
 ) {
   throw new Error("unknown suite");
 }

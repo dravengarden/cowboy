@@ -84,10 +84,12 @@ const cowboy = Object.freeze({
   preferences: namespace("preferences", { schema: none, get: (scope) => ({ scope }) }),
   session: namespace("session", {
     info: none,
+    usage: none,
     queue: query,
     drafts: query,
     message: (id, q) => ({ ...q, id }),
     events: query,
+    history: query,
   }),
   calls: namespace("calls", {
     capabilities: none,
@@ -96,7 +98,20 @@ const cowboy = Object.freeze({
     result: (call_id, q) => ({ ...q, call_id }),
     observe: (request_id) => ({ request_id }),
   }),
-  sessions: namespace("sessions", { list: query, info: id }),
+  sessions: namespace("sessions", {
+    list: query,
+    info: id,
+    usage: id,
+    queue: (session_id, q) => ({ ...q, session_id }),
+    drafts: (session_id, q) => ({ ...q, session_id }),
+    message: (session_id, id, q) => ({ ...q, session_id, id }),
+    events: (session_id, q) => ({ ...q, session_id }),
+    history: (session_id, q) => ({ ...q, session_id }),
+  }),
+  usage: namespace("usage", {
+    list: query,
+    read: (account, q) => ({ ...q, account }),
+  }),
   documents: namespace("documents", {
     list: query,
     read: (id, q) => ({ ...q, id }),

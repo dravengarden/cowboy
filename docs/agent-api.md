@@ -1,14 +1,14 @@
 # Agent API: Cowboy as a token-frugal MCP surface
 
-Status: read composition and explicit scoped actions implemented; bounded read
-pages and topic discovery completed, 2026-10-17.
+Status: read composition and explicit scoped actions implemented; same-owner
+session content/history and cached account usage/quota reads added, 2026-10-17.
 Activation follows the Controller and Machine compatibility gates below.
 
 ## Problem
 
 Cowboy owns live session state; Matrix owns durable historical evidence. Native
 agents own execution and conversation state. The MCP surface gives an agent
-bounded access to Cowboy's sessions, queue, documents and managed calls. The
+bounded access to Cowboy's sessions, queue, usage, documents and managed calls. The
 `cowboy review` CLI remains a single-command shortcut to the same review
 contract. Neither surface creates a second review engine or memory store.
 
@@ -110,10 +110,10 @@ Managed child sessions have no grant and no Agent API.
 `help:"actions"` return declarations without starting a program. Help and code
 are mutually exclusive. Definitions stay stable for the MCP process; an
 unavailable capability is reported instead of silently falling back.
-Use `help:"session"`, `"sessions"`, `"calls"`, `"documents"` or
+Use `help:"session"`, `"sessions"`, `"usage"`, `"calls"`, `"documents"` or
 `"preferences"` for just that domain. Read topics include their own type
 dependencies and share one declaration source with the full SDK. Each of the
-first four topics is tested to cost less than half of full read discovery.
+five read topics is tested to cost less than half of full read discovery.
 
 Resource `cowboy://sdk/v1` serves the strict declaration
 ([`src/agent_api.rs`](../src/agent_api.rs) `SDK`). `cowboy_read` runs CODE
@@ -122,9 +122,10 @@ with `format: "module"`; `language: "js"` selects JavaScript.
 
 | Namespace | Operations |
 |---|---|
-| `session` | `info()`, `queue({after?,limit?,chars?})`, `drafts({after?,limit?,chars?})`, `message(id, window?)`, `events({after?, before?, limit?, chars?, kinds?})` |
+| `session` | `info()`, `usage()`, `queue(query?)`, `drafts(query?)`, `message(id, window?)`, `events(query?)`, `history(query?)` |
 | `calls` | `capabilities()`, `inspect(id)`, `wait(id, ms?)`, `result(id, window?)`, `observe(request_id)` |
-| `sessions` | `list({after?,status?,limit?})`, `info(id)`: sessions of the same owner, never system or closing sessions |
+| `sessions` | `list({after?,status?,limit?})`, `info(id)`, `usage(id)`, `queue(id, query?)`, `drafts(id, query?)`, `message(id, message_id, window?)`, `events(id, query?)`, `history(id, query?)`: same owner, never system or closing sessions |
+| `usage` | `list({after?,limit?})`, `read(account, {section?,path?,offset?,limit?,describe?})`: cached Service account observations |
 | `documents` | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents |
 | `preferences` | `schema()`, `get("about")`: typed account preferences and compact ordering choices |
 
@@ -177,6 +178,92 @@ inside the selected interval. This preserves a tool's final update even when its
 start lies on an earlier page, while keeping streaming chunks together.
 `reached_start:false` at the end means older history
 is no longer retained. Zero list limits are rejected.
+
+### Other sessions and archived history
+
+The plural `sessions` methods use the same bounds and projections as `session`.
+An explicit target must have the caller's owner, including the anonymous local
+owner when applicable. System, closing, foreign and missing targets all return
+`not_found`. Queue and live-log ownership checks happen under the lock copying
+the data; archived reads recheck target visibility and the active parent after
+storage I/O. Reading does not start, resume or hydrate a worker.
+
+`events` reads the retained live window. `history` reads saved history through
+the existing byte-bounded storage reader, scanning at most 64 raw events per
+call. It accepts `before`, `limit`, `chars` and `kinds`, pages backwards through
+`next.before`, and includes `source:"durable"`. Without persistence it returns
+the bounded in-memory history with `source:"memory"`; `reached_start:false`
+still identifies missing older history. Saved history may lag the live window.
+Streamed messages and tools can span raw pages; combine their sequences when
+assembling a conversation. Both surfaces omit thoughts and retain the same
+per-item text limits.
+
+`session.usage()` and `sessions.usage(id)` return that session's reported
+context/cost payload and its observation time, plus the account key declared
+by its exact Provider version and digest. Missing usage and unknown account
+bindings remain null. The Provider ID (for example `codex`) is not assumed to
+be the account key (for example `openai`). Session context consumption is not
+account quota or a total billed-token counter.
+
+### Account usage and quota
+
+`usage.list()` lists the active Plugin-defined account keys, labels, status,
+source, observation/refresh metadata and available sections. It returns 20
+accounts by default (maximum 100), in account-ID order; use `next` as `after`.
+It does not include account payloads or activity history. Account observations
+are Service-wide, matching the product Usage API: on an authenticated Service
+the parent must belong to an active product user. An unowned legacy session
+does not gain this access.
+
+`usage.read(account)` defaults to the `quota` section: the Provider's cached
+`rate_limits` payload. Select `section:"account"` for its reported account/plan
+or balance information, or `section:"activity"` for its cached activity.
+Cowboy preserves Provider fields and units instead of adding another parser.
+For example, `usedPercent` means used, `windowDurationMins` is minutes, and
+`resetsAt` is epoch seconds; `observed_at_ms` is milliseconds. Daily activity
+is not evidence of consumption within the current plan window. A missing
+section is `available:false` with null data, never an invented zero or 100%.
+Quota inferred only from a live session remains available through that
+session's `usage().usage.raw`, separately from the cached account observation.
+
+Use a JSON pointer such as `path:"/rateLimits/primary"` or
+`path:"/last24Hours/summary"` to select before copying. `page.data` contains at
+most 50 object entries or array elements by default (maximum 200); object keys
+sort lexically, array order is preserved. Resume using `page.range.next` as
+`offset`, retaining the same section/path. These are live cached observations,
+not snapshots: compare observation times and restart if consistency matters.
+`describe:true` returns field types and sizes instead of their contents, useful
+for new Plugins or large activity records. A selected page above 32 KiB returns
+`selection_too_large`; inspect its shape and select a deeper path. The final
+program result still has the independent 16 KiB limit.
+
+These operations project the existing cache without cloning unrelated account
+activity, starting a collector, refreshing a quota, or spending reset credits.
+`refreshing`, `refresh.stale`, observation timestamps and retained errors stay
+visible. Normal UsageService collection keeps its existing schedule. An
+explicit refresh still uses the authenticated Usage HTTP/CLI surface.
+
+For example, one read program can resolve the current account and select only
+its reported quota data:
+
+```ts
+const current = await cowboy.session.usage();
+if (!current.account) return { account: null, usage: current.usage };
+const quota = await cowboy.usage.read(current.account);
+return { account: current.account, observed_at_ms: quota.observed_at_ms,
+  refresh: quota.refresh, available: quota.available, quota: quota.page };
+```
+
+### Coverage boundary
+
+The read surface now covers same-owner session summaries, content, saved
+history, queues/drafts, per-session usage, cached account quota/activity,
+documents, managed calls and supported preferences. It is not full parity with
+every Cowboy UI/HTTP feature. Cross-session creation, prompting, cancellation
+and configuration, general Machine/Plugin administration, usage refresh/reset
+actions and arbitrary telemetry queries are not MCP operations. They keep
+their existing product/CLI permission and activation contracts; no read method
+implicitly performs them. The stages below track separate future additions.
 
 These additions retain the protocol-30/31 gateway actions and work for Codex
 and Claude through the shared server. Upgrade the Controller for read behavior

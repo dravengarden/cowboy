@@ -469,6 +469,18 @@ impl UsageService {
         snapshot
     }
 
+    /// Project cached observations without starting a collector or cloning
+    /// unrelated account activity. The callback must stay bounded and synchronous.
+    pub(crate) async fn cached_view<T>(
+        &self,
+        read: impl FnOnce(&UsageSnapshot, &[PluginUsageSpec], &BTreeSet<String>) -> T,
+    ) -> T {
+        let bindings = self.bindings.current();
+        let refreshing = self.in_flight.lock().clone();
+        let snapshot = self.snapshot.lock().await;
+        read(&snapshot, &bindings, &refreshing)
+    }
+
     /// Wakes on every snapshot or refresh-state change; the Controller fans
     /// the current snapshot out to every connected client.
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
@@ -1407,6 +1419,32 @@ struct PluginActivityTransform {
 mod tests {
     use super::*;
     use crate::plugin_host::{UsageCollectorKind, UsageErrorKind};
+
+    #[tokio::test]
+    async fn cached_views_neither_start_collectors_nor_rewrite_observations() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("usage.json");
+        let service =
+            UsageService::with_bindings(None, Some(cache.clone()), vec![openai_usage_binding()]);
+        let changes = service.subscribe();
+        let observed = service
+            .cached_view(|snapshot, bindings, refreshing| {
+                assert_eq!(bindings[0].account, "openai");
+                assert!(refreshing.is_empty());
+                snapshot.providers[0].observed_at_ms
+            })
+            .await;
+        assert_eq!(
+            service
+                .cached_view(|snapshot, _, _| snapshot.providers[0].observed_at_ms)
+                .await,
+            observed
+        );
+        assert!(!service.warming.load(Ordering::Relaxed));
+        assert!(service.in_flight.lock().is_empty());
+        assert!(!changes.has_changed().unwrap());
+        assert!(!cache.exists());
+    }
 
     #[test]
     fn reset_claim_and_ids_follow_plugin_bindings() {

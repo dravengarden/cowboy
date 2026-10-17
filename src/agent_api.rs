@@ -32,10 +32,12 @@ pub const MAX_BROKER_BYTES: usize = 1024 * 1024;
 /// dispatcher and [`SDK`] are checked against this list.
 pub const READ_OPERATIONS: &[&str] = &[
     "session.info",
+    "session.usage",
     "session.queue",
     "session.drafts",
     "session.message",
     "session.events",
+    "session.history",
     "calls.capabilities",
     "calls.inspect",
     "calls.wait",
@@ -43,6 +45,14 @@ pub const READ_OPERATIONS: &[&str] = &[
     "calls.observe",
     "sessions.list",
     "sessions.info",
+    "sessions.usage",
+    "sessions.queue",
+    "sessions.drafts",
+    "sessions.message",
+    "sessions.events",
+    "sessions.history",
+    "usage.list",
+    "usage.read",
     "documents.list",
     "documents.read",
     "preferences.schema",
@@ -111,17 +121,18 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
     match topic {
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["session","sessions","calls","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list()).map(s=>({id:s.id,status:s.status}));"})),
+            "help":["session","sessions","usage","calls","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list()).map(s=>({id:s.id,status:s.status}));"})),
         "preferences" => Some(
             json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
         ),
         "read" => Some(json!({"api":API_VERSION,"types":SDK})),
         "session" => Some(
-            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_SDK].concat())}),
+            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_TYPES,SESSION_SDK].concat())}),
         ),
         "sessions" => Some(
-            json!({"api":API_VERSION,"types":([SDK_HEADER,SESSION_VIEW,SESSIONS_SDK].concat())}),
+            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_TYPES,SESSIONS_SDK].concat())}),
         ),
+        "usage" => Some(json!({"api":API_VERSION,"types":([SDK_HEADER,USAGE_SDK].concat())})),
         "calls" => {
             Some(json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,CALLS_SDK].concat())}))
         }
@@ -163,8 +174,10 @@ export type SessionView = {
   queued: number; drafts: number; events: number; background_tasks: number;
   context: { used: number; size: number } | null;
 };
+export type SessionUsageView = {session_id:string;provider:string;account:string|null;context:SessionView["context"];usage:{used:number;size:number;observed_at_ms:number;raw:unknown}|null};
+// Session usage is context/cost reported by that exact Provider generation, not account quota.
 "#,
-SESSION_SDK: r#"
+SESSION_TYPES: r#"
 export type Seq = number;
 export type Message = { id: string; text: string; attachments: number; scheduled_at_ms?: number; range: TextRange };
 export type MessageQuery = {after?:string;limit?:number;chars?:number}; // queue order; last id resumes; default20/max100, chars default400/max4000
@@ -181,15 +194,20 @@ export type EventItem = {
   tool?: { id: string; title?: string; status?: string; kind?: string };
 };
 export type EventPage = { items: EventItem[]; reached_start: boolean; more: boolean; next: {after:Seq}|{before:Seq}|null };
+export type HistoryPage = EventPage & {source:"durable"|"memory"};
 // Resume with {...query,...page.next}, even for empty filtered pages. Tool spans
 // can overlap: never derive a cursor from item.to. Pages are live observations.
+"#,
+SESSION_SDK: r#"
 export interface Cowboy {
   session: {
     info(): Promise<SessionView>;
+    usage(): Promise<SessionUsageView>;
     queue(q?: MessageQuery): Promise<Message[]>;
     drafts(q?: MessageQuery): Promise<Message[]>;
     message(id: string, q?: TextWindow): Promise<Message>; // full queued/draft text in pages
     events(q?: EventQuery): Promise<EventPage>;
+    history(q?: Omit<EventQuery,"after">): Promise<HistoryPage>; // backward saved pages; no wake; may lag live events
   };
 }
 "#,
@@ -220,8 +238,32 @@ export interface Cowboy {
   sessions: { // same owner; id order; last id resumes, default50/max200; live pages
     list(q?: { after?: string; status?: string; limit?: number }): Promise<SessionView[]>;
     info(id: string): Promise<SessionView>;
+    usage(id: string): Promise<SessionUsageView>;
+    queue(id: string, q?: MessageQuery): Promise<Message[]>;
+    drafts(id: string, q?: MessageQuery): Promise<Message[]>;
+    message(id: string, message_id: string, q?: TextWindow): Promise<Message>;
+    events(id: string, q?: EventQuery): Promise<EventPage>;
+    history(id: string, q?: Omit<EventQuery,"after">): Promise<HistoryPage>;
   };
 }
+"#,
+USAGE_SDK: r#"
+export type UsageAccount = {account:string;label:string;status:string;source:string|null;observed_at_ms:number|null;refresh:{last_attempt_at_ms:number;manual_refresh_after_ms:number;next_auto_refresh_at_ms:number;stale:boolean}|null;refreshing:boolean;error:string|null};
+export type UsageQuery = {section?:"quota"|"account"|"activity";path?:string;offset?:number;limit?:number;describe?:boolean};
+export type UsagePage = UsageAccount & {section:string;available:boolean;page:{path:string;kind:"object"|"array"|"value";describe:boolean;data:unknown;range:{offset:number;next:number|null;total:number}}};
+export interface Cowboy {
+  usage: { // Service account observations, visible to active product users; no collector is started
+    list(q?:{after?:string;limit?:number}): Promise<{accounts:(UsageAccount & {sections:Record<"account"|"quota"|"activity",boolean>})[];next:string|null;next_refresh_at_ms:number;refresh_interval_ms:number}>;
+    read(account:string, q?:UsageQuery): Promise<UsagePage>;
+  };
+}
+// list: account ID order, default20/max100. read: quota by default; Provider JSON stays intact.
+// path is a JSON pointer. Object keys sort; arrays retain order. default50/max200 entries.
+// Use page.range.next as offset; pages are live, not snapshots. describe:true gives key/type/size only.
+// selection_too_large: use describe:true, then select a deeper path (32KiB/page).
+// observed_at_ms/refresh describe freshness; available:false is unknown, never zero or full quota.
+// In reported rateLimits buckets, usedPercent is USED; resetsAt is epoch seconds, windowDurationMins is minutes.
+// Activity history is separate from account limit windows. Select paths before returning data to the model.
 "#,
 DOCUMENTS_SDK: r#"
 export type DocumentMeta = {
@@ -280,7 +322,7 @@ mod tests {
                 + RECEIPT_DESCRIPTION.len()
                 < 1500
         );
-        assert!(SDK.len() < 6000);
+        assert!(SDK.len() < 10 * 1024);
     }
 
     #[test]
@@ -290,6 +332,7 @@ mod tests {
             ("sessions", "type SessionView", "documents: {"),
             ("calls", "type TextWindow", "session: {"),
             ("documents", "type TextRange", "calls: {"),
+            ("usage", "type UsageAccount", "documents: {"),
         ] {
             let help = help(topic).unwrap();
             let types = help["types"].as_str().unwrap();

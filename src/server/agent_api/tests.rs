@@ -358,6 +358,9 @@ impl Host for FakeHost {
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
             "documents.read" => Ok(json!({"body": "x".repeat(MAX_REPLY_BYTES)})),
+            "session.usage" | "session.history" | "sessions.history" | "sessions.usage"
+            | "sessions.events" | "sessions.message" | "sessions.queue" | "sessions.drafts"
+            | "usage.list" | "usage.read" => Ok(json!({"op":op,"args":args})),
             _ => Err("unknown_operation".into()),
         }
     }
@@ -400,6 +403,42 @@ async fn a_typed_program_composes_calls_and_returns_only_its_result() {
         json!({"schema":1,"state":"ok","value":{"status":"busy","call":"running","missing":"not_found"},
             "logs":"checked 2\n"})
     );
+}
+
+#[tokio::test]
+async fn scoped_runner_methods_preserve_explicit_ids_over_query_fields() {
+    let Some(value) = run(r#"
+        return [
+          await cowboy.session.usage(),
+          await cowboy.sessions.usage('mine'),
+          await cowboy.sessions.events('mine', {session_id:'foreign', after:7}),
+          await cowboy.sessions.message('mine', 'message', {session_id:'foreign', id:'other', chars:8}),
+          await cowboy.sessions.queue('mine', {limit:1}),
+          await cowboy.sessions.drafts('mine', {chars:5}),
+          await cowboy.usage.list({limit:1}),
+          await cowboy.usage.read('account', {account:'other', section:'quota'}),
+          await cowboy.sessions.history('mine', {session_id:'foreign',before:50}),
+          await cowboy.session.history({before:30})
+        ];
+    "#, false, 10_000).await else { return; };
+    assert_eq!(value["state"], "ok");
+    let rows = value["value"].as_array().unwrap();
+    assert_eq!(rows[0]["args"], json!({}));
+    assert_eq!(rows[1]["args"], json!({"id":"mine"}));
+    assert_eq!(rows[2]["args"], json!({"session_id":"mine","after":7}));
+    assert_eq!(
+        rows[3]["args"],
+        json!({"session_id":"mine","id":"message","chars":8})
+    );
+    assert_eq!(rows[4]["args"], json!({"session_id":"mine","limit":1}));
+    assert_eq!(rows[5]["args"], json!({"session_id":"mine","chars":5}));
+    assert_eq!(rows[6]["args"], json!({"limit":1}));
+    assert_eq!(
+        rows[7]["args"],
+        json!({"account":"account","section":"quota"})
+    );
+    assert_eq!(rows[8]["args"], json!({"session_id":"mine","before":50}));
+    assert_eq!(rows[9]["args"], json!({"before":30}));
 }
 
 #[tokio::test]

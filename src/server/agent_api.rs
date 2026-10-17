@@ -30,6 +30,8 @@ use crate::managed_calls::service::Ledger;
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
 mod review_defaults;
+mod session_reads;
+mod usage_reads;
 pub(super) use actions::invoke;
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
@@ -166,14 +168,31 @@ impl Host for SessionHost<'_> {
         // lose its account while a preceding operation is awaiting a reply.
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         match op {
-            "session.info" => {
-                only_keys(&args, &[])?;
-                let info = self
-                    .state
-                    .hub
-                    .session_info(&self.meta.id)
-                    .ok_or("not_found")?;
-                Ok(session_view(&info))
+            "session.history" | "sessions.history" => {
+                let value = session_reads::history(
+                    &self.state.hub,
+                    self.state.store.as_ref(),
+                    self.meta,
+                    op == "sessions.history",
+                    args,
+                )
+                .await?;
+                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+                Ok(value)
+            }
+            "session.info" | "session.usage" | "session.queue" | "session.drafts"
+            | "session.message" | "session.events" | "sessions.info" | "sessions.usage"
+            | "sessions.queue" | "sessions.drafts" | "sessions.message" | "sessions.events" => {
+                session_reads::read(
+                    &self.state.hub,
+                    &self.state.provider_catalog,
+                    self.meta,
+                    op,
+                    args,
+                )
+            }
+            "usage.list" | "usage.read" => {
+                usage_reads::read(self.state, self.meta, op, &args).await
             }
             "preferences.schema" => {
                 only_keys(&args, &[])?;
@@ -194,43 +213,6 @@ impl Host for SessionHost<'_> {
                 super::preferences::read_value(self.state, owner, arg_str(&args, "scope")?)
                     .await
                     .map_err(str::to_owned)
-            }
-            "session.queue" | "session.drafts" => {
-                only_keys(&args, &["after", "limit", "chars"])?;
-                let (queue, drafts) = self
-                    .state
-                    .hub
-                    .queue_and_drafts(&self.meta.id)
-                    .ok_or("not_found")?;
-                let items = if op == "session.queue" { queue } else { drafts };
-                message_page(&items, &args)
-            }
-            "session.message" => {
-                only_keys(&args, &["id", "offset", "chars"])?;
-                let id = arg_str(&args, "id")?;
-                let (queue, drafts) = self
-                    .state
-                    .hub
-                    .queue_and_drafts(&self.meta.id)
-                    .ok_or("not_found")?;
-                let message = queue
-                    .iter()
-                    .chain(&drafts)
-                    .find(|message| message.id == id)
-                    .ok_or("not_found")?;
-                let mut value = message_view(message);
-                text_window(&mut value, "text", &args)?;
-                Ok(value)
-            }
-            "session.events" => {
-                only_keys(&args, &["after", "before", "limit", "chars", "kinds"])?;
-                let query = EventQuery::parse(&args)?;
-                let (window, reached_start) = self
-                    .state
-                    .hub
-                    .log_window(&self.meta.id, query.after, query.before, EVENT_WINDOW)
-                    .ok_or("not_found")?;
-                Ok(query.page(&window, reached_start))
             }
             "calls.capabilities" => {
                 only_keys(&args, &[])?;
@@ -306,21 +288,6 @@ impl Host for SessionHost<'_> {
                     .take(limit)
                     .collect();
                 Ok(Value::Array(rows))
-            }
-            "sessions.info" => {
-                only_keys(&args, &["id"])?;
-                let id = arg_str(&args, "id")?;
-                let info = self
-                    .state
-                    .hub
-                    .session_info(id)
-                    .filter(|info| {
-                        !info.meta.system
-                            && !info.meta.closing
-                            && info.meta.owner_user_id == self.meta.owner_user_id
-                    })
-                    .ok_or("not_found")?;
-                Ok(session_view(&info))
             }
             "documents.list" | "documents.read" => {
                 let owner = self.meta.owner_user_id.as_deref().ok_or("unavailable")?;
