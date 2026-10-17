@@ -316,8 +316,68 @@ The optional Sessions directory starts visibly empty on ordinary creation.
 Global means no selection: it is not a synthetic row in the directory dropdown.
 A selected directory can be cleared through the field's clear button or the
 popup's Clear selection action.
-Creation from a folder preselects that folder. Choosing a directory does not
-change the source project or executor. Successful creation writes an explicit
+Creation from a folder preselects that folder. Choosing a directory applies its
+inherited creation defaults to fields the user has not explicitly selected.
+Successful creation writes an explicit
 placement, including Global, so project bindings cannot override this choice.
 The picker reveals the selected directory on reopening and keeps its hierarchy
 preference separate from the Project and legacy working-directory pickers.
+
+### Inherited directory defaults
+
+Directories store a sparse `defaults` object in the existing owner-scoped synced
+folder state. Supported keys are `project` (registered workspace ID), `machine`
+(files and command execution), `runtime_machine` (agent process), `provider`,
+and `preset` (`provider/preset-id`). Presets come from the signed Provider
+catalog and include its supported model/reasoning combinations; Cowboy does not
+invent model IDs or copy permission, credential, prompt or tool policies into
+the directory tree. New keys must extend the closed server schema and its UI.
+
+Each field independently uses the nearest explicit value. An absent key inherits;
+JSON `null` stops ancestry lookup and uses the global creation default, except
+`project: null`, which requires an explicit project selection. The legacy unique
+`project` binding remains an automatic filing rule and supplies a compatibility
+default when no explicit `defaults.project` exists. Creation defaults need not be
+unique: multiple directories may create sessions for the same project.
+
+Subdirectories retain sparse overrides, never copies of parent defaults. Changing
+or moving a directory updates inherited defaults immediately; moving or updating
+an existing session does not switch its project, execution placement or agent.
+The default settings sheet shows the effective value and source of each field.
+The create form preserves manual choices when its destination changes. A preset
+is provider-qualified: changing agents requires selecting a compatible preset or
+Agent default rather than silently applying another provider's configuration.
+
+Both creation endpoints validate folder access before preparing a session, resolve
+omitted inputs, validate presets against the exact installed generation, and save
+configuration preferences before workspace preparation schedules the first prompt.
+They write explicit placement. If the destination is deleted during remote
+preparation, the successfully created session stays at Global. Removed machines,
+projects, providers and incompatible presets never silently redirect creation.
+Legacy project labels resolve only to unambiguous registered roots, never paths.
+
+Mobile and Desktop expose **Directory defaults** in the folder actions menu
+(`D` in Desktop). The existing project-binding action continues to control
+automatic filing independently. API and CLI share the same arbiter and resolver:
+
+```sh
+cowboy dir list
+cowboy dir new Anthropic --parent f-example
+cowboy dir defaults f-example
+cowboy dir set f-example project suger
+cowboy dir set f-example machine hawk
+cowboy dir set f-example runtime_machine ovh
+cowboy dir set f-example provider claude-code
+cowboy dir set f-example preset claude-code/opus-default
+cowboy dir set f-child project --clear
+cowboy dir set f-child machine --inherit
+cowboy session new --dir f-example
+```
+
+Use the registered IDs from the inventory, not the illustrative machine names
+above. `GET /api/folders/{id}/defaults` returns `values` and `sources`;
+`PATCH` accepts `{values: {...}, inherit: [...]}`. Changes merge per field so
+editing a machine does not overwrite another client's project edit. Mutations
+use existing folder sync persistence and owner checks. PostgreSQL migration 0059
+and SQLite migration 0033 add `defaults_json` without changing deployed migrations.
+This behavior is shared by Codex and Claude through the Provider contract.

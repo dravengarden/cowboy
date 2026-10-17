@@ -5156,16 +5156,15 @@ impl SqliteStorage {
 
     pub(super) async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
         let rows: Vec<SessionFolderRow> = sqlx::query_as(
-            "SELECT id, owner_user_id, name, parent_id, project, position \
+            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json \
              FROM session_folders ORDER BY position ASC, created_at_ms ASC, id ASC",
         )
         .fetch_all(&self.pool)
         .await
         .context("SELECT SQLite session_folders")?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(SessionFolderRow::into_folder)
-            .collect())
+            .collect()
     }
 
     pub(super) async fn replace_session_folders(
@@ -5208,12 +5207,12 @@ impl SqliteStorage {
         for folder in folders {
             sqlx::query(
                 "INSERT INTO session_folders \
-                 (id, owner_user_id, name, parent_id, project, position, created_at_ms, updated_at_ms) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) \
+                 (id, owner_user_id, name, parent_id, project, position, created_at_ms, updated_at_ms, defaults_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8) \
                  ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
                  name = excluded.name, parent_id = excluded.parent_id, \
                  project = excluded.project, position = excluded.position, \
-                 updated_at_ms = excluded.updated_at_ms",
+                 defaults_json = excluded.defaults_json, updated_at_ms = excluded.updated_at_ms",
             )
             .bind(&folder.id)
             .bind(folder.owner_user_id.as_deref())
@@ -5222,6 +5221,7 @@ impl SqliteStorage {
             .bind(folder.project.as_deref())
             .bind(folder.position)
             .bind(timestamp)
+            .bind(serde_json::to_string(&folder.defaults)?)
             .execute(&mut *transaction)
             .await
             .with_context(|| format!("UPSERT SQLite session_folder {}", folder.id))?;

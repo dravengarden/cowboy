@@ -8,6 +8,8 @@
 import type { Mutators } from "@cowboy/state-sync";
 import type { SessionMeta } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
+import type { FolderDefaults, FolderDefaultKey } from "./folderDefaults";
+import { FOLDER_DEFAULT_FIELDS, validFolderDefaults } from "./folderDefaults";
 
 export interface SessionFolder {
   readonly id: string;
@@ -15,6 +17,7 @@ export interface SessionFolder {
   readonly parent: string | null;
   readonly position: number;
   readonly project: string | null;
+  readonly defaults?: FolderDefaults;
 }
 
 /** Placement value for "explicitly at the top level" (the Controller's
@@ -159,6 +162,16 @@ function withFolders(
  *  unchanged when the arbiter would reject it, so the local view never shows
  *  a state the server cannot reach. */
 export const sessionFolderMutators = {
+  defaults: (value: SessionFoldersValue, a: { id: string; values: FolderDefaults; inherit?: FolderDefaultKey[] }): SessionFoldersValue => {
+    if (!sessionFolderById(value, a.id)) return value;
+    if (!validFolderDefaults(a.values) || (a.inherit ?? []).some((key) => !Object.hasOwn(FOLDER_DEFAULT_FIELDS, key) || Object.hasOwn(a.values, key))) return value;
+    return withFolders(value, value.folders.map((folder) => {
+      if (folder.id !== a.id) return folder;
+      const defaults = { ...folder.defaults, ...a.values };
+      for (const key of a.inherit ?? []) delete defaults[key];
+      return { ...folder, defaults };
+    }));
+  },
   create: (
     value: SessionFoldersValue,
     a: {

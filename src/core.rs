@@ -2218,6 +2218,14 @@ impl Hub {
         self.inner.folders.lock().set_folders(folders);
     }
 
+    pub fn folder_defaults(
+        &self,
+        actor: &crate::session_folders::FolderActor,
+        id: &str,
+    ) -> Result<crate::session_folders::defaults::ResolvedDefaults, String> {
+        self.inner.folders.lock().resolve_defaults(actor, id)
+    }
+
     /// Restore persisted sessions while reconciling detached runtime workers.
     /// A persisted `Busy` row is interrupted only when no matching live worker
     /// exists. This prevents a control-plane deploy from generating a false
@@ -7203,6 +7211,7 @@ mod runtime_reconciliation_tests {
     fn restore_rehydrates_folder_placements_into_the_live_tree() {
         let hub = Hub::new();
         hub.restore_session_folders(vec![crate::session_folders::SessionFolder {
+            defaults: Default::default(),
             id: "f-a".to_owned(),
             owner_user_id: None,
             name: "A".to_owned(),

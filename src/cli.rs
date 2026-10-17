@@ -65,6 +65,9 @@ enum Command {
     /// sessions through this computer's login, as the Web UI does.
     #[cfg(feature = "full")]
     Session(crate::product_cli::SessionArgs),
+    /// Inspect and configure inherited Sessions directory defaults.
+    #[cfg(feature = "full")]
+    Dir(crate::product_cli::DirArgs),
     /// Call any authenticated Cowboy HTTP route through this computer's login.
     #[cfg(feature = "full")]
     Api(crate::product_cli::ApiArgs),
@@ -530,6 +533,8 @@ impl Cli {
             Command::Login(args) => login_client(args).await,
             #[cfg(feature = "full")]
             Command::Session(args) => Box::pin(crate::product_cli::run_session(args)).await,
+            #[cfg(feature = "full")]
+            Command::Dir(args) => Box::pin(crate::product_cli::run_dir(args)).await,
             #[cfg(feature = "full")]
             Command::Api(args) => Box::pin(crate::product_cli::run_api(args)).await,
             #[cfg(feature = "full")]

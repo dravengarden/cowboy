@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::merge_session_order;
 
+pub mod defaults;
+use defaults::{DefaultKey, FolderDefaults, ResolvedDefaults};
+
 /// Longest accepted folder name, in characters.
 pub const FOLDER_NAME_MAX_CHARS: usize = 80;
 /// Longest accepted folder id or project label, in bytes.
@@ -39,6 +42,8 @@ pub struct SessionFolder {
     pub parent: Option<String>,
     pub position: i64,
     pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub defaults: FolderDefaults,
 }
 
 /// Who is mutating: the product principal reduced to what folders care about.
@@ -139,6 +144,42 @@ fn project_arg(args: &serde_json::Value) -> Result<Option<String>, String> {
 }
 
 impl SessionFolders {
+    /// Resolve only within the owning user's tree, with provenance and cycle protection.
+    pub fn resolve_defaults(
+        &self,
+        actor: &FolderActor,
+        id: &str,
+    ) -> Result<ResolvedDefaults, String> {
+        let first = self.touchable(actor, id)?;
+        let owner = &first.owner_user_id;
+        let mut result = ResolvedDefaults::default();
+        let mut seen = HashSet::new();
+        let mut cursor = Some(first);
+        while let Some(folder) = cursor {
+            if &folder.owner_user_id != owner || !seen.insert(&folder.id) {
+                return Err("invalid directory ancestry".into());
+            }
+            let mut local = folder.defaults.clone();
+            if let Some(project) = &folder.project {
+                local
+                    .entry(DefaultKey::Project)
+                    .or_insert_with(|| Some(project.clone()));
+            }
+            for (key, value) in local {
+                if let std::collections::btree_map::Entry::Vacant(entry) = result.values.entry(key)
+                {
+                    entry.insert(value);
+                    result.sources.insert(key, folder.id.clone());
+                }
+            }
+            cursor = folder
+                .parent
+                .as_deref()
+                .map(|parent| self.find(parent).ok_or("unknown parent directory"))
+                .transpose()?;
+        }
+        Ok(result)
+    }
     /// Replace the folder set (startup restore), keeping placements.
     pub fn set_folders(&mut self, mut folders: Vec<SessionFolder>) {
         folders.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
@@ -270,6 +311,33 @@ impl SessionFolders {
         args: &serde_json::Value,
     ) -> Result<FolderEffects, String> {
         match mutation {
+            "defaults" => {
+                let id = key_arg(args, "id")?;
+                let patch = defaults::parse(args.get("values").ok_or("missing values")?)?;
+                let inherit: Vec<DefaultKey> = serde_json::from_value(
+                    args.get("inherit")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!([])),
+                )
+                .map_err(|_| "invalid inherit fields")?;
+                if inherit.iter().any(|key| patch.contains_key(key)) {
+                    return Err("a default cannot be set and inherited together".into());
+                }
+                let owner = self.touchable(actor, &id)?.owner_user_id.clone();
+                let folder = self
+                    .folders
+                    .iter_mut()
+                    .find(|folder| folder.id == id)
+                    .expect("validated folder");
+                for key in inherit {
+                    folder.defaults.remove(&key);
+                }
+                folder.defaults.extend(patch);
+                Ok(FolderEffects {
+                    replaced_owner: Some(owner),
+                    placements: Vec::new(),
+                })
+            }
             "create" => self.create(actor, args),
             "rename" => {
                 let id = key_arg(args, "id")?;
@@ -360,6 +428,7 @@ impl SessionFolders {
             parent,
             position,
             project,
+            defaults: FolderDefaults::default(),
         });
         Ok(FolderEffects {
             replaced_owner: Some(owner),
@@ -985,6 +1054,7 @@ mod tests {
                 id: "f-b".to_owned(),
                 owner_user_id: None,
                 name: "B".to_owned(),
+                defaults: Default::default(),
                 parent: None,
                 position: 1,
                 project: None,
@@ -993,6 +1063,7 @@ mod tests {
                 id: "f-a".to_owned(),
                 owner_user_id: None,
                 name: "A".to_owned(),
+                defaults: Default::default(),
                 parent: None,
                 position: 0,
                 project: Some("cowboy".to_owned()),
