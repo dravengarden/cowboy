@@ -697,7 +697,7 @@ function ConversationEmptyState({
     : sleeping
     ? kind === "cleared"
       ? "Context cleared. Settings are saved; the agent starts when you send."
-      : "Choose your settings or write a message. The agent starts when you send."
+      : "The agent starts when you send."
     : kind === "cleared"
     ? `Previous context was cleared. ${agent} ${readiness} with a fresh context.`
     : location
@@ -749,7 +749,7 @@ function ConversationEmptyState({
         flex: "1 1 0 !important",
         minHeight: 220,
         width: "100%",
-        px: { xs: 1, sm: 3 },
+        px: { xs: 2.5, sm: 3 },
         py: { xs: 2, sm: 3 },
         alignItems: "center",
         justifyContent: "safe center",
@@ -832,6 +832,7 @@ function ConversationEmptyState({
       {(
         <ButtonBase
           data-conversation-empty-settings
+          title="Session settings"
           aria-label={facts.length ? `Change session settings: ${facts.join(", ")}` : "Session settings"}
           aria-keyshortcuts="Enter Space"
           {...settingsTap}
@@ -849,6 +850,7 @@ function ConversationEmptyState({
           }}
           sx={{
             maxWidth: "100%",
+            minHeight: desktopSize(44),
             px: 0.75,
             py: 0.75,
             borderRadius: 3,
@@ -869,25 +871,9 @@ function ConversationEmptyState({
             alignItems="center"
             gap={0.75}
           >
-            <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>
-              All session settings
+            <Typography variant="body2" sx={{ color: "text.secondary", overflowWrap: "anywhere" }}>
+              {facts.join(" · ") || "Session settings"}
             </Typography>
-            {facts.map((fact) => (
-              <Chip
-                key={fact}
-                label={fact}
-                size="small"
-                variant="outlined"
-                sx={(theme) => ({
-                  height: desktopSize(25),
-                  pointerEvents: "none",
-                  color: "text.secondary",
-                  borderColor: alpha(theme.palette.divider, 0.72),
-                  bgcolor: alpha(theme.palette.background.paper, 0.42),
-                  "& .MuiChip-label": { px: 1, fontSize: "0.72rem" },
-                })}
-              />
-            ))}
             <Tune
               aria-hidden
               sx={{ fontSize: desktopSize(16), color: "text.secondary", opacity: 0.78 }}
