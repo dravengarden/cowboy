@@ -619,7 +619,7 @@ function SessionProjectionBadge({
                 flexShrink: 0,
                 bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
                 color: "primary.main",
-                fontSize: "0.72em",
+                fontSize: "0.6875rem",
                 fontWeight: 700,
                 letterSpacing: "0.06em",
                 "& .MuiChip-label": {
@@ -2165,8 +2165,9 @@ function SessionList({
                                 <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </Box>
-                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 1 }} />
+                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 0.75 }} />
                         <ListItemText
+                            sx={{ my: 0.25, minWidth: 0 }}
                             primary={
                                 <Stack
                                     direction="row"
@@ -2188,20 +2189,6 @@ function SessionList({
                                     >
                                         {s.title}
                                     </Typography>
-                                    {(s.system || (s.origin ?? "api") !== "web") && (
-                                        <Chip
-                                            size="small"
-                                            label={s.system ? "System" : "External"}
-                                            color={s.system ? "secondary" : "default"}
-                                            sx={{
-                                                height: "1.5rem",
-                                                fontSize: "0.75rem",
-                                                "& .MuiChip-label": { px: "0.625rem" },
-                                            }}
-                                        />
-                                    )}
-                                    <SessionProjectionBadge sessionId={s.id} />
-                                    <ScheduleBadge meta={s} />
                                     <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
                                 </Stack>
                             }
@@ -2214,9 +2201,8 @@ function SessionList({
                                 // send, reflowing the whole list.
                                 <Stack
                                     direction="row"
-                                    spacing={0.75}
                                     alignItems="center"
-                                    sx={{ minWidth: 0, maxWidth: "100%" }}
+                                    sx={{ minWidth: 0, maxWidth: "100%", flexWrap: "wrap", columnGap: 0.5, rowGap: 0.25 }}
                                 >
                                     <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
                                         {sessionListProjectLabel(s)}
@@ -2228,6 +2214,16 @@ function SessionList({
                                     />
                                     <SessionUpdateBadge session={s} />
                                     <SessionObligationBadge sessionId={s.id} />
+                                    <SessionProjectionBadge sessionId={s.id} />
+                                    {(s.system || (s.origin ?? "api") !== "web") && (
+                                        <Chip
+                                            size="small"
+                                            label={s.system ? "System" : "External"}
+                                            color={s.system ? "secondary" : "default"}
+                                            sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
+                                        />
+                                    )}
+                                    <ScheduleBadge meta={s} />
                                 </Stack>
                             }
                             slotProps={{

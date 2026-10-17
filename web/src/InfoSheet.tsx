@@ -12,14 +12,16 @@ import {
   ButtonBase,
   DialogContentText,
   Divider,
+  IconButton,
   LinearProgress,
   Stack,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  Tooltip,
 } from "@mui/material";
-import { ExpandMore, OpenInNew, Refresh } from "@mui/icons-material";
+import { ExpandMore, OpenInNew, Refresh, Tune } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
@@ -663,7 +665,7 @@ function ProviderUsageCardBody({
   );
 }
 
-function UsageInfoSection({ order }: { order: string[] }): React.JSX.Element {
+function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutAction: React.ReactNode }): React.JSX.Element {
   // Usage and its refresh progress belong to the Controller and are pushed to
   // every client, so closing and reopening this sheet keeps showing a refresh.
   const snapshot = useStoreSelector((state) => state.usage);
@@ -706,7 +708,7 @@ function UsageInfoSection({ order }: { order: string[] }): React.JSX.Element {
   return (
     <Stack spacing={1.25}>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
-        <Box>
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="overline" color="text.secondary">
             Usage
           </Typography>
@@ -719,18 +721,21 @@ function UsageInfoSection({ order }: { order: string[] }): React.JSX.Element {
               ? `Refresh failed · Updated ${refreshed}`
               : `Updated ${refreshed}`}
             {nextRefreshMinutes !== null
-              ? ` · Auto refresh in ${String(nextRefreshMinutes)}m`
+              ? ` · Refresh in ${String(nextRefreshMinutes)}m`
               : ""}
           </Typography>
         </Box>
-        <NetworkIconButton
-          aria-label="Refresh usage"
-          disabled={refreshing}
-          networkAction={() => load(true)}
-          sx={{ width: 44, height: 44 }}
-        >
-          <Refresh />
-        </NetworkIconButton>
+        <Stack direction="row" sx={{ flexShrink: 0 }}>
+          {layoutAction}
+          <NetworkIconButton
+            aria-label="Refresh usage"
+            disabled={refreshing}
+            networkAction={() => load(true)}
+            sx={{ width: 44, height: 44 }}
+          >
+            <Refresh />
+          </NetworkIconButton>
+        </Stack>
       </Stack>
       {orderedItems(usageCardProviders(snapshot), order, (provider) => provider.provider).map((provider) => (
         <ProviderUsageCard
@@ -916,11 +921,11 @@ export function InfoContent({
     usage_order: layout.data.choices.usage_order.map((item) => ({ ...item, name: accountProviderLabel(item.id) })),
   } : undefined, [layout.data]);
   return (
-    <Stack spacing={1.5}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between">
-        <Typography variant="caption" color="text.secondary" role="status">{layout.saving ? "Saving layout…" : editing ? "Customize layout" : ""}</Typography>
-        <Button disabled={!layout.data || layout.saving || !!layout.pending} onClick={() => setEditing(!editing)}>{editing ? "Done" : "Customize layout"}</Button>
-      </Stack>
+    <Stack spacing={1.5} sx={{ containerType: "inline-size" }}>
+      {editing && <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Typography variant="caption" color="text.secondary" role="status">{layout.saving ? "Saving layout…" : "Customize layout"}</Typography>
+        <Button disabled={!layout.data || layout.saving || !!layout.pending} onClick={() => setEditing(false)}>Done</Button>
+      </Stack>}
       {layout.error && <Alert severity="warning" action={<Stack direction="row"><Button color="inherit" disabled={layout.saving} onClick={() => { void layout.retry(); }}>Retry</Button>{layout.pending && <Button color="inherit" disabled={layout.saving} onClick={layout.discard}>Discard</Button>}</Stack>}>{layout.error}</Alert>}
       {editing && choices
         ? <AboutLayoutEditor desktop={desktop} choices={choices} values={{ ...values, ...layout.pending?.changes }} disabled={layout.saving || !!layout.pending} onChange={(changes) => { void layout.save(changes); }} />
@@ -928,16 +933,20 @@ export function InfoContent({
     <Box
       sx={desktop
         ? {
-          mt: 1,
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1.55fr) minmax(280px, 0.85fr)",
+          gridTemplateColumns: "minmax(0, 1fr)",
+          "@container (min-width: 720px)": { gridTemplateColumns: "minmax(0, 1.55fr) minmax(280px, 0.85fr)" },
           gap: 2,
           alignItems: "start",
         }
-        : { mt: 1, display: "flex", flexDirection: "column", gap: 2.5 }}
+        : { display: "flex", flexDirection: "column", gap: 2 }}
     >
       <Box>
-        <UsageInfoSection order={values.usage_order} />
+        <UsageInfoSection order={values.usage_order} layoutAction={
+          <Tooltip title="Customize layout">
+            <span><IconButton aria-label="Customize layout" disabled={!layout.data || layout.saving || !!layout.pending} onClick={() => setEditing(true)} sx={{ width: 44, height: 44 }}><Tune fontSize="small" /></IconButton></span>
+          </Tooltip>
+        } />
       </Box>
       {!desktop && <Divider />}
       <Stack spacing={desktop ? 1.25 : 2.5}>
