@@ -331,7 +331,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     {
         Ok(execution::Response::ManagedRound { prepared }) => prepared,
         Ok(execution::Response::ManagedRoundRefused { code }) => {
-            let code = match code.as_str() {
+            let category = match code.as_str() {
                 "input_changed" => "input_changed",
                 "child_busy" => return Step::Wait(Duration::from_secs(1)),
                 "submodule_unsupported"
@@ -344,7 +344,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
                 "context_unreadable" => "context_unreadable",
                 _ => "snapshot_unavailable",
             };
-            advance(state, store, record, fail(code, None)).await;
+            advance(state, store, record, fail(category, Some(code))).await;
             return Step::Again;
         }
         Ok(_) => {
