@@ -1,13 +1,15 @@
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
-  choiceFor,
-  choiceValues,
   agentLabel,
   type AgentTools,
+  choiceFor,
+  choiceValues,
   normalizedDefault,
   overridden,
   overrideFor,
+  saveSessionTools,
+  subscribeSessionTools,
   withMemoryKey,
   withTarget,
   withWireKey,
@@ -24,6 +26,56 @@ const defaults: AgentTools = {
     max_per_session: 64,
   },
 };
+
+test("session tools serialize writes across surfaces and release after failures", async () => {
+  const originalFetch = globalThis.fetch;
+  let release!: (response: Response) => void;
+  let writes = 0;
+  let acknowledgements = 0;
+  const session = "tools-concurrency-fixture";
+  const unsubscribe = subscribeSessionTools(session, () => {
+    acknowledgements++;
+  });
+  const view = {
+    session_id: session,
+    agent: "codex",
+    defaults,
+    defaults_customized: false,
+    override: { schema: 1 },
+    effective: defaults,
+    catalog: { call_targets: [] },
+  };
+  globalThis.fetch = (() => {
+    writes++;
+    return new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+  }) as typeof fetch;
+  try {
+    const first = saveSessionTools(session, { schema: 1 });
+    await assertRejects(
+      () => saveSessionTools(session, { schema: 1 }),
+      Error,
+      "already being saved",
+    );
+    assertEquals(writes, 1);
+    release(Response.json(view));
+    await first;
+    assertEquals(acknowledgements, 1);
+    const failed = saveSessionTools(session, { schema: 1 });
+    release(new Response("failed", { status: 503 }));
+    await assertRejects(() => failed, Error, "Tools were not saved");
+    assertEquals(acknowledgements, 1);
+    const retry = saveSessionTools(session, { schema: 1 });
+    release(Response.json(view));
+    await retry;
+    assertEquals(writes, 3);
+    assertEquals(acknowledgements, 2);
+  } finally {
+    unsubscribe();
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("a session stores only what differs from its agent defaults", () => {
   assert(!overridden(overrideFor(defaults, defaults)));
@@ -78,17 +130,27 @@ test("a custom choice that equals a preset becomes that preset", () => {
     values: { model: "gpt-6-astra", reasoning_effort: "max" },
   }];
   assert(
-    JSON.stringify(choiceFor({ model: "gpt-6-astra", reasoning_effort: "max" }, presets)) ===
+    JSON.stringify(
+      choiceFor({ model: "gpt-6-astra", reasoning_effort: "max" }, presets),
+    ) ===
       JSON.stringify({ preset: "astra-max" }),
   );
   assert(
-    JSON.stringify(choiceFor({ model: "gpt-6-astra", reasoning_effort: "high" }, presets)) ===
-      JSON.stringify({ options: { model: "gpt-6-astra", reasoning_effort: "high" } }),
+    JSON.stringify(
+      choiceFor({ model: "gpt-6-astra", reasoning_effort: "high" }, presets),
+    ) ===
+      JSON.stringify({
+        options: { model: "gpt-6-astra", reasoning_effort: "high" },
+      }),
   );
   assert(JSON.stringify(choiceFor({}, presets)) === "{}");
-  assert(choiceValues({ preset: "astra-max" }, presets).reasoning_effort === "max");
   assert(
-    JSON.stringify(withTarget([], "codex", true, { options: { model: "m" } })) ===
+    choiceValues({ preset: "astra-max" }, presets).reasoning_effort === "max",
+  );
+  assert(
+    JSON.stringify(
+      withTarget([], "codex", true, { options: { model: "m" } }),
+    ) ===
       JSON.stringify([{ agent: "codex", options: { model: "m" } }]),
   );
 });

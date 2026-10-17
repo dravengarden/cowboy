@@ -270,7 +270,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
       (suite === "sign-in" || suite === "session-move" ||
           suite === "editor-plugin-sandbox"
         ? 4
-        : suite === "session-fold" || suite === "dormant-session"
+        : suite === "dormant-session"
+        ? 15
+        : suite === "session-fold"
         ? 7
         : suite === "managed-calls"
         ? 12

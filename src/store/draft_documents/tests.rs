@@ -33,6 +33,83 @@ fn applied(result: DraftResult) -> DraftDocument {
 #[allow(clippy::too_many_lines)] // One revision/CAS/history contract shared by SQLite and PostgreSQL.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();
+    // Metadata keyset pages stay owner-scoped and full across tombstones.
+    for (id, owner) in [
+        ("a", "pager"),
+        ("b", "pager"),
+        ("c", "pager"),
+        ("d", "pager"),
+        ("e", "other-pager"),
+    ] {
+        applied(
+            store
+                .mutate_draft_document(
+                    owner,
+                    &mutation(
+                        id,
+                        &format!("page-create-{id}"),
+                        0,
+                        create(DraftKind::Document, id, None, &"large body".repeat(1000)),
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    applied(
+        store
+            .mutate_draft_document("pager", &mutation("b", "page-trash", 1, DraftChange::Trash))
+            .await
+            .unwrap(),
+    );
+    let page = store
+        .draft_documents_page("pager", None, 2, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+        ["a", "c"]
+    );
+    assert!(
+        page.iter()
+            .all(|d| d.body.is_empty() && d.attachments.is_empty())
+    );
+    let page = store
+        .draft_documents_page("pager", Some("c"), 2, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+        ["d"]
+    );
+    let page = store
+        .draft_documents_page("pager", Some("a"), 2, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+        ["b", "c"]
+    );
+    assert!(page[0].deleted);
+    assert!(
+        store
+            .draft_documents_page("pager", Some("d"), 2, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .draft_documents_page("pager", None, 0, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .draft_documents_page("pager", None, 201, false)
+            .await
+            .is_err()
+    );
     // Text-only agent edits preserve attachments. Receipts commit with the
     // edit; replay cannot reapply stale content after a human's later edit.
     let attachment =

@@ -128,6 +128,31 @@ fn arg_u64(args: &Value, key: &str, default: u64, max: u64) -> Result<u64, Strin
     }
 }
 
+fn page_limit(args: &Value, default: u64, max: u64) -> Result<usize, String> {
+    let limit = arg_u64(args, "limit", default, max)?;
+    if limit == 0 {
+        return Err("invalid_argument".into());
+    }
+    usize::try_from(limit).map_err(|_| "invalid_argument".into())
+}
+
+fn explicit_arg(args: &Value, key: &str) -> bool {
+    args.get(key).is_some_and(|value| !value.is_null())
+}
+
+fn require_page(args: &Value, count: usize, limit: usize) -> Result<(), String> {
+    if count > limit && !explicit_arg(args, "limit") {
+        return Err("page_required".into());
+    }
+    Ok(())
+}
+
+fn after_id(args: &Value) -> Result<Option<&str>, String> {
+    args.get("after")
+        .map(|_| arg_str(args, "after"))
+        .transpose()
+}
+
 fn only_keys(args: &Value, allowed: &[&str]) -> Result<(), String> {
     match args {
         Value::Object(map) if map.keys().all(|key| allowed.contains(&key.as_str())) => Ok(()),
@@ -137,6 +162,9 @@ fn only_keys(args: &Value, allowed: &[&str]) -> Result<(), String> {
 
 impl Host for SessionHost<'_> {
     async fn call(&self, op: &str, args: Value, remaining: Duration) -> Result<Value, String> {
+        // Programs can run for a minute. A parent may close, change owner or
+        // lose its account while a preceding operation is awaiting a reply.
+        actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         match op {
             "session.info" => {
                 only_keys(&args, &[])?;
@@ -153,25 +181,46 @@ impl Host for SessionHost<'_> {
             }
             "preferences.get" => {
                 only_keys(&args, &["scope"])?;
-                let owner = actions::preference_owner(self.state, self.meta).await?;
+                let owner = self
+                    .meta
+                    .owner_user_id
+                    .as_deref()
+                    .ok_or("permission_denied")?;
                 if args["scope"] == "zed" {
-                    return review_defaults::read(self.state, self.meta, &owner)
+                    return review_defaults::read(self.state, self.meta, owner)
                         .await
                         .map_err(str::to_owned);
                 }
-                super::preferences::read_value(self.state, &owner, arg_str(&args, "scope")?)
+                super::preferences::read_value(self.state, owner, arg_str(&args, "scope")?)
                     .await
                     .map_err(str::to_owned)
             }
             "session.queue" | "session.drafts" => {
-                only_keys(&args, &[])?;
+                only_keys(&args, &["after", "limit", "chars"])?;
                 let (queue, drafts) = self
                     .state
                     .hub
                     .queue_and_drafts(&self.meta.id)
                     .ok_or("not_found")?;
                 let items = if op == "session.queue" { queue } else { drafts };
-                Ok(Value::Array(items.iter().map(message_view).collect()))
+                message_page(&items, &args)
+            }
+            "session.message" => {
+                only_keys(&args, &["id", "offset", "chars"])?;
+                let id = arg_str(&args, "id")?;
+                let (queue, drafts) = self
+                    .state
+                    .hub
+                    .queue_and_drafts(&self.meta.id)
+                    .ok_or("not_found")?;
+                let message = queue
+                    .iter()
+                    .chain(&drafts)
+                    .find(|message| message.id == id)
+                    .ok_or("not_found")?;
+                let mut value = message_view(message);
+                text_window(&mut value, "text", &args)?;
+                Ok(value)
             }
             "session.events" => {
                 only_keys(&args, &["after", "before", "limit", "chars", "kinds"])?;
@@ -223,21 +272,31 @@ impl Host for SessionHost<'_> {
                 self.calls(Action::Observe { request_id }).await
             }
             "sessions.list" => {
-                only_keys(&args, &["status", "limit"])?;
+                only_keys(&args, &["status", "limit", "after"])?;
                 let status = match args.get("status") {
                     None | Some(Value::Null) => None,
                     Some(Value::String(status)) if status.len() <= 32 => Some(status.clone()),
                     Some(_) => return Err("invalid_argument".into()),
                 };
-                let limit = usize::try_from(arg_u64(&args, "limit", 50, 200)?).unwrap_or(200);
+                let limit = page_limit(&args, 50, 200)?;
+                let after = after_id(&args)?;
                 let owner = self.meta.owner_user_id.clone();
-                let rows = self
+                let mut rows = self
                     .state
                     .hub
-                    .session_list_filtered(|row| row == owner.as_deref())
+                    .session_list_filtered(|row| row == owner.as_deref());
+                rows.sort_by(|a, b| a.id.cmp(&b.id));
+                let rows = rows
                     .into_iter()
-                    .filter(|meta| !meta.system && !meta.closing)
+                    .filter(|meta| {
+                        !meta.system
+                            && !meta.closing
+                            && after.is_none_or(|after| meta.id.as_str() > after)
+                    })
                     .filter_map(|meta| self.state.hub.session_info(&meta.id))
+                    .filter(|info| {
+                        !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
+                    })
                     .map(|info| session_view(&info))
                     .filter(|view| {
                         status
@@ -256,7 +315,9 @@ impl Host for SessionHost<'_> {
                     .hub
                     .session_info(id)
                     .filter(|info| {
-                        !info.meta.system && info.meta.owner_user_id == self.meta.owner_user_id
+                        !info.meta.system
+                            && !info.meta.closing
+                            && info.meta.owner_user_id == self.meta.owner_user_id
                     })
                     .ok_or("not_found")?;
                 Ok(session_view(&info))
@@ -265,30 +326,7 @@ impl Host for SessionHost<'_> {
                 let owner = self.meta.owner_user_id.as_deref().ok_or("unavailable")?;
                 let store = self.state.store.as_ref().ok_or("unavailable")?;
                 if op == "documents.list" {
-                    only_keys(&args, &["after", "limit", "include_deleted"])?;
-                    let after = args
-                        .get("after")
-                        .map(|_| arg_str(&args, "after"))
-                        .transpose()?;
-                    let deleted = optional_bool(&args, "include_deleted")?;
-                    let limit =
-                        usize::try_from(arg_u64(&args, "limit", 10_000, 200)?).unwrap_or(200);
-                    let mut documents = store
-                        .draft_documents(owner)
-                        .await
-                        .map_err(|_| "unavailable")?;
-                    documents.sort_by(|a, b| a.id.cmp(&b.id));
-                    Ok(Value::Array(
-                        documents
-                            .iter()
-                            .filter(|document| deleted || !document.deleted)
-                            .filter(|document| {
-                                after.is_none_or(|after| document.id.as_str() > after)
-                            })
-                            .take(limit)
-                            .map(|document| document_view(document, false))
-                            .collect(),
-                    ))
+                    document_page(store, owner, &args).await
                 } else {
                     only_keys(&args, &["id", "offset", "chars", "include_deleted"])?;
                     let id = arg_str(&args, "id")?;
@@ -369,6 +407,68 @@ fn message_view(message: &QueuedMessage) -> Value {
     view
 }
 
+fn message_page(messages: &[QueuedMessage], args: &Value) -> Result<Value, String> {
+    let limit = page_limit(args, 20, 100)?;
+    let start = after_id(args)?
+        .map(|id| {
+            messages
+                .iter()
+                .position(|message| message.id == id)
+                .map(|index| index + 1)
+                .ok_or_else(|| "invalid_cursor".to_owned())
+        })
+        .transpose()?
+        .unwrap_or(0);
+    require_page(args, messages.len().saturating_sub(start), limit)?;
+    let chars = arg_u64(args, "chars", 400, 4000)?;
+    if chars == 0 {
+        return Err("invalid_argument".into());
+    }
+    messages
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|message| {
+            let mut value = message_view(message);
+            if !explicit_arg(args, "chars")
+                && value["text"]
+                    .as_str()
+                    .is_some_and(|text| text.chars().count() > chars as usize)
+            {
+                return Err("text_window_required".into());
+            }
+            text_window(&mut value, "text", &json!({"chars":chars}))?;
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
+}
+
+async fn document_page(
+    store: &crate::store::Store,
+    owner: &str,
+    args: &Value,
+) -> Result<Value, String> {
+    only_keys(args, &["after", "limit", "include_deleted"])?;
+    let after = after_id(args)?;
+    let deleted = optional_bool(args, "include_deleted")?;
+    let limit = page_limit(args, 50, 200)?;
+    // One lookahead row distinguishes a complete legacy read from a page.
+    // The default is 50, so lookahead stays inside the store's 200-row bound.
+    let fetch = limit + usize::from(!explicit_arg(args, "limit"));
+    let documents = store
+        .draft_documents_page(owner, after, fetch as i64, deleted)
+        .await
+        .map_err(|_| "unavailable")?;
+    require_page(args, documents.len(), limit)?;
+    Ok(Value::Array(
+        documents
+            .iter()
+            .map(|document| document_view(document, false))
+            .collect(),
+    ))
+}
+
 fn document_view(document: &crate::store::draft_documents::DraftDocument, body: bool) -> Value {
     let mut view = serde_json::to_value(document).unwrap_or(Value::Null);
     if let Some(object) = view.as_object_mut() {
@@ -396,9 +496,6 @@ fn optional_bool(args: &Value, key: &str) -> Result<bool, String> {
 /// Unicode scalar offsets, never byte slices. Explicit windows let a program
 /// read a large retained value without first exceeding the broker's budget.
 fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), String> {
-    if args.get("offset").is_none() && args.get("chars").is_none() {
-        return Ok(());
-    }
     let offset = usize::try_from(arg_u64(args, "offset", 0, u64::from(u32::MAX))?)
         .map_err(|_| "invalid_argument")?;
     let count =
@@ -408,6 +505,11 @@ fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), Strin
     }
     if let Some(text) = value[field].as_str() {
         let total = text.chars().count();
+        // Older callers may append to an unwindowed document or treat a call
+        // result as complete. Never silently turn that full read into a prefix.
+        if !explicit_arg(args, "offset") && !explicit_arg(args, "chars") && total > count {
+            return Err("text_window_required".into());
+        }
         let offset = offset.min(total);
         let body: String = text.chars().skip(offset).take(count).collect();
         let end = offset + body.chars().count();
@@ -476,30 +578,61 @@ impl EventQuery {
         Ok(Self {
             after: optional("after")?,
             before: optional("before")?,
-            limit: usize::try_from(arg_u64(args, "limit", 20, 100)?).unwrap_or(100),
+            limit: page_limit(args, 20, 100)?,
             chars: usize::try_from(arg_u64(args, "chars", 400, 4000)?).unwrap_or(4000),
             kinds,
         })
     }
 
     fn page(&self, window: &[Envelope], reached_start: bool) -> Value {
-        let mut items: Vec<Item> = coalesce(window)
+        // Select raw boundaries before folding tools across messages. Otherwise
+        // reverse paging can discard a tool's final update with its older start.
+        // Contiguous message chunks still count as one group, so streaming does
+        // not turn a message into hundreds of tiny pages.
+        let mut groups: Vec<Item> = coalesce(window, false)
             .into_iter()
             .filter(|item| self.kinds.iter().any(|kind| kind == item.kind))
             .collect();
-        let more = if self.after.is_some() {
-            let more = items.len() > self.limit || window.len() == EVENT_WINDOW;
-            items.truncate(self.limit);
-            more
+        let (more, next, selected) = if self.after.is_some() {
+            let more = groups.len() > self.limit || window.len() == EVENT_WINDOW;
+            let cursor = groups
+                .get(self.limit)
+                .map(|item| item.seq.saturating_sub(1))
+                .or_else(|| window.last().map(|event| event.seq));
+            let end = cursor.map_or(window.len(), |seq| {
+                window.partition_point(|event| event.seq <= seq)
+            });
+            (
+                more,
+                cursor.map(|after| json!({"after":after})),
+                &window[..end],
+            )
         } else {
-            let more = items.len() > self.limit || !reached_start;
-            items.drain(..items.len().saturating_sub(self.limit));
-            more
+            let more = groups.len() > self.limit || !reached_start;
+            let trimmed = groups.len() > self.limit;
+            groups.drain(..groups.len().saturating_sub(self.limit));
+            let cursor = if trimmed {
+                groups.first().map(|item| item.seq)
+            } else {
+                window.first().map(|event| event.seq)
+            };
+            let start = cursor.map_or(0, |seq| window.partition_point(|event| event.seq < seq));
+            (
+                more,
+                cursor.map(|before| json!({"before":before})),
+                &window[start..],
+            )
         };
+        let items: Vec<Item> = coalesce(selected, true)
+            .into_iter()
+            .filter(|item| self.kinds.iter().any(|kind| kind == item.kind))
+            .collect();
+        let more = more && next.is_some();
         json!({
             "items": items.iter().map(|item| item.view(self.chars)).collect::<Vec<_>>(),
             "reached_start": reached_start && !more,
             "more": more,
+            "next": if more { next } else { None },
         })
     }
 }
@@ -543,7 +676,7 @@ fn block_text(block: &Value) -> String {
     }
 }
 
-fn coalesce(window: &[Envelope]) -> Vec<Item> {
+fn coalesce(window: &[Envelope], fold_tools: bool) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     let mut tools: HashMap<String, usize> = HashMap::new();
     for envelope in window {
@@ -566,7 +699,7 @@ fn coalesce(window: &[Envelope]) -> Vec<Item> {
                             fields.insert(to.into(), value.clone());
                         }
                     }
-                    if let Some(index) = tools.get(&id).copied() {
+                    if fold_tools && let Some(index) = tools.get(&id).copied() {
                         let item = &mut items[index];
                         item.to = seq;
                         if let Some(tool) = &mut item.tool {
@@ -878,7 +1011,7 @@ fn finish(done: bool, mut frame: Value) -> Value {
         .get("logs")
         .and_then(Value::as_str)
         .filter(|logs| !logs.is_empty())
-        .map(|logs| logs.chars().take(MAX_LOG_BYTES).collect::<String>());
+        .map(|logs| logs[..logs.floor_char_boundary(MAX_LOG_BYTES.min(logs.len()))].to_owned());
     let mut value = if done {
         let result = frame.get_mut("value").map_or(Value::Null, Value::take);
         let size = serde_json::to_vec(&result).map_or(usize::MAX, |bytes| bytes.len());

@@ -52,6 +52,132 @@ fn large_text_pages_preserve_unicode_and_signal_the_exact_continuation() {
     assert_eq!(result["truncated"], true);
     assert!(text_window(&mut result, "text", &json!({"chars":0})).is_err());
     assert!(text_window(&mut result, "text", &json!({"offset":-1})).is_err());
+    let mut default_page = json!({"body": original});
+    assert_eq!(
+        text_window(&mut default_page, "body", &json!({})),
+        Err("text_window_required".into())
+    );
+    assert_eq!(default_page["body"], original); // a failed read never presents a prefix as complete
+    text_window(&mut default_page, "body", &json!({"offset":0})).unwrap();
+    assert_eq!(default_page["body"].as_str().unwrap().chars().count(), 1000);
+    assert_eq!(default_page["range"]["next"], 1000);
+    let mut retained_result = json!({"text":"finding ".repeat(200),"truncated":false});
+    assert_eq!(
+        text_window(&mut retained_result, "text", &json!({})),
+        Err("text_window_required".into())
+    );
+    let mut small = json!({"body":"whole body"});
+    text_window(&mut small, "body", &json!({})).unwrap();
+    assert_eq!(small["body"], "whole body");
+    assert_eq!(small["range"]["next"], Value::Null);
+}
+
+#[test]
+fn queued_messages_are_bounded_and_cursor_loss_is_explicit() {
+    let messages: Vec<QueuedMessage> = (0..30)
+        .map(|n| {
+            serde_json::from_value(json!({
+                "id":format!("message-{n}"),"text":"中🙂".repeat(4000)
+            }))
+            .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        message_page(&messages, &json!({})),
+        Err("page_required".into())
+    );
+    assert_eq!(
+        message_page(&messages, &json!({"limit":null})),
+        Err("page_required".into())
+    );
+    assert_eq!(
+        message_page(&messages, &json!({"limit":20})),
+        Err("text_window_required".into())
+    );
+    let page = message_page(&messages, &json!({"limit":20,"chars":400})).unwrap();
+    assert_eq!(page.as_array().unwrap().len(), 20);
+    assert_eq!(page[0]["text"].as_str().unwrap().chars().count(), 400);
+    assert_eq!(
+        page[0]["range"],
+        json!({"offset":0,"next":400,"total":8000})
+    );
+    let page = message_page(
+        &messages,
+        &json!({"after":"message-19","limit":20,"chars":400}),
+    )
+    .unwrap();
+    assert_eq!(page.as_array().unwrap().len(), 10);
+    assert_eq!(page[0]["id"], "message-20");
+    assert_eq!(
+        message_page(&messages, &json!({"after":"removed"})),
+        Err("invalid_cursor".into())
+    );
+    for args in [json!({"limit":0}), json!({"limit":101}), json!({"chars":0})] {
+        assert!(message_page(&messages, &args).is_err());
+    }
+    let small: QueuedMessage =
+        serde_json::from_value(json!({"id":"small","text":"entire prompt"})).unwrap();
+    let page = message_page(&[small], &json!({})).unwrap();
+    assert_eq!(page[0]["text"], "entire prompt");
+    assert_eq!(page[0]["range"]["next"], Value::Null);
+}
+
+#[tokio::test]
+async fn unpaged_document_lists_never_silently_drop_the_last_document() {
+    use crate::store::draft_documents::{DraftChange, DraftKind, DraftMutation, DraftResult};
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    for n in 0..51 {
+        let id = format!("doc-{n:03}");
+        let result = store
+            .mutate_draft_document(
+                "owner",
+                &DraftMutation {
+                    operation_id: format!("create-{id}"),
+                    document_id: id.clone(),
+                    expected_revision: 0,
+                    change: DraftChange::Create {
+                        kind: DraftKind::Document,
+                        title: id,
+                        parent_id: None,
+                        body: "full body".into(),
+                        attachments: vec![],
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, DraftResult::Applied(_)));
+    }
+    for query in [json!({}), json!({"limit":null})] {
+        assert_eq!(
+            document_page(&store, "owner", &query).await,
+            Err("page_required".into())
+        );
+    }
+    let first = document_page(&store, "owner", &json!({"limit":50}))
+        .await
+        .unwrap();
+    assert_eq!(first.as_array().unwrap().len(), 50);
+    assert!(first[0].get("body").is_none());
+    let last = document_page(
+        &store,
+        "owner",
+        &json!({"after":first[49]["id"],"limit":50}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(last.as_array().unwrap().len(), 1);
+    assert_eq!(last[0]["id"], "doc-050");
+    assert_eq!(
+        document_page(&store, "other-owner", &json!({}))
+            .await
+            .unwrap(),
+        json!([])
+    );
 }
 
 fn envelope(seq: u64, event: Event) -> Envelope {
@@ -132,6 +258,95 @@ fn transcript_chunks_coalesce_and_tool_updates_fold_into_their_call() {
     assert_eq!(page["more"], true);
     assert!(EventQuery::parse(&json!({"kinds":["thought"]})).is_err());
     assert!(EventQuery::parse(&json!({"limit":101})).is_err());
+    assert!(EventQuery::parse(&json!({"limit":0})).is_err());
+}
+
+#[test]
+fn transcript_continuations_do_not_skip_messages_inside_tool_spans() {
+    let window = vec![
+        update(
+            1,
+            json!({"sessionUpdate":"tool_call","toolCallId":"t","title":"test"}),
+        ),
+        update(
+            2,
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"between"}}),
+        ),
+        update(
+            3,
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"t","status":"completed"}),
+        ),
+    ];
+    let first = EventQuery::parse(&json!({"after":0,"limit":1}))
+        .unwrap()
+        .page(&window, true);
+    assert_eq!(first["items"][0]["to"], 1);
+    assert_eq!(first["next"], json!({"after":1}));
+    let second = EventQuery::parse(&json!({"after":first["next"]["after"],"limit":1}))
+        .unwrap()
+        .page(&window[1..], false);
+    assert_eq!(second["items"][0]["text"], "between");
+    assert_eq!(second["next"], json!({"after":2}));
+    let reverse = EventQuery::parse(&json!({"limit":1}))
+        .unwrap()
+        .page(&window, true);
+    assert_eq!(reverse["next"], json!({"before":3}));
+    assert_eq!(reverse["items"][0]["tool"]["status"], "completed");
+    let earlier = EventQuery::parse(&json!({"before":3,"limit":1}))
+        .unwrap()
+        .page(&window[..2], true);
+    assert_eq!(earlier["items"][0]["text"], "between");
+    assert_eq!(earlier["next"], json!({"before":2}));
+}
+
+#[test]
+fn a_streamed_message_stays_one_group_when_selecting_page_boundaries() {
+    let window: Vec<_> = (1..=1000)
+        .map(|seq| {
+            update(
+                seq,
+                json!({
+                    "sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"}
+                }),
+            )
+        })
+        .collect();
+    for query in [json!({"limit":1}), json!({"limit":1,"after":0})] {
+        let page = EventQuery::parse(&query).unwrap().page(&window, true);
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(page["items"][0]["to"], 1000);
+        assert_eq!(page["more"], false);
+    }
+}
+
+#[test]
+fn filtered_empty_transcript_pages_still_advance() {
+    let window: Vec<_> = (1..=EVENT_WINDOW as u64).map(|seq| update(seq,
+        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hidden"}})
+    )).collect();
+    let forward = EventQuery::parse(&json!({"after":0,"kinds":["user"]}))
+        .unwrap()
+        .page(&window, true);
+    assert_eq!(forward["items"], json!([]));
+    assert_eq!(forward["next"], json!({"after":EVENT_WINDOW}));
+    let reverse = EventQuery::parse(&json!({"kinds":["user"]}))
+        .unwrap()
+        .page(&window, false);
+    assert_eq!(reverse["next"], json!({"before":1}));
+    let end = EventQuery::parse(&json!({"before":1}))
+        .unwrap()
+        .page(&[], false);
+    assert_eq!(end["next"], Value::Null);
+    assert_eq!(end["more"], false);
+    assert_eq!(end["reached_start"], false); // retained history is incomplete
+}
+
+#[test]
+fn console_budget_counts_utf8_bytes() {
+    let reply = finish(true, json!({"value":null,"logs":"🙂".repeat(4096)}));
+    let logs = reply["logs"].as_str().unwrap();
+    assert_eq!(logs.len(), MAX_LOG_BYTES);
+    assert_eq!(logs.chars().count(), 1024);
 }
 
 struct FakeHost;
@@ -225,6 +440,18 @@ async fn budgets_and_failures_are_explicit() {
         .await
         .unwrap();
     assert_eq!(value["value"].as_str().map(str::len), Some(16000));
+    let value = run(
+        "console.log('a' + '🙂'.repeat(4096)); console.log('x'); return 1;",
+        false,
+        10_000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["value"], 1);
+    let logs = value["logs"].as_str().unwrap();
+    assert!(logs.len() <= MAX_LOG_BYTES);
+    assert!(!logs.contains('\u{fffd}'));
+    assert!(logs.starts_with("a🙂"));
     let value = run("return (", false, 10_000).await.unwrap();
     assert_eq!(value["error"]["code"], "compile_error");
     let value = run(

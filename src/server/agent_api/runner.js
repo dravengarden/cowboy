@@ -13,9 +13,10 @@ const lines = console[Symbol.asyncIterator]();
 const pending = new Map();
 let next = 1;
 let logs = "";
+let logBytes = 0;
 
 function log(...values) {
-  if (logs.length >= MAX_LOG) return;
+  if (logBytes >= MAX_LOG) return;
   const line = values.map((value) =>
     typeof value === "string" ? value : (() => {
       try {
@@ -25,7 +26,15 @@ function log(...values) {
       }
     })()
   ).join(" ");
-  logs = (logs + line + "\n").slice(0, MAX_LOG);
+  const bytes = Buffer.from(line + "\n");
+  let count = Math.min(bytes.length, MAX_LOG - logBytes);
+  // Keep a whole UTF-8 prefix. Slicing UTF-16 can leave a lone surrogate,
+  // producing a final JSON frame the broker cannot decode.
+  while (count < bytes.length && count > 0 && (bytes[count] & 0xc0) === 0x80) {
+    count--;
+  }
+  logs += bytes.toString("utf8", 0, count);
+  logBytes += count;
 }
 for (const name of ["log", "info", "warn", "error", "debug"]) {
   console[name] = log;
@@ -75,8 +84,9 @@ const cowboy = Object.freeze({
   preferences: namespace("preferences", { schema: none, get: (scope) => ({ scope }) }),
   session: namespace("session", {
     info: none,
-    queue: none,
-    drafts: none,
+    queue: query,
+    drafts: query,
+    message: (id, q) => ({ ...q, id }),
     events: query,
   }),
   calls: namespace("calls", {

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 /** Agent tools the Controller enforces: per agent kind, per-session overrides. */
 export interface CallTarget {
@@ -241,18 +247,75 @@ export async function fetchSessionTools(
   );
 }
 
+// A start page and its settings sheet can display the same session together.
+// Fan out acknowledged writes; never retain a second copy of the document.
+const sessionToolsListeners = new Map<
+  string,
+  Set<(value: SessionToolsView) => void>
+>();
+const sessionToolsWrites = new Set<string>();
+const sessionToolsWriteListeners = new Set<() => void>();
+const subscribeToolsWrites = (receive: () => void): () => void => {
+  sessionToolsWriteListeners.add(receive);
+  return () => {
+    sessionToolsWriteListeners.delete(receive);
+  };
+};
+const notifyToolsWrites = (): void => {
+  for (const receive of sessionToolsWriteListeners) receive();
+};
+
+export function useSessionToolsSaving(session: string): boolean {
+  return useSyncExternalStore(
+    subscribeToolsWrites,
+    () => sessionToolsWrites.has(session),
+    () => false,
+  );
+}
+
+export function subscribeSessionTools(
+  session: string,
+  receive: (value: SessionToolsView) => void,
+): () => void {
+  const listeners = sessionToolsListeners.get(session) ?? new Set();
+  listeners.add(receive);
+  sessionToolsListeners.set(session, listeners);
+  return () => {
+    listeners.delete(receive);
+    if (listeners.size === 0) sessionToolsListeners.delete(session);
+  };
+}
+
 export async function saveSessionTools(
   session: string,
   override: SessionToolsOverride,
 ): Promise<SessionToolsView> {
-  return await json(
-    await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(withWireKey(override)),
-    }),
-    "Tools were not saved",
-  );
+  // Admission is synchronous, including two presses before React has painted
+  // disabled controls. Only one whole-document write per session may be in flight.
+  if (sessionToolsWrites.has(session)) {
+    throw new Error(
+      "Tools are already being saved. Try again when the save finishes.",
+    );
+  }
+  sessionToolsWrites.add(session);
+  notifyToolsWrites();
+  try {
+    const saved = await json<SessionToolsView>(
+      await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(withWireKey(override)),
+      }),
+      "Tools were not saved",
+    );
+    for (const receive of sessionToolsListeners.get(session) ?? []) {
+      receive(saved);
+    }
+    return saved;
+  } finally {
+    sessionToolsWrites.delete(session);
+    notifyToolsWrites();
+  }
 }
 
 export async function fetchAgentTools(): Promise<AgentToolsList> {
@@ -278,6 +341,7 @@ export async function saveAgentTools(
 export function useRemoteDocument<T>(
   load: () => Promise<T>,
   key: string,
+  subscribe?: (receive: (value: T) => void) => () => void,
 ): {
   value: T | null;
   error: string | null;
@@ -287,23 +351,36 @@ export function useRemoteDocument<T>(
   const [value, setValue] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const acknowledgedRevision = useRef(0);
   useEffect(() => {
     let live = true;
+    let received = false;
     setValue(null);
     setError(null);
+    const unsubscribe = subscribe?.((saved) => {
+      received = true;
+      acknowledgedRevision.current += 1;
+      if (live) {
+        setValue(saved);
+        setError(null);
+      }
+    });
     load().then(
-      (loaded) => live && setValue(loaded),
+      (loaded) => live && !received && setValue(loaded),
       (failure: unknown) =>
-        live && setError(String((failure as Error).message ?? failure)),
+        live && !received &&
+        setError(String((failure as Error).message ?? failure)),
     );
     return () => {
       live = false;
+      unsubscribe?.();
     };
-    // `key` names the document; `load` closes over the same identity.
+    // `key` names the document; `load` and `subscribe` close over that identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const save = useCallback((write: () => Promise<T>, optimistic?: T) => {
     const previous = value;
+    const revision = acknowledgedRevision.current;
     if (optimistic !== undefined) setValue(optimistic);
     setSaving(true);
     write().then(
@@ -312,7 +389,7 @@ export function useRemoteDocument<T>(
         setError(null);
       },
       (failure: unknown) => {
-        setValue(previous);
+        if (acknowledgedRevision.current === revision) setValue(previous);
         setError(String((failure as Error).message ?? failure));
       },
     ).finally(() => setSaving(false));

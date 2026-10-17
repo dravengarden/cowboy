@@ -1,5 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
+import { SessionStartSettings } from "./SessionStartSettings";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
 // normal layout so native scroll anchoring can track streamed markdown / code
 // blocks / images as they grow.
@@ -705,8 +706,7 @@ function ConversationEmptyState({
     ? `${agent} is starting — you can write your first message now.`
     : `${agent} is ready for your first message.`;
   const facts = [
-    context.model,
-    context.reasoning ? `Reasoning · ${context.reasoning}` : null,
+    agent,
     context.project,
     context.machine,
   ]
@@ -724,7 +724,7 @@ function ConversationEmptyState({
   });
   const writeFromEmpty = (event: { target: EventTarget | null }): boolean => {
     if (!(event.target instanceof Element)) return true;
-    return event.target.closest("[data-conversation-empty-settings]") ===
+    return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings]") ===
       null;
   };
   return (
@@ -749,10 +749,13 @@ function ConversationEmptyState({
         flex: "1 1 0 !important",
         minHeight: 220,
         width: "100%",
-        px: { xs: 2.5, sm: 4 },
-        py: { xs: 4, sm: 6 },
+        px: { xs: 1, sm: 3 },
+        py: { xs: 2, sm: 3 },
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: "flex-start",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+        "& > *": { flexShrink: 0 },
         textAlign: "center",
         gap: 1.1,
         color: "text.secondary",
@@ -767,30 +770,32 @@ function ConversationEmptyState({
         },
       }}
     >
-      <Box
-        sx={(theme) => ({
-          width: 48,
-          height: 48,
-          borderRadius: "50%",
-          display: "grid",
-          placeItems: "center",
-          color: "primary.main",
-          bgcolor: alpha(theme.palette.primary.main, 0.09),
-          border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
-        })}
-      >
-        {kind === "preparing"
-          ? <Terminal sx={{ fontSize: desktopSize(22) }} />
-          : kind === "cleared"
-          ? <CleaningServices sx={{ fontSize: desktopSize(22) }} />
-          : <ChatBubbleOutline sx={{ fontSize: desktopSize(22) }} />}
-      </Box>
-      <Typography
-        variant="body1"
-        sx={{ fontWeight: 700, color: "text.primary" }}
-      >
-        {title}
-      </Typography>
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Box
+          sx={(theme) => ({
+            width: 32,
+            height: 32,
+            borderRadius: "50%",
+            display: "grid",
+            placeItems: "center",
+            color: "primary.main",
+            bgcolor: alpha(theme.palette.primary.main, 0.09),
+            border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
+          })}
+        >
+          {kind === "preparing"
+            ? <Terminal sx={{ fontSize: desktopSize(22) }} />
+            : kind === "cleared"
+            ? <CleaningServices sx={{ fontSize: desktopSize(22) }} />
+            : <ChatBubbleOutline sx={{ fontSize: desktopSize(22) }} />}
+        </Box>
+        <Typography
+          variant="body1"
+          sx={{ fontWeight: 700, color: "text.primary" }}
+        >
+          {title}
+        </Typography>
+      </Stack>
       <Typography variant="body2" sx={{ maxWidth: 420, lineHeight: 1.55 }}>
         {detail}
       </Typography>
@@ -865,7 +870,7 @@ function ConversationEmptyState({
             gap={0.75}
           >
             <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>
-              Session settings
+              All session settings
             </Typography>
             {facts.map((fact) => (
               <Chip
@@ -890,10 +895,11 @@ function ConversationEmptyState({
           </Stack>
         </ButtonBase>
       )}
+      <SessionStartSettings key={sessionId} sessionId={sessionId} />
       <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
         {preparing
           ? "Tap here to write — it sends when ready"
-          : "Tap anywhere here to write"}
+          : "Choose your settings, then write a message"}
       </Typography>
     </Stack>
   );
