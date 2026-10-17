@@ -1,5 +1,12 @@
 import type { Components, Theme } from "@mui/material";
 
+// Eight rounded spokes stay distinct in dense rows. The dimmest spoke is
+// still visible, so small indicators never collapse into a broken arc.
+const spokes = [1, 0.24, 0.32, 0.4, 0.5, 0.62, 0.75, 0.88].map((opacity, index) =>
+  `<path d="M12 3.5v3.5" transform="rotate(${index * 45} 12 12)" opacity="${opacity}"/>`
+).join("");
+const activityMask = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">${spokes}</g></svg>`)}")`;
+
 /** Loading glyphs scale with global text on both touch and Desktop. MUI sets
  * size inline, so these two dimensions intentionally override its pixel style.
  * Existing desktopSize callers keep their nominal size but also scale on touch. */
@@ -22,21 +29,20 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         flexShrink: 0,
         verticalAlign: "middle",
         position: "relative",
-        // Constant velocity and a fixed silhouette avoid the small-size
-        // contracting/expanding arc that looks like a wobbling broken ring.
-        animationDuration: "1s",
-        animationTimingFunction: "linear",
+        // Advance the brightness around fixed spoke positions. No continuously
+        // rotating hairline, blur, geometry morphing or per-frame JS work.
+        animationDuration: "800ms",
+        animationTimingFunction: "steps(8, end)",
         "& .MuiCircularProgress-svg": { display: "none" },
         "&::before": {
           content: '""',
           position: "absolute",
           inset: 0,
-          borderRadius: "50%",
-          background: "conic-gradient(from -90deg, transparent 0deg, currentColor 300deg, transparent 300deg)",
-          // A feathered edge stays smooth at fractional font scales. Paint is
-          // static; only the containing transform rotates, with no JS timers.
-          maskImage: "radial-gradient(closest-side, transparent 76%, #000 80%, #000 94%, transparent 98%)",
-          WebkitMaskImage: "radial-gradient(closest-side, transparent 76%, #000 80%, #000 94%, transparent 98%)",
+          backgroundColor: "currentColor",
+          maskImage: activityMask,
+          WebkitMaskImage: activityMask,
+          maskSize: "100% 100%",
+          maskRepeat: "no-repeat",
         },
         "@media (prefers-reduced-motion: reduce)": {
           animation: "none",

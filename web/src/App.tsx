@@ -531,7 +531,7 @@ function FolderActivityBadges({
             label: "working",
             glyph: (
                 <CircularProgress
-                    size={desktopSize(9)}
+                    size="0.75rem"
                     thickness={7}
                     disableShrink
                     color="inherit"
