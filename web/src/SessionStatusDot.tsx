@@ -15,7 +15,7 @@ import { desktopSize } from "./surface/desktopSize";
 // hue has to carry the whole meaning. The palette tokens are chosen so the
 // colors read the same here and in any future status surface:
 //   green (success)       — live:     running (idle, ready).
-//   cyan (activity)       — busy:     a turn in flight, with a breathing halo.
+//   theme (primary)      — busy:     a turn in flight, with a breathing halo.
 //   blue  (info)          — starting:  process spinning up, not ready yet (breathing).
 //   grey  (text.disabled) — dormant:   exited cleanly + resumable — "asleep, wakes
 //                                       on resume". Deliberately NOT a warning hue.
@@ -28,7 +28,7 @@ export function statusColor(s: Status): string {
     case "running":
       return "success.main";
     case "busy":
-      return "var(--cowboy-activity-color, #0891b2)";
+      return "primary.main";
     case "starting":
       return "info.main";
     case "exited":
@@ -60,7 +60,7 @@ export function statusLabel(s: Status): string {
 }
 
 // One status indicator, shared by the header and the sidebar list so the
-// "green = ready, cyan = working, grey = dormant" code reads identically everywhere. The
+// "green = ready, theme = working, grey = dormant" code reads identically everywhere. The
 // dot encodes state by color; the tooltip + aria-label spell it out for hover and
 // assistive tech (touch has no hover, but the wording is also redundant with
 // the surrounding chrome).
