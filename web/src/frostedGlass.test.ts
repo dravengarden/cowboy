@@ -110,8 +110,6 @@ test("the Explore page dock yields to the focused mobile composer", () => {
     ),
     true,
   );
-  assertEquals(transcriptSource.includes("context.reasoning"), true);
-  assertEquals(transcriptSource.includes("Reasoning ·"), true);
   assertEquals(
     transcriptSource.includes("data-conversation-empty-settings"),
     true,

@@ -17,6 +17,7 @@ import {
 } from "./providerCatalogRegistry";
 import { openSession, useStore } from "./store";
 import { openSessionSettings } from "./sessionSettingsOpen";
+import { type SessionToolsOverride, withMemoryKey } from "./agentTools";
 import type { ConfigOption, Envelope, SessionMeta } from "./protocol";
 
 export async function runDormantSessionBrowserConformance(
@@ -55,6 +56,7 @@ export async function runDormantSessionBrowserConformance(
   };
   let options: ConfigOption[] = [];
   let timeline: Envelope[] = [];
+  let toolsOverride: SessionToolsOverride = { schema: 1 };
   let socket: FixtureSocket | undefined;
   const commands: string[] = [];
   const requests: string[] = [];
@@ -170,6 +172,9 @@ export async function runDormantSessionBrowserConformance(
       });
     }
     if (path === "/api/sessions/sleeping/tools") {
+      if (init?.method === "PUT") {
+        toolsOverride = withMemoryKey(JSON.parse(String(init.body)));
+      }
       const defaults = {
         schema: 1,
         memory: { tools: true, recall: true },
@@ -186,8 +191,12 @@ export async function runDormantSessionBrowserConformance(
         agent: session.provider,
         defaults,
         defaults_customized: false,
-        override: { schema: 1 },
-        effective: defaults,
+        override: toolsOverride,
+        effective: {
+          ...defaults,
+          memory: { ...defaults.memory, ...toolsOverride.memory },
+          calls: { ...defaults.calls, ...toolsOverride.calls },
+        },
         catalog: { call_targets: [] },
       });
     }
@@ -284,6 +293,26 @@ export async function runDormantSessionBrowserConformance(
         !requests.some((request) => request.includes("/reload")),
       "opening settings performs no execution or mutation",
     );
+    await until(
+      () =>
+        document.querySelectorAll("input[aria-label='Memory tools']").length ===
+          2,
+      "both tools surfaces missing",
+    );
+    [...document.querySelectorAll<HTMLInputElement>(
+      "input[aria-label='Memory tools']",
+    )].at(-1)!.click();
+    await until(
+      () =>
+        [...document.querySelectorAll<HTMLInputElement>(
+          "input[aria-label='Memory tools']",
+        )].every((input) => !input.checked && !input.disabled),
+      "tools surfaces did not receive the saved settings",
+    );
+    check(
+      !commands.includes("prompt"),
+      "tools changes in the settings sheet update the start page without activation",
+    );
     // Simulate the Controller's workerless signed configuration projection.
     options = [{
       id: "model",
@@ -343,6 +372,114 @@ export async function runDormantSessionBrowserConformance(
         !requests.some((request) => request.includes("/reload")),
       "Clear uses the reset path without prompting or reloading",
     );
+    // The start page exposes every advertised option, including future Plugin
+    // options and booleans, without opening the settings sheet or waking up.
+    options = [...options, {
+      id: "permission_mode",
+      name: "Permissions",
+      currentValue: "ask",
+      options: [{ value: "ask", name: "Ask before changes" }, {
+        value: "auto",
+        name: "Allow workspace changes",
+      }],
+    }, {
+      id: "reasoning_effort",
+      name: "Reasoning",
+      currentValue: "medium",
+      options: [{ value: "medium", name: "Medium" }, {
+        value: "high",
+        name: "High",
+      }],
+    }, {
+      id: "fast",
+      name: "Fast mode",
+      currentValue: false,
+      options: [{ value: false, name: "Off" }, { value: true, name: "On" }],
+    }, {
+      id: "future_plugin_option",
+      name: "Planning",
+      currentValue: "adaptive",
+      options: [{ value: "adaptive", name: "Adaptive" }, {
+        value: "always",
+        name: "Always plan",
+      }],
+    }];
+    socket!.publish({
+      type: "config_options",
+      session_id: session.id,
+      options,
+    });
+    flushSync(() => root.render(<Fixture key="inline-settings" />));
+    await until(
+      () =>
+        container.querySelectorAll("select[data-start-option]").length === 5,
+      "inline options missing",
+    );
+    check(
+      container.querySelector(
+        "[data-session-start-settings] [data-session-tools]",
+      ) !== null,
+      "tools are available directly on the start page",
+    );
+    const choose = async (selector: string, value: string): Promise<void> => {
+      await until(
+        () =>
+          container.querySelector<HTMLSelectElement>(selector)?.disabled ===
+            false,
+        "inline selector unavailable",
+      );
+      const control = container.querySelector<HTMLSelectElement>(selector)!;
+      control.value = value;
+      control.dispatchEvent(new Event("change", { bubbles: true }));
+      await until(
+        () =>
+          container.querySelector<HTMLSelectElement>(selector)?.value ===
+            value &&
+          !container.querySelector<HTMLSelectElement>(selector)?.disabled,
+        "inline selection not acknowledged",
+      );
+    };
+    await choose("select[data-start-option='fast']", "true");
+    check(
+      options.find((item) => item.id === "fast")?.currentValue === true,
+      "inline boolean options keep their wire type",
+    );
+    await choose("select[data-start-option='future_plugin_option']", "always");
+    check(
+      options.find((item) => item.id === "future_plugin_option")
+        ?.currentValue === "always",
+      "new Plugin options work without a hard-coded UI list",
+    );
+    await choose("select[data-start-preset]", "default");
+    check(
+      options.find((item) => item.id === "model")?.currentValue === "small" &&
+        !commands.includes("prompt"),
+      "inline presets save acknowledged configuration without activation",
+    );
+    const option = container.querySelector<HTMLSelectElement>(
+      "select[data-start-option='model']",
+    )!;
+    option.focus();
+    const key = new KeyboardEvent("keydown", {
+      key: " ",
+      bubbles: true,
+      cancelable: true,
+    });
+    option.dispatchEvent(key);
+    check(
+      !key.defaultPrevented && document.activeElement === option,
+      "configuration keys stay with the field instead of focusing the composer",
+    );
+    container.style.width = "320px";
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const panel = container.querySelector<HTMLElement>(
+      "[data-session-start-settings]",
+    )!;
+    check(
+      panel.scrollWidth <= panel.clientWidth + 1,
+      "all start controls fit a narrow phone without horizontal scrolling",
+    );
+    container.style.width = "390px";
     desktop = true;
     flushSync(() => root.render(<Fixture key="desktop" />));
     openSessionSettings("agent", "another-session");

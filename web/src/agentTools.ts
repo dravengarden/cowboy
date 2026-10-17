@@ -241,11 +241,28 @@ export async function fetchSessionTools(
   );
 }
 
+// A start page and its settings sheet can display the same session together.
+// Fan out acknowledged writes; never retain a second copy of the document.
+const sessionToolsListeners = new Map<string, Set<(value: SessionToolsView) => void>>();
+
+export function subscribeSessionTools(
+  session: string,
+  receive: (value: SessionToolsView) => void,
+): () => void {
+  const listeners = sessionToolsListeners.get(session) ?? new Set();
+  listeners.add(receive);
+  sessionToolsListeners.set(session, listeners);
+  return () => {
+    listeners.delete(receive);
+    if (listeners.size === 0) sessionToolsListeners.delete(session);
+  };
+}
+
 export async function saveSessionTools(
   session: string,
   override: SessionToolsOverride,
 ): Promise<SessionToolsView> {
-  return await json(
+  const saved = await json<SessionToolsView>(
     await fetch(`/api/sessions/${encodeURIComponent(session)}/tools`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -253,6 +270,8 @@ export async function saveSessionTools(
     }),
     "Tools were not saved",
   );
+  for (const receive of sessionToolsListeners.get(session) ?? []) receive(saved);
+  return saved;
 }
 
 export async function fetchAgentTools(): Promise<AgentToolsList> {
@@ -278,6 +297,7 @@ export async function saveAgentTools(
 export function useRemoteDocument<T>(
   load: () => Promise<T>,
   key: string,
+  subscribe?: (receive: (value: T) => void) => () => void,
 ): {
   value: T | null;
   error: string | null;
@@ -289,17 +309,23 @@ export function useRemoteDocument<T>(
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     let live = true;
+    let received = false;
     setValue(null);
     setError(null);
+    const unsubscribe = subscribe?.((saved) => {
+      received = true;
+      if (live) { setValue(saved); setError(null); }
+    });
     load().then(
-      (loaded) => live && setValue(loaded),
+      (loaded) => live && !received && setValue(loaded),
       (failure: unknown) =>
-        live && setError(String((failure as Error).message ?? failure)),
+        live && !received && setError(String((failure as Error).message ?? failure)),
     );
     return () => {
       live = false;
+      unsubscribe?.();
     };
-    // `key` names the document; `load` closes over the same identity.
+    // `key` names the document; `load` and `subscribe` close over that identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const save = useCallback((write: () => Promise<T>, optimistic?: T) => {
