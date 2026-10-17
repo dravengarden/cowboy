@@ -10,6 +10,7 @@ import {
   Box,
   Button,
   ButtonBase,
+  CircularProgress,
   DialogContentText,
   Divider,
   IconButton,
@@ -330,17 +331,9 @@ function ProviderUsageCardBody({
                 size="small"
                 sx={{ width: 40, height: 40 }}
               >
-                <Refresh
-                  sx={{
-                    fontSize: desktopSize(17),
-                    ...(refreshBusy && {
-                      animation: "cowboy-card-refresh 700ms linear infinite",
-                      "@keyframes cowboy-card-refresh": {
-                        to: { transform: "rotate(360deg)" },
-                      },
-                    }),
-                  }}
-                />
+                {refreshBusy
+                  ? <CircularProgress size={desktopSize(17)} color="inherit" aria-label={`Refreshing ${title}`} />
+                  : <Refresh sx={{ fontSize: desktopSize(17) }} />}
               </NetworkIconButton>
             )}
           </Stack>

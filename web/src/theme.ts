@@ -1,4 +1,5 @@
 import { desktopSize } from "./surface/desktopSize";
+import { loadingProgress } from "./loadingProgress";
 // cowboy's MUI theme. The dark/light/system *selection* is shared (app-shell
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
@@ -163,6 +164,7 @@ export function useThemeMode(): ThemeControls {
           fontSize: OS_BASE_FONT_SIZE,
         },
         components: {
+          MuiCircularProgress: loadingProgress,
           // iOS Safari and the WKWebView shell both paint the UA tap wash on
           // the element under the finger. Opening Session settings mounts the
           // sheet dismiss under that same point, so the wash lands on the
