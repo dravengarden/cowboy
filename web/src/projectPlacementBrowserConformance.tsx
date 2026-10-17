@@ -2,6 +2,8 @@
 import { StrictMode, useLayoutEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { CssBaseline } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import type { MachineSummary } from "./protocol";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
@@ -31,7 +33,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     status: "online",
     components: [],
     capacity: { max_sessions: 8, draining: false },
-    active_sessions: 0,
+    active_sessions: id === "ovh" ? 8 : 0,
     local: id === "hawk",
     connected: true,
     schedulable: id !== "ovh",
@@ -116,8 +118,8 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   const root = createRoot(container);
   let current: ReturnType<typeof useProjectPlacement> | undefined;
   function Harness({ inventory }: { inventory: MachineSummary[] }) {
-    // Exercise the same session-derived projection that store.ts applies to
-    // HTTP and WebSocket inventories before the New Session picker reads them.
+    // Preserve authoritative worker occupancy even when session metadata has
+    // not arrived. A full Machine must still allow creating dormant sessions.
     const placement = useProjectPlacement(
       true,
       projectMachineOccupancy(inventory, []),
@@ -149,7 +151,10 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     flushSync(() =>
       root.render(
         <StrictMode>
-          <Harness inventory={inventory} />
+          <BrowserProductTheme>
+            <CssBaseline />
+            <Harness inventory={inventory} />
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );
@@ -178,13 +183,18 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       current?.projects.length === 2 && current.installations.length === 3,
       "runtime needs no mirror project",
     );
+    check(
+      current?.installation?.machine?.active_sessions === 8 &&
+        !current.installation.full && current.ready,
+      "full worker capacity still permits creating a dormant session",
+    );
     const field = () =>
       container.querySelector<HTMLElement>(
         '.MuiSelect-select[role="combobox"]',
       )!;
     const checkAlignment = (): void => {
       const icon = field().querySelector<SVGElement>('[role="img"]')!;
-      const name = field().querySelector<HTMLElement>("[title]")!;
+      const name = field().querySelector<HTMLElement>(".MuiTypography-root")!;
       check(icon && name, "selected installation has an icon and label");
       const a = icon.getBoundingClientRect();
       const b = name.getBoundingClientRect();
@@ -219,7 +229,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         ),
       );
       checkAlignment();
-      const name = field().querySelector<HTMLElement>("[title]")!;
+      const name = field().querySelector<HTMLElement>(".MuiTypography-root")!;
       check(
         name.scrollWidth > name.clientWidth &&
           getComputedStyle(name).textOverflow === "ellipsis",
@@ -361,7 +371,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         </div>
       );
     }
-    flushSync(() => root.render(<SessionRow />));
+    flushSync(() => root.render(<BrowserProductTheme><CssBaseline /><SessionRow /></BrowserProductTheme>));
     const badge = container.querySelector<HTMLElement>(".MuiChip-root")!;
     check(
       badge.textContent === "OVH → Hawk",
@@ -399,7 +409,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       getComputedStyle(badge).boxShadow === "none",
       "badge remains paint-only on the swipe surface",
     );
-    flushSync(() => root.render(<SessionRow cwd="/changed-runtime" />));
+    flushSync(() => root.render(<BrowserProductTheme><CssBaseline /><SessionRow cwd="/changed-runtime" /></BrowserProductTheme>));
     const unavailableBadge = container.querySelector<HTMLElement>(
       ".MuiChip-root",
     )!;
@@ -412,7 +422,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     return [
       "project before installed AI",
       "runtime without mirror directories",
-      "Codex and Claude selectable after live occupancy projection",
+      "Codex and Claude selectable at full worker capacity",
       "compact selected AI icon and label share one row",
       "long AI labels fit mobile and desktop fields",
       "cross-target readiness isolation",

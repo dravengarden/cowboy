@@ -90,6 +90,7 @@ export type MachineHostResources = {
   disk_total_bytes: number;
   disk_available_bytes: number;
   agent_memory_bytes?: number;
+  memory_headroom_bytes?: number;
   uptime_seconds: number;
   observed_at_ms: number;
 };
@@ -162,13 +163,14 @@ export interface SessionMeta {
   title: string;
   status: Status;
   origin?: SessionOrigin;
+  /** Native conversation identity, absent before initialization. */
+  agent_session_id?: string | null;
   /** True for a machine-driven, view-only system session: the UI hides its
    *  composer and shows a "System" badge. Persisted. */
   system?: boolean;
   /** User-set MANUAL PAUSE of the queue drain (the ⏸ toggle). While true queued
    *  messages don't auto-advance (even after the turn ends), but the running turn
-   *  isn't interrupted. Released by the user to resume. Transient, never
-   *  persisted (resets to false on a daemon restart). */
+   *  isn't interrupted. Persisted until the user resumes the queue. */
   paused?: boolean;
   /** An accepted deletion is waiting for the session's execution environment to
    *  confirm it stopped. The row disappears on confirmation, or returns without
@@ -189,6 +191,7 @@ export interface SessionMeta {
   /** Newer installed Provider release this session can adopt. Absent while
    *  none is waiting or an update is already in progress. Transient. */
   provider_update_available?: ProviderUpdateAvailable;
+  resource_wait?: string;
   /** Full latest ACP usage update. `raw` retains optional standard cost and
    * provider `_meta` rate-limit fields for the Info → Usage panel. */
   usage?: {

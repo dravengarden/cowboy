@@ -56,25 +56,26 @@ fn agent_memory_bytes() -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-/// One cgroup's headroom: its limit (`memory.high`, else `memory.max`) minus
-/// `memory.current`, plus the inactive file cache it can drop without
-/// throttling. `None` when the cgroup is unlimited.
+/// Estimated headroom below the tighter finite high/max limit, discounting
+/// inactive file cache. Cache is an estimate, not a guarantee of cheap reclaim.
+/// Subtract cache from usage before saturating: usage may already exceed high.
 fn cgroup_headroom(high: &str, max: &str, current: &str, stat: &str) -> Option<u64> {
     let limit = [high, max]
         .into_iter()
-        .find_map(|value| value.trim().parse::<u64>().ok())?;
+        .filter_map(|value| value.trim().parse::<u64>().ok())
+        .min()?;
     let current = current.trim().parse::<u64>().ok()?;
     let inactive_file = stat
         .lines()
         .find_map(|line| line.strip_prefix("inactive_file "))
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(0);
-    Some(limit.saturating_sub(current).saturating_add(inactive_file))
+    Some(limit.saturating_sub(current.saturating_sub(inactive_file)))
 }
 
 /// The smallest headroom from the Agent worker slice (or, without one, the
 /// user manager) up to the cgroup root.
-pub(crate) fn memory_headroom_bytes() -> Option<u64> {
+fn cgroup_memory_headroom_bytes() -> Option<u64> {
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
     let root = Path::new("/sys/fs/cgroup");
     let manager = root.join(user_manager_root(&cgroup)?.trim_start_matches('/'));
@@ -100,6 +101,58 @@ pub(crate) fn memory_headroom_bytes() -> Option<u64> {
         }
     }
     smallest
+}
+
+/// Both the host and its tightest ancestor constrain a cold launch. Hosts
+/// without a finite cgroup still have a physical memory admission boundary.
+pub(crate) fn memory_headroom_bytes() -> Option<u64> {
+    let available = parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)?.1;
+    // This is an admission estimate, not MemAvailable: while tasks are already
+    // stalling there is no budget for another worker. Reporting it also lets
+    // the Controller reclaim an eligible idle worker before admission retries.
+    if memory_stalled() {
+        return Some(0);
+    }
+    Some(cgroup_memory_headroom_bytes().map_or(available, |headroom| headroom.min(available)))
+}
+
+fn full_pressure(text: &str) -> Option<f64> {
+    let full = text.lines().find(|line| line.starts_with("full "))?;
+    let value = full
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("avg10="))?
+        .parse::<f64>()
+        .ok()?;
+    value.is_finite().then_some(value)
+}
+
+/// Pause cold allocations while memory stalls consume at least 1% of the
+/// last ten seconds. Existing work continues; the launch queue stays bounded.
+pub(crate) fn memory_stalled() -> bool {
+    let stalled = |path: &Path| {
+        full_pressure(&std::fs::read_to_string(path).unwrap_or_default())
+            .is_some_and(|full| full >= 1.0)
+    };
+    if stalled(Path::new("/proc/pressure/memory")) {
+        return true;
+    }
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let Some(manager) = user_manager_root(&cgroup) else {
+        return false;
+    };
+    let root = Path::new("/sys/fs/cgroup");
+    let manager = root.join(manager.trim_start_matches('/'));
+    let agents = manager.join("cowboy.slice/cowboy-agents.slice");
+    let mut directory = if agents.is_dir() { agents } else { manager };
+    while directory.starts_with(root) && directory != root {
+        if stalled(&directory.join("memory.pressure")) {
+            return true;
+        }
+        if !directory.pop() {
+            break;
+        }
+    }
+    false
 }
 
 /// Observe this host. `None` on platforms or hosts without the Linux sources.
@@ -170,6 +223,17 @@ mod tests {
     }
 
     #[test]
+    fn pressure_uses_full_stalls_not_busy_cpu_or_partial_stalls() {
+        assert_eq!(
+            full_pressure("some avg10=99.00\nfull avg10=0.15 avg60=2.00"),
+            Some(0.15)
+        );
+        assert_eq!(full_pressure("full avg10=1.25 avg60=0.00"), Some(1.25));
+        assert_eq!(full_pressure("full avg10=NaN"), None);
+        assert_eq!(full_pressure(""), None);
+    }
+
+    #[test]
     fn cgroup_headroom_uses_the_tighter_limit_and_counts_dropable_cache() {
         let stat = "anon 7000\nfile 1300\ninactive_file 580\nactive_file 720\n";
         // memory.high wins over memory.max; inactive file cache is headroom.
@@ -185,6 +249,21 @@ mod tests {
         // An unlimited cgroup contributes nothing; usage past a limit is zero.
         assert_eq!(cgroup_headroom("max\n", "max\n", "10106\n", stat), None);
         assert_eq!(cgroup_headroom("100\n", "max\n", "500\n", ""), Some(0));
+        // Breaching high must not erase the overage before cache is credited.
+        assert_eq!(
+            cgroup_headroom("1000", "1200", "1100", "inactive_file 200"),
+            Some(100)
+        );
+        assert_eq!(
+            cgroup_headroom("1000", "1200", "1300", "inactive_file 200"),
+            Some(0)
+        );
+        // A finite hard limit can be tighter than high.
+        assert_eq!(cgroup_headroom("1200", "1000", "900", ""), Some(100));
+        assert_eq!(
+            cgroup_headroom("1000", "1200", "100", "inactive_file 200"),
+            Some(1000)
+        );
     }
 
     #[test]

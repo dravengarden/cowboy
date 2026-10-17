@@ -99,10 +99,9 @@ export function useProjectPlacement(
         m.id === placement.runtime_machine_id
       );
       if (!machine?.connected || machine.capacity.draining) return [];
-      // A connected, non-draining Machine that is not schedulable has reached
-      // its live-session capacity. Show it as full instead of silently hiding
-      // every installation it hosts.
-      const full = !machine.schedulable;
+      // Creating a session prepares its workspace; a worker is admitted on
+      // first use. A full worker pool must not disable creating a conversation.
+      const full = false;
       const inventory = projectAgentPluginInventory(machine.plugins);
       const row = joinProviderInstallations(catalog?.providers ?? [], inventory)
         .find((row) => row.providerId === placement.provider);

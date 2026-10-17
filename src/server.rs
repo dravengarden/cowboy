@@ -16,6 +16,7 @@ mod dormant_pins;
 mod memory_reclaim;
 mod secure_transport;
 mod session_create_replay;
+mod session_maintenance;
 mod session_provider_updates;
 mod session_reclaim;
 mod web_roots;
@@ -264,6 +265,7 @@ struct AppState {
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
     machine_snapshots: MachineSnapshots,
+    session_maintenance: session_maintenance::Coordinator,
     plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
     plugin_storage: crate::plugin_storage::PluginStorage,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
@@ -423,7 +425,15 @@ struct MachineSnapshots {
 fn holds_worker_slot(router: &RuntimeRouter, session: &crate::core::SessionMeta) -> bool {
     match session.status {
         crate::agent_model::Status::Exited => false,
-        crate::agent_model::Status::Starting => true,
+        crate::agent_model::Status::Starting => {
+            !session
+                .execution_binding
+                .as_ref()
+                .is_some_and(|binding| binding.preparation().is_some())
+                && !(session.origin == SessionOrigin::Web
+                    && session.machine_id != "local"
+                    && session.workspace_source_path.as_deref() == Some(session.cwd.as_str()))
+        }
         _ => router
             .runtime(&session.machine_id)
             .is_some_and(|runtime| runtime.has_worker(&session.id)),
@@ -683,8 +693,13 @@ impl MachineSnapshots {
                     && !capacity.draining
                     && (active_sessions < capacity.max_sessions
                         || session_reclaim::reclaimable(
-                            self.service_config
-                                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY),
+                            session_maintenance::policy(
+                                &self.hub,
+                                &self.service_config,
+                                &machine.id,
+                            )
+                            .reclaim_on_capacity
+                                == Some(true),
                             self.service_config
                                 .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE),
                             &session_reclaim::candidates_in(
@@ -1803,6 +1818,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             runtime_router,
             machine_control,
             machine_snapshots,
+            session_maintenance: session_maintenance::Coordinator::default(),
             plugin_catalog,
             plugin_storage,
             provider_catalog,
@@ -3355,6 +3371,7 @@ async fn run_dispatcher(
             trace.clone(),
         ) {
             Ok(()) => {
+                session_maintenance::clear_wait(&hub, &session_id);
                 if let Some(t) = title {
                     hub.auto_title(&session_id, t);
                 }
@@ -3385,6 +3402,10 @@ fn retain_failed_dispatch(
     error: &str,
 ) {
     hub.requeue_prompt(&session_id, text, content, cmid);
+    if let Some(reason) = error.strip_prefix(session_maintenance::WAIT_PREFIX) {
+        session_maintenance::wait(hub, &session_id, reason);
+        return;
+    }
     // A Controller restart authenticates the Machine WebSocket before the
     // ACP runtime handshake finishes. The prompt is durable; do not toast a
     // transient "not connected" as a user-facing send failure.
@@ -5254,6 +5275,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             | "/api/plugins"
             | "/api/providers"
             | "/api/machines"
+            | "/api/session-maintenance"
             | "/api/observability/batches"
             | "/api/telemetry/v1/logs"
             | "/api/telemetry/v1/metrics"
@@ -5274,6 +5296,10 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path.starts_with("/api/usage/") {
         return RouteAuth::Product;
+    }
+    if path.starts_with("/api/machines/") && path.ends_with("/maintenance") && method == Method::PUT
+    {
+        return RouteAuth::ProductOperator;
     }
     if path.starts_with("/api/machines/")
         && (path.ends_with("/events") || path.ends_with("/plugins") || path.ends_with("/providers"))
@@ -10174,6 +10200,7 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    session_maintenance::start(&state);
     session_reclaim::listen_for_wakes(&state);
     memory_reclaim::start(&state);
     let secure_transport = Arc::new(secure_transport::SecureTransport::new(
@@ -10512,6 +10539,8 @@ async fn serve_axum(
             get(api_session_reload_plan).post(api_session_reload).put(session_provider_updates::configure),
         )
         .route("/api/sessions/{id}/hibernate", post(api_session_hibernate))
+        .route("/api/session-maintenance", get(session_maintenance::inventory))
+        .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
@@ -14793,6 +14822,9 @@ async fn handle_machine_ws(
         protocol,
         machine_command_tx,
     );
+    state
+        .session_maintenance
+        .observe_capacity(&hello.machine_id, hello.capacity.clone());
     let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
     // Dropped when this connection ends, which refuses further lanes.
     let _lane_registration = lane_token.map(|token| {
@@ -15681,6 +15713,10 @@ async fn api_session_reload(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let _maintenance = match session_maintenance::reload_lease(&state, &session_id) {
+        Ok(lease) => lease,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    };
     if query.upgrade_provider {
         let _fence = match ProviderReloadFence::acquire(
             &state.plugin_lifecycle_fences,
@@ -15859,24 +15895,33 @@ async fn api_session_prompt(
     {
         return (StatusCode::CONFLICT, refusal).into_response();
     }
-    let blocks: Vec<ContentBlock> = if req.content.is_empty() {
-        if req.text.is_empty() {
-            return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
-        }
-        vec![ContentBlock::from(req.text)]
-    } else {
-        req.content
-            .into_iter()
-            .filter_map(|v| serde_json::from_value::<ContentBlock>(v).ok())
-            .collect()
+    let Some(info) = state.hub.session_info(&session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    match state
-        .supervisor
-        .send(&session_id, AgentCommand::Prompt(blocks, None, None))
+    if info
+        .meta
+        .execution_binding
+        .as_ref()
+        .is_some_and(|binding| binding.managed().is_some())
     {
-        Ok(()) => (StatusCode::ACCEPTED, "queued").into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+        return (
+            StatusCode::CONFLICT,
+            "this child conversation is controlled by its parent's managed call",
+        )
+            .into_response();
     }
+    if build_prompt_blocks(&req.text, &req.content).is_none() {
+        return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
+    }
+    // API and UI prompts share one durable queue and cold-admission boundary.
+    // Resource pressure must not turn an accepted backend wake into a 404.
+    state.hub.submit(
+        &session_id,
+        req.text,
+        req.content,
+        Some(format!("api:{}", uuid::Uuid::new_v4())),
+    );
+    (StatusCode::ACCEPTED, "queued").into_response()
 }
 
 /// Request body for `POST /api/sessions`.
@@ -16195,12 +16240,9 @@ async fn api_new_session(
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
-        // Held until the handler returns: by then the session is registered
-        // as `Starting` and holds its slot itself.
-        let _slot = match session_reclaim::reserve_slot(&state, &req.machine_id, &capacity).await {
-            Ok(slot) => slot,
-            Err(refusal) => return (StatusCode::CONFLICT, refusal).into_response(),
-        };
+        if capacity.draining {
+            return (StatusCode::CONFLICT, "Machine is draining").into_response();
+        }
         let providers = machine
             .inventory
             .get("plugins")
@@ -16279,6 +16321,16 @@ async fn api_new_session(
         let prepare_machine_id = req.machine_id.clone();
         let prepare_source_path = source_path.to_owned();
         let initial_prompt = req.initial_prompt;
+        let eager = req.system;
+        if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
+            state.hub.requeue_prompt(
+                &session_id,
+                prompt,
+                vec![],
+                Some(format!("initial:{session_id}")),
+            );
+            session_maintenance::wait(&state.hub, &session_id, "preparing the workspace");
+        }
         tokio::spawn(async move {
             let result = prepare_state
                 .machine_control
@@ -16336,32 +16388,27 @@ async fn api_new_session(
                     Some(PluginFenceState::Installing) | None => break,
                 }
             }
-            let prepared_session = prepare_state
-                .hub
-                .update_session_cwd(&prepare_session_id, prepared.path)
-                .and_then(|()| {
-                    prepare_state
-                        .supervisor
-                        .start_registered_session(&prepare_session_id)
-                });
+            let prepared_session = if eager {
+                prepare_state
+                    .hub
+                    .update_session_cwd(&prepare_session_id, prepared.path)
+                    .and_then(|()| {
+                        prepare_state
+                            .supervisor
+                            .start_registered_session(&prepare_session_id)
+                    })
+            } else {
+                prepare_state
+                    .supervisor
+                    .finish_session_preparation(&prepare_session_id, |hub| {
+                        hub.update_session_cwd(&prepare_session_id, prepared.path)
+                    })
+            };
             if let Err(error) = prepared_session {
                 prepare_state.hub.set_status(
                     &prepare_session_id,
                     crate::agent_model::Status::Crashed,
                     Some(format!("Session preparation failed: {error}")),
-                );
-                return;
-            }
-            if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty())
-                && let Err(error) = prepare_state.supervisor.send(
-                    &prepare_session_id,
-                    AgentCommand::Prompt(vec![ContentBlock::from(prompt)], None, None),
-                )
-            {
-                prepare_state.hub.set_status(
-                    &prepare_session_id,
-                    crate::agent_model::Status::Crashed,
-                    Some(format!("Initial prompt failed: {error}")),
                 );
             }
         });
@@ -21332,6 +21379,15 @@ mod bootstrap_tests {
         assert!(!slot(Status::Running));
         assert!(!slot(Status::Busy));
         assert!(!slot(Status::Exited));
+        let mut preparing = hub.session_list()[0].clone();
+        preparing.status = Status::Starting;
+        preparing.origin = SessionOrigin::Web;
+        preparing.machine_id = "ovh".into();
+        preparing.workspace_source_path = Some(preparing.cwd.clone());
+        assert!(
+            !holds_worker_slot(&router, &preparing),
+            "workspace preparation is not an AI worker"
+        );
     }
 
     #[test]
@@ -23090,6 +23146,7 @@ mod product_auth_api_tests {
         for (method, path) in [
             (Method::POST, "/api/machines/hawk/projects"),
             (Method::PUT, "/api/machines/ovh/project-policy"),
+            (Method::PUT, "/api/machines/ovh/maintenance"),
         ] {
             assert_eq!(classify_route(&method, path), RouteAuth::ProductOperator);
         }

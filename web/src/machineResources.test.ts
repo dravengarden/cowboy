@@ -33,6 +33,7 @@ test("a reporting Machine shows memory, swap, load, disk and sessions", () => {
       disk_total_bytes: 96 * GIB,
       disk_available_bytes: 56 * GIB,
       agent_memory_bytes: 2 * GIB,
+      memory_headroom_bytes: 4 * GIB,
       uptime_seconds: 5 * 86_400 + 6 * 3_600,
       observed_at_ms: 1_000,
     },
@@ -40,8 +41,9 @@ test("a reporting Machine shows memory, swap, load, disk and sessions", () => {
   assertEquals(machineResourceMetrics(ovh), [
     ["Memory", "4.0 GB / 12.0 GB"],
     ["Swap", "0 B / 20.0 GB"],
-    ["Live sessions", "8 / 28"],
+    ["AI workers", "8 / 28"],
     ["Agent memory", "2.0 GB"],
+    ["Worker budget (estimate)", "4.0 GB"],
     ["Load (1 min)", "0.40 · 6 CPUs"],
     ["Disk", "40.0 GB / 96.0 GB"],
     ["Uptime", "5d 6h"],
@@ -73,7 +75,7 @@ test("a Machine low on disk says so in its caption", () => {
 
 test("an older or offline Machine still shows what is known", () => {
   const old = machine({});
-  assertEquals(machineResourceMetrics(old), [["Live sessions", "8 / 28"]]);
+  assertEquals(machineResourceMetrics(old), [["AI workers", "8 / 28"]]);
   assertEquals(
     machineResourcesCaption(old, 0),
     "Remote · resource reporting needs a newer Machine",

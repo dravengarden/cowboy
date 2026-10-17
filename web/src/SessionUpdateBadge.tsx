@@ -10,11 +10,12 @@ import { HintTooltip } from "./HintTooltip";
  *  Passive: a tap opens the session, whose sheet or top bar offers the update. */
 export function SessionUpdateBadge({ session }: { session: SessionMeta }) {
   const offer = sessionProviderUpdate(session);
-  if (!offer) return null;
-  const queued = offer.when_idle === true;
-  const description = queued
-    ? `Updates to ${offer.version} after the current turn`
-    : `Provider update available: ${session.provider_version ?? ""} → ${offer.version}`;
+  const waiting = session.resource_wait;
+  if (!offer && !waiting) return null;
+  const queued = Boolean(waiting) || offer?.when_idle === true;
+  const description = waiting ? `Waiting for resources: ${waiting}` : queued
+    ? `Updates to ${offer?.version ?? ""} after the current turn`
+    : `Provider update available: ${session.provider_version ?? ""} → ${offer?.version ?? ""}`;
   return (
     <HintTooltip title={description}>
       <Chip
@@ -23,7 +24,7 @@ export function SessionUpdateBadge({ session }: { session: SessionMeta }) {
         size="small"
         variant="outlined"
         color="info"
-        label={offer.version}
+        label={waiting ? (offer ? `Waiting · ${offer.version}` : "Waiting") : offer?.version}
         aria-label={description}
         icon={queued ? <Schedule /> : <Upgrade />}
         sx={{

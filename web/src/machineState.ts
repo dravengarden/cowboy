@@ -44,11 +44,10 @@ export function projectMachineOccupancy(
   let changed = false;
   const projected = machines.map((machine) => {
     const load = sessionLoads.get(machine.id);
-    const activeSessions = load?.active ?? 0;
-    // AI runtime capacity is independent of the target's project registry.
-    const schedulable = machine.connected &&
-      !machine.capacity.draining &&
-      activeSessions < machine.capacity.max_sessions;
+    // Session status cannot prove worker ownership or reclaim eligibility.
+    // Only the Controller's pushed Machine snapshot owns admission/counts.
+    const activeSessions = machine.active_sessions;
+    const schedulable = machine.schedulable;
     let componentsChanged = false;
     const components = machine.components.map((component) => {
       let activeLeases = component.active_leases;

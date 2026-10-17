@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useNetworkActionState } from "./NetworkActionFeedback";
 import type { SessionMeta } from "./protocol";
 import { providerName } from "./providerPresentation";
+import { reloadSession } from "./sessionReload";
 import {
   providerUpdateScheduleText,
   providerUpdateWaitsForTurn,
@@ -31,7 +32,20 @@ export function ProviderUpdateCard({
     const timer = globalThis.setInterval(() => setNow(Date.now()), 30_000);
     return () => globalThis.clearInterval(timer);
   }, [hasOffer]);
-  if (!offer) return null;
+  if (!offer) {
+    if (session.status !== "exited" || session.agent_session_id) return null;
+    return (
+      <Stack spacing={0.5} sx={{ mb: 2 }} data-provider-initialize>
+        <Typography variant="body2" color="text.secondary">
+          Choose model options before your first message.
+        </Typography>
+        <Button variant="outlined" disabled={action.pending} sx={{ minHeight: 44 }}
+          onClick={() => { void action.run(() => reloadSession(session.id)); }}>
+          Load model options
+        </Button>
+      </Stack>
+    );
+  }
   const scheduled = offer.when_idle === true;
   const waits = providerUpdateWaitsForTurn(session);
   const name = providerName(

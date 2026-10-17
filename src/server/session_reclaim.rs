@@ -129,9 +129,6 @@ pub(super) fn listen_for_wakes(state: &Arc<AppState>) {
 /// hibernate one other eligible idle session afterwards so the slot count
 /// returns to the limit. Best effort: it never delays or refuses the open.
 pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
-    if !reclaim_enabled(&state) {
-        return;
-    }
     // Two clients, or a prompt racing an open, can wake the same session
     // together; one rebalance covers it (production logged every
     // hibernation twice).
@@ -154,7 +151,7 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     let (chosen, _decision) = loop {
         // Policy and capacity are read on every pass: a retry may follow a
         // ten-minute wait during which an operator changed them.
-        if !reclaim_enabled(&state) {
+        if !reclaim_enabled(&state, &machine_id) {
             return;
         }
         let Some(max_sessions) = device_capacity(&state, &machine_id).await else {
@@ -189,14 +186,14 @@ pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
     }
 }
 
-fn reclaim_enabled(state: &AppState) -> bool {
-    state
-        .service_config
-        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+fn reclaim_enabled(state: &AppState, machine_id: &str) -> bool {
+    super::session_maintenance::policy(&state.hub, &state.service_config, machine_id)
+        .reclaim_on_capacity
+        == Some(true)
 }
 
 /// The enrolled Device's current `max_sessions`, if it is still enrolled.
-async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
+pub(super) async fn device_capacity(state: &AppState, machine_id: &str) -> Option<usize> {
     let machines = state.store.as_ref()?.list_machines().await.ok()?;
     let machine = machines
         .into_iter()
@@ -266,7 +263,7 @@ static DECISIONS: std::sync::LazyLock<
     parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
 
-fn decisions(machine_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+pub(super) fn decisions(machine_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     Arc::clone(DECISIONS.lock().entry(machine_id.to_owned()).or_default())
 }
 
@@ -298,7 +295,7 @@ impl Drop for SlotReservation {
 /// sessions are read: a create registers as `Starting` before it drops its
 /// reservation, so it is counted at least once (at worst twice, which only
 /// refuses or reclaims conservatively for that instant), never zero times.
-fn occupied(state: &AppState, machine_id: &str) -> usize {
+pub(super) fn occupied(state: &AppState, machine_id: &str) -> usize {
     let reserved = RESERVED.lock();
     let live = state
         .hub
@@ -339,6 +336,9 @@ pub(super) async fn reserve_slot(
     let _decision = decisions.lock().await;
     let mut reclaims = 0;
     loop {
+        if !super::session_maintenance::has_waiters(state, machine_id) {
+            return Err("No messages are waiting for resources".into());
+        }
         if occupied(state, machine_id) < max_sessions {
             *RESERVED.lock().entry(machine_id.to_owned()).or_default() += 1;
             return Ok(SlotReservation {
@@ -346,7 +346,7 @@ pub(super) async fn reserve_slot(
             });
         }
         if reclaims == MAX_RECLAIMS_PER_CREATE
-            || !reclaim_enabled(state)
+            || !reclaim_enabled(state, machine_id)
             || !reclaim_slot(state, machine_id).await
         {
             return Err(capacity_refusal(state, machine_id, max_sessions));
@@ -399,7 +399,11 @@ pub(super) async fn reclaim_slot(state: &Arc<AppState>, machine_id: &str) -> boo
     let min_idle = state
         .service_config
         .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
-    let candidates = candidates(state, machine_id);
+    let woken = recent_wakes(None);
+    let candidates = candidates(state, machine_id)
+        .into_iter()
+        .filter(|candidate| !woken.contains(&candidate.id))
+        .collect::<Vec<_>>();
     let Some(chosen) = choose(&candidates, min_idle).map(str::to_owned) else {
         tracing::info!(machine = %machine_id, "Device is full and no session is idle enough to reclaim");
         return false;

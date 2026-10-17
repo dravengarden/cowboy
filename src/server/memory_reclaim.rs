@@ -15,8 +15,7 @@ use std::time::{Duration, Instant};
 
 use super::{AppState, holds_worker_slot, session_reclaim};
 use crate::config::schema::{
-    SESSIONS_MEMORY_RECLAIM, SESSIONS_MEMORY_RECLAIM_BELOW, SESSIONS_MEMORY_RECLAIM_MIN_IDLE,
-    SESSIONS_MEMORY_RECLAIM_UNTIL,
+    SESSIONS_MEMORY_RECLAIM_BELOW, SESSIONS_MEMORY_RECLAIM_MIN_IDLE, SESSIONS_MEMORY_RECLAIM_UNTIL,
 };
 
 const TICK: Duration = Duration::from_secs(5);
@@ -43,6 +42,8 @@ struct Pending {
     /// The newest report when the worker was seen released; the memory it
     /// freed shows only in a report taken after that.
     released_at_report: Option<i64>,
+    /// Keep wakes and upgrades out until the release is observed.
+    _decision: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 /// Whether the previous hibernation is reflected in `observed_at_ms`: its
@@ -93,10 +94,6 @@ pub(super) fn start(state: &Arc<AppState>) {
         loop {
             tokio::time::sleep(TICK).await;
             let Some(state) = weak.upgrade() else { return };
-            if !state.service_config.get(&SESSIONS_MEMORY_RECLAIM) {
-                devices.clear();
-                continue;
-            }
             tick(&state, &mut devices);
         }
     });
@@ -114,6 +111,13 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
     let min_idle = state.service_config.get(&SESSIONS_MEMORY_RECLAIM_MIN_IDLE);
     let now_ms = super::now_ms();
     for (machine_id, observed) in state.machine_control.all_host_resources() {
+        if super::session_maintenance::policy(&state.hub, &state.service_config, &machine_id)
+            .memory_reclaim
+            != Some(true)
+        {
+            devices.remove(&machine_id);
+            continue;
+        }
         let Some(headroom) = observed.resources.memory_headroom_bytes else {
             continue;
         };
@@ -144,22 +148,28 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
                         "Device memory is low and no session is idle enough to hibernate");
                 }
             }
-            Step::Hibernate(session) => match state.supervisor.hibernate_session(&session) {
-                Ok(()) => {
-                    tracing::info!(machine = %machine_id, session = %session, headroom_bytes = headroom,
+            Step::Hibernate(session) => {
+                let Ok(decision) = session_reclaim::decisions(&machine_id).try_lock_owned() else {
+                    continue;
+                };
+                match state.supervisor.hibernate_session(&session) {
+                    Ok(()) => {
+                        tracing::info!(machine = %machine_id, session = %session, headroom_bytes = headroom,
                         "hibernating the longest-idle session to relieve Device memory");
-                    device.pending = Some(Pending {
-                        session,
-                        at: Instant::now(),
-                        observed_at_ms: observed.observed_at_ms,
-                        released_at_report: None,
-                    });
-                }
-                Err(error) => {
-                    tracing::warn!(machine = %machine_id, session = %session, %error,
+                        device.pending = Some(Pending {
+                            session,
+                            at: Instant::now(),
+                            observed_at_ms: observed.observed_at_ms,
+                            released_at_report: None,
+                            _decision: Some(decision),
+                        });
+                    }
+                    Err(error) => {
+                        tracing::warn!(machine = %machine_id, session = %session, %error,
                         "could not hibernate a session to relieve Device memory");
+                    }
                 }
-            },
+            }
         }
     }
 }
@@ -213,6 +223,7 @@ mod tests {
             at: Instant::now(),
             observed_at_ms: 100,
             released_at_report: None,
+            _decision: None,
         };
         // Still holding its worker: wait.
         assert!(!pending_settled(&mut pending, false, 200));

@@ -330,6 +330,8 @@ def main():
                     "--state-dir", state, "--socket", state / "broker", "--provider-usage-socket", state / "usage", "--workspace-config", state / "absent-config",
                     "--workspace", f"fixture={root}/{machine}-source", "--spawn-mode", "direct", "--worker-command", inputs["worker"], "--desired-generation", "execution-fixture",
                     "--plugin-operation-admission", "--execution-config", root / "execution.json"]
+                if inputs.get("session_maintenance"):
+                    command.extend(["--max-sessions", "2"])
                 machines[machine] = (start(machine, [*command, "--enrollment-token-file", token]), command)
                 wait(lambda: connected(machine), f"{machine} enrollment")
             checks.append("real_product_setup_login_and_two_signed_machine_handshakes")
@@ -396,6 +398,69 @@ def main():
             require(not (Path(meta["cwd"]) / "route.txt").exists(), "runtime file was changed")
             require(not (root / "target-source/route.txt").exists(), "stable source was changed")
             checks.extend(["public_creation_persists_exact_binding_and_isolated_target_worktree", "worker_tools_cross_both_enrolled_machine_connections", "runtime_and_stable_source_remain_unchanged"])
+            if inputs.get("session_maintenance"):
+                def session_info(identifier):
+                    status, value = call("GET", f"/api/sessions/{identifier}/info")
+                    require(status == 200, "maintenance session missing")
+                    return value
+
+                def maintenance():
+                    status, rows = call("GET", "/api/session-maintenance")
+                    require(status == 200, "maintenance inventory unavailable")
+                    return next(row for row in rows if row["machine"]["id"] == "runtime")
+
+                endpoint = "/api/machines/runtime/maintenance"
+                require(call("PUT", endpoint, {"memory_reclaim": True}, anonymous=True)[0] == 401,
+                        "anonymous maintenance mutation admitted")
+                require(call("PUT", endpoint, {"memory_reclaim": True, "reclaim_on_capacity": False})[0] == 200,
+                        "maintenance policy refused")
+                require(call("PUT", endpoint, {"auto_update_idle_sessions": True})[0] == 200,
+                        "partial maintenance policy refused")
+                require(maintenance()["policy"] == {"memory_reclaim": True, "reclaim_on_capacity": False,
+                                                    "auto_update_idle_sessions": True},
+                        "partial policy overwrote another switch")
+                dormant = []
+                for _ in range(4):
+                    status, created = call("POST", "/api/execution-sessions",
+                                           {key: value for key, value in request.items() if key != "initial_prompt"})
+                    require(status == 201, "worker limit blocked durable session creation")
+                    identifier = created["session_id"]
+                    dormant.append(identifier)
+                    wait(lambda: session_info(identifier)["status"] == "exited", "workerless preparation")
+                    require(not session_info(identifier).get("agent_session_id"), "creation started a native worker")
+                require(maintenance()["machine"]["active_sessions"] == 1, "dormant records consumed capacity")
+                checks.append("more_session_records_than_worker_limit_without_native_start")
+                require(call("POST", f"/api/sessions/{dormant[0]}/reload")[0] == 202,
+                        "explicit model-options initialization refused")
+                wait(lambda: session_info(dormant[0])["status"] == "running", "explicit initialization")
+                require(call("POST", f"/api/sessions/{dormant[1]}/prompt", {"text": "Wait for resources"})[0] == 202,
+                        "full capacity rejected message instead of retaining it")
+                wait(lambda: session_info(dormant[1]).get("resource_wait"), "resource wait reason")
+                pending_binding = session_info(dormant[1])["execution_binding"]
+                pending_effects = Path(pending_binding["workspace"]["cwd"]) / "effects"
+                require(not pending_effects.exists(), "blocked prompt ran before admission")
+                controller.terminate()
+                controller.wait(timeout=20)
+                controller = start("controller-resource-wait", controller_command)
+                wait(lambda: call("GET", "/healthz")[0] == 200, "resource wait restart")
+                wait(lambda: connected("runtime") and connected("target"), "resource wait reconnect")
+                wait(lambda: session_info(dormant[0])["status"] == "running"
+                     and maintenance()["machine"]["active_sessions"] == 2, "restored worker ownership")
+                wait(lambda: session_info(dormant[1]).get("resource_wait"), "restored resource wait")
+                require(maintenance()["policy"]["memory_reclaim"] is True, "restart lost maintenance override")
+                require(not pending_effects.exists(), "restart bypassed capacity")
+                require(call("POST", f"/api/sessions/{dormant[0]}/hibernate")[0] == 202,
+                        "idle worker hibernation refused")
+                wait(lambda: pending_effects.exists(), "waiting prompt admitted after slot release")
+                wait(lambda: session_info(dormant[1])["status"] == "running", "waiting turn completion")
+                require(pending_effects.read_text() == "once\n", "resource retry duplicated native effects")
+                require(not session_info(dormant[1]).get("resource_wait"), "completed wait marker remained")
+                require(call("POST", f"/api/sessions/{dormant[1]}/hibernate")[0] == 202,
+                        "completed fixture worker hibernation refused")
+                wait(lambda: session_info(dormant[1])["status"] == "exited", "fixture slot release")
+                checks.extend(["partial_maintenance_policy_is_authorized_and_durable",
+                               "waiting_prompt_survives_controller_restart_without_starting",
+                               "released_slot_dispatches_original_message_exactly_once"])
             if inputs.get("native_projects"):
                 endpoint = "/api/machines/target/projects"
                 registry = call("GET", endpoint)[1]

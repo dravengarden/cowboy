@@ -305,9 +305,10 @@ impl RemoteRuntime {
         }
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {
-            for worker in &bootstrap.workers {
-                apply_snapshot(&shared, worker);
-            }
+            // Production installs a connecting runtime with an empty worker
+            // map. Seed ownership before marking the broker ready; projecting
+            // only Hub metadata temporarily makes every live slot look free.
+            merge_worker_snapshots(&shared, bootstrap.workers);
             connection_manager(
                 shared,
                 notify_rx,
@@ -755,6 +756,12 @@ impl RemoteRuntime {
                 command_id,
             },
         );
+    }
+
+    pub(crate) fn hibernation_pending(&self, session_id: &str) -> bool {
+        self.shared.pending.lock().values().any(|command| {
+            matches!(command, CoreCommand::HibernateSession { session_id: pending, .. } if pending == session_id)
+        })
     }
 
     pub fn stop(&self, session_id: &str) {
@@ -3053,6 +3060,30 @@ mod tests {
             background_tasks: None,
             incarnation: None,
         }
+    }
+
+    #[tokio::test]
+    async fn broker_bootstrap_restores_worker_ownership_before_admission() {
+        let runtime = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        let (socket, _broker) = UnixStream::pair().unwrap();
+        let (reader, writer) = socket.into_split();
+        runtime.start(RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-bootstrap-test"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("first"), snapshot("second")],
+            buffered: Vec::new(),
+        });
+        for _ in 0..100 {
+            if runtime.connected() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(runtime.connected());
+        assert!(runtime.has_worker("first"));
+        assert!(runtime.has_worker("second"));
+        runtime.disconnect();
     }
 
     #[tokio::test]

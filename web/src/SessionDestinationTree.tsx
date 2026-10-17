@@ -479,6 +479,7 @@ export function SessionDestinationTree(
                           status={row.session.status}
                           backgroundTasks={row.session.background_tasks}
                           providerUpdate={row.session.provider_update}
+                          resourceWait={row.session.resource_wait}
                         />
                       )}
                   </Box>

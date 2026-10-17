@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Box, CircularProgress, Tooltip } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
-import { Circle } from "@mui/icons-material";
+import { Circle, Schedule } from "@mui/icons-material";
 import type { ProviderUpdate, Status } from "./protocol";
 import {
   backgroundProviderUpdateLabel,
@@ -67,14 +67,20 @@ export function StatusDot({
   status,
   backgroundTasks,
   providerUpdate,
+  resourceWait,
   sx,
 }: {
   status: Status;
   backgroundTasks?: number | undefined;
   providerUpdate?: ProviderUpdate | undefined;
+  resourceWait?: string | undefined;
   sx?: SxProps<Theme>;
 }): React.JSX.Element {
   const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
+  if (resourceWait && status !== "busy" && status !== "starting") {
+    const label = `Waiting for resources: ${resourceWait}`;
+    return <Tooltip title={label}><Schedule aria-label={label} sx={[{ fontSize: desktopSize(12), color: "info.main", flexShrink: 0 }, ...extra]} /></Tooltip>;
+  }
   // "busy" and "starting" are the *active* states — a turn is in flight, or the
   // process is spinning up — so a static dot would read as idle/stuck. Render the
   // active states as a tiny spinner sized to the dot, with the stroke following

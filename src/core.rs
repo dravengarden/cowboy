@@ -487,8 +487,8 @@ pub struct SessionMeta {
     /// auto-drain is HELD — queued messages don't advance even after the current
     /// turn ends — but the running turn is NOT interrupted (it finishes). The
     /// user toggles it (`SetPaused`) and releases it to resume. A MANUAL send
-    /// still overrides it. In-memory only (transient — resets to false on a
-    /// daemon restart); `serde(default)` covers old clients + the restore path.
+    /// still overrides it. Persisted as a UI-owned setting; `serde(default)`
+    /// covers older clients and sessions with no explicit pause.
     #[serde(default)]
     pub paused: bool,
     /// True while an accepted deletion waits for the session's execution
@@ -532,6 +532,9 @@ pub struct SessionMeta {
     /// the Controller's update offers in `session_list`. Transient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_update_available: Option<ProviderUpdateAvailable>,
+    /// Why an explicitly sent message remains in the durable queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_wait: Option<String>,
     /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
     /// `None` if none are scheduled. Derived from the drafts in `session_list`
     /// (not stored on the struct proper) so the session-row clock badge can show
@@ -2317,6 +2320,13 @@ impl Hub {
                 if reconcile_config_preferences(config_options.as_ref(), &mut config_preferences) {
                     config_preferences_dirty.push((id.clone(), config_preferences.clone()));
                 }
+                meta.paused = self
+                    .setting(&format!(
+                        "{}{id}",
+                        settings_keys::SESSION_QUEUE_PAUSED_PREFIX
+                    ))
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
                 let runtime = live.get(id.as_str()).copied();
                 let was_busy = meta.status == Status::Busy && runtime.is_none();
                 meta.status = match runtime.map(|worker| worker.state) {
@@ -3136,6 +3146,7 @@ impl Hub {
             background_tasks: 0,
             provider_update: None,
             provider_update_available: None,
+            resource_wait: None,
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
@@ -3225,6 +3236,15 @@ impl Hub {
             }
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
+            }
+            for prefix in [
+                settings_keys::SESSION_RESOURCE_WAIT_PREFIX,
+                settings_keys::SESSION_QUEUE_PAUSED_PREFIX,
+            ] {
+                let key = format!("{prefix}{session_id}");
+                if self.setting(&key).is_some() {
+                    self.set_setting(key, serde_json::Value::Null);
+                }
             }
             self.broadcast_sessions();
         }
@@ -3325,6 +3345,23 @@ impl Hub {
         self.publish_setting(key, value, snapshot);
     }
 
+    pub(crate) fn set_resource_wait(&self, session_id: &str, reason: Option<String>) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            if let Some(s) = sessions.get_mut(session_id)
+                && s.meta.resource_wait != reason
+            {
+                s.meta.resource_wait = reason;
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
     /// Publish whether an accepted deletion is still waiting for its execution
     /// environment. Broadcast-only; deletion itself is [`Self::delete_session`].
     pub fn set_closing(&self, session_id: &str, closing: bool) {
@@ -3347,14 +3384,19 @@ impl Hub {
     /// holds the auto-drain (`drain_head` returns early on `paused`) WITHOUT
     /// touching the running turn — it finishes normally; only the next queued
     /// message is held. Resuming kicks the drain (which still waits for any
-    /// in-flight turn to end, then advances). In-memory only (not persisted) +
-    /// broadcast so every terminal reflects the state. No-op when unchanged.
+    /// in-flight turn to end, then advances). Persisted and broadcast so every
+    /// terminal and a restarted Controller retain the user's decision.
     pub fn set_paused(&self, session_id: &str, paused: bool) {
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.paused != paused => {
                     s.meta.paused = paused;
+                    // Keep persistence ordered with concurrent pause/resume.
+                    self.set_setting(
+                        format!("{}{session_id}", settings_keys::SESSION_QUEUE_PAUSED_PREFIX),
+                        serde_json::Value::Bool(paused),
+                    );
                     true
                 }
                 _ => false,
@@ -4332,6 +4374,7 @@ impl Hub {
                 );
             }
             if session.meta.provider != expected.provider
+                || session.meta.status != expected.status
                 || session.meta.provider_version != expected.provider_version
                 || session.meta.provider_generation_digest != expected.provider_generation_digest
                 || session.meta.provider_auth_generation != expected.provider_auth_generation
@@ -5308,6 +5351,11 @@ impl Hub {
     /// WITHOUT resuming the rest of the held queue.
     pub fn drain_now(&self, session_id: &str) {
         self.drain_head(session_id, true, true);
+    }
+
+    /// Retry a never-dispatched resource wait, respecting pause and editing.
+    pub(crate) fn retry_resource_wait(&self, session_id: &str) {
+        self.drain_head(session_id, true, false);
     }
 
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
@@ -7236,7 +7284,7 @@ mod runtime_reconciliation_tests {
         assert!(hub.session_idle_for("future").unwrap() < std::time::Duration::from_secs(5));
     }
 
-    fn restored_busy(id: &str) -> RestoredSession {
+    pub(super) fn restored_busy(id: &str) -> RestoredSession {
         RestoredSession {
             meta: SessionMeta {
                 id: id.to_owned(),
@@ -7264,6 +7312,7 @@ mod runtime_reconciliation_tests {
                 background_tasks: 0,
                 provider_update: None,
                 provider_update_available: None,
+                resource_wait: None,
                 next_schedule_ms: None,
                 owner_user_id: None,
                 owner_username: None,
@@ -7837,6 +7886,51 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn resource_retry_respects_pause_edit_cancel_and_dispatches_once() {
+        let hub = hub_with_session("wait");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("wait", Status::Exited, None);
+        hub.requeue_prompt("wait", "keep me".into(), vec![], Some("once".into()));
+        hub.set_paused("wait", true);
+        hub.retry_resource_wait("wait");
+        assert!(rx.try_recv().is_err());
+        hub.set_paused("wait", false);
+        let id = hub.queue_and_drafts("wait").unwrap().0[0].id.clone();
+        hub.set_queue_editing("wait", Some(id));
+        hub.retry_resource_wait("wait");
+        assert!(rx.try_recv().is_err());
+        hub.set_queue_editing("wait", None);
+        hub.remove_queued_by_cmid("wait", "once");
+        hub.retry_resource_wait("wait");
+        assert!(rx.try_recv().is_err());
+        hub.requeue_prompt("wait", "send once".into(), vec![], Some("next".into()));
+        hub.retry_resource_wait("wait");
+        hub.retry_resource_wait("wait");
+        assert_eq!(rx.try_recv().unwrap().cmid.as_deref(), Some("next"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn queue_pause_survives_restore_and_is_removed_with_the_session() {
+        let hub = hub_with_session("paused");
+        hub.set_paused("paused", true);
+        let restored = Hub::new();
+        restored.load_settings(hub.settings_snapshot().into_iter().collect());
+        let mut session = super::runtime_reconciliation_tests::restored_busy("paused");
+        session.meta.status = Status::Exited;
+        restored.restore_with_workers(vec![session], &[]);
+        assert!(restored.session_info("paused").unwrap().meta.paused);
+        restored.set_paused("paused", false);
+        assert_eq!(
+            restored.setting("session_queue_paused:paused"),
+            Some(serde_json::Value::Bool(false))
+        );
+        restored.delete_session("paused");
+        assert_eq!(restored.setting("session_queue_paused:paused"), None);
     }
 
     #[test]
@@ -9702,6 +9796,18 @@ mod core_tests {
             hub.set_status(&before.id, Status::Crashed, None);
             assert_eq!(failed(&hub, &before), held);
         }
+    }
+
+    #[test]
+    fn provider_reload_rejects_a_session_hibernated_after_selection() {
+        let behavior = crate::provider::legacy_behavior("codex");
+        let (hub, before) = provider_reload_fixture();
+        hub.set_status(&before.id, Status::Exited, None);
+        assert!(
+            hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+                .is_err()
+        );
+        assert_eq!(hub.status(&before.id), Some(Status::Exited));
     }
 
     #[test]

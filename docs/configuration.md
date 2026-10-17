@@ -208,19 +208,29 @@ whose release is no longer newer is dropped rather than firing later.
 
 ## Session reclaim on capacity
 
-Capacity (`capacity.max_sessions`) counts live workers only: sessions that
-are starting or hold a worker, plus creates admitted but not yet registered.
-Dormant sessions and their history never count. Both create paths (direct and
-split runtime/execution placement) reserve a slot on the runtime Machine, one
-decision per Machine at a time, so concurrent creates cannot both take the
-last slot.
+Capacity (`capacity.max_sessions`) counts workers and admitted cold launches.
+Creating a Web session prepares its isolated workspace and durable record;
+it stays workerless until a message is sent or the user explicitly loads model
+options. Both direct and split placements can create records on a full Machine.
+Workspace preparation, dormant history and workerless crashed records do not
+consume worker slots. Legacy caller-owned and system creation retain their
+eager startup behavior.
 
-Off by default. With `sessions.reclaim_on_capacity = true`, a new session that
-targets a full Device first hibernates that Device's longest-idle eligible
-session, waits up to 20 seconds for its slot, counts again, and repeats at most
-twice; otherwise the request is refused, naming the idle sessions the user
-could hibernate. A full Device is still offered for new sessions while one is
-eligible. A session is eligible only when it holds
+Cold prompts reserve admission under the same per-Machine decision fence as
+memory reclaim and Provider maintenance. The Controller checks the worker
+limit, draining flag and recent memory observation before dispatch. Messages
+waiting for capacity remain in the existing durable queue, with a persisted
+reason and original wait timestamp. Queue pause is also persisted, so a
+Controller restart cannot resume deliberately paused work. Editing and
+cancellation keep their ordinary semantics. Waiting queues resume oldest first within each
+retry pass; a fresh interactive submission can arrive between passes. Crashed
+or interrupted work requires its ordinary explicit recovery.
+
+With `sessions.reclaim_on_capacity = true`, a waiting message on a full
+Device allows the Service to hibernate its longest-idle eligible session,
+wait up to 20 seconds for release, and count again (at most two reclaims per
+pass). Disabling the policy leaves messages waiting until a slot is freed.
+A session is eligible only when it holds
 a slot, is idle (no turn, queued prompt or background task), is not a system
 session, does not have Provider cache protection enabled, and has had no event
 for `sessions.reclaim_min_idle`.
@@ -228,22 +238,32 @@ for `sessions.reclaim_min_idle`.
 Opening a hibernated session shows its history without waking it: the
 transcript lives in the Controller, so a dormant session costs its Device
 nothing until it is used. The first prompt wakes it (the client shows
-Starting for the whole launch), even on a full Device, because the Machine
-treats capacity as advisory. With reclaim enabled, the Service then
-hibernates the longest-idle eligible session other than the one just woken
-whenever the Device holds more workers than its capacity. This never delays
-or refuses the prompt. Two clients waking one session share one rebalance.
+Starting for the whole launch) after admission. A waiting indicator explains
+why it has not started. Recent wakes are protected for ten minutes. The
+existing post-wake rebalance also covers legacy eager startup paths.
+
+Desktop and Mobile share Settings → Resources & automatic maintenance.
+Each Machine has independent switches for low-memory reclaim, capacity
+reclaim and automatic idle Provider updates. UI overrides are persisted in
+the database; unspecified fields inherit the Service TOML defaults. The
+inventory is `GET /api/session-maintenance`; an operator changes only the
+supplied fields with `PUT /api/machines/{id}/maintenance`. Background
+Provider reloads yield to foreground resource waiters and memory pressure.
+Dormant updates only change the retained Provider pin.
 
 ## Memory reclaim
 
 Off by default. With `sessions.memory_reclaim = true`, the Service keeps each
 Device's Agent workers below the cgroup limit that contains them. A Device
 reports `memory_headroom_bytes` with every heartbeat (every 15 seconds): for
-the worker slice and each of its ancestors with a `memory.high` (or else
-`memory.max`), the limit minus `memory.current` plus its inactive file cache,
-taking the smallest. Host `MemAvailable` is not used: on OVH on 2026-10-15 it
-reported 2.59 GiB while the user slice sat at 10.11 of its 10.20 GB
-`memory.high` and had been throttled into reclaim 145,783 times.
+the worker slice and each ancestor, it takes the smaller finite
+`memory.high`/`memory.max`, subtracts usage after discounting inactive file
+cache, and floors the result at zero. It then takes the minimum across these
+limits and host `MemAvailable`. This ordering does not overstate headroom
+when usage already exceeds a limit. Inactive cache remains an estimate.
+If host or ancestor memory PSI `full avg10` reaches 1%, the reported admission
+budget becomes zero until pressure subsides. The UI labels it as an estimate,
+separately from physical available memory.
 
 When the headroom falls below `sessions.memory_reclaim_below` (1 GiB), the
 Service hibernates the longest-idle eligible session on that Device, waits
@@ -252,11 +272,14 @@ repeats until the headroom reaches `sessions.memory_reclaim_until` (2 GiB).
 Eligibility is that of capacity reclaim with its own idle threshold,
 `sessions.memory_reclaim_min_idle` (15 minutes), and excludes sessions woken
 in the last ten minutes. With nothing eligible it logs once every ten minutes
-and waits. The Machine admits each cold launch against the same headroom
+and waits. The Controller serializes cold admission with reclaim and reserves
+512 MiB for each starting worker beside a 1 GiB minimum observation; a report
+older than 60 seconds pauses cold admission. The Machine checks live headroom
 (two at a time, 512 MiB reserved per launch beside a 512 MiB floor). A launch
 that finds no headroom within 60 seconds is refused as resource exhaustion
 rather than started, so a wake or create on a Device whose sessions are all
-busy fails visibly instead of stalling the Device.
+busy fails visibly instead of stalling the Device. A Controller-side wait
+does not start a model turn or repeatedly transfer the queued message.
 
 Hibernation sends no model request and the wake makes none before the
 prompt (`docs/hibernation-token-audit-2026-10-06.md`). That is not proof that

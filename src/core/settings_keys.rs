@@ -9,6 +9,12 @@ use crate::admin;
 
 /// Session id -> first epoch ms a retention pass saw the session dormant.
 pub const SESSION_DORMANT_SINCE: &str = "session_dormant_since";
+/// UI-owned per-Machine maintenance policy; TOML supplies inherited defaults.
+pub const MACHINE_MAINTENANCE_PREFIX: &str = "machine_maintenance:";
+/// A never-dispatched prompt waiting for resources, resumable after restart.
+pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
+/// Explicit queue pause must survive a Controller restart.
+pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
 pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_update:";
 /// Agent tools defaults for one agent kind; the agent id follows.
@@ -24,6 +30,9 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
     admin::is_admin_setting_key(key)
         || key == SESSION_DORMANT_SINCE
         || [
+            MACHINE_MAINTENANCE_PREFIX,
+            SESSION_RESOURCE_WAIT_PREFIX,
+            SESSION_QUEUE_PAUSED_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
@@ -45,6 +54,9 @@ pub(crate) fn examples() -> Vec<String> {
         admin::SESSION_LIMITS_SETTING.to_owned(),
         admin::ADMIN_IDENTITIES_SETTING.to_owned(),
         SESSION_DORMANT_SINCE.to_owned(),
+        format!("{MACHINE_MAINTENANCE_PREFIX}ovh"),
+        format!("{SESSION_RESOURCE_WAIT_PREFIX}sess-1"),
+        format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),

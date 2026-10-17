@@ -159,9 +159,9 @@ fn opens_into_update(
 /// with a newer release waiting records the same one-shot request as "update
 /// when idle", so it is current within seconds, before the first prompt.
 pub(super) fn request_on_open(state: &AppState, meta: &crate::core::SessionMeta) {
-    if !state
-        .service_config
-        .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS)
+    if super::session_maintenance::policy(&state.hub, &state.service_config, &meta.machine_id)
+        .auto_update_idle_sessions
+        != Some(true)
     {
         return;
     }
@@ -280,6 +280,11 @@ async fn repin_missing(state: &Arc<AppState>) {
             continue;
         }
         let repinned = {
+            let Ok(_decision) =
+                super::session_reclaim::decisions(&meta.machine_id).try_lock_owned()
+            else {
+                continue;
+            };
             let Ok(_fence) = ProviderReloadFence::acquire(
                 &state.plugin_lifecycle_fences,
                 (meta.machine_id.clone(), meta.provider.clone()),
@@ -335,18 +340,8 @@ async fn repin_missing(state: &Arc<AppState>) {
             }
         };
         if repinned && info.queue_count > 0 {
-            match state.supervisor.ensure_alive(&meta.id) {
-                Ok(started) => tracing::info!(
-                    session = %meta.id,
-                    started,
-                    "revived the re-pinned session for its queued prompt"
-                ),
-                Err(error) => tracing::warn!(
-                    session = %meta.id,
-                    %error,
-                    "the re-pinned session could not be revived for its queued prompt"
-                ),
-            }
+            // Cold admission and pause/edit/cancel remain owned by dispatch.
+            state.hub.retry_resource_wait(&meta.id);
         }
     }
 }
@@ -392,9 +387,6 @@ async fn pass(
             .filter(|meta| !stalled.contains(&meta.id))
             .map(|meta| (meta.machine_id.as_str(), meta.status)),
     );
-    let fleet_policy = state
-        .service_config
-        .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS);
     let idle_after = state
         .service_config
         .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_AFTER);
@@ -409,6 +401,10 @@ async fn pass(
     let mut targets: HashMap<TargetKey, Option<ResolvedProviderGeneration>> = HashMap::new();
     let mut offers = HashMap::new();
     for meta in sessions {
+        let fleet_policy =
+            super::session_maintenance::policy(&state.hub, &state.service_config, &meta.machine_id)
+                .auto_update_idle_sessions
+                == Some(true);
         if meta.status == Status::Starting || meta.closing {
             continue;
         }
@@ -552,6 +548,15 @@ async fn update_running(
     meta: &crate::core::SessionMeta,
     still_wanted: &(dyn Fn() -> bool + Sync),
 ) -> bool {
+    // Foreground wakes and memory reclamation own the same decision boundary.
+    if super::session_maintenance::has_waiters(state, &meta.machine_id)
+        || super::session_maintenance::memory_wait(state, &meta.machine_id).is_some()
+    {
+        return false;
+    }
+    let Ok(_decision) = super::session_reclaim::decisions(&meta.machine_id).try_lock_owned() else {
+        return false;
+    };
     let Ok(_fence) = ProviderReloadFence::acquire(
         &state.plugin_lifecycle_fences,
         (meta.machine_id.clone(), meta.provider.clone()),
@@ -589,6 +594,9 @@ fn repin_dormant(
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
 ) -> bool {
+    let Ok(_decision) = super::session_reclaim::decisions(&meta.machine_id).try_lock_owned() else {
+        return false;
+    };
     let Ok(_fence) = ProviderReloadFence::acquire(
         &state.plugin_lifecycle_fences,
         (meta.machine_id.clone(), meta.provider.clone()),

@@ -61,10 +61,13 @@ pub struct Supervisor {
     /// Told the id of every dormant session a prompt woke, so the server can
     /// return its Device to capacity. Opening a session no longer wakes it.
     wake_listener: parking_lot::Mutex<Option<WakeListener>>,
+    wake_admission: parking_lot::Mutex<Option<WakeAdmission>>,
 }
 
 /// Receives the id of a dormant session that a prompt is waking.
 pub(crate) type WakeListener = Arc<dyn Fn(&str) + Send + Sync>;
+/// A cold prompt holds its admission lease until Starting has been published.
+pub(crate) type WakeAdmission = Arc<dyn Fn(&str) -> Result<Box<dyn Send>, String> + Send + Sync>;
 
 fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
     let live_floor = hub
@@ -124,11 +127,41 @@ impl Supervisor {
             lifecycle: Mutex::new(()),
             runtime_restrictions: Arc::default(),
             wake_listener: parking_lot::Mutex::new(None),
+            wake_admission: parking_lot::Mutex::new(None),
         }
     }
 
     pub(crate) fn set_wake_listener(&self, listener: WakeListener) {
         *self.wake_listener.lock() = Some(listener);
+    }
+
+    pub(crate) fn set_wake_admission(&self, admission: WakeAdmission) {
+        *self.wake_admission.lock() = Some(admission);
+    }
+
+    /// The isolated workspace is ready, but no AI process is needed until use.
+    pub(crate) fn finish_session_preparation(
+        &self,
+        session_id: &str,
+        complete: impl FnOnce(&Hub) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let runtime = self.runtime_for_session(session_id)?;
+        if runtime.has_worker(session_id) {
+            return Err("session already has a worker during preparation".into());
+        }
+        // Publish the prepared path/binding and dormant state under the same
+        // fence as open/send. No observer can launch between these transitions.
+        complete(&self.hub)?;
+        self.hub.set_status(
+            session_id,
+            Status::Exited,
+            Some("Ready; starts when a message is sent".into()),
+        );
+        // Messages submitted while preparation was in progress already belong
+        // to the durable queue. Empty, paused and edited queues stay dormant.
+        self.hub.retry_resource_wait(session_id);
+        Ok(())
     }
 
     /// A dormant session holds no worker and has cleanly exited: it is
@@ -412,6 +445,24 @@ impl Supervisor {
                 "this child conversation is controlled by its parent's managed call".into(),
             );
         }
+        if matches!(command, AgentCommand::Prompt(..))
+            && self
+                .runtime_for_session(session_id)?
+                .hibernation_pending(session_id)
+        {
+            return Err("Waiting for resources: session is finishing hibernation".into());
+        }
+        let _admission = if matches!(command, AgentCommand::Prompt(..))
+            && !self.runtime_for_session(session_id)?.has_worker(session_id)
+        {
+            self.wake_admission
+                .lock()
+                .clone()
+                .map(|admit| admit(session_id))
+                .transpose()?
+        } else {
+            None
+        };
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
         match command {
@@ -474,14 +525,12 @@ impl Supervisor {
     /// # Errors
     /// If the session is unknown or its Machine runtime is disconnected.
     pub fn open(&self, session_id: &str) -> Result<bool, String> {
-        {
-            let _lifecycle = self.lifecycle.lock();
-            let runtime = self.runtime_for_session(session_id)?;
-            if self.is_dormant(&runtime, session_id) {
-                return Ok(false);
-            }
+        let _lifecycle = self.lifecycle.lock();
+        let runtime = self.runtime_for_session(session_id)?;
+        if self.is_dormant(&runtime, session_id) {
+            return Ok(false);
         }
-        self.ensure_alive(session_id)
+        self.ensure_alive_inner(session_id)
     }
 
     /// Ensure a session has a live detached worker without sending a turn.
@@ -490,8 +539,13 @@ impl Supervisor {
     ///
     /// # Errors
     /// If the session is unknown or its Machine runtime is disconnected.
-    pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
+    #[cfg(test)]
+    fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
+        self.ensure_alive_inner(session_id)
+    }
+
+    fn ensure_alive_inner(&self, session_id: &str) -> Result<bool, String> {
         // Native restore timeouts are session-local hydrate failures. Open,
         // reconnect, send, and Retry must not recycle the worker and pay the
         // same unbounded resume again. Reload remains the explicit retry.
@@ -800,6 +854,9 @@ impl Supervisor {
         let runtime = self.runtime_for_session(&expected.id)?;
         if !runtime.connected() {
             return Err("session Machine is not connected".to_owned());
+        }
+        if runtime.hibernation_pending(&expected.id) {
+            return Err("session is finishing hibernation".into());
         }
         let behavior = generation
             .behavior
@@ -1292,6 +1349,66 @@ mod tests {
         });
         hub.set_status("s", Status::Exited, None);
         hub
+    }
+
+    #[tokio::test]
+    async fn prepared_sessions_stay_workerless_and_resource_wait_precedes_every_launch() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        hub.set_status("s", Status::Starting, None);
+        supervisor
+            .finish_session_preparation("s", |_| Ok(()))
+            .unwrap();
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(!supervisor.open("s").unwrap());
+        assert!(runtime.pending_for_test().is_empty());
+        supervisor.set_wake_admission(Arc::new(|_| Err("Waiting for resources: full".into())));
+        let send = || AgentCommand::Prompt(Vec::new(), Some("once".into()), None);
+        assert!(
+            supervisor
+                .send("s", send())
+                .unwrap_err()
+                .contains("Waiting for resources")
+        );
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(
+            runtime.pending_for_test().is_empty(),
+            "refused wake must not allocate or send"
+        );
+        supervisor.set_wake_admission(Arc::new(|_| Ok(Box::new(()))));
+        supervisor.send("s", send()).unwrap();
+        assert_eq!(hub.status("s"), Some(Status::Starting));
+        assert_eq!(
+            runtime
+                .pending_for_test()
+                .iter()
+                .filter(|command| matches!(command, CoreCommand::Prompt { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn preparation_completion_dispatches_messages_submitted_during_preparation() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Starting, None);
+        hub.requeue_prompt("s", "while preparing".into(), vec![], Some("first".into()));
+        supervisor
+            .finish_session_preparation("s", |_| Ok(()))
+            .unwrap();
+        assert_eq!(rx.try_recv().unwrap().cmid.as_deref(), Some("first"));
+        assert!(rx.try_recv().is_err());
+        assert!(
+            runtime.pending_for_test().is_empty(),
+            "only the dispatcher may admit the launch"
+        );
     }
 
     #[tokio::test]

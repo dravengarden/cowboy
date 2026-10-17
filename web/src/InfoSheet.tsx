@@ -66,13 +66,8 @@ import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
 import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
 import { CodeBufferSynchronizationPanel } from "./CodeBufferSynchronizationPanel";
 import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel";
-import {
-  formatBytes,
-  machineResourceMetrics,
-  machineResourcesCaption,
-  machinesForResources,
-} from "./machineResources";
-import type { MachineSummary } from "./protocol";
+import { formatBytes } from "./machineResources";
+import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import {
   type ClientRuntimeMetrics,
   readClientRuntimeMetrics,
@@ -844,57 +839,6 @@ function ServiceStorageInfoSection(): React.JSX.Element {
   return <MetricsGrid metrics={metrics} />;
 }
 
-// Each enrolled Machine's host load (GET /api/machines). Machines report
-// resources periodically; the sheet polls while open instead of the Machine
-// list broadcasting every observation to every client.
-function MachineResourcesSection(): React.JSX.Element {
-  const [machines, setMachines] = useState<readonly MachineSummary[] | null>(
-    null,
-  );
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const ctrl = new AbortController();
-    const load = (): void => {
-      void fetch("/api/machines", { signal: ctrl.signal })
-        .then((r) => r.json() as Promise<MachineSummary[]>)
-        .then((value) => {
-          setMachines(value);
-          setNow(Date.now());
-        })
-        .catch(() => {
-          /* keep the last observation */
-        });
-    };
-    load();
-    const timer = globalThis.setInterval(load, 30_000);
-    return () => {
-      ctrl.abort();
-      globalThis.clearInterval(timer);
-    };
-  }, []);
-  if (!machines) {
-    return (
-      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        Loading…
-      </Typography>
-    );
-  }
-  return (
-    <Stack spacing={1.25}>
-      {machinesForResources(machines).map((machine) => (
-        <Stack key={machine.id} spacing={0.5} data-machine-resources={machine.id}>
-          <Typography variant="caption" fontWeight={700}>
-            {machine.display_name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {machineResourcesCaption(machine, now)}
-          </Typography>
-          <MetricsGrid metrics={machineResourceMetrics(machine)} />
-        </Stack>
-      ))}
-    </Stack>
-  );
-}
 
 function ClientStorageInfoSection(): React.JSX.Element {
   const [metrics, setMetrics] = useState<ClientRuntimeMetrics | null>(null);
@@ -1004,12 +948,12 @@ export function InfoContent({
           </Stack>
           <Stack spacing={0.75} sx={{ pt: 1 }} data-storage-scope="machines">
             <Typography variant="caption" fontWeight={700}>
-              Machines
+              Resources & automatic maintenance
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Host memory, swap, load and disk of each enrolled Machine
+              Memory, worker capacity and Provider updates on each Machine
             </Typography>
-            <MachineResourcesSection />
+            <SessionMaintenancePanel />
           </Stack>
           <ProductSyncDataNotice />
         </Stack>

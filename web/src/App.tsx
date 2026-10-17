@@ -2159,7 +2159,7 @@ function SessionList({
                                 <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </Box>
-                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} sx={{ mr: 1 }} />
+                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
                                 <Stack
@@ -4044,7 +4044,7 @@ export function App({
                     : session.title,
                 leading: (
                     <>
-                        <StatusDot status={session.status} backgroundTasks={session.background_tasks} providerUpdate={session.provider_update} />
+                        <StatusDot status={session.status} backgroundTasks={session.background_tasks} providerUpdate={session.provider_update} resourceWait={session.resource_wait} />
                         <ProviderIcon
                             provider={session.provider}
                             providerVersion={session.provider_version}
@@ -4775,7 +4775,7 @@ export function App({
                                 />
                             }
                             renderStatus={(s): React.ReactNode => (
-                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} />
+                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} />
                             )}
                         />
                     </Suspense>
@@ -5377,7 +5377,7 @@ export function App({
                                     }),
                                 }}
                             >
-                                <StatusDot status={active.status} backgroundTasks={active.background_tasks} providerUpdate={active.provider_update} />
+                                <StatusDot status={active.status} backgroundTasks={active.background_tasks} providerUpdate={active.provider_update} resourceWait={active.resource_wait} />
                                 <ProviderIcon
                                     provider={active.provider}
                                     providerVersion={active.provider_version}
@@ -5585,6 +5585,7 @@ export function App({
                                         status={active.status}
                                         backgroundTasks={active.background_tasks}
                                         providerUpdate={active.provider_update}
+                                        resourceWait={active.resource_wait}
                                     />
                                 )}
                                 prompt={active.system ? (

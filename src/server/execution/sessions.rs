@@ -212,9 +212,9 @@ async fn create_checked(
             .unwrap_or_default(),
     )
     .unwrap_or_default();
-    // The session runs on the runtime Machine (`meta.machine_id`), so its
-    // live worker slot is counted there, exactly as for a direct create.
-    let _slot = crate::server::session_reclaim::reserve_slot(state, &runtime.id, &capacity).await?;
+    if capacity.draining {
+        return Err("Runtime Machine is draining".into());
+    }
     let workspaces: Vec<MachineWorkspace> = serde_json::from_value(
         target
             .inventory
@@ -308,6 +308,11 @@ async fn create_checked(
             prompt,
             vec![],
             Some(format!("execution-initial:{session_id}")),
+        );
+        crate::server::session_maintenance::wait(
+            &state.hub,
+            &session_id,
+            "preparing the workspace",
         );
     }
     schedule(state, &session_id);
@@ -449,9 +454,10 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
         return Err("Execution environment is closing".into());
     }
     state
-        .hub
-        .accept_execution_binding(session_id, &expected, prepared)?;
-    state.supervisor.start_registered_session(session_id)
+        .supervisor
+        .finish_session_preparation(session_id, |hub| {
+            hub.accept_execution_binding(session_id, &expected, prepared)
+        })
 }
 
 /// Removing the runtime alone cannot prove remote jobs stopped. Retain the

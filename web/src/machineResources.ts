@@ -1,5 +1,10 @@
 import type { MachineSummary } from "./protocol";
 
+/** Resource polling does not transfer Plugin or workspace inventories. */
+export type MachineResourceSummary = Pick<MachineSummary,
+  "id" | "display_name" | "local" | "connected" | "capacity" | "active_sessions"
+> & { resources?: MachineSummary["resources"] | null };
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -48,7 +53,7 @@ const LOW_DISK_BYTES = 15 * 1024 ** 3;
 
 /** One line under the Machine name: placement, reachability and freshness. */
 export function machineResourcesCaption(
-  machine: MachineSummary,
+  machine: MachineResourceSummary,
   nowMs: number,
 ): string {
   const placement = machine.local ? "Controller host" : "Remote";
@@ -67,10 +72,10 @@ export function machineResourcesCaption(
 
 /** Label/value tiles for one Machine; sessions are always known. */
 export function machineResourceMetrics(
-  machine: MachineSummary,
+  machine: MachineResourceSummary,
 ): [string, string][] {
   const sessions: [string, string] = [
-    "Live sessions",
+    "AI workers",
     `${String(machine.active_sessions)} / ${String(machine.capacity.max_sessions)}`,
   ];
   const resources = machine.resources;
@@ -96,6 +101,9 @@ export function machineResourceMetrics(
   ];
   if (resources.agent_memory_bytes !== undefined) {
     metrics.push(["Agent memory", formatBytes(resources.agent_memory_bytes)]);
+  }
+  if (resources.memory_headroom_bytes !== undefined) {
+    metrics.push(["Worker budget (estimate)", formatBytes(resources.memory_headroom_bytes)]);
   }
   metrics.push(
     [

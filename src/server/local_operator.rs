@@ -136,6 +136,23 @@ async fn session_provider_update(
         }
         return reply(StatusCode::ACCEPTED, "after_turn");
     }
+    let live_worker = state
+        .runtime_router
+        .runtime(&meta.machine_id)
+        .is_some_and(|runtime| runtime.has_worker(&meta.id));
+    // Host operators share the same maintenance boundary as UI and automatic
+    // updates. A dormant re-pin only changes metadata; recovery may allocate.
+    let _maintenance: Box<dyn Send> = if meta.status == Status::Exited && !live_worker {
+        match session_reclaim::decisions(&meta.machine_id).try_lock_owned() {
+            Ok(lease) => Box::new(lease),
+            Err(_) => return (StatusCode::CONFLICT, "maintenance is finishing").into_response(),
+        }
+    } else {
+        match session_maintenance::reload_lease(&state, &session_id) {
+            Ok(lease) => lease,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        }
+    };
     let _fence = match ProviderReloadFence::acquire(
         &state.plugin_lifecycle_fences,
         (meta.machine_id.clone(), meta.provider.clone()),
@@ -143,10 +160,6 @@ async fn session_provider_update(
         Ok(fence) => fence,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
-    let live_worker = state
-        .runtime_router
-        .runtime(&meta.machine_id)
-        .is_some_and(|runtime| runtime.has_worker(&meta.id));
     // An exited session whose worker survives is reloaded, never re-pinned:
     // the worker's release would reconcile a re-pin straight back.
     let result = if meta.status == Status::Exited && !live_worker {
