@@ -40,6 +40,7 @@ mod copy;
 mod core_security;
 pub(crate) mod draft_documents;
 mod managed_calls;
+pub(crate) mod preferences;
 mod workspace_documents;
 pub(crate) use core_security::HandoffPoint;
 mod plugin_installations;

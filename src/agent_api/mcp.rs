@@ -57,7 +57,7 @@ fn tools(actions: bool) -> Value {
         {
             "name":"cowboy_receipt","description":RECEIPT_DESCRIPTION,
             "inputSchema":{"type":"object","properties":{
-                "domain":{"enum":["calls","documents"]},"operation":{"type":"string"}
+                "domain":{"enum":["calls","documents","preferences"]},"operation":{"type":"string"}
             },"required":["domain","operation"],"additionalProperties":false},
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
@@ -107,7 +107,10 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
     let mut tagged = arguments;
     if name == "cowboy_receipt" {
         if tagged.as_object().is_none_or(|map| map.len() != 2)
-            || !matches!(tagged["domain"].as_str(), Some("calls" | "documents"))
+            || !matches!(
+                tagged["domain"].as_str(),
+                Some("calls" | "documents" | "preferences")
+            )
             || tagged["operation"]
                 .as_str()
                 .is_none_or(|id| !crate::managed_calls::valid_id(id))

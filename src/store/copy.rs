@@ -15,6 +15,9 @@ use sqlx::{Connection as _, Row as _};
 use super::sqlite::SqliteStorage;
 
 const TABLES: &[&str] = &[
+    "user_preference_owners",
+    "user_preferences",
+    "user_preference_operations",
     "draft_document_owners",
     "draft_documents",
     "draft_workspace_folder_imports",

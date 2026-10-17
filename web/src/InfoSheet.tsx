@@ -1,9 +1,12 @@
 import { desktopSize } from "./surface/desktopSize";
+import { AboutLayoutEditor } from "./AboutLayoutEditor";
+import { DEFAULT_ABOUT_VALUES, orderedItems, useAboutPreferences } from "./aboutPreferences";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Alert,
   Box,
   Button,
   ButtonBase,
@@ -660,7 +663,7 @@ function ProviderUsageCardBody({
   );
 }
 
-function UsageInfoSection(): React.JSX.Element {
+function UsageInfoSection({ order }: { order: string[] }): React.JSX.Element {
   // Usage and its refresh progress belong to the Controller and are pushed to
   // every client, so closing and reopening this sheet keeps showing a refresh.
   const snapshot = useStoreSelector((state) => state.usage);
@@ -729,7 +732,7 @@ function UsageInfoSection(): React.JSX.Element {
           <Refresh />
         </NetworkIconButton>
       </Stack>
-      {usageCardProviders(snapshot).map((provider) => (
+      {orderedItems(usageCardProviders(snapshot), order, (provider) => provider.provider).map((provider) => (
         <ProviderUsageCard
           key={provider.provider}
           usage={provider}
@@ -904,7 +907,24 @@ export function InfoContent({
   desktop?: boolean;
   aside?: React.ReactNode;
 } = {}): React.JSX.Element {
+  const connected = useStoreSelector((state) => state.connected);
+  const layout = useAboutPreferences(connected);
+  const [editing, setEditing] = useState(false);
+  const values = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
+  const choices = useMemo(() => layout.data ? {
+    ...layout.data.choices,
+    usage_order: layout.data.choices.usage_order.map((item) => ({ ...item, name: accountProviderLabel(item.id) })),
+  } : undefined, [layout.data]);
   return (
+    <Stack spacing={1.5}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Typography variant="caption" color="text.secondary" role="status">{layout.saving ? "Saving layout…" : editing ? "Customize layout" : ""}</Typography>
+        <Button disabled={!layout.data || layout.saving || !!layout.pending} onClick={() => setEditing(!editing)}>{editing ? "Done" : "Customize layout"}</Button>
+      </Stack>
+      {layout.error && <Alert severity="warning" action={<Stack direction="row"><Button color="inherit" disabled={layout.saving} onClick={() => { void layout.retry(); }}>Retry</Button>{layout.pending && <Button color="inherit" disabled={layout.saving} onClick={layout.discard}>Discard</Button>}</Stack>}>{layout.error}</Alert>}
+      {editing && choices
+        ? <AboutLayoutEditor desktop={desktop} choices={choices} values={{ ...values, ...layout.pending?.changes }} disabled={layout.saving || !!layout.pending} onChange={(changes) => { void layout.save(changes); }} />
+        : (
     <Box
       sx={desktop
         ? {
@@ -917,7 +937,7 @@ export function InfoContent({
         : { mt: 1, display: "flex", flexDirection: "column", gap: 2.5 }}
     >
       <Box>
-        <UsageInfoSection />
+        <UsageInfoSection order={values.usage_order} />
       </Box>
       {!desktop && <Divider />}
       <Stack spacing={desktop ? 1.25 : 2.5}>
@@ -953,7 +973,7 @@ export function InfoContent({
             <Typography variant="caption" color="text.secondary">
               Memory, worker capacity and Provider updates on each Machine
             </Typography>
-            <SessionMaintenancePanel />
+            <SessionMaintenancePanel order={values.machine_order} />
           </Stack>
           <ProductSyncDataNotice />
         </Stack>
@@ -977,5 +997,7 @@ export function InfoContent({
         {aside}
       </Stack>
     </Box>
+        )}
+    </Stack>
   );
 }

@@ -19,7 +19,7 @@ if (
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
-  suite !== "dormant-session"
+  suite !== "dormant-session" && suite !== "about-layout"
 ) {
   throw new Error("unknown suite");
 }
@@ -48,7 +48,8 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "session-maintenance" || suite === "dormant-session"
+        suite === "session-maintenance" || suite === "dormant-session" ||
+        suite === "about-layout"
         ? "development"
         : "production",
     ),
@@ -96,6 +97,8 @@ await build({
       entry: new URL(
         suite === "dormant-session"
           ? "../web/src/dormantSessionBrowserConformance.tsx"
+          : suite === "about-layout"
+          ? "../web/src/aboutLayoutBrowserConformance.tsx"
           : suite === "session-maintenance"
           ? "../web/src/sessionMaintenanceBrowserConformance.tsx"
           : suite === "editor-plugin-sandbox"
