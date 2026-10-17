@@ -5188,14 +5188,18 @@ impl SqliteStorage {
         );
         let timestamp = now_ms();
         // `IS` compares NULL owners as equal, unlike `=`.
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM session_folders WHERE owner_user_id IS ?1")
-                .bind(owner_user_id)
-                .fetch_all(&mut *transaction)
-                .await
-                .context("SELECT SQLite session_folders ids")?;
+        let existing: std::collections::HashMap<String, String> =
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT id, defaults_json FROM session_folders WHERE owner_user_id IS ?1",
+            )
+            .bind(owner_user_id)
+            .fetch_all(&mut *transaction)
+            .await
+            .context("SELECT SQLite session_folders ids")?
+            .into_iter()
+            .collect();
         for stale in existing
-            .iter()
+            .keys()
             .filter(|id| !folders.iter().any(|folder| &folder.id == *id))
         {
             sqlx::query("DELETE FROM session_folders WHERE id = ?1")
@@ -5221,7 +5225,7 @@ impl SqliteStorage {
             .bind(folder.project.as_deref())
             .bind(folder.position)
             .bind(timestamp)
-            .bind(serde_json::to_string(&folder.defaults)?)
+            .bind(crate::session_folders::defaults::stored_json(&folder.defaults, existing.get(&folder.id).map(String::as_str))?)
             .execute(&mut *transaction)
             .await
             .with_context(|| format!("UPSERT SQLite session_folder {}", folder.id))?;
