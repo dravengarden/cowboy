@@ -12,6 +12,11 @@ import {
   workspaceCodeContextId,
 } from "./mobile/review/reviewContextModel";
 
+/** Browsing another root never owns the target session's tabs or progress. */
+export function reviewStateKey(owner: string | undefined, target: string): string {
+  return owner === target ? target : `workspace::view::${encodeURIComponent(owner ?? "none")}::${encodeURIComponent(target)}`;
+}
+
 export function inheritedReviewDirectory(
   session: SessionMeta,
   tree: SessionFoldersValue,

@@ -1813,7 +1813,7 @@ struct HubInner {
     sync: Mutex<HashMap<String, SyncArbiter>>,
     /// Serialize read/compare/apply and ordered write-behind snapshots.
     sync_apply_gate: Mutex<()>,
-    review_default_receipts: Mutex<HashMap<String, String>>,
+    review_default_receipts: Mutex<review_defaults::Receipts>,
     /// Monotonic source of queued/draft message ids (`q1`, `q2`, …). Seeded from
     /// the wall-clock-free counter; uniqueness across a daemon lifetime is all
     /// that's required (ids are list-local keys, not persisted-across-restart
@@ -1989,7 +1989,7 @@ impl Hub {
                 scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 sync_apply_gate: Mutex::new(()),
-                review_default_receipts: Mutex::new(HashMap::new()),
+                review_default_receipts: Mutex::new(review_defaults::Receipts::default()),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
             }),
@@ -7921,6 +7921,12 @@ mod core_tests {
         hub.review_directory_update(&actor, "zed-agent", "one", &input)
             .unwrap();
         assert!(hub.review_default_receipt("one"));
+        let remembered = std::mem::take(&mut *hub.inner.review_default_receipts.lock());
+        assert_eq!(
+            hub.review_directory_update(&actor, "zed-agent", "one", &input),
+            Err("receipt_expired")
+        );
+        *hub.inner.review_default_receipts.lock() = remembered;
         assert_eq!(
             hub.review_directory_update(&actor, "zed-agent", "two", &input),
             Err("revision_conflict")

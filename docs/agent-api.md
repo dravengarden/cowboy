@@ -50,8 +50,11 @@ browser only and grant no filesystem access or worker activation. Existing files
 stay open until the user switches contexts or opens the default explicitly.
 
 This scope deliberately reuses folder/mobile-review sync and its DB write-behind
-queue. Its receipt says **accepted**, not committed, and expires when the
-Controller restarts. `cowboy_receipt({domain:"preferences",operation})` can
+queue. Its receipt says **accepted**, not committed. The 4,096 most recently used
+receipts are retained until eviction or Controller restart.
+An evicted operation still in the sync dedupe window returns `receipt_expired`
+instead of acknowledging an unverified replay.
+`cowboy_receipt({domain:"preferences",operation})` can
 therefore return unknown; read current settings before retrying with the same
 input, expectation and operation. A changed expectation or operation is a new
 user decision. Compare/apply and exact-input replay are serialized with browser

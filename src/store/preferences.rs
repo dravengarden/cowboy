@@ -38,7 +38,7 @@ pub(crate) fn schema() -> Value {
     json!({"scopes":{"zed":{"storage":"database via existing folder/mobile-review sync","ownership":"calling session or its owner's folder",
         "read":"cowboy.preferences.get('zed')",
         "update":{"action":"preferences.update","arguments":{"scope":"zed","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
-        "receipts":"preferences domain; accepted means queued, not committed. Receipts expire at Controller restart. On unknown, read current state before retry; retain expected/input/operation.",
+        "receipts":"preferences domain; accepted means queued, not committed. The 4096 most recently used receipts expire on eviction or Controller restart. On unknown, read current state before retry; retain expected/input/operation.",
         "activation":"Next code-context entry or Open default directory; never moves Agent workspace or starts a worker."},
         "about":{"storage":"database","ownership":"current_user",
         "fields":{"usage_order":{"type":"unique_id_array","default":[]},

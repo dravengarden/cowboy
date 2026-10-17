@@ -22,7 +22,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -93,6 +93,7 @@ export function renderReviewContextPreview(dense = false) {
   };
   const requests: string[] = [];
   const commands: string[] = [];
+  const mutations: string[] = [];
   let socket: FixtureSocket | undefined;
   class FixtureSocket {
     static OPEN = 1;
@@ -124,7 +125,13 @@ export function renderReviewContextPreview(dense = false) {
           }],
         });
         this.publish({ type: "sessions", sessions });
-        this.publish({ type: "bootstrap_complete" });
+        for (const session of sessions) this.publish({ type: "sync_patch", state: `mobile-review:${session.id}`, version: 0, resync: true, confirmed: [], value: { mode: "git", tabs: deferDefaults && session.id === "worktree" ? [{path:"README.md",pinned:false}] : [], ...(deferDefaults && session.id === "worktree" ? {active:"README.md"} : {}), progress: {}, positions: {} } });
+        const defaults = () => {
+          this.publish({ type: "sync_patch", state: "folders", version: 0, resync: true, confirmed: [], value: deferDefaults ? { folders: [{id:"initial",name:"Initial",parent:null,project:null,position:0,defaults:{review_directory:"workspace::hawk::suger"}}],placement:{worktree:"initial"} } : {folders:[],placement:{}} });
+          this.publish({ type: "bootstrap_complete" });
+        };
+        if (deferDefaults) setTimeout(defaults, 180);
+        else defaults();
       }, 20);
     }
     publish(message: unknown) {
@@ -132,6 +139,8 @@ export function renderReviewContextPreview(dense = false) {
     }
     send(data: string) {
       commands.push(JSON.parse(data).type);
+      const message = JSON.parse(data);
+      if (message.type === "sync") mutations.push(`${message.state}/${message.name}`);
     }
     close() {
       this.readyState = 3;
@@ -311,6 +320,7 @@ export function renderReviewContextPreview(dense = false) {
     container,
     requests,
     commands,
+    mutations,
     refresh: () => socket?.publish({ type: "sessions", sessions }),
     sync: (state: string, value: unknown, version: number) => socket?.publish({ type: "sync_patch", state, value, version, confirmed: [], resync: true }),
     select: (id: string) => flushSync(() => setActiveSessionId(id)),
@@ -324,7 +334,7 @@ export function renderReviewContextPreview(dense = false) {
 }
 
 export async function runReviewContextBrowserConformance(): Promise<string[]> {
-  const fixture = renderReviewContextPreview(true);
+  const fixture = renderReviewContextPreview(true, true);
   const tests: string[] = [];
   const overview = () =>
     fixture.container.querySelector<HTMLElement>(
@@ -378,6 +388,15 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     return rect.top;
   };
   try {
+    await wait(90);
+    check(!fixture.requests.some(r => r.includes("/api/code/")), "A hydrated tab fetched files before directory defaults loaded");
+    await until(() => !!fixture.container.textContent?.includes("Project code · Suger"), "Late folder resync should select the inherited root");
+    check(!fixture.requests.some(r => r.includes("/sessions/worktree/")), "An early Automatic root was pinned before folders loaded");
+    fixture.sync("folders", { folders: [], placement: {} }, 1);
+    fixture.sync("mobile-review:worktree", {mode:"git",tabs:[],progress:{},positions:{}}, 1);
+    await until(() => !!fixture.container.textContent?.includes("Worktree · Cowboy"), "Reset inherited fixture");
+    await wait(150);
+    fixture.requests.length = 0;
     await until(
       () => !!overview()?.textContent?.includes("app.ts"),
       "Session changes should be the first screen",
@@ -670,7 +689,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
         { id: "review-child", name: "Review child", project: null, parent: "review-root", position: 0, defaults: {} },
       ], placement: { worktree: "review-child" },
     });
-    fixture.sync("folders", folders("workspace::hawk::suger"), 1);
+    fixture.sync("folders", folders("workspace::hawk::suger"), 2);
     fixture.select("worktree");
     await until(() => !!fixture.container.textContent?.includes("Project code · Suger"), "Directory default should choose the inherited project");
     await click(labelled("Worktree files"));
@@ -678,7 +697,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     await click(document.querySelector('[data-code-tree-path="README.md"]'));
     await until(() => !!document.querySelector("[data-markdown-review-preview]"), "Inherited project file should open");
     const countBeforeParentChange = fixture.requests.length;
-    fixture.sync("folders", folders("workspace::hawk::cowboy"), 2);
+    fixture.sync("folders", folders("workspace::hawk::cowboy"), 3);
     await wait(200);
     check(fixture.container.textContent?.includes("Project code · Suger"), "Parent default stole an open file's directory");
     check(!fixture.requests.slice(countBeforeParentChange).some(r => r.includes("workspace::hawk::cowboy")), "Parent default fetched the open file against another root");
@@ -694,6 +713,24 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     await click(document.querySelector("[data-use-review-default]"));
     await until(() => !!fixture.container.textContent?.includes("Worktree · Cowboy"), "Automatic should block directory inheritance and use the real session worktree");
     check(getActiveSessionId() === "worktree", "Browsing defaults switched the Agent session");
+    await click(labelled("Worktree files"));
+    await until(() => !!files()?.textContent?.includes("README.md"), "Automatic worktree files");
+    await click(document.querySelector('[data-code-tree-path="README.md"]'));
+    await until(() => !!document.querySelector("[data-markdown-review-preview]"), "Automatic worktree document");
+    await click(labelled("Close README.md"));
+    await click([...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "Close tab") ?? null);
+    await click(labelled("Switch session. Current session Improve review"));
+    await click(document.querySelector("[data-edit-review-directory]"));
+    check(document.querySelector('[data-review-directory="automatic"]')?.classList.contains("Mui-selected"), "Closing the final tab erased the session directory override");
+    await click(document.querySelector('[data-review-directory="session::project"]'));
+    await click(document.querySelector("[data-use-review-default]"));
+    await click(labelled("Worktree files"));
+    await until(() => !!files()?.textContent?.includes("README.md"), "Another session worktree should be browsable");
+    const beforeForeign = fixture.mutations.length;
+    await click(document.querySelector('[data-code-tree-path="README.md"]'));
+    await until(() => !!document.querySelector("[data-markdown-review-preview]"), "Foreign context file should open");
+    await wait(600);
+    check(!fixture.mutations.slice(beforeForeign).some(m => m.startsWith("mobile-review:project/")), "Browsing another session mutated its tabs or positions");
     check(!fixture.commands.some(c => ["prompt", "new_session", "resume_session", "set_config_option"].includes(c)), "Directory defaults activated a worker");
     tests.push("session and ancestor defaults share a hierarchical picker, preserve open files and return explicitly to the new default without worker activation");
     return tests;

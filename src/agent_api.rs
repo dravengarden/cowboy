@@ -78,7 +78,8 @@ pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the 
 // string = "project" | "workspace::<machine>::<workspace>" | "session::<id>".
 // Copy expected exactly from the selected override in get. Mutations return accepted
 // (write-behind), NOT committed. preferences receipts are volatile for this scope;
-// unknown after restart requires reading current state before any retry.
+// the 4096 most recently used expire on eviction/restart. On unknown or
+// receipt_expired, read current settings before deciding whether a new edit is needed.
 // Schema is Controller-owned: discover it even from older installed MCP clients.
 "#;
 

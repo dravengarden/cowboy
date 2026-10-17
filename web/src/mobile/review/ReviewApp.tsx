@@ -60,11 +60,11 @@ import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsB
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
-import { inheritedReviewDirectory, resolveReviewDirectory } from "../../reviewDirectoryDefault";
+import { inheritedReviewDirectory, resolveReviewDirectory, reviewStateKey } from "../../reviewDirectoryDefault";
 import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
 import {
-  mutateMobileReview,
+  mutateMobileReview as mutateReviewState,
   notify,
   openSession,
   useMobileReviewState,
@@ -466,6 +466,7 @@ type TabCloseRequest =
 // Exported for the synthetic-HTTP browser conformance fixture only.
 export function DocumentView({
   sessionId,
+  reviewStateId = sessionId,
   target,
   onRevision,
   markdownPreview,
@@ -490,6 +491,7 @@ export function DocumentView({
   onOutlineSelect,
 }: {
   sessionId: string;
+  reviewStateId?: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
@@ -523,6 +525,7 @@ export function DocumentView({
   onOutlineSelect: (line: number) => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
+  const mutateMobileReview: typeof mutateReviewState = useCallback((_context, name, args) => mutateReviewState(reviewStateId, name, args), [reviewStateId]);
   const settings = useReviewSettings();
   const previewKind = reviewPreviewKind(target.path);
   const mediaPreview = isReviewMediaPath(target.path);
@@ -2129,11 +2132,13 @@ export function ReviewApp({
   const sessionLocation = currentSession ? sessionReviewLocation(currentSession, sessionRegisteredWorkspace) : undefined;
   const folderTree = useStoreSelector(state => state.sessionFolders);
   const sessionReview = useMobileReviewState(currentSession?.id);
+  const defaultsReady = useStoreSelector(state => state.sessionFoldersReady && (!currentSession || state.mobileReviewReady.has(currentSession.id)));
+  const mutateMobileReview: typeof mutateReviewState = useCallback((context, name, args) => mutateReviewState(reviewStateKey(boundWorkspace?.sessionId, context), name, args), [boundWorkspace?.sessionId]);
   const directoryDefault = currentSession ? inheritedReviewDirectory(currentSession, folderTree, sessionReview.directory) : undefined;
   const [readingDefault, setReadingDefault] = useState<{ owner: string; value: string | null | undefined }>();
   const directoryValue = readingDefault?.owner === currentSession?.id && readingDefault
     ? readingDefault.value : directoryDefault?.value;
-  const resolvedDirectory = currentSession ? resolveReviewDirectory(directoryValue, currentSession, sessions, machineInventories) : {};
+  const resolvedDirectory = !defaultsReady ? { error: "Loading directory defaults…" } : currentSession ? resolveReviewDirectory(directoryValue, currentSession, sessions, machineInventories) : {};
   const boundCodeWorkspace = boundWorkspace
     ? { ...boundWorkspace, cwd: executionUsable ? execution?.cwd ?? "" : "" }
     : null;
@@ -2163,14 +2168,14 @@ export function ReviewApp({
   const workspaceIdentity = workspace
     ? JSON.stringify([workspace.sessionId, workspace.cwd, projectCodeContext?.machineId ?? execution?.machineId])
     : undefined;
-  const syncedReview = useMobileReviewState(workspace?.sessionId);
+  const syncedReview = useMobileReviewState(workspace ? reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId) : undefined);
   // Pin the preference while a file is open. Parent edits update the default
   // shown in settings without reinterpreting a relative tab in a new root.
   useEffect(() => {
-    if (surfaceActive && currentSession && workspace && !explicitProjectContext && (syncedReview.active || syncedReview.remote_selected)) {
+    if (defaultsReady && surfaceActive && currentSession && workspace && !explicitProjectContext && (syncedReview.active || syncedReview.remote_selected)) {
       setReadingDefault(previous => previous?.owner === currentSession.id ? previous : { owner: currentSession.id, value: directoryValue });
     }
-  }, [surfaceActive, currentSession?.id, workspaceIdentity, syncedReview.active, syncedReview.remote_selected, directoryValue, explicitProjectContext]);
+  }, [defaultsReady, surfaceActive, currentSession?.id, workspaceIdentity, syncedReview.active, syncedReview.remote_selected, directoryValue, explicitProjectContext]);
   const remoteSelected = !projectCodeContext && syncedReview.remote_selected === true;
   const active = surfaceActive && !remoteSelected;
   useEffect(() => {
@@ -3460,12 +3465,13 @@ export function ReviewApp({
           )
           : (
             <DocumentView
-              key={`${workspace.sessionId}:${target.kind}:${target.path}:${
+              key={`${reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)}:${target.kind}:${target.path}:${
                 target.kind === "diff"
                   ? target.comparison ?? target.scope
                   : "source"
               }`}
               sessionId={workspace.sessionId}
+              reviewStateId={reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)}
               bufferMode={bufferMode}
               dataRevision={dataRevision}
               active={active}
