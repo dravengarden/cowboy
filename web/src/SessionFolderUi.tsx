@@ -597,13 +597,14 @@ export function DeleteFolderShell({
       >
         <Stack spacing={1}>
           <Typography variant="body2" color="text.secondary">
-            Only this folder is removed. Its {sessionCount} sessions, {draftCount} Drafts and {childCount} subdirectories move to {target}. Nothing inside is deleted.
+            This folder contains {sessionCount} sessions, {draftCount} Drafts and {childCount} subdirectories. Only the folder is removed; nothing inside is deleted.
           </Typography>
+          <Typography variant="body2" color="text.secondary">Explicitly placed sessions, Drafts and subdirectories move to {target}.</Typography>
           <Typography variant="body2" color="text.secondary">Subdirectories will inherit defaults from their new parent. Existing sessions keep their settings.</Typography>
           {onSelectSessions && <Button onClick={onSelectSessions} sx={{ alignSelf: "flex-start" }}>Select sessions to delete instead…</Button>}
           {folder.project && (
             <Typography variant="caption" color="text.secondary">
-              Sessions of "{folder.project}" stop filing themselves here.
+              Sessions automatically filed here by "{folder.project}" return to Global. Explicit placements are preserved.
             </Typography>
           )}
         </Stack>

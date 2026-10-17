@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -17,7 +17,7 @@ import { Search } from "@mui/icons-material";
 import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
 import { DirectoryWorkbench } from "./DirectoryWorkbench";
-import { deleteSession, useStoreSelector } from "./store";
+import { deleteSession, notify, useStoreSelector } from "./store";
 import {
   effectiveSessionFolder,
   sessionFolderById,
@@ -46,19 +46,25 @@ export function DirectorySessionsSheet(
       sessions={sessions}
       deleting={deleting}
       removeSession={(sessionId) => deleteSession(sessionId, { quiet: true })}
+      onBackgroundFailure={(count) =>
+        notify(
+          `${count} session delete requests could not be confirmed. Check Sessions and retry.`,
+        )}
     />
   );
 }
 
 export function DirectorySessionsView(
-  { id, onClose, tree, sessions, deleting, removeSession }: {
-    id: string;
-    onClose: () => void;
-    tree: SessionFoldersValue;
-    sessions: readonly SessionMeta[];
-    deleting: ReadonlySet<string>;
-    removeSession: (id: string) => Promise<void>;
-  },
+  { id, onClose, tree, sessions, deleting, removeSession, onBackgroundFailure }:
+    {
+      id: string;
+      onClose: () => void;
+      tree: SessionFoldersValue;
+      sessions: readonly SessionMeta[];
+      deleting: ReadonlySet<string>;
+      removeSession: (id: string) => Promise<void>;
+      onBackgroundFailure: (count: number) => void;
+    },
 ): React.JSX.Element {
   const desktop = useSurfaceProfile().kind === "desktop";
   const folder = sessionFolderById(tree, id);
@@ -69,6 +75,13 @@ export function DirectorySessionsView(
   const [busy, setBusy] = useState(false);
   const [failures, setFailures] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState<Set<string>>(new Set());
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const anchor = useRef<string | null>(null);
   const content = useRef<HTMLDivElement>(null);
   useDialogFocus(
@@ -132,6 +145,11 @@ export function DirectorySessionsView(
     setBusy(true);
     setFailures({});
     const errors = await deleteSelectedSessions(ids, removeSession);
+    if (!mounted.current) {
+      const count = Object.keys(errors).length;
+      if (count > 0) onBackgroundFailure(count);
+      return;
+    }
     setFailures(errors);
     setSubmitted(new Set(ids));
     setBusy(false);

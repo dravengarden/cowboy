@@ -408,12 +408,15 @@ Deletion requires one confirmation listing the exact session identities. The
 existing authenticated session deletion writer receives at most four concurrent
 requests. Acknowledgement of `closing` is pending, not success: only authoritative
 removal counts as deleted. Retained or failed sessions stay selected, with errors
-and a retry action; successful removals are never included in a retry. This is
+and a retry action; successful removals are never included in a retry. Closing
+the selection panel while requests run still reports failures globally. This is
 client orchestration of the existing single-session operation, not a new deletion
 policy or protocol. No directories or Drafts are included in the session batch.
 
 **Delete folder only** uses the shared compact confirmation surface and explains
-the destination of its sessions, Drafts and immediate subdirectories, which are
-preserved. It also explains that inherited defaults follow the new parent, and
+the destination of explicitly placed sessions, Drafts and immediate subdirectories,
+which are preserved. Sessions filed only by the deleted project's binding return
+to Global, matching the existing derived-placement rule. It also explains that
+inherited defaults follow the new parent, and
 offers a separate route to select sessions for deletion. Folder confirmations
 stay in the keyboard-resized App host instead of adding a body-level portal.

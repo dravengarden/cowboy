@@ -94,6 +94,9 @@ export function renderDirectoryUxPreview(
     desktopHost: !mobile,
   });
   const calls: string[] = [];
+  const backgroundFailures: number[] = [];
+  let gate: Promise<void> | undefined;
+  let release: (() => void) | undefined;
   let fail = true;
   let addSession = () => {};
   function Fixture() {
@@ -118,9 +121,11 @@ export function renderDirectoryUxPreview(
                 onClose={() => {}}
                 removeSession={async (id) => {
                   calls.push(id);
+                  if (gate) await gate;
                   if (id === "b" && fail) throw new Error("Machine offline");
                   setSessions((current) => current.filter((s) => s.id !== id));
                 }}
+                onBackgroundFailure={(count) => backgroundFailures.push(count)}
               />
             )
             : (
@@ -150,6 +155,13 @@ export function renderDirectoryUxPreview(
   flushSync(() => root.render(<Fixture />));
   return {
     calls,
+    backgroundFailures,
+    pause: () => {
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    resume: () => release?.(),
     addSession: () => flushSync(addSession),
     allowRetry: () => {
       fail = false;
@@ -259,5 +271,18 @@ export async function runDirectoryUxBrowserChecks(): Promise<void> {
     } finally {
       batch.close();
     }
+    const detached = renderDirectoryUxPreview("sessions", mobile);
+    await tick();
+    detached.pause();
+    await click(button("Select all in directory (2)"));
+    await click(button("Delete (2)"));
+    await click(button("Delete 2 sessions"));
+    detached.close();
+    detached.resume();
+    await tick();
+    check(
+      detached.backgroundFailures.join(",") === "1",
+      "closing a running batch still reports its failures globally",
+    );
   }
 }
