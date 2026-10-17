@@ -104,6 +104,8 @@ class WebSocket:
 
 
 def agent():
+    config_options = [{"id": "model", "name": "Model", "category": "model", "type": "select",
+                       "currentValue": "small", "options": [{"value": "small", "name": "Small"}, {"value": "large", "name": "Large"}]}]
     for line in sys.stdin:
         request = json.loads(line)
         if "id" not in request:
@@ -113,7 +115,12 @@ def agent():
             if method == "initialize":
                 result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}, "authMethods": []}
             elif method in ("session/new", "session/load", "session/resume"):
-                result = {"sessionId": request["params"].get("sessionId", "execution-fixture-native")}
+                result = {"sessionId": request["params"].get("sessionId", "execution-fixture-native"),
+                          "configOptions": config_options}
+            elif method == "session/set_config_option":
+                require(request["params"]["configId"] == "model", "unknown fixture option")
+                config_options[0]["currentValue"] = request["params"]["value"]
+                result = {"configOptions": config_options}
             elif method == "session/prompt":
                 descriptor = json.loads(Path(os.environ["COWBOY_EXECUTION_DESCRIPTOR"]).read_text())
                 client = WebSocket(descriptor["endpoint"], {"Authorization": "Bearer " + descriptor["bearer_token"]})
@@ -121,6 +128,8 @@ def agent():
                     initialized = client.rpc("initialize", {})
                     cwd = Path(descriptor["binding"]["workspace"]["cwd"])
                     require(initialized["environmentInfo"]["cwd"] == cwd.as_uri(), "wrong native cwd")
+                    client.rpc("fs/writeFile", {"path": (cwd / "selected-model.txt").as_uri(),
+                        "dataBase64": base64.b64encode(config_options[0]["currentValue"].encode()).decode()})
                     client.rpc("fs/writeFile", {"path": (cwd / "route.txt").as_uri(), "dataBase64": base64.b64encode("target '\" $() 中文 🐎\n".encode()).decode()})
                     # Frames above the lane threshold: writes and reads that
                     # the Machine moves onto bulk lanes once they open.
@@ -224,6 +233,12 @@ def main():
             platforms=[{"os": "linux", "architecture": "x86_64", "payload_digest": "", "launch_command": "fixture-agent",
                 "private_components": [{"kind": "provider_adapter", "slot": "fixture", "dependency": "fixture-agent", "command": "fixture-agent"}]}])
         source["runtime"]["behavior"].update(permission="portable_v1", configuration="portable_v1", default_preferences={})
+        if inputs.get("session_maintenance"):
+            source["runtime"]["behavior"]["default_preferences"] = {"model": "small"}
+            source["configuration_presets"] = [
+                {"id": "standard", "name": "Standard", "detail": "Small model", "is_default": True, "values": {"model": "small"}},
+                {"id": "large", "name": "Large", "detail": "Large model", "is_default": False, "values": {"model": "large"}},
+            ]
         source["runtime"]["behavior"]["execution"]["executor_digests"] = [native_digest]
         source["authentication"].update(required=False, methods=[], credential_files=[], environment_projection={})
         manifest = json.loads(Path("plugins/codex/plugin.json").read_text())
@@ -430,9 +445,56 @@ def main():
                     require(not session_info(identifier).get("agent_session_id"), "creation started a native worker")
                 require(maintenance()["machine"]["active_sessions"] == 1, "dormant records consumed capacity")
                 checks.append("more_session_records_than_worker_limit_without_native_start")
+                def selected_model(identifier):
+                    status, value = call("GET", f"/api/sessions/{identifier}/bootstrap")
+                    require(status == 200, "dormant bootstrap failed")
+                    options = next(message["options"] for message in value["messages"] if message["type"] == "config_options")
+                    return next(option["currentValue"] for option in options if option["id"] == "model")
+
+                require(selected_model(dormant[0]) == "small", "signed defaults absent before startup")
+                status, dataset = call("GET", "/api/sync/dataset")
+                require(status == 200, "browser dataset unavailable")
+                query = urllib.parse.urlencode({"dataset": dataset["dataset_id"], "bootstrap": "lazy"})
+                headers = {"Origin": public_origin,
+                    "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()), "Sec-WebSocket-Protocol": "cowboy-sync-v1"}
+                if device:
+                    headers.update({"X-Forwarded-Proto": "https",
+                        "x-cowboy-browser-proof": device.proof("GET", f"/ws?{query}")})
+                settings_browser = WebSocket(f"ws://127.0.0.1:{port}/ws?{query}", headers)
+                try:
+                    settings_browser.send({"type": "set_config_option", "session_id": dormant[0], "config_id": "model", "value": "large"})
+                    wait(lambda: selected_model(dormant[0]) == "large", "dormant setting saved")
+                    settings_browser.send({"type": "reset_session", "session_id": dormant[0]})
+                    wait(lambda: any(event.get("update", {}).get("sessionUpdate") == "context_cleared"
+                                     for message in call("GET", f"/api/sessions/{dormant[0]}/bootstrap")[1]["messages"]
+                                     for event in message.get("events", [])), "dormant clear")
+                finally:
+                    settings_browser.close()
+                require(selected_model(dormant[0]) == "large", "Clear lost settings")
+                require(session_info(dormant[0])["status"] == "exited"
+                        and not session_info(dormant[0]).get("agent_session_id")
+                        and maintenance()["machine"]["active_sessions"] == 1, "settings or Clear started a worker")
+                checks.append("signed_prelaunch_settings_and_clear_preserve_workerless_state")
+                controller.terminate()
+                controller.wait(timeout=20)
+                controller = start("controller-prelaunch-settings", controller_command)
+                wait(lambda: call("GET", "/healthz")[0] == 200, "prelaunch settings restart")
+                wait(lambda: connected("runtime") and connected("target"), "prelaunch Machines reconnect")
+                require(selected_model(dormant[0]) == "large", "restart lost prelaunch preference")
+                require(session_info(dormant[0])["status"] == "exited"
+                        and not session_info(dormant[0]).get("agent_session_id"), "restart woke prelaunch session")
+                checks.append("prelaunch_preferences_survive_restart_without_an_agent_snapshot")
                 require(call("POST", f"/api/sessions/{dormant[0]}/reload")[0] == 202,
-                        "explicit model-options initialization refused")
+                        "explicit runtime initialization refused")
                 wait(lambda: session_info(dormant[0])["status"] == "running", "explicit initialization")
+                wait(lambda: selected_model(dormant[0]) == "large", "saved setting applied at first launch")
+                require(call("POST", f"/api/sessions/{dormant[0]}/prompt", {"text": "Verify saved model"})[0] == 202,
+                        "configured first prompt refused")
+                selected_path = Path(session_info(dormant[0])["execution_binding"]["workspace"]["cwd"]) / "selected-model.txt"
+                wait(lambda: selected_path.exists(), "configured prompt executed")
+                require(selected_path.read_text() == "large", "first prompt ran before saved preferences applied")
+                wait(lambda: session_info(dormant[0])["status"] == "running", "configured prompt finished")
+                checks.append("saved_model_applies_before_first_prompt")
                 require(call("POST", f"/api/sessions/{dormant[1]}/prompt", {"text": "Wait for resources"})[0] == 202,
                         "full capacity rejected message instead of retaining it")
                 wait(lambda: session_info(dormant[1]).get("resource_wait"), "resource wait reason")
@@ -448,6 +510,7 @@ def main():
                      and maintenance()["machine"]["active_sessions"] == 2, "restored worker ownership")
                 wait(lambda: session_info(dormant[1]).get("resource_wait"), "restored resource wait")
                 require(maintenance()["policy"]["memory_reclaim"] is True, "restart lost maintenance override")
+                require(selected_model(dormant[0]) == "large", "restart lost saved model")
                 require(not pending_effects.exists(), "restart bypassed capacity")
                 require(call("POST", f"/api/sessions/{dormant[0]}/hibernate")[0] == 202,
                         "idle worker hibernation refused")

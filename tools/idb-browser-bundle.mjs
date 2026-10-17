@@ -18,7 +18,8 @@ if (
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
-  suite !== "managed-calls" && suite !== "session-maintenance"
+  suite !== "managed-calls" && suite !== "session-maintenance" &&
+  suite !== "dormant-session"
 ) {
   throw new Error("unknown suite");
 }
@@ -47,7 +48,7 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "session-maintenance"
+        suite === "session-maintenance" || suite === "dormant-session"
         ? "development"
         : "production",
     ),
@@ -87,12 +88,15 @@ await build({
         suite === "workspace-extensions" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
-        suite === "tool-inspector" || suite === "managed-calls"
+        suite === "tool-inspector" || suite === "managed-calls" ||
+        suite === "dormant-session"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "session-maintenance"
+        suite === "dormant-session"
+          ? "../web/src/dormantSessionBrowserConformance.tsx"
+          : suite === "session-maintenance"
           ? "../web/src/sessionMaintenanceBrowserConformance.tsx"
           : suite === "editor-plugin-sandbox"
           ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"

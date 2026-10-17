@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { OPEN_SESSION_SETTINGS_EVENT, sessionSettingsEventMatches } from "../sessionSettingsOpen";
 import {
   alpha,
   Box,
@@ -53,7 +54,6 @@ import {
   type ProviderConfigOptionPresentation,
   providerConfigOptionPresentations,
   providerConfigOptions,
-  providerConfigSurfaceDisabled,
 } from "../providerConfigOptions";
 import {
   activeRunConfigPreset,
@@ -1196,6 +1196,13 @@ export function DesktopTopBarControls({
     "config" | "usage" | "update" | "reload" | "compact" | "clear" | null
   >(null);
   const configOpen = openSurface === "config";
+  useEffect(() => {
+    const openSettings = (event: Event): void => {
+      if (sessionSettingsEventMatches(event, sessionId)) setOpenSurface("config");
+    };
+    document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
+    return () => document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
+  }, [sessionId]);
   const usageOpen = openSurface === "usage";
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const configPanelRef = useRef<HTMLDivElement>(null);
@@ -1270,11 +1277,9 @@ export function DesktopTopBarControls({
       },
     );
   }, [optionPresentations, rawOptions, session?.provider]);
-  const configDisabled = providerConfigSurfaceDisabled(
-    status,
-    options,
-    optionPresentations,
-  );
+  // This surface also owns Cowboy tools. Missing Provider options must never
+  // disable the whole settings entry point.
+  const configDisabled = session === undefined;
   const configSummary = options.map(compactOptionName).join(" · ");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
@@ -1910,7 +1915,9 @@ export function DesktopTopBarControls({
         open={configOpen}
         onClose={(): void => setOpenSurface(null)}
         title="Run configuration"
-        description="Changes apply immediately to this session."
+        description={dead
+          ? "Changes are saved for your next message. The session stays asleep."
+          : "Changes apply immediately to this session."}
         icon={<Tune sx={{ color: "primary.main" }} />}
         width={900}
         shortcutGroups={[{

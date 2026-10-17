@@ -170,6 +170,18 @@ impl Supervisor {
         !runtime.has_worker(session_id) && self.hub.status(session_id) == Some(Status::Exited)
     }
 
+    /// Editing preferences is not a request to start or recover a process.
+    /// This also covers workspace preparation and stopped/offline Machines.
+    fn defer_configuration(&self, session_id: &str) -> bool {
+        matches!(
+            self.hub.status(session_id),
+            Some(Status::Exited | Status::Crashed | Status::Interrupted)
+        ) || (self.hub.status(session_id) == Some(Status::Starting)
+            && self
+                .runtime_for_session(session_id)
+                .is_ok_and(|runtime| !runtime.has_worker(session_id)))
+    }
+
     pub(crate) fn with_runtime_restrictions(
         mut self,
         restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
@@ -418,6 +430,13 @@ impl Supervisor {
             self.runtime_for_session(session_id)?.cancel(session_id);
             return Ok(());
         }
+        if matches!(command, AgentCommand::SetConfigOption { .. })
+            && self.defer_configuration(session_id)
+        {
+            // The caller already saved the preference. Do this before cwd
+            // repair or runtime admission: neither belongs to a settings edit.
+            return Ok(());
+        }
         if matches!(
             command,
             AgentCommand::Prompt(..) | AgentCommand::SetConfigOption { .. }
@@ -526,8 +545,10 @@ impl Supervisor {
     /// If the session is unknown or its Machine runtime is disconnected.
     pub fn open(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
-        let runtime = self.runtime_for_session(session_id)?;
-        if self.is_dormant(&runtime, session_id) {
+        if matches!(
+            self.hub.status(session_id),
+            Some(Status::Exited | Status::Crashed | Status::Interrupted)
+        ) {
             return Ok(false);
         }
         self.ensure_alive_inner(session_id)
@@ -722,9 +743,10 @@ impl Supervisor {
         let _lifecycle = self.lifecycle.lock();
         // A dormant session has no worker to replace. Its native id is already
         // forgotten, so the next prompt's wake starts a fresh context.
-        if self
-            .runtime_for_session(session_id)
-            .is_ok_and(|runtime| self.is_dormant(&runtime, session_id))
+        if self.hub.status(session_id) == Some(Status::Exited)
+            && !self
+                .runtime_for_session(session_id)
+                .is_ok_and(|runtime| runtime.has_worker(session_id))
         {
             return Ok(());
         }
@@ -900,8 +922,10 @@ impl Supervisor {
         let Some(effect) = crate::managed_config::effect_for_id(&configuration, config_id) else {
             return Ok(false);
         };
-        if matches!(meta.status, Status::Busy | Status::Starting)
-            || self.hub.session_has_in_flight_prompt(session_id)
+        let deferred = self.defer_configuration(session_id);
+        if !deferred
+            && (matches!(meta.status, Status::Busy | Status::Starting)
+                || self.hub.session_has_in_flight_prompt(session_id))
         {
             return Err(
                 "wait for the current turn to finish before changing this managed setting"
@@ -918,11 +942,10 @@ impl Supervisor {
             &preferences,
             &value,
         )?;
-        let runtime = self.runtime_for_session(session_id)?;
         self.hub
             .set_config_preference(session_id, config_id.to_owned(), value)?;
         // A dormant session's next launch reads the new preference.
-        if unchanged || self.is_dormant(&runtime, session_id) {
+        if unchanged || deferred {
             return Ok(true);
         }
         self.resolve_and_persist_cwd(session_id)?;
@@ -1499,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_a_crashed_session_still_restarts_it() {
+    async fn inspecting_a_crashed_session_preserves_the_failure_without_restarting() {
         let root = TestDir::new();
         let hub = dormant_codex_session(&root);
         hub.set_status("s", Status::Crashed, None);
@@ -1508,10 +1531,36 @@ mod tests {
         router.install("hawk".to_owned(), Arc::clone(&runtime));
         let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
         supervisor.open("s").expect("open crashed");
-        assert!(runtime.pending_for_test().iter().any(|command| matches!(
-            command,
-            CoreCommand::EnsureSession { session } if session.session_id == "s"
-        )));
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+    }
+
+    #[tokio::test]
+    async fn stopped_configuration_and_clear_work_without_a_connected_machine() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, RuntimeRouter::new());
+        for status in [Status::Exited, Status::Crashed, Status::Interrupted] {
+            hub.set_status("s", status, None);
+            assert!(!supervisor.open("s").unwrap());
+            hub.set_config_preference("s", "model".into(), serde_json::json!("chosen"))
+                .unwrap();
+            supervisor
+                .send(
+                    "s",
+                    AgentCommand::SetConfigOption {
+                        config_id: "model".into(),
+                        value: serde_json::json!("chosen"),
+                    },
+                )
+                .unwrap();
+            assert_eq!(hub.status("s"), Some(status));
+        }
+        hub.set_status("s", Status::Exited, None);
+        hub.prepare_context_reset("s");
+        supervisor.reset_session("s").unwrap();
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert_eq!(hub.config_preferences("s").unwrap()["model"], "chosen");
     }
 
     #[tokio::test]
