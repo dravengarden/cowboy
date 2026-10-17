@@ -343,15 +343,17 @@ creation does not require a live worker or silently change an unavailable bindin
 
 The existing authenticated CLI is the AI fallback for directory controls:
 `cowboy dir new --defaults`, `dir defaults`, and `dir set` use the same scoped
-writers. Directory mutations are an explicit MCP coverage exception in this change:
-they predate the MCP action surface and do not yet have its durable parent-scoped
-operation receipts. Do not expose a generic sync-write action to bypass that
-boundary; add typed directory actions when those receipts are implemented.
+writers. Zed browsing defaults additionally expose the typed `zed` preference
+scope through MCP; see [Agent API](agent-api.md). This uses an explicit
+acceptance receipt for the existing write-behind queue, not a durable commit
+receipt. Other directory mutations retain their CLI fallback until typed
+operations are available; there is no generic agent sync-write action.
 
 Directories store a sparse `defaults` object in the existing owner-scoped synced
 folder state. Supported keys are `project` (registered workspace ID), `machine`
 (files and command execution), `runtime_machine` (agent process), `provider`,
-and `preset` (`provider/preset-id`). Presets come from the signed Provider
+`preset` (`provider/preset-id`), and `review_directory` (Zed code-context identity).
+Presets come from the signed Provider
 catalog and include its supported model/reasoning combinations; Cowboy does not
 invent model IDs or copy permission, credential, prompt or tool policies into
 the directory tree. New keys must extend the closed server schema and its UI.
@@ -367,6 +369,17 @@ Subdirectories retain sparse overrides, never copies of parent defaults. Changin
 or moving a directory updates inherited defaults immediately; moving or updating
 an existing session does not switch its project, execution placement or agent.
 The default settings sheet shows the effective value and source of each field.
+Zed browsing is independently inherited at session → directory → ancestors.
+Its missing value inherits; null means Automatic (actual session worktree, then
+registered project). `project` selects the associated main checkout,
+`workspace::<machine>::<workspace>` selects a registered checkout, and
+`session::<id>` follows a visible session's files workspace. These identities
+never confer filesystem access. The picker groups real canonical hierarchies by
+Machine and supports search, with distinct Inherit and Automatic actions. A
+session can configure its override from Code & diff settings or the Review
+context sheet. Directory edits update the default immediately while an open file
+keeps its current root; **Open default directory** explicitly adopts the latest
+default. Missing targets are explained instead of redirecting to another root.
 The create form preserves manual choices when its destination changes. A preset
 is provider-qualified: changing agents requires selecting a compatible preset or
 Agent default rather than silently applying another provider's configuration.

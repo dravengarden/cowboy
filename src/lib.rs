@@ -174,6 +174,8 @@ mod provider_usage_spool;
 #[cfg(feature = "full")]
 mod remote_runtime;
 #[cfg(feature = "full")]
+mod review_directory;
+#[cfg(feature = "full")]
 mod runtime;
 #[cfg(feature = "full")]
 mod runtime_router;

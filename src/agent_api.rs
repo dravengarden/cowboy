@@ -70,6 +70,16 @@ pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the 
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.
+// Zed directory defaults: preferences.get("zed") returns the calling session's
+// override, its owner's directory overrides/parents, and registered project choices.
+// preferences.update arguments: {scope:"zed",folder_id?:string,expected:Override,
+// change:{inherit:true}|Override}. Omit folder_id for this session.
+// Override = {} (inherit) | {directory:null|string}; null = Automatic,
+// string = "project" | "workspace::<machine>::<workspace>" | "session::<id>".
+// Copy expected exactly from the selected override in get. Mutations return accepted
+// (write-behind), NOT committed. preferences receipts are volatile for this scope;
+// unknown after restart requires reading current state before any retry.
+// Schema is Controller-owned: discover it even from older installed MCP clients.
 "#;
 
 pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation}); one explicit effect, no writable code.
@@ -158,6 +168,7 @@ export type Document = DocumentMeta & { body: string; attachments: number; range
 export interface Cowboy {
   preferences: {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
+    get(scope: "zed"): Promise<{scope:"zed";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
   };
   session: {                       // this session

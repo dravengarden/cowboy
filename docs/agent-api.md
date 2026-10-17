@@ -37,6 +37,27 @@ would then remain. Claude and Codex share the same stdio MCP server.
 
 ## Transport and authority
 
+Zed browsing defaults use `cowboy.preferences.schema()` and
+`cowboy.preferences.get("zed")`. The existing `preferences.update` action accepts
+`{scope:"zed", folder_id?, expected, change}`: omit `folder_id` for the calling
+session, otherwise select an owned directory. Copy its exact `override` object
+into `expected`; use `change:{inherit:true}` to remove the override, or
+`change:{directory:null|string}` to choose Automatic or a stable code-context ID.
+The schema discovers accepted identities and the read response lists registered
+projects. Inheritance is session → containing directory → ancestors → Automatic
+(actual session worktree, then associated project). These settings affect the
+browser only and grant no filesystem access or worker activation. Existing files
+stay open until the user switches contexts or opens the default explicitly.
+
+This scope deliberately reuses folder/mobile-review sync and its DB write-behind
+queue. Its receipt says **accepted**, not committed, and expires when the
+Controller restarts. `cowboy_receipt({domain:"preferences",operation})` can
+therefore return unknown; read current settings before retrying with the same
+input, expectation and operation. A changed expectation or operation is a new
+user decision. Compare/apply and exact-input replay are serialized with browser
+mutations. This additive scope works through the existing Machine action gate;
+it does not require a worker generation change.
+
 ```text
 agent ── stdio MCP ──> cowboy mcp ── COWBOY_CALL_CONTEXT socket ──> Machine gateway
       ── authenticated Machine channel ──> Controller: authorize, then act

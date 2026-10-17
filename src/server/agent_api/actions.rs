@@ -5,6 +5,11 @@ use crate::managed_calls::Request;
 use crate::store::draft_documents::{DraftChange, DraftMutation, DraftResult};
 use serde::Deserialize;
 
+// Serialize this small, infrequent configuration surface across its two
+// domain writers so one operation cannot race into About and Zed together.
+static PREFERENCE_WRITES: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CallInput {
@@ -80,6 +85,10 @@ fn document_operation(parent: &str, operation: &str) -> String {
             &serde_json::to_vec(&(parent, operation)).expect("strings serialize")
         )
     )
+}
+
+fn review_operation(owner: &str, parent: &str, operation: &str) -> String {
+    document_operation(&format!("{owner}:{parent}"), operation)
 }
 
 fn success(value: Value) -> Value {
@@ -221,6 +230,14 @@ async fn execute(
                     .map_err(|_| "unavailable")?;
                 Ok(success(match receipt {
                     Some(prefs) => json!({"status":"committed","preferences":prefs}),
+                    None if state.hub.review_default_receipt(&review_operation(
+                        &owner,
+                        &meta.id,
+                        &input.operation,
+                    )) =>
+                    {
+                        json!({"status":"accepted","scope":"zed","durable_receipt":false})
+                    }
                     None => json!({"status":"unknown"}),
                 }))
             }
@@ -276,9 +293,44 @@ async fn execute(
         .ok_or("invalid_operation")?;
     match action {
         "preferences.update" => {
+            let _guard = PREFERENCE_WRITES.lock().await;
+            if args["scope"] == "zed" {
+                let input: crate::review_directory::Change =
+                    serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+                let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
+                let review_operation = review_operation(&owner, &meta.id, operation);
+                let operation = document_operation(&meta.id, operation);
+                // Prevent reusing an About operation for this distinct domain.
+                if state
+                    .store
+                    .as_ref()
+                    .ok_or("unavailable")?
+                    .preference_receipt(&owner, &operation)
+                    .await
+                    .map_err(|_| "unavailable")?
+                    .is_some()
+                {
+                    return Err("operation_conflict");
+                }
+                state.hub.review_directory_update(
+                    &review_defaults::actor(&owner),
+                    &meta.id,
+                    &review_operation,
+                    &input,
+                )?;
+                return Ok(success(
+                    json!({"status":"accepted","scope":"zed","durable_receipt":false}),
+                ));
+            }
             let input: crate::store::preferences::PreferenceChange =
                 serde_json::from_value(args).map_err(|_| "invalid_argument")?;
             let owner = preference_owner(state, meta).await?;
+            if state
+                .hub
+                .review_default_receipt(&review_operation(&owner, &meta.id, operation))
+            {
+                return Err("operation_conflict");
+            }
             let value = super::super::preferences::update_value(
                 state,
                 &owner,

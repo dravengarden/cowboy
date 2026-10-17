@@ -9,10 +9,12 @@ import {
 import { ExpandLess, ExpandMore, Tune } from "@mui/icons-material";
 import { FolderDefaultsEditor } from "./FolderDefaultsEditor";
 import {
+  FOLDER_DEFAULT_FIELDS,
   type FolderDefaultKey,
   type FolderDefaults,
   resolveFolderDefaults,
 } from "./folderDefaults";
+import { reviewDirectoryLabel } from "./reviewDirectoryDefault";
 import { sessionFolderById, type SessionFoldersValue } from "./sessionFolders";
 import { directoryProjects } from "./directoryProjects";
 import {
@@ -84,6 +86,9 @@ export function FolderCreationDefaults({
     effective.runtime_machine
       ? `Agent on ${machineName(effective.runtime_machine)}`
       : null,
+    effective.review_directory
+      ? `Zed: ${reviewDirectoryLabel(effective.review_directory, machines)}`
+      : null,
   ].filter(Boolean).join(" · ");
   const count = Object.keys(defaults).length;
   const source = parent
@@ -149,7 +154,7 @@ export function FolderCreationDefaults({
                   </Box>
                 )}
                 <Box component="span" sx={{ display: "block" }}>
-                  {count === 5
+                  {count === Object.keys(FOLDER_DEFAULT_FIELDS).length
                     ? "All settings chosen for this folder"
                     : count
                     ? `Other settings: ${inheritance.toLowerCase()}`

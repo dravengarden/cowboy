@@ -1,4 +1,5 @@
 import { createBootstrapPresentation } from "./bootstrapPresentation";
+import { validReviewDirectory } from "./reviewDirectoryIdentity";
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 import { createAuthoredSendGate } from "./authoredSendGate";
@@ -3300,6 +3301,7 @@ export interface MobileReviewTabState {
 }
 
 export interface MobileReviewState {
+  readonly directory?: string | null;
   readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
   readonly remote_selected?: boolean;
   readonly mode: "files" | "git";
@@ -3319,6 +3321,13 @@ const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
 };
 
 const mobileReviewMutators = {
+  setDirectory: (value: MobileReviewState, args: { directory?: string | null; inherit?: boolean }): MobileReviewState => {
+    if ((args.inherit && args.directory !== undefined) || (!args.inherit && args.directory !== null && !validReviewDirectory(args.directory))) throw new Error("Invalid Zed default directory");
+    const next = { ...value };
+    if (args.inherit) delete next.directory;
+    else if (args.directory !== undefined) return { ...value, directory: args.directory };
+    return next;
+  },
   setRemoteReview: (
     value: MobileReviewState,
     args: { binding: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null },

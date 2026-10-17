@@ -33,6 +33,9 @@ import { latestProviderEntries, useProviderCatalog } from "./providerCatalog";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useDialogFocus } from "./useDialogInputFocus";
 import { directoryProjectRows, directoryProjects } from "./directoryProjects";
+import { ReviewDirectoryPicker } from "./ReviewDirectoryPicker";
+import { reviewDirectoryLabel } from "./reviewDirectoryDefault";
+import { useStoreSelector } from "./store";
 
 const automatic: Record<FolderDefaultKey, string> = {
   project: "Choose when creating",
@@ -40,6 +43,7 @@ const automatic: Record<FolderDefaultKey, string> = {
   runtime_machine: "Global placement default",
   provider: "Claude",
   preset: "Agent recommended preset",
+  review_directory: "Automatic · session worktree, then project",
 };
 
 export function FolderDefaultsEditor(
@@ -72,6 +76,7 @@ export function FolderDefaultsEditor(
   },
 ): React.JSX.Element {
   const folder = sessionFolderById(tree, id);
+  const sessions = useStoreSelector((state) => state.sessions);
   const entries = latestProviderEntries(catalog?.providers ?? []);
   const desktop = useSurfaceProfile().kind === "desktop";
   const [search, setSearch] = useState("");
@@ -123,6 +128,7 @@ export function FolderDefaultsEditor(
     FolderDefaultKey,
     { value: string; label: string; detail?: string }[]
   > = {
+    review_directory: [],
     project: projects,
     machine: machines.map((machine) => ({
       value: machine.id,
@@ -158,7 +164,9 @@ export function FolderDefaultsEditor(
     ),
   };
   const label = (key: FolderDefaultKey, value: string | null | undefined) =>
-    value
+    key === "review_directory"
+      ? reviewDirectoryLabel(value, machines, sessions)
+      : value
       ? choices[key].find((option) => option.value === value)?.label ?? value
       : automatic[key];
   const source = (key: FolderDefaultKey) => {
@@ -223,6 +231,29 @@ export function FolderDefaultsEditor(
     >
       {!folder
         ? <Alert severity="error">This directory was removed.</Alert>
+        : field === "review_directory"
+        ? (
+          <>
+            <Button
+              startIcon={<ArrowBack />}
+              onClick={back}
+              sx={{ alignSelf: "flex-start" }}
+            >
+              {draft ? "Back to folder" : `${folder.name} defaults`}
+            </Button>
+            <Typography variant="body2" color="text.secondary">
+              Choose the code directory Zed opens. Sessions inherit this setting
+              unless they override it.
+            </Typography>
+            <ReviewDirectoryPicker
+              value={own}
+              inherited={inherited.values.review_directory}
+              machines={machines}
+              sessions={sessions}
+              onChange={save}
+            />
+          </>
+        )
         : field
         ? (
           <>
@@ -412,7 +443,7 @@ export function FolderDefaultsEditor(
             <Typography variant="body2" color="text.secondary">
               {draft
                 ? "New sessions and subfolders inherit these settings."
-                : "Subdirectories inherit these defaults. New sessions use them; existing sessions keep their settings."}
+                : "Subdirectories inherit these defaults. Agent defaults apply when creating sessions; Zed defaults also follow the directory in existing sessions."}
             </Typography>
             {error && <Alert severity="error">{error}</Alert>}
             {presetMismatch && !draft && (
@@ -453,6 +484,9 @@ export function FolderDefaultsEditor(
               {([{ title: "Workspace", keys: ["project", "machine"] }, {
                 title: "Agent",
                 keys: ["provider", "preset", "runtime_machine"],
+              }, {
+                title: "Code browsing",
+                keys: ["review_directory"],
               }] as const).map((group) => (
                 <Box key={group.title}>
                   <Typography variant="overline" color="text.secondary">

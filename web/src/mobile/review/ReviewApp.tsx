@@ -60,6 +60,8 @@ import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsB
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
+import { inheritedReviewDirectory, resolveReviewDirectory } from "../../reviewDirectoryDefault";
+import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
 import {
   mutateMobileReview,
@@ -2125,6 +2127,13 @@ export function ReviewApp({
     })))
     : undefined;
   const sessionLocation = currentSession ? sessionReviewLocation(currentSession, sessionRegisteredWorkspace) : undefined;
+  const folderTree = useStoreSelector(state => state.sessionFolders);
+  const sessionReview = useMobileReviewState(currentSession?.id);
+  const directoryDefault = currentSession ? inheritedReviewDirectory(currentSession, folderTree, sessionReview.directory) : undefined;
+  const [readingDefault, setReadingDefault] = useState<{ owner: string; value: string | null | undefined }>();
+  const directoryValue = readingDefault?.owner === currentSession?.id && readingDefault
+    ? readingDefault.value : directoryDefault?.value;
+  const resolvedDirectory = currentSession ? resolveReviewDirectory(directoryValue, currentSession, sessions, machineInventories) : {};
   const boundCodeWorkspace = boundWorkspace
     ? { ...boundWorkspace, cwd: executionUsable ? execution?.cwd ?? "" : "" }
     : null;
@@ -2136,8 +2145,9 @@ export function ReviewApp({
       provider: string;
       title: string;
       machineId: string;
-      workspaceId: string;
+      workspaceId?: string;
       project: string;
+      kind?: "Worktree" | "Project code" | "Workspace";
     } | undefined
   >();
   // A context override belongs to the session in which it was selected. Never
@@ -2146,24 +2156,21 @@ export function ReviewApp({
     ? selectedProjectContext
     : undefined;
   const projectCodeContext = explicitProjectContext ??
-    (boundCodeWorkspace && executionUsable && !boundCodeWorkspace.cwd && sessionRegisteredWorkspace && sessionMachine
-      ? {
-        ownerSessionId: boundCodeWorkspace.sessionId,
-        sessionId: workspaceCodeContextId(sessionMachine.id, sessionRegisteredWorkspace.id),
-        cwd: sessionRegisteredWorkspace.canonicalPath,
-        provider: "read-only",
-        title: sessionRegisteredWorkspace.displayName,
-        machineId: sessionMachine.id,
-        workspaceId: sessionRegisteredWorkspace.id,
-        project: sessionRegisteredWorkspace.displayName,
-      }
-      : undefined);
+    (resolvedDirectory.context && resolvedDirectory.context.sessionId !== currentSession?.id
+      ? { ...resolvedDirectory.context, ownerSessionId: currentSession?.id ?? null } : undefined);
   const workspace = projectCodeContext ??
-    (boundCodeWorkspace && (boundCodeWorkspace.cwd || !executionUsable) ? boundCodeWorkspace : null);
+    (!resolvedDirectory.error && boundCodeWorkspace && (boundCodeWorkspace.cwd || !executionUsable) ? boundCodeWorkspace : null);
   const workspaceIdentity = workspace
     ? JSON.stringify([workspace.sessionId, workspace.cwd, projectCodeContext?.machineId ?? execution?.machineId])
     : undefined;
   const syncedReview = useMobileReviewState(workspace?.sessionId);
+  // Pin the preference while a file is open. Parent edits update the default
+  // shown in settings without reinterpreting a relative tab in a new root.
+  useEffect(() => {
+    if (surfaceActive && currentSession && workspace && !explicitProjectContext && (syncedReview.active || syncedReview.remote_selected)) {
+      setReadingDefault(previous => previous?.owner === currentSession.id ? previous : { owner: currentSession.id, value: directoryValue });
+    }
+  }, [surfaceActive, currentSession?.id, workspaceIdentity, syncedReview.active, syncedReview.remote_selected, directoryValue, explicitProjectContext]);
   const remoteSelected = !projectCodeContext && syncedReview.remote_selected === true;
   const active = surfaceActive && !remoteSelected;
   useEffect(() => {
@@ -2199,6 +2206,7 @@ export function ReviewApp({
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
+  const [directoryEditing, setDirectoryEditing] = useState(false);
   const [contextTab, setContextTab] = useState<"sessions" | "projects">(
     "sessions",
   );
@@ -2515,6 +2523,7 @@ export function ReviewApp({
     preserveNavigation = false,
     revealRange?: Omit<CodeRevealRange, "id">,
   ): void => {
+    if (currentSession && !explicitProjectContext) setReadingDefault({ owner: currentSession.id, value: directoryValue });
     const revealRequestId = revealLine !== undefined || revealRange
       ? ++revealRangeId.current
       : undefined;
@@ -2696,6 +2705,7 @@ export function ReviewApp({
     entry: GitReviewEntry,
     queue: GitReviewEntry[],
   ): void => {
+    if (currentSession && !explicitProjectContext) setReadingDefault({ owner: currentSession.id, value: directoryValue });
     setCurrentRevision(undefined);
     setCommitTarget(undefined);
     setMode("git");
@@ -2712,6 +2722,7 @@ export function ReviewApp({
     setCloseRequest((value) => value + 1);
   };
   const openCommit = (commit: GitCommitSummary): void => {
+    if (currentSession && !explicitProjectContext) setReadingDefault({ owner: currentSession.id, value: directoryValue });
     navigationHaptic();
     setMode("git");
     setDiffTarget(undefined);
@@ -2969,7 +2980,7 @@ export function ReviewApp({
   };
   const currentProject = projectCodeContext?.project ??
     sessionLocation?.project ?? repositoryContext?.project;
-  const contextLabel = projectCodeContext ? "Project code" : sessionLocation?.kind ?? "Worktree";
+  const contextLabel = projectCodeContext ? projectCodeContext.kind ?? "Project code" : sessionLocation?.kind ?? "Worktree";
   const currentMachineId = projectCodeContext?.machineId ??
     execution?.machineId ?? sessionMachine?.id ?? (execution?.state === "unavailable" ? "unavailable" : "local");
   const displayedChangeCount = gitComparison
@@ -3049,6 +3060,7 @@ export function ReviewApp({
     if (projectContextSessionRef.current !== activeSessionId) {
       projectContextSessionRef.current = activeSessionId;
       setProjectCodeContext(undefined);
+      setReadingDefault(undefined);
     }
   }, [activeSessionId]);
   useEffect(() => {
@@ -3087,6 +3099,7 @@ export function ReviewApp({
     }
     suppressedHistoryTargetRef.current = session.id;
     setProjectCodeContext(undefined);
+    setReadingDefault(undefined);
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
@@ -3125,6 +3138,15 @@ export function ReviewApp({
       return;
     }
     returnToPreviousSession();
+  };
+  const openDefaultDirectory = (): void => {
+    if (!currentSession) return;
+    const resolved = resolveReviewDirectory(directoryDefault?.value, currentSession, sessions, machineInventories);
+    if (!resolved.context) { setContextError(resolved.error); return; }
+    setReadingDefault({ owner: currentSession.id, value: directoryDefault?.value });
+    setProjectCodeContext(undefined);
+    setSourceTarget(undefined);
+    setSessionSwitcherOpen(false);
   };
   const openRepositoryPull = (choice: Choice, pull: PullSummary): void => {
     const sessionId = workspace?.sessionId;
@@ -3259,7 +3281,7 @@ export function ReviewApp({
         >
           <ButtonBase
             aria-label={projectCodeContext
-              ? `Open context. Current project code ${projectCodeContext.project}`
+              ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
               : `Switch session. Current session ${currentSession?.title ?? "none"}`}
             onClick={openContextSwitcher}
             sx={{ flex: 1, minWidth: 0, minHeight: 48, display: "flex", flexDirection: "column", alignItems: "stretch", textAlign: "left" }}
@@ -3324,7 +3346,7 @@ export function ReviewApp({
                     : "Conflict · "
                   : ""}
                 {projectCodeContext
-                  ? `Project code · ${projectCodeContext.project}`
+                  ? `${contextLabel} · ${projectCodeContext.project}`
                   : currentProject ? `${contextLabel} · ${currentProject}`
                   : (workspace ? "Loading session…" : "Choose project or session")}
                 {!navigationInline && repositoryContext?.branch
@@ -3405,7 +3427,7 @@ export function ReviewApp({
             >
               <FolderOpenOutlined color="disabled" />
               <Typography color="text.secondary">
-                Choose a project or session to review
+                {resolvedDirectory.error ?? "Choose a project or session to review"}
               </Typography>
               <Button onClick={openContextSwitcher}>Choose project</Button>
             </Stack>
@@ -3816,7 +3838,7 @@ export function ReviewApp({
           onClose={() => {
             setSessionSwitcherOpen(false);
           }}
-          title={selectedContextProject?.label ?? "Context"}
+          title={directoryEditing ? "Zed defaults" : selectedContextProject?.label ?? "Context"}
           forceSheet
           cover
           portal
@@ -3837,6 +3859,11 @@ export function ReviewApp({
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
             }}
           >
+            <ReviewDirectorySetting onUseDefault={openDefaultDirectory} onEditingChange={setDirectoryEditing}
+              currentDirectory={workspace ? projectCodeContext?.sessionId.startsWith("workspace::")
+                ? projectCodeContext.sessionId : `session::${workspace.sessionId}` : undefined} />
+            {!directoryEditing && <>
+            <Divider />
             {contextError && (
               <Alert
                 severity="error"
@@ -4107,6 +4134,7 @@ export function ReviewApp({
                 No sessions yet
               </Typography>
             )}
+            </>}
           </Stack>
         </Sheet>
       </Stack>

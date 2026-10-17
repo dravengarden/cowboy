@@ -312,6 +312,7 @@ export function renderReviewContextPreview(dense = false) {
     requests,
     commands,
     refresh: () => socket?.publish({ type: "sessions", sessions }),
+    sync: (state: string, value: unknown, version: number) => socket?.publish({ type: "sync_patch", state, value, version, confirmed: [], resync: true }),
     select: (id: string) => flushSync(() => setActiveSessionId(id)),
     cleanup: () => {
       root.unmount();
@@ -663,6 +664,38 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     tests.push(
       "project-only contexts fall back by workspace identity without starting an Agent worker",
     );
+    const folders = (directory: string) => ({
+      folders: [
+        { id: "review-root", name: "Review root", project: null, parent: null, position: 0, defaults: { review_directory: directory } },
+        { id: "review-child", name: "Review child", project: null, parent: "review-root", position: 0, defaults: {} },
+      ], placement: { worktree: "review-child" },
+    });
+    fixture.sync("folders", folders("workspace::hawk::suger"), 1);
+    fixture.select("worktree");
+    await until(() => !!fixture.container.textContent?.includes("Project code · Suger"), "Directory default should choose the inherited project");
+    await click(labelled("Worktree files"));
+    await until(() => !!files()?.textContent?.includes("README.md"), "Inherited project should be browsable");
+    await click(document.querySelector('[data-code-tree-path="README.md"]'));
+    await until(() => !!document.querySelector("[data-markdown-review-preview]"), "Inherited project file should open");
+    const countBeforeParentChange = fixture.requests.length;
+    fixture.sync("folders", folders("workspace::hawk::cowboy"), 2);
+    await wait(200);
+    check(fixture.container.textContent?.includes("Project code · Suger"), "Parent default stole an open file's directory");
+    check(!fixture.requests.slice(countBeforeParentChange).some(r => r.includes("workspace::hawk::cowboy")), "Parent default fetched the open file against another root");
+    await click(labelled("Open context. Current project code Suger"));
+    await until(() => !!document.querySelector("[data-session-review-directory]")?.textContent?.includes("Inherited from Review root"), "Default provenance is missing");
+    await click(document.querySelector("[data-use-review-default]"));
+    await until(() => !!fixture.container.textContent?.includes("Project code · Cowboy"), "Open default must apply the newest inherited directory");
+    await click(labelled("Open context. Current project code Cowboy"));
+    await click(document.querySelector("[data-edit-review-directory]"));
+    await until(() => !!document.querySelector("[data-review-directory-picker]"), "Session default editor should use the shared picker");
+    check(document.querySelector('[aria-label="Hawk code directories"]'), "Picker lost machine hierarchy");
+    await click(document.querySelector('[data-review-directory="automatic"]'));
+    await click(document.querySelector("[data-use-review-default]"));
+    await until(() => !!fixture.container.textContent?.includes("Worktree · Cowboy"), "Automatic should block directory inheritance and use the real session worktree");
+    check(getActiveSessionId() === "worktree", "Browsing defaults switched the Agent session");
+    check(!fixture.commands.some(c => ["prompt", "new_session", "resume_session", "set_config_option"].includes(c)), "Directory defaults activated a worker");
+    tests.push("session and ancestor defaults share a hierarchical picker, preserve open files and return explicitly to the new default without worker activation");
     return tests;
   } finally {
     fixture.cleanup();
