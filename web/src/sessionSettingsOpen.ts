@@ -4,10 +4,16 @@ export type SessionSettingsFocus = "session" | "agent";
 
 export function openSessionSettings(
   focus: SessionSettingsFocus = "agent",
+  sessionId?: string,
 ): void {
   document.dispatchEvent(
-    new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus } }),
+    new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus, sessionId } }),
   );
+}
+
+export function sessionSettingsEventMatches(event: Event, sessionId: string): boolean {
+  return !(event instanceof CustomEvent) || !event.detail?.sessionId ||
+    event.detail.sessionId === sessionId;
 }
 
 export function sessionSettingsFocusFromEvent(

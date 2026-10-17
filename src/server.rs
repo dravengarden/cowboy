@@ -16,6 +16,7 @@ mod dormant_pins;
 mod folder_defaults;
 mod memory_reclaim;
 mod secure_transport;
+mod session_configuration;
 mod session_create_replay;
 mod session_maintenance;
 mod session_provider_updates;
@@ -18720,6 +18721,7 @@ async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
+    session_configuration::prepare(&state, &session_id);
     let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
@@ -20660,27 +20662,30 @@ fn handle_command(
             session_id,
             config_id,
             value,
-        } => match state.supervisor.set_managed_config_option(
-            &session_id,
-            &config_id,
-            value.clone(),
-        ) {
-            Ok(true) => Ok(()),
-            Ok(false) => {
-                state
-                    .hub
-                    .set_config_preference(&session_id, config_id.clone(), value.clone())
-                    .and_then(|()| {
-                        state.supervisor.send(
-                            &session_id,
-                            AgentCommand::SetConfigOption { config_id, value },
-                        )
-                    })
+        } => {
+            session_configuration::prepare(state, &session_id);
+            match state.supervisor.set_managed_config_option(
+                &session_id,
+                &config_id,
+                value.clone(),
+            ) {
+                Ok(true) => Ok(()),
+                Ok(false) => {
+                    state
+                        .hub
+                        .set_config_preference(&session_id, config_id.clone(), value.clone())
+                        .and_then(|()| {
+                            state.supervisor.send(
+                                &session_id,
+                                AgentCommand::SetConfigOption { config_id, value },
+                            )
+                        })
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
         },
-        // Revive on open (design §7): warm the agent when the client selects
-        // the session, not only on the first prompt. No-op if already alive.
+        // Opening is inspection; stopped sessions remain stopped until work is
+        // submitted. Live ownership is reconciled without a throwaway prompt.
         Inbound::OpenSession { session_id } => {
             // Do NOT revive an INTERRUPTED session on open. Reviving would flip it
             // to Starting→Running, hiding the fact that its last turn was cut off
@@ -20689,8 +20694,7 @@ fn handle_command(
             // deploy + reload it looked like the agent was still thinking). Left
             // interrupted, the client shows the "last turn was interrupted — send
             // a message to start a new one" bar and no spinner; submitting a
-            // message revives it via the drain. Exited/dormant sessions (nothing
-            // unfinished) still pre-revive on open so they're ready to type into.
+            // message revives it via the drain. Exited sessions also stay asleep.
             let meta = state
                 .hub
                 .session_list()

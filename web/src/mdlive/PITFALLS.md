@@ -3068,3 +3068,15 @@ Web gate and on the Desktop shell in Chrome; not run on iOS.
     Sessions grips and small Desktop spinners use `desktopSize`. Mobile is
     unchanged. Verified at 50-150% font scale in fine-pointer Chromium, both
     themes, and with `just desktop-browser-gate`.
+
+### 2026-10-17 Settings before the first worker starts
+
+New sessions are workerless. Never hide the session settings entry point just
+because no ACP options have arrived. Mobile settings and Desktop Run
+configuration accept the Controller's signed preview; preferences are saved
+without waking the session. Empty and cleared sleeping conversations retain
+their welcome/settings surface, and the prompt keeps its ordinary placeholder.
+The empty-state settings event carries the session id so a split pane cannot
+open another pane's modal. No editor extension, caret, IME, paste or keyboard
+focus-transfer path changed. Browser fixtures cover both themes and settings
+interactions; they do not establish physical iPhone IME or swipe acceptance.

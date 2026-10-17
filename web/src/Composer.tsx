@@ -311,7 +311,6 @@ import {
   providerConfigOptionOrder,
   providerConfigOptionPresentations,
   providerConfigOptions,
-  providerConfigSurfaceDisabled,
 } from "./providerConfigOptions";
 import {
   activeRunConfigPreset,
@@ -342,6 +341,7 @@ import {
   OPEN_SESSION_SETTINGS_EVENT,
   type SessionSettingsFocus,
   sessionSettingsFocusFromEvent,
+  sessionSettingsEventMatches,
 } from "./sessionSettingsOpen";
 import { useStore as usePrefStore } from "@cowboy/state-store";
 import {
@@ -2573,8 +2573,6 @@ export function ComposerWorkspace({
               commands={(): AvailableCommand[] => availableCommands}
               placeholder={preparing
                 ? "You can start typing while this session prepares…"
-                : dead
-                ? "Send to resume this session…"
                 : "Message the agent…"}
               // Vim is desktop-only — never load it on touch (no physical keyboard /
               // modal editing). ComposerEditor also gates the actual vim import on a
@@ -3425,9 +3423,7 @@ export function ComposerWorkspace({
           onPasteClipboardImages={pasteClipboardImages}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
-          placeholder={dead
-            ? "Send to resume this session…"
-            : "Message the agent…"}
+          placeholder="Message the agent…"
           sendable={sendable}
           attachmentsSlot={fullscreenTrayAttachments.length > 0
             ? (
@@ -6575,6 +6571,7 @@ export function SessionControls({
   );
   useEffect(() => {
     const onOpen = (event: Event): void => {
+      if (!sessionSettingsEventMatches(event, sessionId)) return;
       if (touchInput) releaseMobileComposerFocus();
       setSheetFocus(sessionSettingsFocusFromEvent(event));
       setSheetOpen(true);
@@ -6582,7 +6579,7 @@ export function SessionControls({
     document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
     return () =>
       document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
-  }, [touchInput]);
+  }, [touchInput, sessionId]);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const providerUpdate = sessionProviderUpdate(session);
@@ -6613,7 +6610,6 @@ export function SessionControls({
   }, [configOptions, optionPresentations, session?.provider]);
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
-  const hasConfig = showSkeleton || options.length > 0;
   const compactAction = useMemo(
     () =>
       resolveSessionAction(
@@ -6656,7 +6652,7 @@ export function SessionControls({
   };
   return (
     <>
-      {hasConfig && (
+      {session && (
         <Tooltip
           title={providerUpdate
             ? `Options · ${providerUpdate.version} update available`
@@ -6666,11 +6662,6 @@ export function SessionControls({
             aria-label={providerUpdate
               ? "options, Provider update available"
               : "options"}
-            disabled={providerConfigSurfaceDisabled(
-              status,
-              options,
-              optionPresentations,
-            )}
             onPointerDown={(event): void => {
               // Session settings lives in the navbar, outside the Composer's
               // focus region. Release the active Mobile editor while the
@@ -7073,38 +7064,8 @@ function ComposerSheet({
         </Stack>
       )}
     >
-      {session && (
-        <SessionInfoSection
-          session={session}
-          title={title}
-          titleInputRef={titleInputRef}
-          onTitleChange={setTitle}
-          onTitleFocusChange={setTitleFocused}
-          onTitleSave={saveTitle}
-          saveOnBlur={!useSheetSurface}
-          compactAction={compactAction}
-          clearAction={clearAction}
-          compacting={compacting}
-          actionsExpanded={sessionActionsExpanded}
-          onActionsExpandedChange={setSessionActionsExpanded}
-          onSessionAction={setCmdConfirm}
-          onReload={(): void => setReloadConfirm(true)}
-          onProviderUpdate={(): void => setUpdateConfirm(true)}
-        />
-      )}
-      {session && <SessionProviderSection session={session} />}
-      {session && (
-        <WorkspaceOptionsSection
-          session={session}
-          expanded={workspaceOptionsExpanded}
-          onExpandedChange={setWorkspaceOptionsExpanded}
-          projection={projection}
-          onProjectionChange={onProjectionChange}
-        />
-      )}
       {(loading || options.length > 0) && (
         <>
-          <Divider />
           <Box data-session-settings-agent sx={{ py: 1.5 }}>
             <Typography
               variant="overline"
@@ -7113,6 +7074,11 @@ function ComposerSheet({
             >
               Agent
             </Typography>
+            {status === "exited" && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Changes are saved for your next message. The session stays asleep.
+              </Typography>
+            )}
             {loading
               ? (
                 <Stack
@@ -7291,6 +7257,36 @@ function ComposerSheet({
         <>
           <Divider />
           <SessionToolsSection sessionId={session.id} />
+        </>
+      )}
+      {session && (
+        <>
+          <Divider />
+          <SessionInfoSection
+            session={session}
+            title={title}
+            titleInputRef={titleInputRef}
+            onTitleChange={setTitle}
+            onTitleFocusChange={setTitleFocused}
+            onTitleSave={saveTitle}
+            saveOnBlur={!useSheetSurface}
+            compactAction={compactAction}
+            clearAction={clearAction}
+            compacting={compacting}
+            actionsExpanded={sessionActionsExpanded}
+            onActionsExpandedChange={setSessionActionsExpanded}
+            onSessionAction={setCmdConfirm}
+            onReload={(): void => setReloadConfirm(true)}
+            onProviderUpdate={(): void => setUpdateConfirm(true)}
+          />
+          <WorkspaceOptionsSection
+            session={session}
+            expanded={workspaceOptionsExpanded}
+            onExpandedChange={setWorkspaceOptionsExpanded}
+            projection={projection}
+            onProjectionChange={onProjectionChange}
+          />
+          <SessionProviderSection session={session} />
         </>
       )}
       <SessionActionConfirmDialog

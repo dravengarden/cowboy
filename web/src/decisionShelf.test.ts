@@ -135,5 +135,6 @@ test("the consequence is a block in the decision's colour, not an orphan line", 
   }
   // The irreversibility sentence is owned by the block, not buried in the copy.
   assertEquals(commands.includes("record. This can't be undone."), false);
-  assert(commands.includes('so you keep the record.",'));
+  assert(commands.includes('Your settings and workspace are kept.",'));
+  assertEquals(commands.includes("The transcript stays on screen"), false);
 });

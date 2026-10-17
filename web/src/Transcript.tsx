@@ -630,12 +630,8 @@ function ScrollbackLoadingSkeleton({
   );
 }
 
-// Shown when a session has NO messages yet but IS live — a freshly created
-// session (`new_session` spawns the agent right away, so it's Running and idle,
-// waiting for the first prompt; no history is coming, so the skeleton would be
-// wrong and a blank wall reads as broken). Dormant / interrupted / crashed empty
-// sessions are NOT handled here — their SessionStatusBar already carries the
-// matching "send a message to wake/restart it" line, so this would just double it.
+// Empty conversations are usable workspaces, including before the first worker
+// starts. Keep configuration reachable without requiring a throwaway message.
 
 type ConversationEmptyKind = "preparing" | "ready" | "cleared";
 
@@ -658,16 +654,20 @@ function focusPrimaryComposer(): void {
 }
 
 function ConversationEmptyState({
+  sessionId,
   kind,
   preparing,
+  sleeping = false,
   context,
 }: {
+  sessionId: string;
   kind: ConversationEmptyKind;
   // The agent is still booting (session status "starting"). For `kind ===
   // "preparing"` that IS the state; for cleared / fresh it is a modifier that
   // withdraws the readiness claim and adds the sweep bar. See
   // conversationEmptyPresentation.
   preparing: boolean;
+  sleeping?: boolean;
   context: ConversationEmptyContext;
 }): React.JSX.Element {
   const agent = providerPresentation(
@@ -692,7 +692,11 @@ function ConversationEmptyState({
   const detail = kind === "preparing"
     ? location
       ? `Creating an isolated workspace for ${location}.`
-      : "Creating an isolated workspace and starting the agent."
+      : "Creating an isolated workspace."
+    : sleeping
+    ? kind === "cleared"
+      ? "Context cleared. Settings are saved; the agent starts when you send."
+      : "Choose your settings or write a message. The agent starts when you send."
     : kind === "cleared"
     ? `Previous context was cleared. ${agent} ${readiness} with a fresh context.`
     : location
@@ -716,7 +720,7 @@ function ConversationEmptyState({
   // announcement, the others are landmarks.
   const announces = kind === "preparing";
   const settingsTap = useReliableTouchTap<HTMLButtonElement>(() => {
-    openSessionSettings("agent");
+    openSessionSettings("agent", sessionId);
   });
   const writeFromEmpty = (event: { target: EventTarget | null }): boolean => {
     if (!(event.target instanceof Element)) return true;
@@ -773,7 +777,6 @@ function ConversationEmptyState({
           color: "primary.main",
           bgcolor: alpha(theme.palette.primary.main, 0.09),
           border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
-          boxShadow: `0 10px 30px ${alpha(theme.palette.primary.main, 0.08)}`,
         })}
       >
         {kind === "preparing"
@@ -821,10 +824,11 @@ function ConversationEmptyState({
           }}
         />
       )}
-      {facts.length > 0 && (
+      {(
         <ButtonBase
           data-conversation-empty-settings
-          aria-label={`Change session settings: ${facts.join(", ")}`}
+          aria-label={facts.length ? `Change session settings: ${facts.join(", ")}` : "Session settings"}
+          aria-keyshortcuts="Enter Space"
           {...settingsTap}
           onPointerDown={(event): void => {
             event.stopPropagation();
@@ -844,7 +848,7 @@ function ConversationEmptyState({
             py: 0.75,
             borderRadius: 3,
             cursor: "pointer",
-            "&:active": { transform: "scale(0.99)" },
+            "&:active": { bgcolor: "action.selected" },
             "&:focus-visible": {
               outline: "2px solid",
               outlineColor: "primary.main",
@@ -860,6 +864,9 @@ function ConversationEmptyState({
             alignItems="center"
             gap={0.75}
           >
+            <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>
+              Session settings
+            </Typography>
             {facts.map((fact) => (
               <Chip
                 key={fact}
@@ -867,13 +874,11 @@ function ConversationEmptyState({
                 size="small"
                 variant="outlined"
                 sx={(theme) => ({
-                  height: 25,
+                  height: desktopSize(25),
                   pointerEvents: "none",
                   color: "text.secondary",
                   borderColor: alpha(theme.palette.divider, 0.72),
                   bgcolor: alpha(theme.palette.background.paper, 0.42),
-                  backdropFilter: "blur(8px)",
-                  WebkitBackdropFilter: "blur(8px)",
                   "& .MuiChip-label": { px: 1, fontSize: "0.72rem" },
                 })}
               />
@@ -3229,7 +3234,7 @@ function SessionStatusBar({
   } else if (status === "exited") {
     tone = "neutral";
     icon = <Bedtime fontSize="small" />;
-    text = "Session is dormant — send a message to wake it.";
+    text = "Asleep · Settings stay available. Sending wakes the agent.";
   } else {
     return null; // running / busy / starting → live
   }
@@ -3800,12 +3805,12 @@ export function Transcript({
   const showFreshSessionEmptyState = shouldShowFreshSessionEmptyState({
     loading,
     itemCount: items.length,
-    isLive,
+    isLive: isLive || status === "exited",
     busy,
     reachedStart: paging?.reachedStart,
     timelineEventCount: timeline.length,
   });
-  const showClearedEmptyState = isLive && !loading &&
+  const showClearedEmptyState = (isLive || status === "exited") && !loading &&
     shouldShowClearedConversationEmptyState(items.map((item) => item.kind));
   const conversationContext: ConversationEmptyContext = emptyContext ?? {
     provider,
@@ -5617,6 +5622,7 @@ export function Transcript({
         {emptyPresentation?.kind === "preparing"
           ? (
             <ConversationEmptyState
+              sessionId={sessionId}
               kind="preparing"
               preparing
               context={conversationContext}
@@ -5635,8 +5641,10 @@ export function Transcript({
           : emptyPresentation !== null
           ? (
             <ConversationEmptyState
+              sessionId={sessionId}
               kind={emptyPresentation.kind}
               preparing={emptyPresentation.preparing}
+              sleeping={status === "exited"}
               context={conversationContext}
             />
           )
@@ -5942,7 +5950,7 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */
       }
-      {statusBar && (status !== "exited" || optimisticMsgs.length === 0) && (
+      {statusBar && (status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)) && (
         <SessionStatusBar status={status} crashDetail={crashDetail} />
       )}
       {

@@ -210,8 +210,8 @@ whose release is no longer newer is dropped rather than firing later.
 
 Capacity (`capacity.max_sessions`) counts workers and admitted cold launches.
 Creating a Web session prepares its isolated workspace and durable record;
-it stays workerless until a message is sent or the user explicitly loads model
-options. Both direct and split placements can create records on a full Machine.
+it stays workerless until a message is sent or the user explicitly starts it
+with Reload. Both direct and split placements can create records on a full Machine.
 Workspace preparation, dormant history and workerless crashed records do not
 consume worker slots. Legacy caller-owned and system creation retain their
 eager startup behavior.
@@ -241,6 +241,21 @@ nothing until it is used. The first prompt wakes it (the client shows
 Starting for the whole launch) after admission. A waiting indicator explains
 why it has not started. Recent wakes are protected for ten minutes. The
 existing post-wake rebalance also covers legacy eager startup paths.
+
+Settings remain available before the first message and throughout hibernation.
+The focused bootstrap projects the exact signed Provider generation's defaults
+and presets without starting a worker. Matching Machine, account and generation
+snapshots can supply option labels and choices; they never supply another
+session's selected values or add undeclared option ids. Providers
+without a published preset/default contract expose their native options after
+their first run. Existing sessions retain their own last advertised options.
+The preview is not an ACP acknowledgement and is not persisted as one. Only
+the selected preferences are durable; the worker validates and replays them
+before the first prompt. Opening settings, editing preferences and clearing a
+dormant conversation require no Machine connection or worker slot. Clear keeps
+settings and the workspace. Compact performs model work and therefore wakes
+the session through ordinary admission. Inspecting a failed session preserves
+its failure until a prompt or explicit recovery is requested.
 
 Desktop and Mobile share Settings → Resources & automatic maintenance.
 Each Machine has independent switches for low-memory reclaim, capacity
