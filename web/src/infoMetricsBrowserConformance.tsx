@@ -157,7 +157,7 @@ export async function runInfoMetricsBrowserConformance(
     const path = String(input);
     if (!path.startsWith("/api/")) return originalFetch(input, init);
     requests.push(`${init?.method ?? "GET"} ${path}`);
-    if (path === "/api/auth/status")
+    if (path === "/api/auth/status") {
       return Response.json({
         setup_required: false,
         registration: {
@@ -169,7 +169,8 @@ export async function runInfoMetricsBrowserConformance(
         host_plugins: [],
         me: { account: "Info fixture", user_id: "info-fixture", role: "owner" },
       });
-    if (path === "/api/sync/dataset")
+    }
+    if (path === "/api/sync/dataset") {
       return Response.json({
         schema: "dravengarden.cowboy.product-sync-dataset/v1",
         dataset_id: `dataset-${"a".repeat(64)}`,
@@ -177,19 +178,23 @@ export async function runInfoMetricsBrowserConformance(
         database_version: 2,
         outbox_contract: "atomic-delta-v1",
       });
-    if (path === "/api/plugins")
+    }
+    if (path === "/api/plugins") {
       return Response.json({
         providers: [],
         authentications: [],
         authentication_executors: [],
       });
-    if (path === "/api/metrics")
+    }
+    if (path === "/api/metrics") {
       return failMetrics
         ? new Response("Metrics temporarily unavailable", { status: 503 })
         : Response.json(service);
-    if (path === "/api/session-maintenance")
+    }
+    if (path === "/api/session-maintenance") {
       return Response.json([older, offline, ovh]);
-    if (path === "/api/preferences/about")
+    }
+    if (path === "/api/preferences/about") {
       return Response.json({
         preferences: {
           scope: "about",
@@ -202,9 +207,11 @@ export async function runInfoMetricsBrowserConformance(
         choices: { usage_order: [], machine_order: [] },
         dataset: { dataset_id: "fixture", user_id: "info-fixture" },
       });
-    if (path === "/api/usage/executors")
+    }
+    if (path === "/api/usage/executors") {
       return Response.json({ providers: {}, machines: [] });
-    if (path === "/api/usage")
+    }
+    if (path === "/api/usage") {
       return Response.json({
         refreshed_at_ms: now,
         next_refresh_at_ms: now + 60_000,
@@ -216,6 +223,26 @@ export async function runInfoMetricsBrowserConformance(
             source: "Claude Code",
             observed_at_ms: now,
             rate_limits: {
+              usageCredits: {
+                enabled: false,
+                balanceMinor: 0,
+                balanceCurrency: "USD",
+                spendCurrency: "USD",
+                spentMinor: 1234,
+                monthlyLimitMinor: 5000,
+                autoReloadEnabled: false,
+                expiryPolicyMonths: 12,
+              },
+              rateLimitResetCredits: {
+                availableCount: 0,
+                credits: [],
+                grants: [{
+                  title: "Weekly",
+                  remaining: 2,
+                  status: "paused",
+                  expiresAt: (now + 86400000) / 1000,
+                }],
+              },
               rateLimits: {
                 primary: {
                   usedPercent: 18,
@@ -239,6 +266,7 @@ export async function runInfoMetricsBrowserConformance(
           },
         ],
       });
+    }
     return new Response("Unavailable in isolated fixture", { status: 404 });
   }) as typeof fetch;
   const check = (ok: unknown, label: string) => {
@@ -251,7 +279,9 @@ export async function runInfoMetricsBrowserConformance(
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     throw new Error(
-      `Info fixture timed out: ${container.textContent?.slice(0, 700)}; ${renderErrors.join(",")}; ${requests.join(",")}`,
+      `Info fixture timed out: ${container.textContent?.slice(0, 700)}; ${
+        renderErrors.join(",")
+      }; ${requests.join(",")}`,
     );
   };
   const render = (desktop = false) =>
@@ -265,7 +295,7 @@ export async function runInfoMetricsBrowserConformance(
             </ProductAuthGate>
           </BrowserProductTheme>
         </SurfaceProvider>,
-      ),
+      )
     );
   const machine = (id: string) =>
     container.querySelector<HTMLElement>(`[data-machine-resources="${id}"]`)!;
@@ -353,8 +383,10 @@ export async function runInfoMetricsBrowserConformance(
       render(width >= 768);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       check(
-        container.scrollWidth <= container.clientWidth + 1,
-        `About fits ${width}px without horizontal overflow`,
+        container.scrollWidth <= container.clientWidth + 1 &&
+          container.textContent?.includes("Auto reload") &&
+          container.textContent?.includes("2 paused"),
+        `About with credit details fits ${width}px without horizontal overflow`,
       );
     }
     const cards = [
@@ -362,9 +394,11 @@ export async function runInfoMetricsBrowserConformance(
     ];
     check(
       cards[0]!.getBoundingClientRect().top ===
-        cards[1]!.getBoundingClientRect().top &&
-        container.querySelector('[data-storage-scope="service"]')!.getBoundingClientRect().top ===
-        container.querySelector('[data-storage-scope="client"]')!.getBoundingClientRect().top,
+          cards[1]!.getBoundingClientRect().top &&
+        container.querySelector('[data-storage-scope="service"]')!
+            .getBoundingClientRect().top ===
+          container.querySelector('[data-storage-scope="client"]')!
+            .getBoundingClientRect().top,
       "wide About lays out storage and Machine cards side by side",
     );
     check(
@@ -374,7 +408,7 @@ export async function runInfoMetricsBrowserConformance(
     );
     check(
       requests.filter((request) => request === "GET /api/metrics").length ===
-        2 && requests.every((request) => request.startsWith("GET ")),
+          2 && requests.every((request) => request.startsWith("GET ")),
       "inspection and viewport changes perform no mutations or extra metric polling",
     );
     if (keepFixture) {
@@ -388,9 +422,9 @@ export async function runInfoMetricsBrowserConformance(
       container.remove();
       globalThis.fetch = originalFetch;
       globalThis.WebSocket = originalSocket;
-      if (storageDescriptor)
+      if (storageDescriptor) {
         Object.defineProperty(navigator, "storage", storageDescriptor);
-      else Reflect.deleteProperty(navigator, "storage");
+      } else Reflect.deleteProperty(navigator, "storage");
     }
   }
 }

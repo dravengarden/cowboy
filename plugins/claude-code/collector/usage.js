@@ -1,4 +1,5 @@
 import { spawn } from "./process.js";
+import { spendCredits } from "./credits.js";
 /* Native Claude usage protocol and projection. No HTTP or credential reads. */
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -273,5 +274,11 @@ export function quotaView(response) {
     const bucket = quotaBucket(limits.extra_usage, "Extra usage");
     if (bucket) buckets["claude-extra-usage"] = bucket;
   }
-  return { rate_limits: { rateLimitsByLimitId: buckets } };
+  const credits = spendCredits(limits.extra_usage);
+  return {
+    rate_limits: {
+      rateLimitsByLimitId: buckets,
+      ...(credits === undefined ? {} : { usageCredits: credits }),
+    },
+  };
 }

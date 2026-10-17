@@ -2,6 +2,63 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { test } from "bun:test";
+import {
+  fetchPrepaidCredits,
+  prepaidCredits,
+  spendCredits,
+} from "./collector/credits.js";
+
+test("credit projections preserve zero and disabled, omit unknown money", () => {
+  equal(
+    spendCredits({ is_enabled: false, used_credits: 0, monthly_limit: null }),
+    { enabled: false, spentMinor: 0 },
+  );
+  equal(
+    prepaidCredits({
+      amount: 0,
+      currency: "USD",
+      auto_reload_settings: { enabled: false },
+      expiry_policy_months: 12,
+    }),
+    {
+      balanceMinor: 0,
+      balanceCurrency: "USD",
+      autoReloadEnabled: false,
+      expiryPolicyMonths: 12,
+    },
+  );
+  equal(
+    spendCredits({
+      is_enabled: true,
+      used_credits: -1,
+      monthly_limit: Infinity,
+    }),
+    { enabled: true },
+  );
+});
+
+test("balance lookup uses at most two reads and projects no account identifiers", async () => {
+  const paths = [];
+  const org = "12345678-1234-1234-1234-123456789abc";
+  const result = await fetchPrepaidCredits(async (path) => {
+    paths.push(path);
+    return paths.length === 1
+      ? { organization: { uuid: org } }
+      : { amount: 123, currency: "USD", secret: "discard" };
+  });
+  equal(paths, [
+    "/api/oauth/profile",
+    `/api/oauth/organizations/${org}/prepaid/credits`,
+  ]);
+  equal(result, { balanceMinor: 123, balanceCurrency: "USD" });
+  let calls = 0;
+  await rejects(() =>
+    fetchPrepaidCredits(async () => {
+      calls++;
+      return { organization: { uuid: "../wrong" } };
+    }), "Claude credit balance is unavailable.");
+  equal(calls, 1);
+});
 import { childEnvironment, collect } from "./collector/index.js";
 import {
   nativeJson,
@@ -131,7 +188,10 @@ test("unknown quota stays unknown and malformed responses are transient failures
       extra_usage: { is_enabled: false },
     }),
     {
-      rate_limits: { rateLimitsByLimitId: {} },
+      rate_limits: {
+        rateLimitsByLimitId: {},
+        usageCredits: { enabled: false },
+      },
     },
   );
   equal(
@@ -278,11 +338,26 @@ test("collector joins reset grants to native quota after native credential refre
       }
     `,
       async ({ command }) => {
+        const paths = [];
         const result = await collect({
           command,
           env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: directory },
-          fetchImpl: async (_url, options) => {
+          fetchImpl: async (url, options) => {
+            paths.push(url);
+            equal(options.method, "GET");
             equal(options.headers.Authorization, "Bearer refreshed-fixture");
+            if (url.endsWith("/profile")) {
+              return Response.json({
+                organization: { uuid: "12345678-1234-1234-1234-123456789abc" },
+              });
+            }
+            if (url.endsWith("/prepaid/credits")) {
+              return Response.json({
+                amount: 0,
+                currency: "USD",
+                auto_reload_settings: { enabled: false },
+              });
+            }
             return Response.json({
               cedar_ember: {
                 eligible: true,
@@ -303,6 +378,13 @@ test("collector joins reset grants to native quota after native credential refre
           45,
         );
         equal(result.rate_limits.rateLimitResetCredits.availableCount, 1);
+        equal(paths.length, 3);
+        equal(result.rate_limits.usageCredits, {
+          balanceMinor: 0,
+          balanceCurrency: "USD",
+          autoReloadEnabled: false,
+          balanceStatus: "available",
+        });
         equal(
           result.rate_limits.rateLimitResetCredits.credits[0].id,
           "launch:1",
@@ -331,6 +413,7 @@ test("collector joins reset grants to native quota after native credential refre
             45,
           );
           equal(degraded.rate_limits.rateLimitResetCredits, undefined);
+          equal(degraded.rate_limits.usageCredits.balanceStatus, "unavailable");
           equal(JSON.stringify(degraded).includes("secret-diagnostic"), false);
         }
         const missingCredential = await collect({

@@ -1,4 +1,5 @@
 import { currentProviderEntry } from "./providerCatalogRegistry";
+import { usageCreditDetails } from "./usageCreditDetails";
 import {
   usageCardOrder,
   usageErrorAuth,
@@ -57,7 +58,9 @@ export function usageRefreshing(
   account?: string,
 ): boolean {
   const refreshing = snapshot?.refreshing ?? [];
-  return account === undefined ? refreshing.length > 0 : refreshing.includes(account);
+  return account === undefined
+    ? refreshing.length > 0
+    : refreshing.includes(account);
 }
 
 /** Display name for an account-usage provider id. Unknown ids pass through. */
@@ -423,6 +426,7 @@ export interface ProviderUsageSlotContext {
   refreshLabel?: string;
   emptyMessage: string;
   limits: ProviderUsageLimitView[];
+  creditDetails?: import("./usageCreditDetails").UsageCreditRow[];
 }
 
 /** Host-owned presentation payload for a `provider.usage` plugin slot. */
@@ -438,11 +442,13 @@ export function providerUsageSlotContext(
 ): ProviderUsageSlotContext {
   const limits = options.limits ?? usageLimits(usage);
   const refreshLabel = providerUsageRefreshLabel(usage);
+  const creditDetails = usageCreditDetails(usage.rate_limits);
   return {
     kind: "provider.usage",
     provider: usage.provider,
     title: accountProviderLabel(usage.provider),
     showTitle: options.showTitle,
+    ...(creditDetails.length ? { creditDetails } : {}),
     ...(options.showDetails ? { showDetails: true, usage } : {}),
     ...(refreshLabel === undefined ? {} : { refreshLabel }),
     emptyMessage: options.emptyMessage,

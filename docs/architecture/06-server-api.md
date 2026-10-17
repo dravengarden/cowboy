@@ -142,6 +142,14 @@ ignored so a stale installed PWA cannot restore removed auto-resume behavior.
   and manual requests share this limit (at most 12 collections per hour per account
   per Controller). Each collection may make multiple native provider requests;
   this is a collection budget, not a fleet-wide HTTP request quota.
+  Claude's read-only credit enrichment adds at most two GETs (profile and prepaid
+  balance), with no retries and within the collector's existing ten-second
+  deadline. Native usage supplies credit enablement, monthly spend and cap;
+  prepaid credits supply balance, currency, auto-reload status and expiry policy.
+  Missing currency prevents money display; unavailable balance is never zero.
+  Promotional/purchased splits and exact credit expiry dates are not inferred.
+  Reset grants retain their available, paused or held state without changing
+  which grant the existing explicit reset action can consume.
   A timeout, connection failure, 408,
   409, 429, or 5xx keeps the last successful value, marks it stale, and becomes
   eligible for one later background attempt after five minutes. Authentication,

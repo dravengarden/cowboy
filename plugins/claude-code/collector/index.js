@@ -8,6 +8,7 @@
  */
 
 import { nativeJson, quotaView, REQUEST_ID, USAGE_ARGS } from "./usage.js";
+import { fetchPrepaidCredits } from "./credits.js";
 import {
   consumeReset,
   fetchResets,
@@ -117,6 +118,7 @@ async function collect(options = {}) {
   const { status, usage, execution } = await prepare(options);
   const quota = quotaView(usage);
   let credits;
+  let balance;
   // Reset status is optional enrichment. Its private API or profile-scope
   // failures must never clear a successful native quota/authentication read.
   if (
@@ -126,9 +128,13 @@ async function collect(options = {}) {
       const token = await readCredential(
         execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
       );
-      credits = await fetchResets(
-        resetClient(token, execution.deadline, options.fetchImpl),
-      );
+      const client = resetClient(token, execution.deadline, options.fetchImpl);
+      const results = await Promise.allSettled([
+        fetchResets(client),
+        fetchPrepaidCredits(client),
+      ]);
+      if (results[0].status === "fulfilled") credits = results[0].value;
+      if (results[1].status === "fulfilled") balance = results[1].value;
     } catch {
       credits = undefined;
     }
@@ -144,9 +150,19 @@ async function collect(options = {}) {
         status.subscriptionType,
     }),
     ...quota,
-    ...(credits === undefined ? {} : {
-      rate_limits: { ...quota.rate_limits, rateLimitResetCredits: credits },
-    }),
+    ...(quota.rate_limits || balance || credits
+      ? {
+        rate_limits: {
+          ...quota.rate_limits,
+          ...(credits === undefined ? {} : { rateLimitResetCredits: credits }),
+          usageCredits: {
+            ...quota.rate_limits?.usageCredits,
+            ...balance,
+            balanceStatus: balance === undefined ? "unavailable" : "available",
+          },
+        },
+      }
+      : {}),
   };
 }
 

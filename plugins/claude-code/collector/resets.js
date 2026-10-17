@@ -105,7 +105,10 @@ export function resetCredits(block, now = Date.now()) {
     throw fail();
   }
   const credits = [];
+  const grants = [];
   let availableCount = 0;
+  if ((block.grants?.length ?? 0) > 128) throw fail();
+  const ids = new Set();
   for (const grant of block.grants ?? []) {
     if (
       typeof grant?.id !== "string" || !ID.test(grant.id) ||
@@ -114,22 +117,29 @@ export function resetCredits(block, now = Date.now()) {
     ) throw fail();
     const ends = grant.ends_at == null ? undefined : Date.parse(grant.ends_at);
     if (ends !== undefined && !Number.isFinite(ends)) throw fail();
-    if (credits.some((credit) => credit.id.split(":")[0] === grant.id)) {
+    if (ids.has(grant.id)) {
       throw fail();
     }
+    ids.add(grant.id);
     const held = grant.resets_left > 0 && (ends === undefined || ends > now);
     if (!held) continue;
     const usable = held && block.eligible && grant.usable_now === true &&
       grant.paused !== true && block.next_grant_id === grant.id &&
       (!block.cooldown_until || Date.parse(block.cooldown_until) <= now);
+    const labels = grant.clears.filter((limit) =>
+      typeof limit === "string" && Object.hasOwn(LABELS, limit)
+    ).map((limit) => LABELS[limit]);
+    grants.push({
+      title: labels.join(" + ") || "Usage limit",
+      remaining: grant.resets_left,
+      status: usable ? "available" : grant.paused === true ? "paused" : "held",
+      ...(ends === undefined ? {} : { expiresAt: ends / 1000 }),
+    });
     // The shared usage card describes every supplied row as available. Only
     // project the currently usable next grant; held/paused grants are not
     // actionable credits under that presentation contract.
     if (!usable) continue;
     availableCount += grant.resets_left;
-    const labels = grant.clears.filter((limit) =>
-      typeof limit === "string" && Object.hasOwn(LABELS, limit)
-    ).map((limit) => LABELS[limit]);
     credits.push({
       // Include the remaining count: an old confirmation cannot consume the
       // next reset from a multi-use grant after another request spent one.
@@ -141,7 +151,7 @@ export function resetCredits(block, now = Date.now()) {
       ...(ends === undefined ? {} : { expiresAt: ends / 1000 }),
     });
   }
-  return { availableCount, credits };
+  return { availableCount, credits, ...(grants.length ? { grants } : {}) };
 }
 
 export async function fetchResets(client) {

@@ -2,6 +2,7 @@ import { Stack, Typography } from "@mui/material";
 import { QuotaMeter } from "./InfoMetricVisuals";
 import type { ProviderUsageSlotContext } from "./usageLimits";
 import { ProviderUsageActivityDetails } from "./ProviderUsageActivityDetails";
+import { ProviderUsageCredits } from "./ProviderUsageCredits";
 
 /** Host-kit presentation for a `provider.usage` plugin slot. */
 export function ProviderUsage({
@@ -26,8 +27,14 @@ export function ProviderUsage({
         </Typography>
       )}
       {limits.map((limit) => (
-        <QuotaMeter key={limit.id} label={limit.label} remaining={limit.remaining} resetsLabel={limit.resetsLabel} />
+        <QuotaMeter
+          key={limit.id}
+          label={limit.label}
+          remaining={limit.remaining}
+          resetsLabel={limit.resetsLabel}
+        />
       ))}
+      <ProviderUsageCredits rows={context.creditDetails} />
       {limits.length === 0 && context.emptyMessage && (
         <Typography variant="body2" color="text.secondary">
           {context.emptyMessage}

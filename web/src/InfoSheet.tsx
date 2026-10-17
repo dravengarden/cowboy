@@ -25,6 +25,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
+import { ProviderUsageCredits } from "./ProviderUsageCredits";
 import { UsageExecutorPicker } from "./UsageExecutorPicker";
 import {
   readUsageExecutors,
@@ -350,6 +351,7 @@ function ProviderUsageCardBody({
           context={usageContext}
         >
           {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
+          <ProviderUsageCredits rows={usageContext.creditDetails} />
           {limits.length === 0 && credits.length === 0 &&
             !usageOmitEmptyLimits(usage.provider) && (
             <Typography variant="body2" color="text.secondary">

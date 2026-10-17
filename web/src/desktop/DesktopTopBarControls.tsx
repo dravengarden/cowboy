@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import { OPEN_SESSION_SETTINGS_EVENT, sessionSettingsEventMatches } from "../sessionSettingsOpen";
 import {
   alpha,
@@ -866,6 +867,7 @@ function DesktopProviderUsage({
             </Typography>
           </Stack>
         ))}
+        <ProviderUsageCredits rows={usageContext.creditDetails} />
         {limits.length === 0 && !hasResetCredit && (
           <Typography variant="body2" color="text.secondary">
             {usageContext.emptyMessage}
