@@ -771,12 +771,31 @@ function CallConversation({
           </Button>
         )}
       </Stack>}
-      <CallTranscript
-        sessionId={call.child_session_id}
-        provider={call.provider}
-        bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
-        desktop={desktop}
-      />
+      {call.error && (
+        <Typography
+          role="alert"
+          variant="body2"
+          color="error"
+          sx={{ p: 2, overflowWrap: "anywhere" }}
+        >
+          {call.error.code}{call.error.detail ? `: ${call.error.detail}` : ""}
+        </Typography>
+      )}
+      {callActive(call.state) || call.input_revision !== null
+        ? (
+          <CallTranscript
+            sessionId={call.child_session_id}
+            provider={call.provider}
+            bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
+            desktop={desktop}
+          />
+        )
+        : (
+          <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+            The call ended before its input snapshot was ready. No conversation
+            was started for this call.
+          </Typography>
+        )}
     </Box>
   );
 }
