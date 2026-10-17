@@ -13,6 +13,11 @@ import { projectMachineOccupancy } from "./machineState";
 import { AiInstallationPicker } from "./AiInstallationPicker";
 import { SessionMachineBadge } from "./SessionMachineBadge";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import type { FolderDefaults } from "./folderDefaults";
+import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
+import { createSessionFolder, removeSessionFolder, setSessionFolderDefault } from "./store";
+import { SurfaceProvider } from "./surface/SurfaceProfile";
+import { bindProductSyncPrincipal } from "./productSyncIdentity";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
   string[]
@@ -73,6 +78,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   });
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url === "/api/sync/dataset") return Promise.resolve(Response.json({ schema: "dravengarden.cowboy.product-sync-dataset/v1", dataset_id: `dataset-${"d".repeat(64)}`, user_id: "defaults-fixture", database_version: 2, outbox_contract: "atomic-delta-v1" }));
     if (url === "/api/plugins") {
       return Promise.resolve(
         Response.json({
@@ -117,12 +123,15 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   document.body.append(container);
   const root = createRoot(container);
   let current: ReturnType<typeof useProjectPlacement> | undefined;
+  let directoryDefaults: FolderDefaults = {};
+  let harnessKey = 0;
   function Harness({ inventory }: { inventory: MachineSummary[] }) {
     // Preserve authoritative worker occupancy even when session metadata has
     // not arrived. A full Machine must still allow creating dormant sessions.
     const placement = useProjectPlacement(
       true,
       projectMachineOccupancy(inventory, []),
+      directoryDefaults,
     );
     useLayoutEffect(() => {
       current = placement;
@@ -153,7 +162,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         <StrictMode>
           <BrowserProductTheme>
             <CssBaseline />
-            <Harness inventory={inventory} />
+            <Harness key={harnessKey} inventory={inventory} />
           </BrowserProductTheme>
         </StrictMode>,
       )
@@ -345,6 +354,53 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     check(resetDefault, "Configured defaults have a reset action");
     flushSync(() => resetDefault!.click());
     check(current?.configuredDefaultProject === "", "Reset restores automatic default selection");
+    directoryDefaults = { machine: "hawk", project: "stable-id", provider: "codex", runtime_machine: "hawk" };
+    harnessKey++;
+    render();
+    await wait(() => current?.ready && !current.separate, "directory defaults select local Codex on Hawk");
+    check(current?.installation?.provider === "codex", "directory agent overrides the global Claude preference");
+    directoryDefaults = { ...directoryDefaults, provider: "missing-agent" };
+    render();
+    check(!current?.ready && !current?.installation, "missing bound agent never falls back");
+    flushSync(() => current!.selectInstallation(JSON.stringify(["ovh", "claude-code"])));
+    check(current?.ready && current?.installation?.provider === "claude-code", "explicit agent choice overrides directory defaults");
+    directoryDefaults = { machine: "missing-machine", project: "stable-id" };
+    harnessKey++;
+    render();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    check(!current?.ready && !current?.project, "missing bound machine never redirects to a different project");
+    directoryDefaults = { project: null };
+    harnessKey++;
+    render();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    check(!current?.project, "explicit project unbinding requires a selection");
+    directoryDefaults = {};
+    bindProductSyncPrincipal("defaults-fixture");
+    const parentFolder = createSessionFolder("Defaults parent", null)!;
+    const childFolder = createSessionFolder("Defaults child", parentFolder)!;
+    setSessionFolderDefault(parentFolder, "provider", "claude-code");
+    flushSync(() => root.render(<SurfaceProvider><BrowserProductTheme><CssBaseline /><FolderDefaultsSheet id={childFolder} onClose={() => {}} /></BrowserProductTheme></SurfaceProvider>));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    const providerField = () => document.querySelectorAll<HTMLElement>('[role="combobox"]')[3]!;
+    check(providerField()?.textContent?.includes("Inherit"), "directory settings show inheritance as an explicit choice");
+    check(document.body.textContent?.includes("Inherited from Defaults parent"), "directory settings show the source of the effective value");
+    const chooseDefault = async (value: string) => {
+      flushSync(() => providerField().dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const option = document.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
+      check(option, `directory default option ${value} is available`);
+      flushSync(() => option!.click());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+    await chooseDefault("value:codex");
+    check(providerField().textContent?.includes("Codex"), "directory override saves and renders immediately");
+    await chooseDefault("inherit");
+    check(providerField().textContent?.includes("Claude Code"), "restore inheritance shows the parent agent");
+    flushSync(() => setSessionFolderDefault(parentFolder, "provider", "codex"));
+    check(providerField().textContent?.includes("Codex"), "parent change updates an open child settings sheet");
+    flushSync(() => root.render(<></>));
+    removeSessionFolder(childFolder);
+    removeSessionFolder(parentFolder);
     let picked = 0;
     let inspected = 0;
     function SessionRow({ cwd = "/runtime" }: { cwd?: string }) {

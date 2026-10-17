@@ -480,12 +480,17 @@ def main():
                 controller = start("controller-prelaunch-settings", controller_command)
                 wait(lambda: call("GET", "/healthz")[0] == 200, "prelaunch settings restart")
                 wait(lambda: connected("runtime") and connected("target"), "prelaunch Machines reconnect")
+                # The control channel reconnects before the session channel has
+                # restored worker ownership. Reload needs the latter's admission.
+                wait(lambda: (row := maintenance())["machine"]["connected"]
+                     and row["machine"]["active_sessions"] == 1, "prelaunch runtime ownership restored")
                 require(selected_model(dormant[0]) == "large", "restart lost prelaunch preference")
                 require(session_info(dormant[0])["status"] == "exited"
                         and not session_info(dormant[0]).get("agent_session_id"), "restart woke prelaunch session")
                 checks.append("prelaunch_preferences_survive_restart_without_an_agent_snapshot")
-                require(call("POST", f"/api/sessions/{dormant[0]}/reload")[0] == 202,
-                        "explicit runtime initialization refused")
+                reload_status, reload_response = call("POST", f"/api/sessions/{dormant[0]}/reload")
+                require(reload_status == 202,
+                        f"explicit runtime initialization refused ({reload_status}): {reload_response}")
                 wait(lambda: session_info(dormant[0])["status"] == "running", "explicit initialization")
                 wait(lambda: selected_model(dormant[0]) == "large", "saved setting applied at first launch")
                 require(call("POST", f"/api/sessions/{dormant[0]}/prompt", {"text": "Verify saved model"})[0] == 202,

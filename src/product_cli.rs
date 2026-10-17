@@ -39,6 +39,104 @@ pub struct SessionArgs {
     command: SessionCommand,
 }
 
+#[derive(Args)]
+pub struct DirArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    #[command(subcommand)]
+    command: DirCommand,
+}
+
+#[derive(Subcommand)]
+enum DirCommand {
+    /// Create a directory, inheriting defaults from --parent without copying them.
+    #[command(alias = "create")]
+    New {
+        name: String,
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// List the visible directory tree and its explicit overrides.
+    List,
+    /// Show effective defaults and the source directory for each field.
+    Defaults { directory: String },
+    /// Set one field. Fields: project, machine, runtime_machine, provider, preset.
+    /// Presets use provider/preset. No value requires --inherit or --clear.
+    Set {
+        directory: String,
+        field: String,
+        value: Option<String>,
+        #[arg(long, conflicts_with_all = ["clear", "value"])]
+        inherit: bool,
+        #[arg(long, conflicts_with = "value")]
+        clear: bool,
+    },
+}
+
+pub async fn run_dir(args: DirArgs) -> Result<()> {
+    let client = Client::new(&args.connect)?;
+    let response = match args.command {
+        DirCommand::New { name, parent } => {
+            client
+                .expect(
+                    Method::POST,
+                    "/api/folders",
+                    Some(&json!({"name":name,"parent":parent})),
+                )
+                .await?
+        }
+        DirCommand::List => client.expect(Method::GET, "/api/folders", None).await?,
+        DirCommand::Defaults { directory } => {
+            client
+                .expect(Method::GET, &directory_defaults_path(&directory)?, None)
+                .await?
+        }
+        DirCommand::Set {
+            directory,
+            field,
+            value,
+            inherit,
+            clear,
+        } => {
+            let _: crate::session_folders::defaults::DefaultKey =
+                serde_json::from_value(json!(field)).context("unknown directory default field")?;
+            ensure!(
+                value.is_some() || inherit || clear,
+                "provide a value, --inherit, or --clear"
+            );
+            let body = if inherit {
+                json!({"values":{}, "inherit":[field]})
+            } else {
+                json!({"values":{field:value}})
+            };
+            client
+                .expect(
+                    Method::PATCH,
+                    &directory_defaults_path(&directory)?,
+                    Some(&body),
+                )
+                .await?
+        }
+    };
+    println!("{response}");
+    Ok(())
+}
+
+fn directory_defaults_path(directory: &str) -> Result<String> {
+    ensure!(
+        directory != "." && directory != "..",
+        "invalid directory id"
+    );
+    ensure!(
+        !directory.is_empty()
+            && directory
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')),
+        "invalid directory id"
+    );
+    Ok(format!("/api/folders/{directory}/defaults"))
+}
+
 #[derive(Subcommand)]
 enum SessionCommand {
     /// List sessions with status, Provider version and any waiting update.
@@ -98,9 +196,18 @@ enum SessionCommand {
     },
     /// Start a session with a Provider, optionally in a directory.
     New {
-        provider: String,
+        provider: Option<String>,
         #[arg(long)]
         cwd: Option<String>,
+        #[arg(long)]
+        machine: Option<String>,
+        #[arg(long)]
+        runtime_machine: Option<String>,
+        #[arg(long)]
+        dir: Option<String>,
+        /// Provider-qualified preset, or an empty string for agent defaults.
+        #[arg(long)]
+        preset: Option<String>,
     },
 }
 
@@ -509,9 +616,27 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
                 .await?;
             println!("{session}\tdelete requested");
         }
-        SessionCommand::New { provider, cwd } => {
-            client.send(&Inbound::NewSession { provider, cwd }).await?;
-            println!("new session requested");
+        SessionCommand::New {
+            provider,
+            cwd,
+            machine,
+            runtime_machine,
+            dir,
+            preset,
+        } => {
+            let mut body = json!({"provider":provider.unwrap_or_default(),"cwd":cwd,"folder_id":dir,"preset":preset});
+            if let Some(machine) = machine {
+                body["machine_id"] = json!(machine);
+            }
+            if let Some(runtime) = runtime_machine {
+                body["runtime_machine_id"] = json!(runtime);
+            }
+            println!(
+                "{}",
+                client
+                    .expect(Method::POST, "/api/sessions", Some(&body))
+                    .await?
+            );
         }
     }
     Ok(())

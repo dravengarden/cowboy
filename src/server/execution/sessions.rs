@@ -131,10 +131,18 @@ pub(in crate::server) async fn availability(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct CreateRequest {
+    #[serde(default)]
     provider: String,
+    #[serde(default)]
     runtime_machine_id: String,
+    #[serde(default)]
     machine_id: String,
+    #[serde(default)]
     cwd: String,
+    #[serde(default)]
+    folder_id: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
     #[serde(default)]
     origin: crate::core::SessionOrigin,
     #[serde(default)]
@@ -167,8 +175,52 @@ pub(in crate::server) async fn create(
 async fn create_checked(
     state: &Arc<AppState>,
     authenticated: &AuthenticatedProductRequest,
-    request: CreateRequest,
+    mut request: CreateRequest,
 ) -> Result<crate::core::SessionMeta, String> {
+    use super::super::folder_defaults::{self, value};
+    use crate::session_folders::defaults::DefaultKey;
+    let defaults = folder_defaults::resolve(
+        state,
+        &authenticated.principal,
+        request.folder_id.as_deref(),
+    )?;
+    if request.provider.is_empty() {
+        request.provider =
+            value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
+    }
+    if request.machine_id.is_empty() {
+        request.machine_id = value(&defaults, DefaultKey::Machine).unwrap_or_default();
+    }
+    if request.runtime_machine_id.is_empty() {
+        request.runtime_machine_id = value(&defaults, DefaultKey::RuntimeMachine)
+            .or_else(|| {
+                state
+                    .project_placement
+                    .snapshot()
+                    .default_runtime_machine_id
+                    .clone()
+            })
+            .unwrap_or_default();
+    }
+    if request.cwd.is_empty() {
+        request.cwd = value(&defaults, DefaultKey::Project).unwrap_or_default();
+    }
+    if request.folder_id.is_some() && (request.machine_id.is_empty() || request.cwd.is_empty()) {
+        if request.cwd.is_empty() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
+            return Err(
+                "This directory has no project binding; select a project explicitly".into(),
+            );
+        }
+        (request.machine_id, request.cwd) = folder_defaults::default_workspace(
+            state,
+            (!request.machine_id.is_empty()).then_some(request.machine_id.as_str()),
+            (!request.cwd.is_empty()).then_some(request.cwd.as_str()),
+        )
+        .await?;
+    }
+    if request.preset.is_none() {
+        request.preset = value(&defaults, DefaultKey::Preset);
+    }
     if !state
         .supervisor
         .runtime_allowed(&request.provider, &request.runtime_machine_id)
@@ -223,7 +275,11 @@ async fn create_checked(
             .unwrap_or_default(),
     )
     .unwrap_or_default();
-    let workspace = resolve_machine_workspace(&workspaces, Some(&request.cwd))?;
+    let workspace = if request.folder_id.is_some() {
+        folder_defaults::workspace(&workspaces, Some(&request.cwd))?
+    } else {
+        resolve_machine_workspace(&workspaces, Some(&request.cwd))?
+    };
     let authentication = state.provider_auth.status(&request.provider);
     let generation = resolve_provider_generation(
         &state.provider_catalog,
@@ -231,6 +287,12 @@ async fn create_checked(
         &providers(runtime),
         &request.provider,
         authentication.as_ref(),
+    )?;
+    let configuration = folder_defaults::preset_values(
+        state,
+        &request.provider,
+        &generation,
+        request.preset.as_deref(),
     )?;
     let executor = executor(state, &target.id).await?;
     if !accepts(&generation.behavior, &executor) {
@@ -299,6 +361,13 @@ async fn create_checked(
             )
             .map_err(|error| error.to_string())??;
     }
+    folder_defaults::apply_created(
+        state,
+        &authenticated.principal,
+        &session_id,
+        request.folder_id.as_deref(),
+        configuration,
+    )?;
     if let Some(prompt) = request
         .initial_prompt
         .filter(|text| !text.trim().is_empty())

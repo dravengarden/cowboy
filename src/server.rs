@@ -13,6 +13,7 @@
 mod agent_tools;
 pub(crate) use agent_tools::launch_extensions;
 mod dormant_pins;
+mod folder_defaults;
 mod memory_reclaim;
 mod secure_transport;
 mod session_configuration;
@@ -5145,7 +5146,11 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     {
         return RouteAuth::ProductOperator;
     }
-    if path == "/api/drafts" || path.starts_with("/api/drafts/") {
+    if path == "/api/drafts"
+        || path.starts_with("/api/drafts/")
+        || path == "/api/folders"
+        || path.starts_with("/api/folders/")
+    {
         return if matches!(*method, Method::GET | Method::HEAD) {
             RouteAuth::Product
         } else {
@@ -10480,6 +10485,8 @@ async fn serve_axum(
             get(agent_tools::session).put(agent_tools::configure_session),
         )
         .route("/api/agent-tools", get(agent_tools::list))
+        .route("/api/folders", get(folder_defaults::list).post(folder_defaults::create))
+        .route("/api/folders/{id}/defaults", get(folder_defaults::get_defaults).patch(folder_defaults::update))
         .route("/api/agent-tools/{agent}", put(agent_tools::configure_agent))
         .route("/api/sessions/{id}/calls/{call_id}", get(managed_calls::inspect))
         .route(
@@ -15934,7 +15941,14 @@ async fn api_session_prompt(
 /// observe the authoritative preparation lifecycle on the destination page.
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
+    #[serde(default)]
     provider: String,
+    #[serde(default)]
+    folder_id: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    runtime_machine_id: Option<String>,
     /// Stable machine placement. API/ACP compatibility callers may omit it and
     /// retain their caller-owned local workspace; Web creation must select a
     /// registered Machine.
@@ -16161,11 +16175,89 @@ fn product_session_owner(
 async fn api_new_session(
     State(state): State<Arc<AppState>>,
     Extension(authenticated): Extension<AuthenticatedProductRequest>,
-    Json(req): Json<NewSessionRequest>,
+    Json(mut req): Json<NewSessionRequest>,
 ) -> Response {
-    let principal = authenticated.principal;
+    let principal = authenticated.principal.clone();
     if !principal.role.at_least(crate::admin::AdminRole::Operator) {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    use crate::session_folders::defaults::DefaultKey;
+    let defaults = match folder_defaults::resolve(&state, &principal, req.folder_id.as_deref()) {
+        Ok(value) => value,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    if req.provider.is_empty() {
+        req.provider = folder_defaults::value(&defaults, DefaultKey::Provider)
+            .unwrap_or_else(|| "claude-code".into());
+    }
+    if req.machine_id == "local" {
+        req.machine_id =
+            folder_defaults::value(&defaults, DefaultKey::Machine).unwrap_or(req.machine_id);
+    }
+    if req.cwd.is_none() {
+        req.cwd = folder_defaults::value(&defaults, DefaultKey::Project);
+    }
+    if req.folder_id.is_some() && (req.machine_id == "local" || req.cwd.is_none()) {
+        if req.cwd.is_none() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "This directory has no project binding; select a project explicitly",
+            )
+                .into_response();
+        }
+        match folder_defaults::default_workspace(
+            &state,
+            (req.machine_id != "local").then_some(req.machine_id.as_str()),
+            req.cwd.as_deref(),
+        )
+        .await
+        {
+            Ok((machine, project)) => {
+                req.machine_id = machine;
+                req.cwd = Some(project);
+            }
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        }
+    }
+    if req.preset.is_none() {
+        req.preset = folder_defaults::value(&defaults, DefaultKey::Preset);
+    }
+    let runtime = req
+        .runtime_machine_id
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| folder_defaults::value(&defaults, DefaultKey::RuntimeMachine))
+        .or_else(|| {
+            req.folder_id.as_ref().and_then(|_| {
+                state
+                    .project_placement
+                    .snapshot()
+                    .default_runtime_machine_id
+                    .clone()
+            })
+        });
+    if let Some(runtime) = runtime.filter(|runtime| runtime != &req.machine_id) {
+        if req.system {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Remote directory sessions cannot be system sessions",
+            )
+                .into_response();
+        }
+        let request = serde_json::from_value(serde_json::json!({
+            "provider": req.provider, "machine_id": req.machine_id, "runtime_machine_id": runtime,
+            "cwd": req.cwd.unwrap_or_default(), "origin": req.origin, "initial_prompt": req.initial_prompt,
+            "folder_id": req.folder_id, "preset": req.preset,
+        })).expect("typed creation request");
+        return execution::sessions::create(State(state), Extension(authenticated), Json(request))
+            .await;
+    }
+    if req.machine_id == "local" && (req.folder_id.is_some() || req.preset.is_some()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Directory defaults require an enrolled Machine",
+        )
+            .into_response();
     }
     if !state
         .supervisor
@@ -16230,7 +16322,12 @@ async fn api_new_session(
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
-        let selected_workspace = match resolve_machine_workspace(&workspaces, cwd.as_deref()) {
+        let workspace = if req.folder_id.is_some() {
+            folder_defaults::workspace(&workspaces, cwd.as_deref())
+        } else {
+            resolve_machine_workspace(&workspaces, cwd.as_deref())
+        };
+        let selected_workspace = match workspace {
             Ok(workspace) => workspace.clone(),
             Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
         };
@@ -16271,6 +16368,15 @@ async fn api_new_session(
                 "remote session requires a trusted workspace",
             )
                 .into_response();
+        };
+        let configuration = match folder_defaults::preset_values(
+            &state,
+            &req.provider,
+            &provider_generation,
+            req.preset.as_deref(),
+        ) {
+            Ok(values) => values,
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
         };
         // Hold both guards through the synchronous durable registration. The
         // lifecycle read guard makes an uninstall snapshot include this new
@@ -16317,6 +16423,15 @@ async fn api_new_session(
             Err(error) => return (StatusCode::CONFLICT, error.to_string()).into_response(),
         }
 
+        if let Err(error) = folder_defaults::apply_created(
+            &state,
+            &principal,
+            &session_id,
+            req.folder_id.as_deref(),
+            configuration,
+        ) {
+            return (StatusCode::BAD_REQUEST, error).into_response();
+        }
         let prepare_state = Arc::clone(&state);
         let prepare_session_id = session_id.clone();
         let prepare_machine_id = req.machine_id.clone();

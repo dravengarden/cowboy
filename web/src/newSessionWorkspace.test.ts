@@ -32,7 +32,7 @@ test("mobile new session actions stay in the non-overlay sheet footer", () => {
 });
 
 test("new session navigation precedes Machine preparation completion", () => {
-  const created = appSource.indexOf("onCreated={(session, folder): void => {");
+  const created = appSource.indexOf("onCreated={(session): void => {");
   const active = appSource.indexOf("setActiveId(session.id);", created);
   const settle = appSource.indexOf(
     "settleMobileDrawerRef.current(false, 0);",
