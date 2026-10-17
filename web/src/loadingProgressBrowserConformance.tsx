@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { Box, CircularProgress, CssBaseline, Stack, Typography } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { StatusDot } from "./SessionStatusDot";
+import { SessionMachineBadge } from "./SessionMachineBadge";
 import { mobileCompositorFlattenSx } from "./mobilePresentationMotion";
 import { splashHtml } from "../../components/app-shell/splash";
 
@@ -24,6 +25,10 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       <CssBaseline />
       <Stack spacing={3} sx={{ p: 3, maxWidth: 520 }}>
         <Typography variant="h6">Loading · Cowboy</Typography>
+        <Box data-machine-warning-preview>
+          {[true, false].map((compact) => <SessionMachineBadge key={String(compact)} compact={compact}
+            session={{ id: "warning", title: "Warning", provider: "claude-code", machine_id: "ovh", cwd: "/runtime", status: "interrupted", execution_binding: {} }} />)}
+        </Box>
         {(["busy", "starting", "running", "exited"] as const).map((status) => (
           <Stack key={status} direction="row" spacing={1.5} alignItems="center">
             <StatusDot status={status} /><Typography>{status}</Typography>
@@ -58,6 +63,11 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       check([busy, numeric, idle].every((node, i) => Math.abs(Number.parseFloat(getComputedStyle(node).height) / before[i]! - 1.5) < 0.01), `Global font scales loading at surface unit ${unit}`);
     }
     const determinate = container.querySelector<HTMLElement>('[aria-label="Progress"]')!;
+    check(Array.from(container.querySelectorAll('[data-machine-warning-preview] .MuiChip-root')).every((chip) => {
+      const icon = chip.querySelector(".MuiChip-icon")!.getBoundingClientRect();
+      const bounds = chip.getBoundingClientRect();
+      return icon.height < bounds.height && icon.top >= bounds.top && icon.bottom <= bounds.bottom;
+    }), "Machine warning icons fit compact and regular badges at enlarged font size");
     check(determinate.getAttribute("aria-valuenow") === "65" && getComputedStyle(determinate).width === "24px" && getComputedStyle(determinate.querySelector("svg")!).display !== "none", "Determinate progress retains value, geometry and visible SVG");
     const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
     const pausedStartup = container.querySelector('[aria-label="Paused startup"]')!;
