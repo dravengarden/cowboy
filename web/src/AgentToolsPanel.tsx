@@ -28,6 +28,7 @@ import {
   saveAgentTools,
   saveSessionTools,
   subscribeSessionTools,
+  useSessionToolsSaving,
   SESSION_LIMIT_CHOICES,
   callableTargets,
   choiceFor,
@@ -528,6 +529,7 @@ export function AgentToolsEditor(
 export function SessionToolsSection(
   { sessionId, disabled = false }: { sessionId: string; disabled?: boolean },
 ): React.JSX.Element {
+  const sharedSaving = useSessionToolsSaving(sessionId);
   const { value, error, saving, save } = useRemoteDocument(
     () => fetchSessionTools(sessionId),
     sessionId,
@@ -548,7 +550,7 @@ export function SessionToolsSection(
             ? (
               <Button
                 size="small"
-                disabled={saving || disabled}
+                disabled={saving || sharedSaving || disabled}
                 onClick={(): void =>
                   save(() => saveSessionTools(sessionId, { schema: 1 }))}
               >
@@ -569,7 +571,7 @@ export function SessionToolsSection(
           caller={value.agent}
           value={value.effective}
           catalog={value.catalog}
-          disabled={saving || disabled}
+          disabled={saving || sharedSaving || disabled}
           onChange={(next): void => {
             const override = overrideFor(value.defaults, next);
             save(

@@ -57,6 +57,8 @@ export async function runDormantSessionBrowserConformance(
   let options: ConfigOption[] = [];
   let timeline: Envelope[] = [];
   let toolsOverride: SessionToolsOverride = { schema: 1 };
+  let holdToolsWrite = false;
+  let releaseToolsWrite: (() => void) | undefined;
   let socket: FixtureSocket | undefined;
   const commands: string[] = [];
   const requests: string[] = [];
@@ -172,6 +174,11 @@ export async function runDormantSessionBrowserConformance(
       });
     }
     if (path === "/api/sessions/sleeping/tools") {
+      if (init?.method === "PUT" && holdToolsWrite) {
+        await new Promise<void>((resolve) => {
+          releaseToolsWrite = resolve;
+        });
+      }
       if (init?.method === "PUT") {
         toolsOverride = withMemoryKey(JSON.parse(String(init.body)));
       }
@@ -299,9 +306,36 @@ export async function runDormantSessionBrowserConformance(
           2,
       "both tools surfaces missing",
     );
+    holdToolsWrite = true;
     [...document.querySelectorAll<HTMLInputElement>(
       "input[aria-label='Memory tools']",
     )].at(-1)!.click();
+    await until(
+      () =>
+        releaseToolsWrite !== undefined &&
+        [...document.querySelectorAll<HTMLInputElement>(
+          "input[aria-label='Memory tools']",
+        )].every((input) => input.disabled),
+      "a pending write did not lock both tools editors",
+    );
+    flushSync(() => root.render(<Fixture key="pending-tools" />));
+    openSessionSettings("agent", session.id);
+    await until(() => {
+      const fields = [
+        ...document.querySelectorAll<HTMLInputElement>(
+          "input[aria-label='Memory tools']",
+        ),
+      ];
+      return fields.length === 2 && fields.every((input) => input.disabled);
+    }, "newly opened tools editors must inherit the in-flight lock");
+    check(
+      requests.filter((request) =>
+        request === "PUT /api/sessions/sleeping/tools"
+      ).length === 1,
+      "a slow save locks all tools editors, including newly opened settings",
+    );
+    holdToolsWrite = false;
+    releaseToolsWrite!();
     await until(
       () =>
         [...document.querySelectorAll<HTMLInputElement>(
