@@ -770,18 +770,15 @@ function ConversationEmptyState({
         },
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", maxWidth: 360, textAlign: "left" }}>
         <Box
-          sx={(theme) => ({
+          sx={{
             width: 32,
             height: 32,
-            borderRadius: "50%",
             display: "grid",
             placeItems: "center",
             color: "primary.main",
-            bgcolor: alpha(theme.palette.primary.main, 0.09),
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
-          })}
+          }}
         >
           {kind === "preparing"
             ? <Terminal sx={{ fontSize: desktopSize(22) }} />
@@ -791,12 +788,12 @@ function ConversationEmptyState({
         </Box>
         <Typography
           variant="body1"
-          sx={{ fontWeight: 700, color: "text.primary" }}
+          sx={{ fontWeight: 600, fontSize: "1.125rem", color: "text.primary" }}
         >
           {title}
         </Typography>
       </Stack>
-      <Typography variant="body2" sx={{ maxWidth: 420, lineHeight: 1.55 }}>
+      <Typography variant="body2" sx={{ width: "100%", maxWidth: 360, textAlign: "left", lineHeight: 1.55 }}>
         {detail}
       </Typography>
       {preparing && (
@@ -804,7 +801,7 @@ function ConversationEmptyState({
           aria-hidden
           sx={{
             position: "relative",
-            width: "min(240px, 62vw)",
+            width: "min(360px, 100%)",
             height: 3,
             mt: 0.5,
             overflow: "hidden",
@@ -849,9 +846,11 @@ function ConversationEmptyState({
             settingsTap.onClick(event);
           }}
           sx={{
-            maxWidth: "100%",
+            width: "100%",
+            maxWidth: 360,
             minHeight: desktopSize(44),
-            px: 0.75,
+            justifyContent: "flex-start",
+            px: 0,
             py: 0.75,
             borderRadius: 3,
             cursor: "pointer",
@@ -867,7 +866,7 @@ function ConversationEmptyState({
             direction="row"
             useFlexGap
             flexWrap="wrap"
-            justifyContent="center"
+            justifyContent="flex-start"
             alignItems="center"
             gap={0.75}
           >
@@ -882,7 +881,7 @@ function ConversationEmptyState({
         </ButtonBase>
       )}
       <SessionStartSettings key={sessionId} sessionId={sessionId} />
-      <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
+      <Typography variant="caption" sx={{ width: "100%", maxWidth: 360, textAlign: "left", mt: 1, opacity: 0.6 }}>
         {preparing
           ? "Tap here to write — it sends when ready"
           : "Tap here to write"}

@@ -37,7 +37,7 @@ function isCoreOption(option: ConfigOption): boolean {
 }
 
 const compactSelect = {
-  // MUI's standard input adds a top margin after any label, including our inline label.
+  // Keep spacing explicit instead of inheriting MUI's floating-label margin.
   "label + &": { marginTop: 0 },
   minHeight: desktopSize(44),
   maxWidth: "100%",
@@ -46,9 +46,9 @@ const compactSelect = {
   fontSize: "1rem",
   "& select": {
     py: 1,
-    pl: 0.5,
+    pl: 0,
     pr: "24px !important",
-    textAlign: "right",
+    textAlign: "left",
     borderRadius: "6px",
   },
   "&:focus-within": { outline: "2px solid", outlineColor: "primary.main" },
@@ -57,11 +57,9 @@ const compactSelect = {
 const coreRow = {
   minWidth: 0,
   width: "100%",
-  display: "grid",
-  gridTemplateColumns: "minmax(72px, auto) minmax(0, 1fr)",
-  alignItems: "center",
-  columnGap: 1,
-  px: 1.5,
+  display: "flex",
+  flexDirection: "column",
+  "& > label": { fontSize: "0.75rem", lineHeight: 1.5 },
 };
 
 /** Core choices are direct native pickers; advanced forms mount only on request.
@@ -184,7 +182,7 @@ export function SessionStartSettings(
       onKeyDown={(event): void => event.stopPropagation()}
       sx={{
         width: "100%",
-        maxWidth: 400,
+        maxWidth: 360,
         textAlign: "left",
         cursor: "default",
       }}
@@ -192,16 +190,25 @@ export function SessionStartSettings(
       <Box
         data-start-core
         sx={{
-          display: core.length || presets.length ? "block" : "none",
-          border: "1px solid",
-          borderColor: "divider",
-          borderRadius: "12px",
-          py: 0.25,
-          "& > * + *": { borderTop: "1px solid", borderColor: "divider" },
+          display: core.length || presets.length ? "grid" : "none",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          columnGap: 2,
+          rowGap: 1.5,
         }}
       >
         {presets.length > 0 && (
-          <FormControl size="small" sx={coreRow}>
+          <FormControl
+            size="small"
+            sx={{
+              ...coreRow,
+              gridColumn: "1 / -1",
+              px: 1.5,
+              pt: 1,
+              pb: 0.25,
+              borderRadius: "10px",
+              bgcolor: "action.hover",
+            }}
+          >
             <Typography
               component="label"
               htmlFor={`${id}-preset`}
@@ -235,7 +242,7 @@ export function SessionStartSettings(
                   )
                 );
               }}
-              sx={compactSelect}
+              sx={{ ...compactSelect, fontWeight: 600, fontSize: "1.0625rem" }}
             >
               <option value="" disabled>Custom</option>
               {presets.map((preset) => (
@@ -263,10 +270,13 @@ export function SessionStartSettings(
       <Box
         sx={{
           display: "flex",
-          justifyContent: "center",
+          justifyContent: "space-between",
           flexWrap: "wrap",
           gap: 0.5,
-          mt: 0.5,
+          mt: 1,
+          pt: 0.5,
+          borderTop: "1px solid",
+          borderColor: "divider",
         }}
       >
         {advanced.length > 0 && (
