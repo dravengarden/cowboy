@@ -1,6 +1,7 @@
 # Agent API: Cowboy as a token-frugal MCP surface
 
-Status: read composition and explicit scoped actions implemented, 2026-10-16.
+Status: read composition and explicit scoped actions implemented; bounded read
+pages and topic discovery completed, 2026-10-17.
 Activation follows the Controller and Machine compatibility gates below.
 
 ## Problem
@@ -21,7 +22,7 @@ multi-step job, as Matrix CodeAct does for memory:
 - stable error codes instead of stack traces or transcript dumps.
 
 The four complete tool definitions, including JSON schemas and annotations,
-plus initialization instructions measure 2,203 UTF-8 bytes on 2026-10-16.
+plus initialization instructions measure 2,184 UTF-8 bytes.
 The discovery test enforces a 4 KiB ceiling for that complete surface, in addition
 to the description budget. This is a serialization measurement, not a provider
 token count, prompt-cache measurement or successful-task cost comparison.
@@ -109,6 +110,10 @@ Managed child sessions have no grant and no Agent API.
 `help:"actions"` return declarations without starting a program. Help and code
 are mutually exclusive. Definitions stay stable for the MCP process; an
 unavailable capability is reported instead of silently falling back.
+Use `help:"session"`, `"sessions"`, `"calls"`, `"documents"` or
+`"preferences"` for just that domain. Read topics include their own type
+dependencies and share one declaration source with the full SDK. Each of the
+first four topics is tested to cost less than half of full read discovery.
 
 Resource `cowboy://sdk/v1` serves the strict declaration
 ([`src/agent_api.rs`](../src/agent_api.rs) `SDK`). `cowboy_read` runs CODE
@@ -117,9 +122,9 @@ with `format: "module"`; `language: "js"` selects JavaScript.
 
 | Namespace | Operations |
 |---|---|
-| `session` | `info()`, `queue()`, `drafts()`, `events({after?, before?, limit?, chars?, kinds?})` |
+| `session` | `info()`, `queue({after?,limit?,chars?})`, `drafts({after?,limit?,chars?})`, `message(id, window?)`, `events({after?, before?, limit?, chars?, kinds?})` |
 | `calls` | `capabilities()`, `inspect(id)`, `wait(id, ms?)`, `result(id, window?)`, `observe(request_id)` |
-| `sessions` | `list({status?, limit?})`, `info(id)`: sessions of the same owner, never system sessions |
+| `sessions` | `list({after?,status?,limit?})`, `info(id)`: sessions of the same owner, never system or closing sessions |
 | `documents` | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents |
 | `preferences` | `schema()`, `get("about")`: typed account preferences and compact ordering choices |
 
@@ -129,13 +134,62 @@ truncated per item. `calls.*` uses the exact managed-call dispatcher, minus
 the CLI-only `schema` and `next` fields; a program can observe calls but not
 start or cancel them. `calls.wait` is clamped to the program's remaining
 budget. A failed operation throws an `Error` whose `code` is stable.
+Each broker operation rechecks the live parent and, for owned sessions, the
+active product account. A long-running read cannot continue using an owner
+snapshot after the parent closes or its account is disabled.
 
 Large document bodies and call-result text can be read with
-`{offset:0,chars:1000}`. Offsets count Unicode scalars; `range.next` is the next
+`{offset:0,chars:1000}`. An unwindowed read returns a small body whole, or
+`text_window_required` above 1,000 characters. It never silently turns a full
+read into a prefix: an older caller might otherwise append to that prefix and
+overwrite the document's remainder, or mistake partial findings for a complete
+review. An explicit window defaults to 1,000 characters; at most 4,000 may be
+requested per page.
+Offsets count Unicode scalars; `range.next` is the next
 offset, or null at the end. Paging never clears a retained result's `truncated`
 flag. Document pages carry revision clocks: restart a read if the body revision
-changes. List pages use the last document id as `after`, at most 200 requested
-items. These are live observations, not a cross-page snapshot.
+changes. Document and Session lists are ordered by ID and use the last returned
+ID as `after`. Sessions return 50 items by default (maximum 200). Documents
+require an explicit `limit` when more than 50 entries remain, returning
+`page_required` otherwise; small unpaged lists remain complete. Use
+`{limit:50}` (maximum 200), then fetch until a page is shorter than that limit.
+Document pagination and tombstone
+filtering run in the owning database, loading only that page's metadata.
+These are live observations, not a cross-page snapshot.
+
+Queue/draft lists retain their queue order. Use `{limit:20,chars:400}` for
+previews (maximum 100 messages and 4,000 characters each). Without an explicit
+`limit`, more than 20 remaining messages returns `page_required`; without
+explicit `chars`, a message over 400 characters returns `text_window_required`.
+Small legacy reads remain complete. Use the last ID as `after`, and
+`session.message(id,{offset,chars})` to continue a message's text. A cursor
+removed by dispatch or editing returns `invalid_cursor`; restart the list.
+Text windows have no snapshot guarantee when a queued message is edited.
+
+Transcript pages include `next:{after}` or `next:{before}`, or null at the
+retained end. Carry it into the next query together with the original filters
+and limits. Empty filtered pages still advance through the scanned raw window.
+Never resume from a tool item's `to`: its updates can span other messages.
+A tool may appear again as a partial update on a later page; merge by tool ID
+and sequence, retaining the newest fields when reading backwards. Page boundaries
+are chosen from chronological message/tool-update groups before folding tools
+inside the selected interval. This preserves a tool's final update even when its
+start lies on an earlier page, while keeping streaming chunks together.
+`reached_start:false` at the end means older history
+is no longer retained. Zero list limits are rejected.
+
+These additions retain the protocol-30/31 gateway actions and work for Codex
+and Claude through the shared server. Upgrade the Controller for read behavior
+and restart the updated MCP binary for the new topic declarations and message
+method. Older clients can still use their existing read operations and explicit
+windows; no worker wire change or additional resident tools is needed.
+
+The stdio server negotiates MCP through `2025-11-25` and keeps the earlier
+versions. It bounds input frames to 1 MiB and concurrent requests to 16, applies
+backpressure, and drains an oversized frame before accepting another request.
+Malformed JSON and invalid requests receive bounded JSON-RPC errors; valid
+notifications remain silent. Framing follows the
+[MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 
 ## Explicit effects and recovery
 

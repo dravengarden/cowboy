@@ -165,6 +165,22 @@ pub(super) async fn preference_owner(
     active_preference_owner(&state.hub, state.store.as_ref(), meta).await
 }
 
+pub(super) async fn read_parent(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    meta: &SessionMeta,
+) -> Result<(), &'static str> {
+    if hub.session_info(&meta.id).is_none_or(|info| {
+        info.meta.system || info.meta.closing || info.meta.owner_user_id != meta.owner_user_id
+    }) {
+        return Err("permission_denied");
+    }
+    if meta.owner_user_id.is_some() {
+        active_preference_owner(hub, store, meta).await?;
+    }
+    Ok(())
+}
+
 async fn active_preference_owner(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,
@@ -474,6 +490,7 @@ mod tests {
             owner_username: Some(user.username.clone()),
         });
         let mut meta = hub.session_info("parent").unwrap().meta;
+        assert_eq!(read_parent(&hub, Some(&store), &meta).await, Ok(()));
         // Every active product account may arrange its own display, even a viewer.
         assert_eq!(
             active_preference_owner(&hub, Some(&store), &meta)
@@ -497,6 +514,10 @@ mod tests {
         );
         store.set_user_disabled_at(&user.id, Some(2)).await.unwrap();
         assert_eq!(
+            read_parent(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        assert_eq!(
             active_preference_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")
         );
@@ -505,6 +526,13 @@ mod tests {
             Err("permission_denied")
         );
         store.set_user_disabled_at(&user.id, None).await.unwrap();
+        hub.set_closing("parent", true);
+        assert_eq!(
+            read_parent(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
+        hub.set_closing("parent", false);
+        assert_eq!(read_parent(&hub, Some(&store), &meta).await, Ok(()));
         meta.id = "other-parent".into();
         assert_eq!(
             active_preference_owner(&hub, Some(&store), &meta).await,
@@ -525,6 +553,10 @@ mod tests {
             Err("permission_denied")
         );
         meta.owner_user_id = None;
+        assert_eq!(
+            read_parent(&hub, Some(&store), &meta).await,
+            Err("permission_denied")
+        );
         assert_eq!(
             document_owner(&hub, Some(&store), &meta).await,
             Err("permission_denied")

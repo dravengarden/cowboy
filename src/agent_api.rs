@@ -34,6 +34,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "session.info",
     "session.queue",
     "session.drafts",
+    "session.message",
     "session.events",
     "calls.capabilities",
     "calls.inspect",
@@ -110,11 +111,23 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
     match topic {
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["read","actions","preferences"],"example":"return (await cowboy.sessions.list()).map(s=>({id:s.id,status:s.status}));"})),
-        "preferences" => Some(json!({"api":API_VERSION,"types":PREFERENCES_SDK})),
-        "read" | "session" | "sessions" | "documents" | "calls" => {
-            Some(json!({"api":API_VERSION,"types":SDK}))
+            "help":["session","sessions","calls","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list()).map(s=>({id:s.id,status:s.status}));"})),
+        "preferences" => Some(
+            json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
+        ),
+        "read" => Some(json!({"api":API_VERSION,"types":SDK})),
+        "session" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_SDK].concat())}),
+        ),
+        "sessions" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,SESSION_VIEW,SESSIONS_SDK].concat())}),
+        ),
+        "calls" => {
+            Some(json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,CALLS_SDK].concat())}))
         }
+        "documents" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,DOCUMENTS_SDK].concat())}),
+        ),
         "actions" | "review" | "receipts" => {
             Some(json!({"api":API_VERSION,"types":ACTION_SDK,"preferences":PREFERENCES_SDK}))
         }
@@ -122,14 +135,27 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
     }
 }
 
-/// The complete strict declaration, served as `cowboy://sdk/v1`.
-pub const SDK: &str = r#"// Cowboy agent API cowboy-ts-v1. cowboy_read runs CODE as
+// One declaration source for complete discovery and self-contained topic help.
+// Repeated Cowboy interfaces merge in TypeScript; topics never duplicate types.
+macro_rules! sdk {
+    ($($name:ident: $source:literal),+ $(,)?) => {
+        $(const $name: &str = $source;)+
+        pub const SDK: &str = concat!($($source),+);
+    };
+}
+
+sdk! {
+SDK_HEADER: r#"// Cowboy agent API cowboy-ts-v1. cowboy_read runs CODE as
 // `async ({cowboy}) => { CODE }` (format "module": export default async function({cowboy})).
 // Return JSON (<=16 KiB). Each await is one of <=16 API calls; no network or files.
 // A failed call throws Error with .code (not_found, permission_denied, unavailable, ...).
-export type Seq = number;
+"#,
+TEXT_TYPES: r#"
 export type TextWindow = { offset?: number; chars?: number }; // Unicode scalars; default1000, max4000
 export type TextRange = { offset: number; next: number | null; total: number };
+// text_window_required: pass {offset:0}; unwindowed large reads fail.
+"#,
+SESSION_VIEW: r#"
 export type SessionView = {
   id: string; title: string; provider: string;
   status: "starting" | "running" | "busy" | "exited" | "crashed" | "interrupted" | string;
@@ -137,7 +163,12 @@ export type SessionView = {
   queued: number; drafts: number; events: number; background_tasks: number;
   context: { used: number; size: number } | null;
 };
-export type Message = { id: string; text: string; attachments: number; scheduled_at_ms?: number };
+"#,
+SESSION_SDK: r#"
+export type Seq = number;
+export type Message = { id: string; text: string; attachments: number; scheduled_at_ms?: number; range: TextRange };
+export type MessageQuery = {after?:string;limit?:number;chars?:number}; // queue order; last id resumes; default20/max100, chars default400/max4000
+// Lists: page_required -> {limit:20}; text_window_required -> {chars:400}.
 export type EventKind = "user" | "agent" | "tool" | "plan" | "permission" | "turn_end" | "lifecycle";
 export type EventQuery = {
   after?: Seq; before?: Seq;   // after: oldest first; otherwise the newest before `before`
@@ -149,7 +180,20 @@ export type EventItem = {
   seq: Seq; to: Seq; kind: EventKind; text?: string; truncated?: true;
   tool?: { id: string; title?: string; status?: string; kind?: string };
 };
-export type EventPage = { items: EventItem[]; reached_start: boolean; more: boolean };
+export type EventPage = { items: EventItem[]; reached_start: boolean; more: boolean; next: {after:Seq}|{before:Seq}|null };
+// Resume with {...query,...page.next}, even for empty filtered pages. Tool spans
+// can overlap: never derive a cursor from item.to. Pages are live observations.
+export interface Cowboy {
+  session: {
+    info(): Promise<SessionView>;
+    queue(q?: MessageQuery): Promise<Message[]>;
+    drafts(q?: MessageQuery): Promise<Message[]>;
+    message(id: string, q?: TextWindow): Promise<Message>; // full queued/draft text in pages
+    events(q?: EventQuery): Promise<EventPage>;
+  };
+}
+"#,
+CALLS_SDK: r#"
 export type CallView = {
   state: string; call_id: string; request_id: string;
   resolved: { provider: string; machine_id: string; workspace_id: string; child_session_id?: string | null };
@@ -161,40 +205,49 @@ export type CallCapabilities = {
   providers: { id: string; available: boolean; reason: string | null; presets: unknown[] }[];
   purposes: string[]; limits: Record<string, number>;
 };
-export type DocumentMeta = {
-  id: string; kind: "document" | "folder"; title: string; parent_id: string | null;
-  revision: number; body_revision: number; metadata_revision: number; updated_at_ms: number; deleted: boolean;
-};
-export type Document = DocumentMeta & { body: string; attachments: number; range?: TextRange };
 export interface Cowboy {
-  preferences: {
-    schema(): Promise<unknown>; // typed scopes, storage and field rules
-    get(scope: "zed"): Promise<{scope:"zed";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
-    get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
-  };
-  session: {                       // this session
-    info(): Promise<SessionView>;
-    queue(): Promise<Message[]>;   // prompts waiting for the current turn
-    drafts(): Promise<Message[]>;  // parked composer drafts
-    events(q?: EventQuery): Promise<EventPage>; // coalesced transcript, retained window
-  };
-  calls: {                         // managed calls this session started
+  calls: {
     capabilities(): Promise<CallCapabilities>;
     inspect(call_id: string): Promise<CallView>;
     wait(call_id: string, timeout_ms?: number): Promise<CallView>; // bounded by the program
     result(call_id: string, q?: TextWindow): Promise<CallView>; // range lives inside result
     observe(request_id: string): Promise<CallView>;
   };
-  sessions: {                      // sessions with this session's owner
-    list(q?: { status?: string; limit?: number }): Promise<SessionView[]>;
+}
+"#,
+SESSIONS_SDK: r#"
+export interface Cowboy {
+  sessions: { // same owner; id order; last id resumes, default50/max200; live pages
+    list(q?: { after?: string; status?: string; limit?: number }): Promise<SessionView[]>;
     info(id: string): Promise<SessionView>;
   };
-  documents: {                     // the owner's Draft documents
-    list(q?: {after?: string; limit?: number; include_deleted?: boolean}): Promise<DocumentMeta[]>; // id order; last id resumes, limit<=200
+}
+"#,
+DOCUMENTS_SDK: r#"
+export type DocumentMeta = {
+  id: string; kind: "document" | "folder"; title: string; parent_id: string | null;
+  revision: number; body_revision: number; metadata_revision: number; updated_at_ms: number; deleted: boolean;
+};
+export type Document = DocumentMeta & { body: string; attachments: number; range: TextRange };
+export interface Cowboy {
+  documents: { // owner's Drafts; id order; last id resumes, default50/max200
+    list(q?: {after?: string; limit?: number; include_deleted?: boolean}): Promise<DocumentMeta[]>;
     read(id: string, q?: TextWindow & {include_deleted?: boolean}): Promise<Document>;
   };
 }
-"#;
+// Text pages carry body_revision: restart if it changes between reads.
+// page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
+"#,
+PREFERENCES_READ_SDK: r#"
+export interface Cowboy {
+  preferences: {
+    schema(): Promise<unknown>; // typed scopes, storage and field rules
+    get(scope: "zed"): Promise<{scope:"zed";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
+    get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
+  };
+}
+"#,
+}
 
 pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";
 
@@ -228,5 +281,29 @@ mod tests {
                 < 1500
         );
         assert!(SDK.len() < 6000);
+    }
+
+    #[test]
+    fn topic_help_is_self_contained_and_smaller_than_full_discovery() {
+        for (topic, declaration, unrelated) in [
+            ("session", "type SessionView", "calls: {"),
+            ("sessions", "type SessionView", "documents: {"),
+            ("calls", "type TextWindow", "session: {"),
+            ("documents", "type TextRange", "calls: {"),
+        ] {
+            let help = help(topic).unwrap();
+            let types = help["types"].as_str().unwrap();
+            assert!(types.contains(declaration), "missing dependency in {topic}");
+            assert!(!types.contains(unrelated), "unrelated API in {topic}");
+            assert!(
+                types.len() * 2 < SDK.len(),
+                "{topic} should cost less than half of full read help"
+            );
+            eprintln!(
+                "Cowboy {topic} help: {} UTF-8 bytes; full read help: {}",
+                types.len(),
+                SDK.len()
+            );
+        }
     }
 }
