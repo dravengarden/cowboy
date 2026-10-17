@@ -4674,13 +4674,30 @@ impl Hub {
     /// lifecycle fence; carrying this guard across the reset would leave the new
     /// idle worker permanently unable to dispatch a queued prompt because the
     /// normal `Starting` -> `Running` edge deliberately does not clear it.
+    ///
+    /// Context usage and background work describe the discarded agent context.
+    /// A fresh agent reports usage only after its first model turn, and a
+    /// dormant session has no worker snapshot to re-seed it, so leaving them
+    /// here would keep the old context ring and Usage panel after Clear.
     pub fn prepare_context_reset(&self, session_id: &str) {
-        {
+        let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
-            if let Some(s) = sessions.get_mut(session_id) {
+            sessions.get_mut(session_id).is_some_and(|s| {
                 s.meta.agent_session_id = None;
                 s.in_flight = false;
-            }
+                let changed = s.meta.context_used != 0
+                    || s.meta.context_size != 0
+                    || s.meta.usage.is_some()
+                    || s.meta.background_tasks != 0;
+                s.meta.context_used = 0;
+                s.meta.context_size = 0;
+                s.meta.usage = None;
+                s.meta.background_tasks = 0;
+                changed
+            })
+        };
+        if usage_changed {
+            self.broadcast_sessions();
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
@@ -9762,6 +9779,29 @@ mod core_tests {
                 .as_deref(),
             Some("thread-after-clear")
         );
+    }
+
+    #[test]
+    fn context_reset_forgets_the_discarded_context_usage() {
+        let hub = hub_with_session("clear-usage");
+        hub.set_session_usage(
+            "clear-usage",
+            crate::agent_model::SessionUsage {
+                used: 870,
+                size: 1000,
+                raw: serde_json::Value::Null,
+                observed_at_ms: 1,
+            },
+        );
+        hub.set_background_tasks("clear-usage", 2);
+
+        hub.prepare_context_reset("clear-usage");
+
+        let meta = hub.session_info("clear-usage").expect("session").meta;
+        assert_eq!((meta.context_used, meta.context_size), (0, 0));
+        assert!(meta.usage.is_none());
+        assert_eq!(meta.background_tasks, 0);
+        assert!(meta.agent_session_id.is_none());
     }
 
     #[test]
