@@ -71,7 +71,8 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       getComputedStyle(pausedRing.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     const starting = container.querySelector('[aria-label="Starting…"]')!;
-    check(getComputedStyle(busy).animationName !== "none" &&
+    check(getComputedStyle(busy).animationName === "none" &&
+      getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-rotate" &&
       getComputedStyle(busy.querySelector("svg")!).display !== "none" &&
       getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
       getComputedStyle(numeric.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
@@ -84,6 +85,20 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     }) && getComputedStyle(determinate.querySelector(".MuiCircularProgress-track")!).display === "none" &&
       getComputedStyle(starting.querySelector(".MuiCircularProgress-track")!).display === "none",
       "Native full tracks show for waits without changing startup or determinate progress");
+    const arc = busy.querySelector(".MuiCircularProgress-circle")!;
+    const track = busy.querySelector(".MuiCircularProgress-track")!;
+    const motion = arc.getAnimations()[0]!;
+    const anchor = track.getBoundingClientRect();
+    motion.pause();
+    check([0, 175, 350, 700, 1050].every((time) => {
+      motion.currentTime = time;
+      const fixed = track.getBoundingClientRect();
+      const moving = arc.getBoundingClientRect();
+      return Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
+        Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
+        Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
+    }), "Full track stays fixed and the moving arc remains concentric throughout rotation");
+    motion.play();
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;

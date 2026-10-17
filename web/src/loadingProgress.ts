@@ -20,6 +20,17 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         height: `${loadingSize(ownerState.size ?? 40)} !important`,
         flexShrink: 0,
         verticalAlign: "middle",
+        // Keep the full track on a fixed pixel grid; only the bright arc moves.
+        animation: "none",
+        "@keyframes cowboy-loading-rotate": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+        "& .MuiCircularProgress-circle": {
+          animation: "cowboy-loading-rotate 1400ms linear infinite",
+          transformOrigin: "center",
+          transformBox: "fill-box",
+        },
         // The full ring must remain readable in the 12–16px status slots.
         "& .MuiCircularProgress-track": { opacity: 0.55 },
         "& .MuiCircularProgress-svg, & .MuiCircularProgress-circle": {
