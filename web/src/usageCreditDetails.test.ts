@@ -27,10 +27,21 @@ test("credit status retains off and zero without inventing a balance", () => {
   expect(rows).toEqual([{ label: "Usage credits", value: "Off" }, {
     label: "Balance",
     value: creditMoney(0, "USD"),
+  }, {
+    label: "Spent this month",
+    value: "500 minor units · currency not reported",
   }, { label: "Auto reload", value: "Off" }]);
   expect(usageCreditDetails({ usageCredits: { balanceStatus: "unavailable" } }))
     .toEqual([{ label: "Balance", value: "Unavailable" }]);
   expect(usageCreditDetails(undefined)).toEqual([]);
+  expect(
+    usageCreditDetails({
+      usageCredits: { balanceMinor: 0, balanceStatus: "available" },
+    }),
+  ).toEqual([{
+    label: "Balance",
+    value: "0 minor units · currency not reported",
+  }]);
 });
 
 test("held resets remain visible without claiming they are usable", () => {

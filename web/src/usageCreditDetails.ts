@@ -33,6 +33,14 @@ export function usageCreditDetails(rateLimits: unknown): UsageCreditRow[] {
   const addMoney = (label: string, value: unknown, currency: unknown) => {
     const formatted = creditMoney(value, currency);
     if (formatted !== undefined) rows.push({ label, value: formatted });
+    else if (
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+    ) {
+      rows.push({
+        label,
+        value: `${value.toLocaleString()} minor units · currency not reported`,
+      });
+    }
   };
   if (typeof credit.enabled === "boolean") {
     rows.push({ label: "Usage credits", value: credit.enabled ? "On" : "Off" });

@@ -10,6 +10,10 @@ import {
 
 test("credit projections preserve zero and disabled, omit unknown money", () => {
   equal(
+    prepaidCredits({ amount: 0, currency: null, auto_reload_settings: null }),
+    { balanceMinor: 0 },
+  );
+  equal(
     spendCredits({ is_enabled: false, used_credits: 0, monthly_limit: null }),
     { enabled: false, spentMinor: 0 },
   );

@@ -146,7 +146,8 @@ ignored so a stale installed PWA cannot restore removed auto-resume behavior.
   balance), with no retries and within the collector's existing ten-second
   deadline. Native usage supplies credit enablement, monthly spend and cap;
   prepaid credits supply balance, currency, auto-reload status and expiry policy.
-  Missing currency prevents money display; unavailable balance is never zero.
+  Missing currency preserves the reported minor-unit amount with an explicit
+  unknown-currency label; an unavailable balance is never zero.
   Promotional/purchased splits and exact credit expiry dates are not inferred.
   Reset grants retain their available, paused or held state without changing
   which grant the existing explicit reset action can consume.

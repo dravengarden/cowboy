@@ -1,6 +1,8 @@
 // Read-only subscription credit projections. Never derive a balance from spend.
 const currencyCode = (value) =>
-  typeof value === "string" && /^[A-Z]{3}$/.test(value) ? value : undefined;
+  typeof value === "string" && /^[a-z]{3}$/i.test(value)
+    ? value.toUpperCase()
+    : undefined;
 const amount = (value) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
@@ -22,14 +24,14 @@ export function spendCredits(value) {
 export function prepaidCredits(value) {
   const balance = amount(value?.amount);
   const currency = currencyCode(value?.currency);
-  if (balance === undefined || !currency) {
+  if (balance === undefined) {
     throw new Error("Claude credit balance is unavailable.");
   }
   const enabled = value.auto_reload_settings?.enabled;
   const expiry = value.expiry_policy_months;
   return {
     balanceMinor: balance,
-    balanceCurrency: currency,
+    ...(currency ? { balanceCurrency: currency } : {}),
     ...(typeof enabled === "boolean" ? { autoReloadEnabled: enabled } : {}),
     ...(Number.isSafeInteger(expiry) && expiry > 0
       ? { expiryPolicyMonths: expiry }

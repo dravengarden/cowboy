@@ -226,7 +226,6 @@ export async function runInfoMetricsBrowserConformance(
               usageCredits: {
                 enabled: false,
                 balanceMinor: 0,
-                balanceCurrency: "USD",
                 spendCurrency: "USD",
                 spentMinor: 1234,
                 monthlyLimitMinor: 5000,
