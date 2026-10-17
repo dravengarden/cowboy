@@ -16,6 +16,8 @@
 //   //   html.replace("</head>", head + "</head>")
 //   //       .replace('<div id="root"></div>', `<div id="root">${body}</div>`)
 
+import { splashLoadingCss } from "./loading-wave";
+
 export interface SplashOptions {
   /** App name shown under the spinner. */
   title: string;
@@ -51,17 +53,12 @@ export function splashHtml(opts: SplashOptions): SplashHtml {
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
       }
       @media (prefers-color-scheme: dark) { #app-splash { background: ${darkBg}; color: ${darkFg}; } }
-      #app-splash .app-splash-spinner {
-        width: 34px; height: 34px; border: 3px solid currentColor; border-top-color: transparent;
-        border-radius: 50%; opacity: 0.65; animation: app-splash-spin 0.8s linear infinite;
-      }
+      ${splashLoadingCss}
       #app-splash .app-splash-title { font-size: 14px; letter-spacing: 0.06em; opacity: 0.75; }
-      @keyframes app-splash-spin { to { transform: rotate(360deg); } }
-      @media (prefers-reduced-motion: reduce) { #app-splash .app-splash-spinner { animation: none; } }
     </style>`;
 
   const body = `<div id="app-splash" aria-label="Loading" role="status">
-        <div class="app-splash-spinner"></div>
+        <div class="app-splash-spinner" aria-hidden="true"><span></span></div>
         <div class="app-splash-title">${opts.title}</div>
       </div>`;
 

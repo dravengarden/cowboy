@@ -1019,17 +1019,10 @@ function isCompactionCompletion(chunks: ContentChunk[]): boolean {
   return isCompactionCompletionText(text);
 }
 
-// The fold icon's gentle vertical squeeze — "condensing" made literal. Compositor
-// transform only (cheap on mobile); frozen under prefers-reduced-motion.
-const fold = keyframes`
-  0%, 100% { transform: scaleY(1); }
-  50%      { transform: scaleY(0.6); }
-`;
-
 // Two states, because the notice is PERSISTED in the transcript and stays in
 // scrollback after compaction ends:
 //   • active (`active` — it's the live tail and the turn is still busy): a
-//     terracotta shimmer + a squeezing fold icon = "condensing right now".
+//     terracotta shimmer + the shared activity mark = "condensing right now".
 //   • done   (anything followed it / the turn is idle): a calm, static muted
 //     "Context compacted" note — no infinite shimmer implying it's still going.
 function CompactingWidget({
@@ -1053,9 +1046,6 @@ function CompactingWidget({
     providerVersion,
     providerDigest,
   ).primary;
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
   return (
     <Stack
       direction="row"
@@ -1074,17 +1064,9 @@ function CompactingWidget({
           : "transparent",
       }}
     >
-      <UnfoldLess
-        aria-hidden
-        sx={{
-          fontSize: desktopSize(16),
-          color: active ? accent : muted,
-          ...(active &&
-            !reducedMotion && {
-            animation: `${fold} 1.4s ease-in-out infinite`,
-          }),
-        }}
-      />
+      {active
+        ? <CircularProgress size={16} color="inherit" aria-label="Compacting" sx={{ color: accent }} />
+        : <UnfoldLess aria-hidden sx={{ fontSize: desktopSize(16), color: muted }} />}
       {active
         ? (
           <Typography
