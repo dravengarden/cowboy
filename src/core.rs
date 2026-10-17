@@ -968,6 +968,10 @@ struct MobileReviewPosition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MobileReviewState {
+    // Preserve opaque settings when an older Controller reads and rewrites
+    // state produced by a newer release. Mutations remain a closed protocol.
+    #[serde(default, flatten)]
+    future: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remote_review: Option<crate::workspace_extensions::ReviewBinding>,
     #[serde(default)]
@@ -991,6 +995,7 @@ fn default_mobile_review_mode() -> String {
 impl Default for MobileReviewState {
     fn default() -> Self {
         Self {
+            future: std::collections::BTreeMap::new(),
             remote_review: None,
             remote_selected: false,
             mode: default_mobile_review_mode(),
@@ -7802,6 +7807,29 @@ mod core_tests {
             value["positions"]["strategies/README.md"]["revision"],
             "abc123"
         );
+    }
+
+    #[test]
+    fn mobile_review_preserves_future_settings_on_older_navigation() {
+        let hub = hub_with_session("future-review");
+        let saved = serde_json::json!({"future_directory":null,"future":{"nested":true}});
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("future-review")
+            .unwrap()
+            .mobile_review = super::MobileReviewState::from_stored(saved.clone());
+        hub.sync_apply(
+            "mobile-review:future-review",
+            "open".into(),
+            "open",
+            &serde_json::json!({"path":"README.md"}),
+        )
+        .unwrap();
+        let value = hub.sync_value("mobile-review:future-review");
+        assert_eq!(value.get("future_directory"), saved.get("future_directory"));
+        assert_eq!(value["future"], saved["future"]);
+        assert_eq!(value["active"], "README.md");
     }
 
     #[test]
