@@ -288,6 +288,13 @@ export async function runDormantSessionBrowserConformance(
       !container.textContent?.includes("send a message to wake"),
       "new sleeping session is a usable empty workspace",
     );
+    check(
+      !container.querySelector(
+        "select[data-start-option], [data-session-tools]",
+      ),
+      "start settings stay collapsed until the user chooses to configure",
+    );
+    click("[data-start-toggle='tools']");
     click("[data-conversation-empty-settings]");
     await until(
       () => document.body.textContent?.includes("Session actions") === true,
@@ -319,6 +326,7 @@ export async function runDormantSessionBrowserConformance(
       "a pending write did not lock both tools editors",
     );
     flushSync(() => root.render(<Fixture key="pending-tools" />));
+    click("[data-start-toggle='tools']");
     openSessionSettings("agent", session.id);
     await until(() => {
       const fields = [
@@ -445,6 +453,19 @@ export async function runDormantSessionBrowserConformance(
     });
     flushSync(() => root.render(<Fixture key="inline-settings" />));
     await until(
+      () => container.querySelectorAll("[data-start-core] select").length === 3,
+      "core configuration choices missing",
+    );
+    check(
+      container.querySelectorAll("[data-start-core] select").length === 3 &&
+        !container.querySelector(
+          "select[data-start-option='fast'], [data-session-tools]",
+        ),
+      "preset, model and reasoning are direct choices while advanced settings stay collapsed",
+    );
+    click("[data-start-toggle='run']");
+    click("[data-start-toggle='tools']");
+    await until(
       () =>
         container.querySelectorAll("select[data-start-option]").length === 5,
       "inline options missing",
@@ -514,6 +535,25 @@ export async function runDormantSessionBrowserConformance(
       "all start controls fit a narrow phone without horizontal scrolling",
     );
     container.style.width = "390px";
+    click("[data-start-toggle='run']");
+    click("[data-start-toggle='tools']");
+    await until(
+      () =>
+        !container.querySelector(
+          "select[data-start-option='fast'], [data-session-tools]",
+        ),
+      "advanced settings did not collapse",
+    );
+    check(
+      container.querySelectorAll("[data-start-core] select").length === 3 &&
+        !container.querySelector(
+          "select[data-start-option='fast'], [data-session-tools]",
+        ) &&
+        container.querySelector("[data-start-toggle='run']")?.getAttribute(
+            "aria-expanded",
+          ) === "false",
+      "settings can return to the compact summary after editing",
+    );
     desktop = true;
     flushSync(() => root.render(<Fixture key="desktop" />));
     openSessionSettings("agent", "another-session");

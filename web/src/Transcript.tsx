@@ -752,7 +752,7 @@ function ConversationEmptyState({
         px: { xs: 1, sm: 3 },
         py: { xs: 2, sm: 3 },
         alignItems: "center",
-        justifyContent: "flex-start",
+        justifyContent: "safe center",
         overflowY: "auto",
         overscrollBehavior: "contain",
         "& > *": { flexShrink: 0 },
@@ -899,7 +899,7 @@ function ConversationEmptyState({
       <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
         {preparing
           ? "Tap here to write — it sends when ready"
-          : "Choose your settings, then write a message"}
+          : "Tap here to write"}
       </Typography>
     </Stack>
   );
