@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { Box, CircularProgress, CssBaseline, Stack, Typography } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { StatusDot } from "./SessionStatusDot";
+import { SessionMachineBadge } from "./SessionMachineBadge";
 import { mobileCompositorFlattenSx } from "./mobilePresentationMotion";
 import { splashHtml } from "../../components/app-shell/splash";
 
@@ -24,6 +25,10 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       <CssBaseline />
       <Stack spacing={3} sx={{ p: 3, maxWidth: 520 }}>
         <Typography variant="h6">Loading · Cowboy</Typography>
+        <Box data-machine-warning-preview>
+          {[true, false].map((compact) => <SessionMachineBadge key={String(compact)} compact={compact}
+            session={{ id: "warning", title: "Warning", provider: "claude-code", machine_id: "ovh", cwd: "/runtime", status: "interrupted", execution_binding: {} }} />)}
+        </Box>
         {(["busy", "starting", "running", "exited"] as const).map((status) => (
           <Stack key={status} direction="row" spacing={1.5} alignItems="center">
             <StatusDot status={status} /><Typography>{status}</Typography>
@@ -58,32 +63,59 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       check([busy, numeric, idle].every((node, i) => Math.abs(Number.parseFloat(getComputedStyle(node).height) / before[i]! - 1.5) < 0.01), `Global font scales loading at surface unit ${unit}`);
     }
     const determinate = container.querySelector<HTMLElement>('[aria-label="Progress"]')!;
+    check(Array.from(container.querySelectorAll('[data-machine-warning-preview] .MuiChip-root')).every((chip) => {
+      const icon = chip.querySelector(".MuiChip-icon")!.getBoundingClientRect();
+      const bounds = chip.getBoundingClientRect();
+      return icon.height < bounds.height && icon.top >= bounds.top && icon.bottom <= bounds.bottom;
+    }), "Machine warning icons fit compact and regular badges at enlarged font size");
     check(determinate.getAttribute("aria-valuenow") === "65" && getComputedStyle(determinate).width === "24px" && getComputedStyle(determinate.querySelector("svg")!).display !== "none", "Determinate progress retains value, geometry and visible SVG");
     const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
     const pausedStartup = container.querySelector('[aria-label="Paused startup"]')!;
     const pausedRing = container.querySelector('[aria-label="Paused loading"]')!;
     check(getComputedStyle(paused).animationPlayState === "paused" &&
-      getComputedStyle(paused.querySelector("circle")!).animationPlayState === "paused" &&
+      getComputedStyle(paused.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::before").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::after").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup.querySelector("svg")!).animationPlayState === "paused" &&
       getComputedStyle(pausedRing).animationPlayState === "paused" &&
-      getComputedStyle(pausedRing.querySelector("circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
+      getComputedStyle(pausedRing.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     const starting = container.querySelector('[aria-label="Starting…"]')!;
-    check(getComputedStyle(busy).animationName !== "none" &&
+    check(getComputedStyle(busy).animationName === "none" &&
+      getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-rotate" &&
       getComputedStyle(busy.querySelector("svg")!).display !== "none" &&
-      getComputedStyle(busy.querySelector("circle")!).display !== "none" &&
-      getComputedStyle(numeric.querySelector("circle")!).display !== "none" &&
-      getComputedStyle(starting.querySelector("circle")!).display === "none" &&
+      getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
+      getComputedStyle(numeric.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
+      getComputedStyle(starting.querySelector(".MuiCircularProgress-circle")!).display === "none" &&
       getComputedStyle(starting, "::before").animationName === "cowboy-starting-wave", "Work and general waits use MUI rings; startup uses bars");
+    check([busy, numeric].every((node) => {
+      const track = node.querySelector(".MuiCircularProgress-track");
+      return track !== null && getComputedStyle(track).display !== "none" &&
+        Number.parseFloat(getComputedStyle(track).opacity) >= 0.55;
+    }) && getComputedStyle(determinate.querySelector(".MuiCircularProgress-track")!).display === "none" &&
+      getComputedStyle(starting.querySelector(".MuiCircularProgress-track")!).display === "none",
+      "Native full tracks show for waits without changing startup or determinate progress");
+    const arc = busy.querySelector(".MuiCircularProgress-circle")!;
+    const track = busy.querySelector(".MuiCircularProgress-track")!;
+    const motion = arc.getAnimations()[0]!;
+    const anchor = track.getBoundingClientRect();
+    motion.pause();
+    check([0, 175, 350, 700, 1050].every((time) => {
+      motion.currentTime = time;
+      const fixed = track.getBoundingClientRect();
+      const moving = arc.getBoundingClientRect();
+      return Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
+        Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
+        Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
+    }), "Full track stays fixed and the moving arc remains concentric throughout rotation");
+    motion.play();
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;
     document.body.append(shell);
     try {
       const mark = shell.querySelector(".app-splash-spinner")!;
-      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor === "rgba(0, 0, 0, 0)", "Pre-mount splash uses a circular wait indicator");
+      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor !== "rgba(0, 0, 0, 0)", "Pre-mount splash uses a complete circular wait indicator");
     } finally {
       shell.remove();
     }

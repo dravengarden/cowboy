@@ -46,6 +46,13 @@ export function SessionMachineBadge({ session, onInfo, compact = false }: {
           maxWidth: machine.remote ? "12rem" : "8rem",
           fontSize: compact ? "0.6875rem" : "0.75rem",
           boxShadow: "none",
+          "& .MuiChip-icon": {
+            fontSize: compact ? "0.8125rem" : "1rem",
+            width: "1em",
+            height: "1em",
+            ml: "0.3rem",
+            mr: "-0.2rem",
+          },
           "&:active, &.Mui-focusVisible": { boxShadow: "none" },
           ...(machine.remote
             ? { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) }
