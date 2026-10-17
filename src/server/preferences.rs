@@ -82,6 +82,8 @@ pub(super) async fn read(
 #[serde(deny_unknown_fields)]
 pub(super) struct Update {
     operation: String,
+    #[serde(default)]
+    dataset: Option<String>,
     #[serde(flatten)]
     change: PreferenceChange,
 }
@@ -96,6 +98,7 @@ pub(super) async fn update(
     if !headers
         .get("x-cowboy-dataset")
         .and_then(|v| v.to_str().ok())
+        .or(input.dataset.as_deref())
         .is_some_and(|v| sync_dataset::matches(&state.service_id, &auth.principal, v))
     {
         return (
@@ -139,6 +142,8 @@ mod tests {
     #[test]
     fn preferences_http_input_rejects_authority_and_unknown_fields() {
         let mut input = json!({"operation":"one","scope":"about","expected_revision":0,"changes":{"usage_order":[]}});
+        assert!(serde_json::from_value::<Update>(input.clone()).is_ok());
+        input["dataset"] = json!("observed-account-dataset");
         assert!(serde_json::from_value::<Update>(input.clone()).is_ok());
         input["owner"] = json!("victim");
         assert!(serde_json::from_value::<Update>(input).is_err());

@@ -146,8 +146,8 @@ UI writes bind the dataset observed by the editor; switching accounts cannot
 redirect an old proposal into the new account.
 
 The authenticated CLI can use `cowboy api` against `GET /api/preferences/about`
-and `PUT /api/preferences`, supplying the returned dataset ID as
-`x-cowboy-dataset` and an `operation` alongside the update fields. UI, CLI and MCP
+and `PUT /api/preferences`, supplying the returned dataset ID as the body field
+`dataset` (or HTTP header `x-cowboy-dataset`) and an `operation` alongside the update fields. UI, CLI and MCP
 reach the same typed domain writer. Display changes are immediate; no Service
 or Device restart is needed for subsequent preference edits. Codex and Claude
 share this surface. Initial feature rollout requires the updated Controller,
