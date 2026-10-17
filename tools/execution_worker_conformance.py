@@ -39,6 +39,15 @@ def complete_turn(client, thread, prompt="Run the fixture."):
     raise ProbeFailure("native turn timed out")
 
 
+def cowboy_mcp_connected(client, thread):
+    inventory = client.request("mcpServerStatus/list", {"threadId": thread})
+    server = next((item for item in inventory["data"] if item["name"] == "cowboy"), {})
+    require((server.get("serverInfo") or {}).get("name") == "cowboy"
+            and server.get("toolsError") is None and not server.get("tools")
+            and server.get("httpOrigin") is None,
+            "automatic Cowboy MCP did not connect without granting tools")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -179,6 +188,9 @@ def main():
         'wire_api = "responses"\nenv_key = "COWBOY_OFFLINE_FIXTURE_KEY"\n'
         'request_max_retries = 0\nstream_max_retries = 0\n'
     )
+    if inputs.get("require_cowboy_mcp"):
+        with (home / "config.toml").open("a") as config:
+            config.write('[mcp_servers.cowboy]\nurl = "http://127.0.0.1:9/obsolete"\n')
 
     def native():
         client = Executor([node, str(launcher), "--cowboy-private-cli", "app-server"],
@@ -200,6 +212,9 @@ def main():
         thread = started["thread"]["id"]
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted API failed")
+        if inputs.get("require_cowboy_mcp"):
+            cowboy_mcp_connected(client, thread)
+            checks.append("automatic_cowboy_mcp_registration")
         require(child_counts == {"none": 2, "all": 2}, "both native children must execute and complete")
         for mode, requests in child_requests.items():
             name = "native-child-" + mode + ".txt"
@@ -243,6 +258,9 @@ def main():
         checks.append("cold_native_resume_makes_zero_model_requests")
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted resume failed")
+        if inputs.get("require_cowboy_mcp"):
+            cowboy_mcp_connected(client, thread)
+            checks.append("cold_resume_retains_cowboy_mcp_registration")
         require((args.target / "once.txt").read_text() == "once", "cold resume repeated a command")
         resumed_outputs = [item for request in api.requests for item in request.get("input", [])
                            if item.get("type") == "function_call_output" and item.get("call_id") == "fixture_resume"]

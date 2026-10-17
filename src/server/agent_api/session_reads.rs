@@ -9,6 +9,55 @@ fn visible(meta: &SessionMeta, owner: Option<&str>) -> bool {
     !meta.system && !meta.closing && meta.owner_user_id.as_deref() == owner
 }
 
+pub(super) struct ListFilter {
+    query: Option<String>,
+    exact: Vec<(&'static str, String)>,
+}
+
+impl ListFilter {
+    pub(super) fn parse(args: &Value) -> Result<Self, String> {
+        let query = match args.get("query") {
+            None => None,
+            Some(Value::String(text))
+                if !text.trim().is_empty() && text.len() <= 256 && !text.contains('\0') =>
+            {
+                Some(text.to_lowercase())
+            }
+            _ => return Err("invalid_argument".into()),
+        };
+        let mut exact = Vec::new();
+        for key in ["provider", "machine", "workspace"] {
+            if args.get(key).is_some() {
+                exact.push((key, arg_str(args, key)?.to_owned()));
+            }
+        }
+        Ok(Self { query, exact })
+    }
+
+    pub(super) fn matches(&self, meta: &SessionMeta) -> bool {
+        self.exact.iter().all(|(key, value)| match *key {
+            "provider" => meta.provider == *value,
+            "machine" => meta.machine_id == *value,
+            _ => {
+                meta.workspace_id.as_deref() == Some(value)
+                    || meta.workspace_name.as_deref() == Some(value)
+            }
+        }) && self.query.as_ref().is_none_or(|query| {
+            [
+                &meta.id,
+                &meta.title,
+                &meta.cwd,
+                &meta.provider,
+                &meta.machine_id,
+            ]
+            .into_iter()
+            .chain(meta.workspace_name.iter())
+            .chain(meta.workspace_id.iter())
+            .any(|field| field.to_lowercase().contains(query))
+        })
+    }
+}
+
 pub(super) async fn history(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,

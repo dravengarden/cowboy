@@ -12,6 +12,19 @@ import {
 
 export { callGuidance, memoryConfiguration, sessionExtensions };
 
+// Core MCP uses the parent's gateway on the execution target. Native Codex
+// owns environment placement; no runtime-host command or copied credential.
+export function agentApiConfiguration({ environmentId, callContext } = {}) {
+  if (!environmentId && !callContext) return [];
+  const placement = environmentId
+    ? `environment_id=${JSON.stringify(environmentId)}`
+    : 'env_vars=["COWBOY_CALL_CONTEXT"]';
+  return [
+    "-c",
+    `mcp_servers.cowboy={command="cowboy",args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
+  ];
+}
+
 export function codexObservation(message) {
   if (message.method !== "item/completed") return null;
   const item = message.params?.item;
@@ -61,16 +74,24 @@ async function send(stream, message) {
 export async function memoryNative(args) {
   const execution = await import("./cowboy-execution.mjs");
   const config = await memoryConfiguration("codex");
-  if (!config) return await execution.main(args);
   const descriptor = process.env.COWBOY_EXECUTION_DESCRIPTOR
     ? await execution.readExecutionDescriptor(
       process.env.COWBOY_EXECUTION_DESCRIPTOR,
     )
     : undefined;
-  const memory = await MatrixClient.open(config, descriptor);
   const configuration = JSON.parse(
     process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS ?? "[]",
   );
+  configuration.push(...agentApiConfiguration({
+    environmentId: descriptor?.binding.environment.id,
+    callContext: process.env.COWBOY_CALL_CONTEXT,
+  }));
+  process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
+  if (!config) return await execution.main(args);
+  if (config.server === "cowboy") {
+    throw new Error("The cowboy MCP name is reserved for session tools");
+  }
+  const memory = await MatrixClient.open(config, descriptor);
   const mcp = memory.mcp();
   configuration.push(
     "-c",

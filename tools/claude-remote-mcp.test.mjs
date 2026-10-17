@@ -8,7 +8,41 @@ import {
   nativeMcpServers,
   projectConfigDirectories,
   targetMcpServers,
+  withCowboyMcp,
 } from "../plugins/claude-code/runtime/mcp.mjs";
+
+test("Cowboy MCP uses the target relay and is absent from managed children", () => {
+  const entries = [{
+    name: "custom",
+    placement: "runtime",
+    config: { url: "https://example.invalid/mcp" },
+  }, {
+    name: "cowboy",
+    placement: "runtime",
+    config: { url: "https://old.invalid/mcp" },
+  }];
+  const ordinary = withCowboyMcp(entries, true);
+  assert.equal(ordinary.length, 2);
+  assert.deepEqual(ordinary[1], {
+    name: "cowboy",
+    scope: "session",
+    placement: "target",
+    argv: ["cowboy", "mcp"],
+    env: {},
+  });
+  assert.deepEqual(withCowboyMcp([], false), []);
+  assert.deepEqual(
+    nativeMcpServers(ordinary, {
+      command: "/exact/node",
+      args: ["/proxy", "/context"],
+    }).cowboy,
+    {
+      type: "stdio",
+      command: "/exact/node",
+      args: ["/proxy", "/context", "cowboy"],
+    },
+  );
+});
 import { relay } from "../plugins/claude-code/runtime/mcp-proxy.mjs";
 
 const stdio = (name) => ({

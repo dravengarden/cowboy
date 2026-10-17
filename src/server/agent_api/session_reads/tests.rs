@@ -26,6 +26,37 @@ fn session(hub: &Hub, id: &str, owner: Option<&str>, system: bool) {
 }
 
 #[test]
+fn session_filters_combine_exact_identity_with_unicode_metadata_search() {
+    let hub = Hub::new();
+    session(&hub, "s", Some("owner"), false);
+    let mut meta = hub.session_info("s").unwrap().meta;
+    meta.title = "检查 Cowboy MCP".into();
+    meta.workspace_id = Some("project-id".into());
+    assert!(
+        ListFilter::parse(&json!({"query":"cowboy","provider":"codex","workspace":"project-id"}))
+            .unwrap()
+            .matches(&meta)
+    );
+    assert!(
+        ListFilter::parse(&json!({"query":"检查"}))
+            .unwrap()
+            .matches(&meta)
+    );
+    assert!(
+        !ListFilter::parse(&json!({"query":"cowboy","machine":"other"}))
+            .unwrap()
+            .matches(&meta)
+    );
+    for args in [
+        json!({"query":""}),
+        json!({"query":"x".repeat(257)}),
+        json!({"provider":1}),
+    ] {
+        assert!(ListFilter::parse(&args).is_err());
+    }
+}
+
+#[test]
 fn content_reads_share_owner_visibility_and_never_wake_a_target() {
     let root = tempfile::tempdir().unwrap();
     let plugins = Arc::new(crate::plugin_catalog::PluginCatalog::open(root.path(), None).unwrap());
@@ -194,8 +225,66 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
     let after = hub.session_info("archived").unwrap();
     assert_eq!(after.event_count, before.event_count);
     assert_eq!(after.meta.status, before.meta.status);
+    let detail_args = json!({"session_id":"archived","seq":80,"path":"/stop_reason","chars":4});
+    let detail = super::super::event_reads::read(&hub, Some(&store), &parent, true, &detail_args)
+        .await
+        .unwrap();
+    assert_eq!(detail["source"], "durable");
+    assert_eq!(detail["page"]["data"], "save");
+    let next = super::super::event_reads::read(&hub,Some(&store),&parent,true,
+        &json!({"session_id":"archived","seq":80,"path":"/stop_reason","offset":4,"expected":detail["revision"]})).await.unwrap();
+    assert_eq!(next["page"]["data"], "d-80");
+    assert_eq!(
+        super::super::event_reads::read(
+            &hub,
+            Some(&store),
+            &parent,
+            true,
+            &json!({"session_id":"archived","seq":80,"expected":"old"})
+        )
+        .await,
+        Err("revision_conflict".into())
+    );
+    let found = super::super::event_reads::search(
+        &hub,
+        Some(&store),
+        &parent,
+        true,
+        &json!({"session_id":"archived","query":"saved-8","limit":2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(found["matches"][0]["seq"], 89);
+    assert_eq!(found["matches"][1]["seq"], 88);
+    assert_eq!(found["next_before"], 88);
+    let empty = super::super::event_reads::search(
+        &hub,
+        Some(&store),
+        &parent,
+        true,
+        &json!({"session_id":"archived","query":"absent"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty["matches"], json!([]));
+    assert!(!empty["next_before"].is_null());
     let mut foreign = parent.clone();
     foreign.owner_user_id = Some("other".into());
+    assert_eq!(
+        super::super::event_reads::read(&hub, Some(&store), &foreign, true, &detail_args).await,
+        Err("not_found".into())
+    );
+    assert_eq!(
+        super::super::event_reads::search(
+            &hub,
+            Some(&store),
+            &foreign,
+            true,
+            &json!({"session_id":"archived","query":"saved"})
+        )
+        .await,
+        Err("not_found".into())
+    );
     assert_eq!(
         history(&hub, Some(&store), &foreign, true, args.clone()).await,
         Err("not_found".into())

@@ -20,6 +20,19 @@ import { posix } from "node:path";
 
 const MAX_SERVERS = 64;
 
+// Reserved session-local server. The keeper injects the live parent context
+// when it spawns the command; no credential crosses into the Provider runtime.
+export function withCowboyMcp(entries, enabled) {
+  if (!enabled) return entries;
+  return [...entries.filter((entry) => entry.name !== "cowboy"), {
+    name: "cowboy",
+    scope: "session",
+    placement: "target",
+    argv: ["cowboy", "mcp"],
+    env: {},
+  }];
+}
+
 // Native's expansion of `${VAR}` and `${VAR:-default}`; a variable that is
 // unset and has no default stays as written.
 export function expandVariables(value, environment) {

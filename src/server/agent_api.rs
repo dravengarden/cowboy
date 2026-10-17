@@ -29,6 +29,9 @@ use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
+mod event_reads;
+mod json_reads;
+mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
@@ -66,6 +69,7 @@ fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value 
         "schema": 1,
         "state": "ok",
         "api": API_VERSION,
+        "revision": crate::agent_api::revision(),
         // The authenticated grant describes the execution Machine. The
         // session's runtime Machine can have a different protocol version.
         "actions": grant.agent_actions,
@@ -168,6 +172,61 @@ impl Host for SessionHost<'_> {
         // lose its account while a preceding operation is awaiting a reply.
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         match op {
+            "machines.list"
+            | "machines.read"
+            | "configuration.schema"
+            | "configuration.read"
+            | "usage.diagnostics" => observations::read(self.state, self.meta, op, &args).await,
+            "api.help" => {
+                only_keys(&args, &["topic"])?;
+                crate::agent_api::help(arg_str(&args, "topic")?).ok_or("invalid_help".into())
+            }
+            "session.event" | "sessions.event" => {
+                let value = event_reads::read(
+                    &self.state.hub,
+                    self.state.store.as_ref(),
+                    self.meta,
+                    op == "sessions.event",
+                    &args,
+                )
+                .await?;
+                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+                Ok(value)
+            }
+            "session.search" | "sessions.search" => {
+                let value = event_reads::search(
+                    &self.state.hub,
+                    self.state.store.as_ref(),
+                    self.meta,
+                    op == "sessions.search",
+                    &args,
+                )
+                .await?;
+                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+                Ok(value)
+            }
+            "calls.list" => {
+                only_keys(&args, &["before", "limit"])?;
+                let before = args
+                    .get("before")
+                    .map(|_| arg_str(&args, "before"))
+                    .transpose()?;
+                let limit = page_limit(&args, 20, 100)?;
+                let rows = self.ledger.list(before).await.map_err(|_| "unavailable")?;
+                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+                let next = (rows.len() >= limit).then(|| rows[limit - 1].call_id.clone());
+                let calls = rows
+                    .iter()
+                    .take(limit)
+                    .map(|row| {
+                        let summary = row.summary();
+                        json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
+                            "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
+                            "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({"calls":calls,"next_before":next}))
+            }
             "session.history" | "sessions.history" => {
                 let value = session_reads::history(
                     &self.state.hub,
@@ -254,7 +313,19 @@ impl Host for SessionHost<'_> {
                 self.calls(Action::Observe { request_id }).await
             }
             "sessions.list" => {
-                only_keys(&args, &["status", "limit", "after"])?;
+                only_keys(
+                    &args,
+                    &[
+                        "status",
+                        "limit",
+                        "after",
+                        "query",
+                        "provider",
+                        "machine",
+                        "workspace",
+                    ],
+                )?;
+                let filter = session_reads::ListFilter::parse(&args)?;
                 let status = match args.get("status") {
                     None | Some(Value::Null) => None,
                     Some(Value::String(status)) if status.len() <= 32 => Some(status.clone()),
@@ -279,6 +350,7 @@ impl Host for SessionHost<'_> {
                     .filter(|info| {
                         !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
                     })
+                    .filter(|info| filter.matches(&info.meta))
                     .map(|info| session_view(&info))
                     .filter(|view| {
                         status
@@ -343,10 +415,13 @@ fn session_view(info: &SessionInfo) -> Value {
         "id": meta.id,
         "title": meta.title,
         "provider": meta.provider,
+        "provider_version": meta.provider_version,
         "status": meta.status,
         "machine": meta.machine_id,
         "workspace": meta.workspace_name.as_ref().or(meta.workspace_id.as_ref()),
         "cwd": meta.cwd,
+        "execution": meta.execution_binding.as_ref().and_then(|b| b.for_runtime(&meta.machine_id, &meta.cwd).ok())
+            .map(|b| json!({"machine":b.environment.machine_id,"workspace":b.workspace.id,"cwd":b.workspace.cwd})),
         "paused": meta.paused,
         "queued": info.queue_count,
         "drafts": info.drafts_count,

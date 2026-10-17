@@ -366,7 +366,7 @@ impl Config {
         merged
     }
 
-    fn to_json(&self) -> serde_json::Value {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
         let fields = self
             .entries()
             .map(|(field, value, source)| {

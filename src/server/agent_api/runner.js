@@ -81,7 +81,11 @@ const id = (id) => ({ id });
 const callId = (call_id) => ({ call_id });
 const query = (q) => q ?? {};
 const cowboy = Object.freeze({
-  preferences: namespace("preferences", { schema: none, get: (scope) => ({ scope }) }),
+  api: namespace("api", { help: (topic) => ({ topic }) }),
+  preferences: namespace("preferences", {
+    schema: none,
+    get: (scope) => ({ scope }),
+  }),
   session: namespace("session", {
     info: none,
     usage: none,
@@ -90,8 +94,11 @@ const cowboy = Object.freeze({
     message: (id, q) => ({ ...q, id }),
     events: query,
     history: query,
+    event: (seq, q) => ({ ...q, seq }),
+    search: query,
   }),
   calls: namespace("calls", {
+    list: query,
     capabilities: none,
     inspect: callId,
     wait: (call_id, timeout_ms) => ({ call_id, timeout_ms }),
@@ -107,10 +114,21 @@ const cowboy = Object.freeze({
     message: (session_id, id, q) => ({ ...q, session_id, id }),
     events: (session_id, q) => ({ ...q, session_id }),
     history: (session_id, q) => ({ ...q, session_id }),
+    event: (session_id, seq, q) => ({ ...q, session_id, seq }),
+    search: (session_id, q) => ({ ...q, session_id }),
   }),
   usage: namespace("usage", {
     list: query,
     read: (account, q) => ({ ...q, account }),
+    diagnostics: query,
+  }),
+  machines: namespace("machines", {
+    list: query,
+    read: (id, q) => ({ ...q, id }),
+  }),
+  configuration: namespace("configuration", {
+    schema: (scope, q) => ({ ...q, scope }),
+    read: (scope, q) => ({ ...q, scope }),
   }),
   documents: namespace("documents", {
     list: query,

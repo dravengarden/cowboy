@@ -632,7 +632,7 @@ pub(super) async fn configure_agent(
         .into_response()
 }
 
-fn session_view(state: &AppState, meta: &crate::core::SessionMeta) -> serde_json::Value {
+pub(super) fn session_view(state: &AppState, meta: &crate::core::SessionMeta) -> serde_json::Value {
     let (defaults, customized) = agent_defaults(state, &meta.provider);
     let session = session_override(state, &meta.id);
     json!({

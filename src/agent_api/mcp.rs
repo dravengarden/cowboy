@@ -12,8 +12,7 @@ use tokio::io::{
 use tokio::sync::Mutex;
 
 use super::{
-    EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, SDK,
-    STATUS_DESCRIPTION,
+    EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, STATUS_DESCRIPTION,
 };
 use crate::managed_calls::cli::{exchange, wiring};
 use crate::managed_calls::protocol::Action;
@@ -108,6 +107,30 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
         _ => return Err("invalid arguments".into()),
     };
     let mut tagged = arguments;
+    if name == "cowboy_read" && tagged.get("help").is_some() {
+        if tagged.as_object().is_none_or(|map| map.len() != 1) {
+            return Err("invalid help arguments".into());
+        }
+        let topic = tagged["help"]
+            .as_str()
+            .filter(|topic| {
+                !topic.is_empty()
+                    && topic.len() <= 64
+                    && topic
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            })
+            .ok_or("invalid help topic")?;
+        return Ok(Action::AgentRead {
+            code: format!(
+                "return await cowboy.api.help({});",
+                serde_json::to_string(topic).unwrap()
+            ),
+            language: Some("js".into()),
+            format: None,
+            timeout_ms: None,
+        });
+    }
     if name == "cowboy_receipt" {
         if tagged.as_object().is_none_or(|map| map.len() != 2)
             || !matches!(
@@ -190,8 +213,13 @@ async fn handle(
         "resources/templates/list" => Ok(json!({"resourceTemplates":[]})),
         "resources/read" => {
             if enabled && params.get("uri").and_then(Value::as_str) == Some(SDK_URI) {
+                let reply = discover("read").await;
+                let types = reply
+                    .pointer("/value/types")
+                    .and_then(Value::as_str)
+                    .ok_or((-32002, "Controller SDK unavailable".into()))?;
                 Ok(
-                    json!({"contents": [{"uri": SDK_URI, "mimeType": "text/typescript", "text": SDK}]}),
+                    json!({"contents": [{"uri": SDK_URI, "mimeType": "text/typescript", "text": types}]}),
                 )
             } else {
                 Err((-32002, "resource not found".into()))
@@ -218,23 +246,21 @@ async fn handle(
             }
             if name == "cowboy_read" && params["arguments"].get("help").is_some() {
                 let args = &params["arguments"];
-                let result = args
+                let topic = args
                     .as_object()
                     .filter(|v| v.len() == 1)
-                    .and_then(|_| args["help"].as_str())
-                    .and_then(super::help);
-                return Ok(match result {
-                    Some(mut value) => {
-                        if !actions {
-                            value["available_actions"] = json!([]);
-                            if value.get("actions").is_some() {
-                                value["actions"] = json!([]);
-                            }
-                        }
-                        tool_result(json!({"state":"ok","value":value}))
+                    .and_then(|_| args["help"].as_str());
+                let mut reply = match topic {
+                    Some(topic) => discover(topic).await,
+                    None => json!({"state":"error","error":{"code":"invalid_help"}}),
+                };
+                if !actions && let Some(value) = reply.get_mut("value") {
+                    value["available_actions"] = json!([]);
+                    if value.get("actions").is_some() {
+                        value["actions"] = json!([]);
                     }
-                    None => tool_result(json!({"state":"error","error":{"code":"invalid_help"}})),
-                });
+                }
+                return Ok(tool_result(reply));
             }
             let action = match action(name, params.get("arguments").unwrap_or(&Value::Null)) {
                 Ok(action) => action,
@@ -254,6 +280,17 @@ async fn handle(
         }
         _ => Err((-32601, "method not found".into())),
     }
+}
+
+async fn discover(topic: &str) -> Value {
+    let Ok(action) = action("cowboy_read", &json!({"help":topic})) else {
+        return json!({"state":"error","error":{"code":"invalid_help"}});
+    };
+    let Ok(context) = wiring() else {
+        return json!({"state":"error","error":{"code":"context_unavailable"}});
+    };
+    let timeout = action.wait_ms();
+    exchange(context, action, timeout).await
 }
 
 pub async fn serve(_args: McpArgs) -> anyhow::Result<()> {
@@ -532,10 +569,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(init["protocolVersion"], "2025-03-26");
-        let sdk = handle("resources/read", &json!({"uri": SDK_URI}), true)
-            .await
-            .unwrap();
-        assert_eq!(sdk["contents"][0]["text"], SDK);
+        assert!(
+            handle("resources/read", &json!({"uri": SDK_URI}), false)
+                .await
+                .is_err()
+        );
         assert!(
             handle("tools/call", &json!({"name":"cowboy_status"}), false)
                 .await
@@ -544,7 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discovery_is_local_and_older_machines_keep_only_read_tools() {
+    async fn discovery_uses_the_controller_and_older_machines_keep_only_read_tools() {
         let old = Surface {
             enabled: true,
             actions: false,
@@ -556,29 +594,15 @@ mod tests {
         let bytes = serde_json::to_vec(&modern["tools"]).unwrap().len() + INSTRUCTIONS.len();
         assert!(bytes < 4096, "resident definitions: {bytes} UTF-8 bytes");
         eprintln!("Cowboy resident definitions and instructions: {bytes} UTF-8 bytes (not tokens)");
-        let help = handle(
-            "tools/call",
-            &json!({"name":"cowboy_read","arguments":{"help":"index"}}),
-            old,
-        )
-        .await
-        .unwrap();
-        let index: Value =
-            serde_json::from_str(help["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(index["actions"], json!([]));
+        let help = action("cowboy_read", &json!({"help":"future_topic"})).unwrap();
+        assert!(
+            matches!(help, Action::AgentRead {code,..} if code == "return await cowboy.api.help(\"future_topic\");")
+        );
         let unavailable = handle("tools/call", &json!({"name":"cowboy_execute","arguments":{"action":"review.start","arguments":{},"operation":"test"}}), old).await.unwrap();
         assert_eq!(unavailable["isError"], true);
-        let help = handle(
-            "tools/call",
-            &json!({"name":"cowboy_read","arguments":{"help":"actions"}}),
-            true,
-        )
-        .await
-        .unwrap();
-        assert_eq!(help["isError"], false);
         for arguments in [
             json!({"help":"actions","code":"return 1"}),
-            json!({"help":"missing"}),
+            json!({"help":"x\"); return process.env; //"}),
         ] {
             assert_eq!(
                 handle(

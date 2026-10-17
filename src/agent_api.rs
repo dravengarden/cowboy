@@ -31,6 +31,7 @@ pub const MAX_BROKER_BYTES: usize = 1024 * 1024;
 /// Every operation a read program may call, in SDK order. The Controller's
 /// dispatcher and [`SDK`] are checked against this list.
 pub const READ_OPERATIONS: &[&str] = &[
+    "api.help",
     "session.info",
     "session.usage",
     "session.queue",
@@ -38,6 +39,9 @@ pub const READ_OPERATIONS: &[&str] = &[
     "session.message",
     "session.events",
     "session.history",
+    "session.event",
+    "session.search",
+    "calls.list",
     "calls.capabilities",
     "calls.inspect",
     "calls.wait",
@@ -51,8 +55,15 @@ pub const READ_OPERATIONS: &[&str] = &[
     "sessions.message",
     "sessions.events",
     "sessions.history",
+    "sessions.event",
+    "sessions.search",
     "usage.list",
     "usage.read",
+    "usage.diagnostics",
+    "machines.list",
+    "machines.read",
+    "configuration.schema",
+    "configuration.read",
     "documents.list",
     "documents.read",
     "preferences.schema",
@@ -118,10 +129,10 @@ export type DraftChange =
 
 pub fn help(topic: &str) -> Option<serde_json::Value> {
     use serde_json::json;
-    match topic {
+    let mut value = match topic {
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["session","sessions","usage","calls","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list()).map(s=>({id:s.id,status:s.status}));"})),
+            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
         "preferences" => Some(
             json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
         ),
@@ -132,7 +143,15 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         "sessions" => Some(
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_TYPES,SESSIONS_SDK].concat())}),
         ),
-        "usage" => Some(json!({"api":API_VERSION,"types":([SDK_HEADER,USAGE_SDK].concat())})),
+        "usage" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,OBSERVATION_TYPES,USAGE_SDK].concat())}),
+        ),
+        "machines" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,OBSERVATION_TYPES,MACHINES_SDK].concat())}),
+        ),
+        "configuration" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,OBSERVATION_TYPES,CONFIGURATION_SDK].concat())}),
+        ),
         "calls" => {
             Some(json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,CALLS_SDK].concat())}))
         }
@@ -143,7 +162,22 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
             Some(json!({"api":API_VERSION,"types":ACTION_SDK,"preferences":PREFERENCES_SDK}))
         }
         _ => None,
-    }
+    }?;
+    value["revision"] = json!(revision());
+    Some(value)
+}
+
+/// Content identity for Controller-owned discovery; unchanged data is cacheable.
+pub fn revision() -> &'static str {
+    use sha2::{Digest as _, Sha256};
+    static REVISION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let mut hash = Sha256::new();
+        for source in [SDK, ACTION_SDK, PREFERENCES_SDK] {
+            hash.update(source.as_bytes());
+        }
+        format!("{:x}", hash.finalize())[..16].to_owned()
+    });
+    &REVISION
 }
 
 // One declaration source for complete discovery and self-contained topic help.
@@ -160,6 +194,11 @@ SDK_HEADER: r#"// Cowboy agent API cowboy-ts-v1. cowboy_read runs CODE as
 // `async ({cowboy}) => { CODE }` (format "module": export default async function({cowboy})).
 // Return JSON (<=16 KiB). Each await is one of <=16 API calls; no network or files.
 // A failed call throws Error with .code (not_found, permission_denied, unavailable, ...).
+export interface Cowboy {
+  api: {
+    help(topic: string): Promise<unknown>; // live Controller discovery; revision identifies the SDK
+  };
+}
 "#,
 TEXT_TYPES: r#"
 export type TextWindow = { offset?: number; chars?: number }; // Unicode scalars; default1000, max4000
@@ -168,9 +207,10 @@ export type TextRange = { offset: number; next: number | null; total: number };
 "#,
 SESSION_VIEW: r#"
 export type SessionView = {
-  id: string; title: string; provider: string;
+  id: string; title: string; provider: string; provider_version:string;
   status: "starting" | "running" | "busy" | "exited" | "crashed" | "interrupted" | string;
   machine: string; workspace: string | null; cwd: string; paused: boolean;
+  execution:{machine:string;workspace:string;cwd:string}|null;
   queued: number; drafts: number; events: number; background_tasks: number;
   context: { used: number; size: number } | null;
 };
@@ -195,6 +235,18 @@ export type EventItem = {
 };
 export type EventPage = { items: EventItem[]; reached_start: boolean; more: boolean; next: {after:Seq}|{before:Seq}|null };
 export type HistoryPage = EventPage & {source:"durable"|"memory"};
+export type EventDetailQuery = {path?:string;offset?:number;chars?:number;limit?:number;describe?:boolean;expected?:string};
+export type EventDetail = {seq:Seq;source:"durable"|"memory";revision:string;page:{path:string;kind:string;data:unknown;range:TextRange}};
+export type SearchQuery = {query:string;before?:Seq;limit?:number;chars?:number};
+export type SearchPage = {matches:{seq:Seq;path:string;text:string;offset:number;revision:string}[];scanned:number;next_before:Seq|null;reached_start:boolean;source:string};
+// Search locates events by literal case-sensitive substring in stored JSON string values,
+// including tool output. First hit per event; no cross-event match. Scans <=64 raw records;
+// default20/max64 hits, excerpt default200/max1000 chars, at least query length. Follow next_before even if empty.
+// event(seq) describes one raw event. Select a JSON pointer to read text, tool outputs,
+// inputs or attachment references. Strings use Unicode offset/chars (default1000/max4000);
+// objects/arrays use offset/limit (default50/max200). 32KiB/page; describe:true gives shape.
+// Pass expected:detail.revision on continuation; revision_conflict -> restart that event.
+// A coalesced summary covers seq..to; raw events in that range preserve every block.
 // Resume with {...query,...page.next}, even for empty filtered pages. Tool spans
 // can overlap: never derive a cursor from item.to. Pages are live observations.
 "#,
@@ -208,10 +260,13 @@ export interface Cowboy {
     message(id: string, q?: TextWindow): Promise<Message>; // full queued/draft text in pages
     events(q?: EventQuery): Promise<EventPage>;
     history(q?: Omit<EventQuery,"after">): Promise<HistoryPage>; // backward saved pages; no wake; may lag live events
+    event(seq:Seq, q?:EventDetailQuery): Promise<EventDetail>;
+    search(q:SearchQuery): Promise<SearchPage>;
   };
 }
 "#,
 CALLS_SDK: r#"
+export type CallSummary = {call_id:string;request_id:string;provider:string;state:string;purpose:string;updated_at_ms:number;has_result:boolean;verdict:string|null;findings:number|null};
 export type CallView = {
   state: string; call_id: string; request_id: string;
   resolved: { provider: string; machine_id: string; workspace_id: string; child_session_id?: string | null };
@@ -225,6 +280,7 @@ export type CallCapabilities = {
 };
 export interface Cowboy {
   calls: {
+    list(q?:{before?:string;limit?:number}): Promise<{calls:CallSummary[];next_before:string|null}>; // own parent, newest admission first; default20/max100
     capabilities(): Promise<CallCapabilities>;
     inspect(call_id: string): Promise<CallView>;
     wait(call_id: string, timeout_ms?: number): Promise<CallView>; // bounded by the program
@@ -236,7 +292,7 @@ export interface Cowboy {
 SESSIONS_SDK: r#"
 export interface Cowboy {
   sessions: { // same owner; id order; last id resumes, default50/max200; live pages
-    list(q?: { after?: string; status?: string; limit?: number }): Promise<SessionView[]>;
+    list(q?: { after?: string; status?: string; limit?: number;query?:string;provider?:string;machine?:string;workspace?:string }): Promise<SessionView[]>;
     info(id: string): Promise<SessionView>;
     usage(id: string): Promise<SessionUsageView>;
     queue(id: string, q?: MessageQuery): Promise<Message[]>;
@@ -244,6 +300,8 @@ export interface Cowboy {
     message(id: string, message_id: string, q?: TextWindow): Promise<Message>;
     events(id: string, q?: EventQuery): Promise<EventPage>;
     history(id: string, q?: Omit<EventQuery,"after">): Promise<HistoryPage>;
+    event(id:string, seq:Seq, q?:EventDetailQuery): Promise<EventDetail>;
+    search(id:string, q:SearchQuery): Promise<SearchPage>;
   };
 }
 "#,
@@ -255,6 +313,7 @@ export interface Cowboy {
   usage: { // Service account observations, visible to active product users; no collector is started
     list(q?:{after?:string;limit?:number}): Promise<{accounts:(UsageAccount & {sections:Record<"account"|"quota"|"activity",boolean>})[];next:string|null;next_refresh_at_ms:number;refresh_interval_ms:number}>;
     read(account:string, q?:UsageQuery): Promise<UsagePage>;
+    diagnostics(q?:Selection): Promise<Selected>; // collector placement/eligibility, no refresh
   };
 }
 // list: account ID order, default20/max100. read: quota by default; Provider JSON stays intact.
@@ -264,6 +323,33 @@ export interface Cowboy {
 // observed_at_ms/refresh describe freshness; available:false is unknown, never zero or full quota.
 // In reported rateLimits buckets, usedPercent is USED; resetsAt is epoch seconds, windowDurationMins is minutes.
 // Activity history is separate from account limit windows. Select paths before returning data to the model.
+"#,
+OBSERVATION_TYPES: r#"
+export type Selection = {path?:string;offset?:number;limit?:number;chars?:number;describe?:boolean};
+export type Selected = {page:{path:string;kind:string;data:unknown;range:{offset:number;next:number|null;total:number}}};
+// Omitted path describes top-level shape. Select JSON pointers for values; describe:true for nested shape.
+// Objects/arrays: offset/limit, default50/max200 entries; strings: offset/chars, default1000/max4000 Unicode scalars.
+// selection_too_large -> deeper path or describe:true (32KiB/page). Live pages; no implicit refresh.
+"#,
+MACHINES_SDK: r#"
+export interface Cowboy {
+  machines: {
+    list(q?:{after?:string;limit?:number}): Promise<{machines:{id:string;name:string;status:string;connected:boolean;schedulable:boolean;health:unknown;capacity:unknown;active_sessions:number;resources:unknown;plugins:number;workspaces:number}[];next:string|null}>; // ID order, default20/max100
+    read(id:string, q?:Selection & {section?:"resources"|"plugins"|"workspaces"|"capabilities"}): Promise<Selected>;
+  };
+}
+// active_sessions counts workers, not saved history. Resource observations include timestamps; absence is unknown.
+"#,
+CONFIGURATION_SDK: r#"
+export interface Cowboy {
+  configuration: {
+    schema(scope:"service"|"device", q?:Selection): Promise<Selected>; // typed TOML registry, defaults/constraints/reload classes
+    read(scope:"service"|"session"|"tools", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
+  };
+}
+// service: effective config-file fields + sources/reload classes. session: exact Provider options and DB preferences.
+// tools: built-in/agent defaults, session overrides and effective Tools policy. Other sessions must share your owner.
+// This read does not wake a worker. Discover preferences for existing scoped writes; never edit raw settings keys.
 "#,
 DOCUMENTS_SDK: r#"
 export type DocumentMeta = {
@@ -322,7 +408,8 @@ mod tests {
                 + RECEIPT_DESCRIPTION.len()
                 < 1500
         );
-        assert!(SDK.len() < 10 * 1024);
+        assert!(SDK.len() < 14 * 1024);
+        assert!(serde_json::to_vec(&help("read").unwrap()).unwrap().len() < MAX_RESULT_BYTES);
     }
 
     #[test]
@@ -333,6 +420,8 @@ mod tests {
             ("calls", "type TextWindow", "session: {"),
             ("documents", "type TextRange", "calls: {"),
             ("usage", "type UsageAccount", "documents: {"),
+            ("machines", "type Selection", "session: {"),
+            ("configuration", "type Selection", "usage: {"),
         ] {
             let help = help(topic).unwrap();
             let types = help["types"].as_str().unwrap();

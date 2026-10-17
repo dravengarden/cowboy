@@ -1433,6 +1433,13 @@ def main():
         return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True,
                       disallowed="AskUserQuestion")
     def context_checked(requests):
+        if inputs.get("require_cowboy_mcp") and isinstance(client, Claude):
+            servers = [server for frame in client.messages if frame.get("type") == "system"
+                       and frame.get("subtype") == "init" for server in frame.get("mcp_servers", [])]
+            require(any(server.get("name") == "cowboy" and server.get("status") == "connected" for server in servers),
+                    "automatic target Cowboy MCP did not connect")
+            if "automatic_target_cowboy_mcp_connects_without_grant_or_tools" not in checks:
+                checks.append("automatic_target_cowboy_mcp_connects_without_grant_or_tools")
         for request in [*api.token_requests, *api.title_requests]:
             require(str(args.runtime) not in json.dumps(request) and
                     str(args.runtime.parent / "claude-home") not in json.dumps(request),

@@ -60,6 +60,8 @@ export function agentCallsPrompt(extensions) {
   });
 }
 
+export { agentApiConfiguration } from "./memory.mjs";
+
 function userCodexConfig() {
   const home = process.env.CODEX_HOME ??
     join(process.env.HOME ?? "", ".codex");
@@ -188,7 +190,9 @@ export async function main(args) {
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (
-    !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+    !inspection &&
+    (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+      process.env.COWBOY_CALL_CONTEXT ||
       await memoryConfiguration("codex", { extensions }))
   ) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {

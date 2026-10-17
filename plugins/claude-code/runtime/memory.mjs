@@ -68,20 +68,30 @@ async function send(stream, frame) {
 // uses the same memory client but still owns every project tool separately.
 export async function localMemoryNative(executable, args) {
   const config = await memoryConfiguration("claude");
+  if (config?.server === "cowboy") {
+    throw new Error("The cowboy MCP server name is reserved");
+  }
   const memory = await MatrixClient.open(config);
-  if (!memory) throw new Error("Missing memory backend configuration");
   const stage = await mkdtemp(join(tmpdir(), "cowboy-matrix-"));
   const mcp = join(stage, "mcp.json");
   await writeFile(
     mcp,
     JSON.stringify({
-      mcpServers: memory.tools ? { [config.server]: memory.mcp() } : {},
+      mcpServers: {
+        ...(memory?.tools ? { [config.server]: memory.mcp() } : {}),
+        ...(process.env.COWBOY_CALL_CONTEXT
+          ? { cowboy: { command: "cowboy", args: ["mcp"] } }
+          : {}),
+      },
     }),
     { mode: 0o600 },
   );
   const child = spawn(executable, [...args, "--mcp-config", mcp], {
-    env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
-    stdio: ["pipe", "pipe", "inherit"],
+    env: {
+      ...process.env,
+      ...(memory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}),
+    },
+    stdio: memory ? ["pipe", "pipe", "inherit"] : "inherit",
   });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));
@@ -90,6 +100,14 @@ export async function localMemoryNative(executable, args) {
     child.once("error", reject);
     child.once("exit", (code) => resolve(code ?? 1));
   });
+  if (!memory) {
+    try {
+      process.exitCode = await exit;
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+    return;
+  }
   const input = (async () => {
     for await (const frame of frames(process.stdin)) {
       if (frame.type === "user") {

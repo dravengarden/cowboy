@@ -10,6 +10,7 @@ web/dist/
 /site-dist/
 dist/plugins/
 dist/matrix-acceptance/
+dist/mcp-next/
 dist/provider-runtime-cache/
 dist/native-plugin-conformance/
 dist/native-shell/

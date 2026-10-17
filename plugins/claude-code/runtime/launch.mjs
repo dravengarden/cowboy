@@ -33,7 +33,12 @@ import {
   parseRound,
   structuredMessage,
 } from "./managed.mjs";
-import { mcpToolPrefix, nativeMcpServers, targetMcpServers } from "./mcp.mjs";
+import {
+  mcpToolPrefix,
+  nativeMcpServers,
+  targetMcpServers,
+  withCowboyMcp,
+} from "./mcp.mjs";
 import {
   BUNDLED_SKILLS,
   SKILL_PLUGIN,
@@ -1109,6 +1114,9 @@ async function native(args) {
     memoryConfigured = managed
       ? null
       : await memoryConfiguration("claude", { extensions });
+    if (memoryConfigured?.server === "cowboy") {
+      throw new Error("The cowboy MCP server name is reserved");
+    }
     memory = managed
       ? null
       : await MatrixClient.open(memoryConfigured, descriptor);
@@ -1206,7 +1214,7 @@ async function native(args) {
       : targetMcpServers(await mcpInputsStarted);
     tools.endStartup();
     startupPhase("target-discovery");
-    const mcpEntries = mcp.entries.filter((entry) =>
+    const mcpEntries = withCowboyMcp(mcp.entries, !managed).filter((entry) =>
       !(memory?.tools && entry.name === memoryConfigured.server)
     );
     tools.mcpServers = new Map(
@@ -1402,7 +1410,9 @@ export async function main(args) {
   const inspection = args.length === 1 &&
     ["--version", "-V", "--help", "-h"].includes(args[0]);
   if (
-    !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+    !inspection &&
+    (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+      process.env.COWBOY_CALL_CONTEXT ||
       await memoryConfiguration("claude"))
   ) {
     if (!isAbsolute(process.env.CLAUDE_CODE_EXECUTABLE ?? "")) {
