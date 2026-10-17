@@ -2,9 +2,6 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 
-const infoSheetSource = await readFile(
-  new URL("./InfoSheet.tsx", import.meta.url), "utf8",
-);
 const detailsSource = await readFile(
   new URL("./ProviderUsageActivityDetails.tsx", import.meta.url), "utf8",
 );
@@ -42,12 +39,6 @@ test("nested observability sheets portal their scrims above the iOS safe area", 
     usageLogsSource.includes('portal\n        title="Filter diagnostic logs"'),
     true,
   );
-});
-
-test("desktop Info uses independent columns and compact metric tiles", () => {
-  assertEquals(infoSheetSource.includes('gridRow: "1 / span 4"'), false);
-  assertEquals(infoSheetSource.includes("repeat(2, minmax(0, 1fr))"), true);
-  assertEquals(infoSheetSource.includes('bgcolor: "action.hover"'), true);
 });
 
 test("activity usage controls stay readable on tablet and desktop widths", () => {

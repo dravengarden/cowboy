@@ -31,7 +31,7 @@ function formatAge(ms: number): string {
   return `${String(Math.round(hours / 24))}d ago`;
 }
 
-function formatUptime(seconds: number): string {
+export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3_600);
   if (days > 0) return `${String(days)}d ${String(hours)}h`;

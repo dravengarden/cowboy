@@ -19,7 +19,8 @@ if (
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
-  suite !== "dormant-session" && suite !== "about-layout"
+  suite !== "dormant-session" && suite !== "about-layout" &&
+  suite !== "info-metrics"
 ) {
   throw new Error("unknown suite");
 }
@@ -49,7 +50,7 @@ await build({
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "session-maintenance" || suite === "dormant-session" ||
-        suite === "about-layout"
+        suite === "about-layout" || suite === "info-metrics"
         ? "development"
         : "production",
     ),
@@ -90,12 +91,14 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "dormant-session"
+        suite === "dormant-session" || suite === "info-metrics"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "dormant-session"
+        suite === "info-metrics"
+          ? "../web/src/infoMetricsBrowserConformance.tsx"
+          : suite === "dormant-session"
           ? "../web/src/dormantSessionBrowserConformance.tsx"
           : suite === "about-layout"
           ? "../web/src/aboutLayoutBrowserConformance.tsx"

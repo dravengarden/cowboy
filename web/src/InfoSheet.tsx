@@ -13,7 +13,6 @@ import {
   DialogContentText,
   Divider,
   IconButton,
-  LinearProgress,
   Stack,
   TextField,
   ToggleButton,
@@ -71,12 +70,9 @@ import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
 import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
 import { CodeBufferSynchronizationPanel } from "./CodeBufferSynchronizationPanel";
 import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel";
-import { formatBytes } from "./machineResources";
+import { QuotaMeter } from "./InfoMetricVisuals";
+import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRuntimeMetrics";
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
-import {
-  type ClientRuntimeMetrics,
-  readClientRuntimeMetrics,
-} from "./clientRuntimeMetrics";
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
@@ -101,19 +97,6 @@ function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   );
 }
 
-interface MetricsData {
-  db_bytes: number;
-  events_rows: number;
-  sessions_live: number;
-  sessions_deleted: number;
-  daemon_rss_bytes: number;
-  observability_pending: number;
-  observability_accepted_batches: number;
-  observability_dropped_batches: number;
-  observability_failed_log_batches: number;
-  observability_failed_metric_batches: number;
-}
-
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
@@ -136,31 +119,7 @@ function providerUsageEmptyMessage(usage: ProviderUsage): string {
 }
 
 function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
-  return (
-    <Stack spacing={0.65}>
-      <Stack direction="row" justifyContent="space-between" spacing={1}>
-        <Typography variant="body2">{limit.label}</Typography>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-          {limit.remaining}% remaining
-        </Typography>
-      </Stack>
-      <LinearProgress
-        variant="determinate"
-        value={limit.remaining}
-        sx={{
-          height: 7,
-          borderRadius: 99,
-          bgcolor: "action.selected",
-          "& .MuiLinearProgress-bar": { borderRadius: 99 },
-        }}
-      />
-      {resetText(limit.resetsAt) && (
-        <Typography variant="caption" color="text.secondary">
-          {resetText(limit.resetsAt)}
-        </Typography>
-      )}
-    </Stack>
-  );
+  return <QuotaMeter label={limit.label} remaining={limit.remaining} resetsLabel={resetText(limit.resetsAt)} />;
 }
 
 function ProviderUsageCard({
@@ -259,7 +218,7 @@ function ProviderUsageCardBody({
     ? usageAvailableStatus(usage.provider) ?? "LIVE"
     : usage.status === "session-only"
     ? "SESSION"
-    : "WAITING";
+    : refreshBusy ? "REFRESHING" : "NOT REPORTED";
   const scheduleValid = fireAt !== "" &&
     new Date(fireAt).getTime() > Date.now();
   const openResetDialog = () => {
@@ -368,7 +327,7 @@ function ProviderUsageCardBody({
                 networkAction={refresh}
                 disabled={refreshBusy}
                 size="small"
-                sx={{ width: 32, height: 32 }}
+                sx={{ width: 40, height: 40 }}
               >
                 <Refresh
                   sx={{
@@ -575,7 +534,7 @@ function ProviderUsageCardBody({
         )}
         <Typography variant="caption" color="text.secondary">
           {usage.source} · {stale ? "Cached" : "Updated"}{" "}
-          {relativeUpdateTime(usage.observed_at_ms)}
+          {relativeUpdateTime(usage.observed_at_ms, now)}
         </Typography>
         {children}
       </Stack>
@@ -737,6 +696,7 @@ function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutActi
           </NetworkIconButton>
         </Stack>
       </Stack>
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 1.25, alignItems: "start" }}>
       {orderedItems(usageCardProviders(snapshot), order, (provider) => provider.provider).map((provider) => (
         <ProviderUsageCard
           key={provider.provider}
@@ -759,147 +719,13 @@ function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutActi
           )}
         </ProviderUsageCard>
       ))}
+      </Box>
       {!snapshot && !error && (
         <Typography variant="body2" color="text.secondary">
           Loading usage…
         </Typography>
       )}
     </Stack>
-  );
-}
-
-// Storage/runtime metrics (GET /api/metrics). Migrated here from user Settings —
-// it's daemon system info, not a user preference.
-function MetricsGrid({
-  metrics,
-}: {
-  metrics: readonly (readonly [string, string])[];
-}): React.JSX.Element {
-  return (
-    <Box
-      sx={{
-        display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        gap: 0.75,
-      }}
-    >
-      {metrics.map(([label, value]) => (
-        <Box
-          key={label}
-          sx={{
-            minWidth: 0,
-            px: 1,
-            py: 0.8,
-            borderRadius: 1.25,
-            bgcolor: "action.hover",
-          }}
-        >
-          <Typography variant="caption" color="text.secondary" display="block">
-            {label}
-          </Typography>
-          <Typography variant="body2" fontWeight={700} sx={{ mt: 0.2 }}>
-            {value}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
-function ServiceStorageInfoSection(): React.JSX.Element {
-  const [m, setM] = useState<MetricsData | null>(null);
-  useEffect(() => {
-    const ctrl = new AbortController();
-    void fetch("/api/metrics", { signal: ctrl.signal })
-      .then((r) => r.json() as Promise<MetricsData>)
-      .then(setM)
-      .catch(() => {
-        /* leave as Loading… */
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, []);
-  if (!m) {
-    return (
-      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        Loading…
-      </Typography>
-    );
-  }
-  const metrics = [
-    ["Database", formatBytes(m.db_bytes)],
-    ["Event rows", m.events_rows.toLocaleString()],
-    ["Live sessions", String(m.sessions_live)],
-    ["Deleted · purge ≤3d", String(m.sessions_deleted)],
-    ["Daemon memory", formatBytes(m.daemon_rss_bytes)],
-    ["Telemetry pending", m.observability_pending.toLocaleString()],
-    ["Telemetry accepted", m.observability_accepted_batches.toLocaleString()],
-    ["Telemetry dropped", m.observability_dropped_batches.toLocaleString()],
-    [
-      "Victoria failures",
-      String(
-        m.observability_failed_log_batches +
-          m.observability_failed_metric_batches,
-      ),
-    ],
-  ] as const;
-  return <MetricsGrid metrics={metrics} />;
-}
-
-
-function ClientStorageInfoSection(): React.JSX.Element {
-  const [metrics, setMetrics] = useState<ClientRuntimeMetrics | null>(null);
-  useEffect(() => {
-    let active = true;
-    void readClientRuntimeMetrics().then((value) => {
-      if (active) setMetrics(value);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-  if (!metrics) {
-    return (
-      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        Loading…
-      </Typography>
-    );
-  }
-  const heap = metrics.jsHeapUsedBytes === undefined
-    ? undefined
-    : metrics.jsHeapLimitBytes === undefined
-    ? formatBytes(metrics.jsHeapUsedBytes)
-    : `${formatBytes(metrics.jsHeapUsedBytes)} / ${
-      formatBytes(metrics.jsHeapLimitBytes)
-    }`;
-  return (
-    <MetricsGrid
-      metrics={[
-        [
-          "App storage used",
-          metrics.storageUsageBytes === undefined
-            ? "Unavailable"
-            : formatBytes(metrics.storageUsageBytes),
-        ],
-        [
-          "App storage allowance",
-          metrics.storageQuotaBytes === undefined
-            ? "Unavailable"
-            : `Up to ${formatBytes(metrics.storageQuotaBytes)}`,
-        ],
-        ["Local state", formatBytes(metrics.bytes)],
-        ["Local entries", metrics.entries.toLocaleString()],
-        ["Local drafts", metrics.drafts.toLocaleString()],
-        [
-          "Cache buckets",
-          metrics.cacheBuckets?.toLocaleString() ?? "Unavailable",
-        ],
-        ...(heap === undefined ? [] : [["JS heap", heap] as const]),
-        ["Surface", metrics.surface],
-        ["Service worker", metrics.serviceWorker],
-      ]}
-    />
   );
 }
 
@@ -930,17 +756,7 @@ export function InfoContent({
       {editing && choices
         ? <AboutLayoutEditor desktop={desktop} choices={choices} values={{ ...values, ...layout.pending?.changes }} disabled={layout.saving || !!layout.pending} onChange={(changes) => { void layout.save(changes); }} />
         : (
-    <Box
-      sx={desktop
-        ? {
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr)",
-          "@container (min-width: 720px)": { gridTemplateColumns: "minmax(0, 1.55fr) minmax(280px, 0.85fr)" },
-          gap: 2,
-          alignItems: "start",
-        }
-        : { display: "flex", flexDirection: "column", gap: 2 }}
-    >
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
       <Box>
         <UsageInfoSection order={values.usage_order} layoutAction={
           <Tooltip title="Customize layout">
@@ -949,14 +765,14 @@ export function InfoContent({
         } />
       </Box>
       {!desktop && <Divider />}
-      <Stack spacing={desktop ? 1.25 : 2.5}>
         <Stack
           spacing={1}
-          sx={desktop ? { ...desktopPanelSx(), p: 1.5 } : undefined}
+          sx={{ minWidth: 0 }}
         >
           <Typography variant="overline" color="text.secondary">
             Storage
           </Typography>
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 1.5, alignItems: "start" }}>
           <Stack spacing={0.75} data-storage-scope="service">
             <Typography variant="caption" fontWeight={700}>
               Service
@@ -966,7 +782,7 @@ export function InfoContent({
             </Typography>
             <ServiceStorageInfoSection />
           </Stack>
-          <Stack spacing={0.75} sx={{ pt: 1 }} data-storage-scope="client">
+          <Stack spacing={0.75} data-storage-scope="client">
             <Typography variant="caption" fontWeight={700}>
               Client
             </Typography>
@@ -975,17 +791,15 @@ export function InfoContent({
             </Typography>
             <ClientStorageInfoSection />
           </Stack>
-          <Stack spacing={0.75} sx={{ pt: 1 }} data-storage-scope="machines">
-            <Typography variant="caption" fontWeight={700}>
-              Resources & automatic maintenance
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Memory, worker capacity and Provider updates on each Machine
-            </Typography>
-            <SessionMaintenancePanel order={values.machine_order} />
-          </Stack>
+          </Box>
           <ProductSyncDataNotice />
         </Stack>
+
+        <Stack spacing={0.75} sx={{ minWidth: 0 }} data-storage-scope="machines">
+          <Typography variant="overline" color="text.secondary">Resources & automatic maintenance</Typography>
+          <SessionMaintenancePanel order={values.machine_order} />
+        </Stack>
+      <Stack spacing={desktop ? 1.25 : 2.5} sx={{ minWidth: 0 }}>
         {!desktop && <Divider />}
         <TelemetryBindingPanel desktop={desktop} />
         <CodeBufferCleanupPanel />
@@ -1005,7 +819,7 @@ export function InfoContent({
         </Stack>
         {aside}
       </Stack>
-    </Box>
+    </Stack>
         )}
     </Stack>
   );

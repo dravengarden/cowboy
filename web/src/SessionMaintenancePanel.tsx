@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { orderedItems } from "./aboutPreferences";
-import { Alert, Box, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
+import { Alert, Box, Divider, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
 import { expectHttpOk } from "./httpResponse";
 import { lowPriorityInterval } from "./network/bandwidth";
-import { machineResourceMetrics, machineResourcesCaption, type MachineResourceSummary } from "./machineResources";
+import { machineResourcesCaption, type MachineResourceSummary } from "./machineResources";
+import { MachineResourceOverview } from "./MachineResourceOverview";
 
 export interface MaintenancePolicy {
   memory_reclaim: boolean;
@@ -25,8 +26,8 @@ export interface MaintenanceMachine {
 }
 
 const controls: [keyof MaintenancePolicy, string][] = [
-  ["memory_reclaim", "Sleep idle sessions when memory is low"],
-  ["reclaim_on_capacity", "Free idle workers for waiting messages"],
+  ["memory_reclaim", "Sleep idle sessions at low memory"],
+  ["reclaim_on_capacity", "Free idle workers for queued messages"],
   ["auto_update_idle_sessions", "Update idle Providers automatically"],
 ];
 
@@ -43,6 +44,7 @@ export function SessionMaintenancePanel({ order = [] }: { order?: string[] } = {
     const load = async (): Promise<void> => {
       if (loading) return;
       loading = true;
+      setNow(Date.now());
       const observed = revision.current;
       try {
         const response = await fetch("/api/session-maintenance", { signal: controller.signal });
@@ -78,42 +80,44 @@ export function SessionMaintenancePanel({ order = [] }: { order?: string[] } = {
   return (
     <Stack spacing={1.5} data-session-maintenance>
       <Typography variant="caption" color="text.secondary">
-        Create and browse sessions freely. AI workers start when you send a message or load model options.
+        Session history has no worker limit. Workers start only when needed.
         Sleeping sessions adopt updates without starting a worker.
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
       {!rows.length && !error && <Typography variant="body2">{loaded ? "No Machines enrolled." : "Loading…"}</Typography>}
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 1.5, alignItems: "start" }}>
       {orderedItems(rows, order, (row) => row.machine.id).map((row) => (
-        <Stack key={row.machine.id} spacing={0.5} data-machine-resources={row.machine.id}
-          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, p: 1.25, minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={650}>{row.machine.display_name}</Typography>
-          <Typography variant="caption" color="text.secondary">{machineResourcesCaption(row.machine, now)}</Typography>
-          <Typography variant="caption" sx={{ fontVariantNumeric: "tabular-nums" }}>
-            {row.sessions} sessions · {row.working} working · {row.warm} warm · {row.sleeping} sleeping
-            {row.starting > 0 && ` · ${String(row.starting)} starting`}
-            {row.updating > 0 && ` · ${String(row.updating)} updating`}
-            {row.waiting.length > 0 && ` · ${String(row.waiting.length)} waiting`}
-          </Typography>
-          <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", columnGap: 1, py: 0.5 }}>
-            {machineResourceMetrics(row.machine).flatMap(([label, value]) => [
-              <Typography key={`${label}-label`} variant="caption" color="text.secondary">{label}</Typography>,
-              <Typography key={label} variant="caption" sx={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{value}</Typography>,
-            ])}
+        <Stack key={row.machine.id} spacing={1.25} data-machine-resources={row.machine.id}
+          sx={{ border: 1, borderColor: "divider", borderRadius: 1.5, p: 1.5, minWidth: 0 }}>
+          <Box>
+            <Typography variant="body2" fontWeight={650} sx={{ overflowWrap: "anywhere" }}>{row.machine.display_name}</Typography>
+            <Typography variant="caption" color="text.secondary">{machineResourcesCaption(row.machine, now)}</Typography>
+            {row.machine.resources && (now - row.machine.resources.observed_at_ms > 60_000 || !row.machine.connected) && <Typography variant="caption" color="text.secondary" display="block">Last reported resources · not a live reading</Typography>}
           </Box>
+          <MachineResourceOverview row={row} />
+          {row.waiting.length > 0 && <Box sx={{ borderLeft: 2, borderColor: "warning.main", pl: 1 }}>
+            <Typography variant="caption" fontWeight={650}>{row.waiting.length} queued sessions</Typography>
+            {row.waiting.map((item) => (
+              <Typography key={item.id} variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: "anywhere" }}>
+                {item.title}: {item.paused ? "Queue paused" : item.reason}.
+              </Typography>
+            ))}
+            <Typography variant="caption" color="text.secondary">Pause or cancel in the session queue.</Typography>
+          </Box>}
+          <Divider />
+          <Box>
+          <Typography variant="caption" fontWeight={650} color="text.secondary">Automatic maintenance</Typography>
           {controls.map(([key, label]) => (
             <FormControlLabel key={key} label={label}
               slotProps={{ typography: { variant: "body2" } }}
-              sx={{ m: 0, justifyContent: "space-between", minHeight: 44, gap: 1 }} labelPlacement="start"
+              sx={{ m: 0, display: "flex", justifyContent: "space-between", minHeight: 44, gap: 1 }} labelPlacement="start"
               control={<Switch size="small" checked={row.policy[key]} disabled={!row.can_configure || pending !== undefined}
                 onChange={(_, checked) => { void update(row, key, checked); }} />} />
           ))}
-          {row.waiting.map((item) => (
-            <Typography key={item.id} variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-              {item.title}: {item.paused ? "Queue paused" : item.reason}. Pause or cancel in the session queue.
-            </Typography>
-          ))}
+          </Box>
         </Stack>
       ))}
+      </Box>
     </Stack>
   );
 }

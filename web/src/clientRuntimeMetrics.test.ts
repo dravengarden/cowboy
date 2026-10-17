@@ -50,12 +50,6 @@ test("About storage distinguishes service and current-device metrics", async () 
   assert(source.includes('data-storage-scope="client"'));
   assert(source.includes("Shared Cowboy daemon and durable session store"));
   assert(source.includes("This browser or app on the current device"));
-  assert(source.includes('"App storage used"'));
-  assert(source.includes('"App storage allowance"'));
-  assert(source.includes("`Up to ${formatBytes(metrics.storageQuotaBytes)}`"));
-  assert(source.includes("heap === undefined ? []"));
-  assert(source.includes('[["JS heap", heap] as const]'));
-  assert(!source.includes('"Not exposed by browser"'));
   const infoStart = source.indexOf("export function InfoContent");
   const storageStart = source.indexOf("\n            Storage\n", infoStart);
   const usageStorageBoundary = source.slice(infoStart, storageStart);

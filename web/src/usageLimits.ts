@@ -508,11 +508,15 @@ export function shortResetTime(epochSeconds: number | undefined): string {
 }
 
 export function relativeUpdateTime(ms: number, now = Date.now()): string {
-  if (ms <= 0) return "Not updated";
+  if (!Number.isFinite(ms) || ms <= 0) return "Not updated";
   const seconds = Math.max(0, Math.round((now - ms) / 1000));
   if (seconds < 5) return "Just now";
   if (seconds < 60) return `${String(seconds)}s ago`;
-  return `${String(Math.round(seconds / 60))}m ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${String(minutes)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)}h ago`;
+  return `${String(Math.floor(hours / 24))}d ago`;
 }
 
 /**

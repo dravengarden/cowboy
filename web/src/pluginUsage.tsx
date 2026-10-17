@@ -1,4 +1,5 @@
-import { LinearProgress, Stack, Typography } from "@mui/material";
+import { Stack, Typography } from "@mui/material";
+import { QuotaMeter } from "./InfoMetricVisuals";
 import type { ProviderUsageSlotContext } from "./usageLimits";
 import { ProviderUsageActivityDetails } from "./ProviderUsageActivityDetails";
 
@@ -25,28 +26,7 @@ export function ProviderUsage({
         </Typography>
       )}
       {limits.map((limit) => (
-        <Stack key={limit.id} spacing={0.5}>
-          <Stack direction="row" justifyContent="space-between">
-            <Typography variant="body2">{limit.label}</Typography>
-            <Typography variant="body2" fontWeight={750}>
-              {`${String(limit.remaining)}% remaining`}
-            </Typography>
-          </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={limit.remaining}
-            sx={{
-              height: 6,
-              borderRadius: 99,
-              "& .MuiLinearProgress-bar": { borderRadius: 99 },
-            }}
-          />
-          {limit.resetsLabel && (
-            <Typography variant="caption" color="text.secondary">
-              {limit.resetsLabel}
-            </Typography>
-          )}
-        </Stack>
+        <QuotaMeter key={limit.id} label={limit.label} remaining={limit.remaining} resetsLabel={limit.resetsLabel} />
       ))}
       {limits.length === 0 && context.emptyMessage && (
         <Typography variant="body2" color="text.secondary">
