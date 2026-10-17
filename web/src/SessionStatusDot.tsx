@@ -15,7 +15,7 @@ import { desktopSize } from "./surface/desktopSize";
 // hue has to carry the whole meaning. The palette tokens are chosen so the
 // colors read the same here and in any future status surface:
 //   green (success)       — live:     running (idle, ready).
-//   theme (primary)      — busy:     a turn in flight, shown as a terminal prompt.
+//   theme (primary)      — busy:     a turn in flight, shown as a MUI ring.
 //   blue  (info)          — starting:  process spinning up, not ready yet (three bars).
 //   grey  (text.disabled) — dormant:   exited cleanly + resumable — "asleep, wakes
 //                                       on resume". Deliberately NOT a warning hue.
@@ -84,7 +84,7 @@ export function StatusDot({
   }
   // "busy" and "starting" are the *active* states — a turn is in flight, or the
   // process is spinning up — so a static dot would read as idle/stuck. Render the
-  // active states with a terminal prompt for work, or three bars for startup, following
+  // active states with a MUI ring for work, or three bars for startup, following
   // statusColor for palette continuity. running / exited / crashed are settled,
   // so they stay a color-coded dot. `color="inherit"` lets the sx `color`
   // (statusColor) drive the mark instead of a fixed MUI palette slot.

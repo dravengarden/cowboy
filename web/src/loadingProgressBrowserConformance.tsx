@@ -63,7 +63,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     const pausedStartup = container.querySelector('[aria-label="Paused startup"]')!;
     const pausedRing = container.querySelector('[aria-label="Paused loading"]')!;
     check(getComputedStyle(paused).animationPlayState === "paused" &&
-      getComputedStyle(paused, "::after").animationPlayState === "paused" &&
+      getComputedStyle(paused.querySelector("circle")!).animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::before").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::after").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup.querySelector("svg")!).animationPlayState === "paused" &&
@@ -71,11 +71,12 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       getComputedStyle(pausedRing.querySelector("circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     const starting = container.querySelector('[aria-label="Starting…"]')!;
-    check(getComputedStyle(busy, "::after").animationName === "cowboy-terminal-cursor" &&
-      getComputedStyle(busy.querySelector("svg")!).display === "none" &&
+    check(getComputedStyle(busy).animationName !== "none" &&
+      getComputedStyle(busy.querySelector("svg")!).display !== "none" &&
+      getComputedStyle(busy.querySelector("circle")!).display !== "none" &&
       getComputedStyle(numeric.querySelector("circle")!).display !== "none" &&
       getComputedStyle(starting.querySelector("circle")!).display === "none" &&
-      getComputedStyle(starting, "::before").animationName === "cowboy-starting-wave", "Work uses a terminal, startup uses bars, and general waits use MUI rings");
+      getComputedStyle(starting, "::before").animationName === "cowboy-starting-wave", "Work and general waits use MUI rings; startup uses bars");
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;

@@ -768,14 +768,11 @@ function ProviderActivity({
             className="provider-terminal-prompt"
             data-session-activity="true"
             size={markBox}
-            color="inherit"
+            color="primary"
             aria-hidden
             sx={{
-              color: primary,
-              "&::after": {
-                animationDuration: `${node.indicator.interval_ms}ms`,
-                ...(reducedMotion ? { animation: "none" } : {}),
-              },
+              animationDuration: `${node.indicator.interval_ms}ms`,
+              ...(reducedMotion ? { animation: "none" } : {}),
             }}
           />
         );

@@ -1,7 +1,5 @@
 import type { Components, Theme } from "@mui/material";
 
-const promptMask = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 6l6 6-6 6" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>')}")`;
-
 /** MUI supplies a pixel size inline; normalize it to the global font scale. */
 function loadingSize(size: number | string): string {
   if (typeof size === "number") return `${size / 16}rem`;
@@ -9,8 +7,7 @@ function loadingSize(size: number | string): string {
   return size.replace("var(--cowboy-desktop-size-unit, 16px)", "1rem");
 }
 
-// General waits use MUI's native ring. Only active agent work gets the >_
-// prompt, with a steady chevron and a gently extending cursor.
+// Agent work and general waits use MUI's native ring; startup keeps its blue bars.
 export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
   defaultProps: { disableShrink: true },
   styleOverrides: {
@@ -61,44 +58,7 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
             "&::before, &::after, & .MuiCircularProgress-svg": { backgroundColor: "CanvasText", forcedColorAdjust: "none" },
           },
         },
-        '&[data-session-activity="true"]': {
-          position: "relative",
-          animation: "none",
-          "& .MuiCircularProgress-svg": { display: "none" },
-          "&::before": {
-            content: '""',
-            position: "absolute",
-            inset: 0,
-            backgroundColor: "currentColor",
-            maskImage: promptMask,
-            WebkitMaskImage: promptMask,
-            maskSize: "100% 100%",
-            maskRepeat: "no-repeat",
-          },
-          "&::after": {
-            content: '""',
-            position: "absolute",
-            left: "53%",
-            top: "69%",
-            width: "38%",
-            height: "12.5%",
-            borderRadius: "999px",
-            backgroundColor: "currentColor",
-            transformOrigin: "left center",
-            animation: "cowboy-terminal-cursor 1800ms ease-in-out infinite",
-            animationPlayState: "inherit",
-          },
-          "@keyframes cowboy-terminal-cursor": {
-            "0%, 100%": { transform: "scaleX(0.75)" },
-            "50%": { transform: "scaleX(1)" },
-          },
-          "@media (prefers-reduced-motion: reduce)": {
-            "&::after": { animation: "none" },
-          },
-          "@media (forced-colors: active)": {
-            "&::before, &::after": { backgroundColor: "CanvasText", forcedColorAdjust: "none" },
-          },
-        },
+
       }),
     }),
   },

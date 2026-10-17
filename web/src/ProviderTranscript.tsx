@@ -72,7 +72,7 @@ function TerminalGlyph({ current }: { current: boolean }): React.JSX.Element {
       }}
     >
       {current
-        ? <CircularProgress data-session-activity="true" size="1rem" color="inherit" />
+        ? <CircularProgress data-session-activity="true" size="1rem" color="primary" />
         : <TerminalRounded sx={{ fontSize: desktopSize(16), display: "block" }} />}
     </Box>
   );
