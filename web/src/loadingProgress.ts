@@ -27,7 +27,7 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           to: { transform: "rotate(360deg)" },
         },
         "& .MuiCircularProgress-circle": {
-          animation: "cowboy-loading-rotate 1400ms linear infinite",
+          animation: "cowboy-loading-rotate 1000ms linear infinite",
           transformOrigin: "center",
           transformBox: "fill-box",
         },

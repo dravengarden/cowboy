@@ -4,7 +4,7 @@ export const splashLoadingCss = `
   width: 2.125rem; height: 2.125rem; box-sizing: border-box;
   border: .1875rem solid currentColor;
   border-right-color: color-mix(in srgb, currentColor 55%, transparent);
-  border-radius: 50%; animation: cowboy-splash-rotate 1400ms linear infinite;
+  border-radius: 50%; animation: cowboy-splash-rotate 1000ms linear infinite;
 }
 #app-splash .app-splash-spinner > span { display: none; }
 @keyframes cowboy-splash-rotate { to { transform: rotate(360deg); } }
