@@ -23,6 +23,7 @@ import {
 } from "./providerCatalog";
 import type { MachineSummary } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { useStoreSelector } from "./store";
 
 /** The create draft never enters the shared store until the one create mutation. */
 export function FolderCreationDefaults({
@@ -53,6 +54,7 @@ export function FolderCreationDefaults({
   error?: string;
 }): React.JSX.Element {
   const id = useId();
+  const sessions = useStoreSelector((state) => state.sessions);
   const desktop = useSurfaceProfile().kind === "desktop";
   const section = useRef<HTMLDivElement>(null);
   const preview: SessionFoldersValue = {
@@ -86,8 +88,10 @@ export function FolderCreationDefaults({
     effective.runtime_machine
       ? `Agent on ${machineName(effective.runtime_machine)}`
       : null,
-    effective.review_directory
-      ? `Zed: ${reviewDirectoryLabel(effective.review_directory, machines)}`
+    effective.review_directory !== undefined
+      ? `Zed: ${
+        reviewDirectoryLabel(effective.review_directory, machines, sessions)
+      }`
       : null,
   ].filter(Boolean).join(" · ");
   const count = Object.keys(defaults).length;
