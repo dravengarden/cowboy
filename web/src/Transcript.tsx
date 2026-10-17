@@ -733,7 +733,7 @@ function ConversationEmptyState({
       role={announces ? "status" : "region"}
       tabIndex={0}
       aria-live="polite"
-      aria-label={`${title}. ${detail}`}
+      aria-label={preparing ? `${title}. ${detail}` : title}
       onClick={(event): void => {
         if (!writeFromEmpty(event)) return;
         focusPrimaryComposer();
@@ -770,7 +770,7 @@ function ConversationEmptyState({
         },
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", maxWidth: 360, textAlign: "left" }}>
+      <Stack direction="row" alignItems="center" justifyContent="center" spacing={1} sx={{ width: "100%", maxWidth: 360 }}>
         <Box
           sx={{
             width: 32,
@@ -793,9 +793,11 @@ function ConversationEmptyState({
           {title}
         </Typography>
       </Stack>
-      <Typography variant="body2" sx={{ width: "100%", maxWidth: 360, textAlign: "left", lineHeight: 1.55 }}>
-        {detail}
-      </Typography>
+      {preparing && (
+        <Typography variant="body2" sx={{ width: "100%", maxWidth: 360, lineHeight: 1.55 }}>
+          {detail}
+        </Typography>
+      )}
       {preparing && (
         <Box
           aria-hidden
@@ -849,7 +851,7 @@ function ConversationEmptyState({
             width: "100%",
             maxWidth: 360,
             minHeight: desktopSize(44),
-            justifyContent: "flex-start",
+            justifyContent: "center",
             px: 0,
             py: 0.75,
             borderRadius: 3,
@@ -866,7 +868,7 @@ function ConversationEmptyState({
             direction="row"
             useFlexGap
             flexWrap="wrap"
-            justifyContent="flex-start"
+            justifyContent="center"
             alignItems="center"
             gap={0.75}
           >
@@ -881,11 +883,6 @@ function ConversationEmptyState({
         </ButtonBase>
       )}
       <SessionStartSettings key={sessionId} sessionId={sessionId} />
-      <Typography variant="caption" sx={{ width: "100%", maxWidth: 360, textAlign: "left", mt: 1, opacity: 0.6 }}>
-        {preparing
-          ? "Tap here to write — it sends when ready"
-          : "Tap here to write"}
-      </Typography>
     </Stack>
   );
 }
