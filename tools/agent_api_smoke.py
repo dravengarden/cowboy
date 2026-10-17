@@ -10,7 +10,10 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import subprocess
+import tempfile
+import threading
 import time
 
 
@@ -30,13 +33,14 @@ def size(text):
 
 
 class Mcp:
-    def __init__(self, binary):
-        self.process = subprocess.Popen([binary, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    def __init__(self, binary, environment=None):
+        self.process = subprocess.Popen([binary, "mcp"], env=environment,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.sequence = 0
         self.pending = b""
         self.costs = []
 
-    def request(self, method, params):
+    def request(self, method, params, *, allow_error=False):
         self.sequence += 1
         payload = {"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params}
         self.process.stdin.write((encoded(payload) + "\n").encode())
@@ -63,7 +67,7 @@ class Mcp:
             if method == "tools/call":
                 self.costs.append({"input": encoded(params), "output": encoded(result),
                                    "elapsed_ms": round((time.monotonic() - start) * 1000)})
-                if result.get("isError"):
+                if result.get("isError") and not allow_error:
                     raise RuntimeError("MCP tool failed: " + encoded(result)[:300])
                 return json.loads(result["content"][0]["text"])
             return result
@@ -89,13 +93,71 @@ def costs(rows):
             "elapsed_ms": sum(row["elapsed_ms"] for row in rows)}
 
 
+def startup_probe(binary):
+    """A late private fixture gateway must work in the same MCP process."""
+    environment = dict(os.environ)
+    environment.pop("COWBOY_CALL_CONTEXT", None)
+    outside = Mcp(binary, environment)
+    try:
+        assert not outside.request("tools/list", {})["tools"]
+    finally:
+        outside.close()
+    with tempfile.TemporaryDirectory(prefix="cowboy-mcp-") as directory:
+        root = Path(directory)
+        context = root / "context.json"
+        environment["COWBOY_CALL_CONTEXT"] = str(context)
+        pending = Mcp(binary, environment)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.settimeout(5)
+        try:
+            init = pending.request("initialize", {"protocolVersion": "2025-11-25"})
+            assert init["instructions"]
+            assert len(pending.request("tools/list", {})["tools"]) == 4
+            arguments = {"name": "cowboy_status", "arguments": {}}
+            denied = pending.request("tools/call", arguments, allow_error=True)
+            assert denied["error"]["code"] == "context_unavailable"
+            listener.bind(str(root / "gateway.sock"))
+            listener.listen()
+            context.write_text(encoded({"schema": 1, "socket": str(root / "gateway.sock"),
+                                        "capability": "a" * 64}))
+            context.chmod(0o600)
+            observed = []
+
+            def gateway():
+                with listener.accept()[0] as connection:
+                    connection.settimeout(5)
+                    request = json.loads(connection.makefile("rb").readline(65536))
+                    observed.append(request["action"])
+                    reply = {"schema": 1, "state": "ok", "value": {"late_gateway": True}}
+                    connection.sendall((encoded(reply) + "\n").encode())
+
+            worker = threading.Thread(target=gateway, daemon=True)
+            worker.start()
+            assert pending.request("tools/call", arguments) == {"late_gateway": True}
+            worker.join(timeout=5)
+            assert not worker.is_alive() and observed == [{"kind": "agent_status"}]
+        finally:
+            listener.close()
+            pending.close()
+    return {"outside_session_empty": True, "pending_grant_discoverable": True,
+            "missing_context_refused": True, "late_gateway_same_process": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cowboy", default="cowboy")
+    parser.add_argument("--startup-only", action="store_true",
+                        help="test a private late gateway fixture without contacting a real session")
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     if args.receipt.exists():
         parser.error("receipt must be a new path")
+    startup = startup_probe(args.cowboy)
+    if args.startup_only:
+        with args.receipt.open("x", encoding="utf8") as target:
+            json.dump({"schema": "cowboy.agent-api-startup/v1", "checks": startup}, target, indent=2)
+        print(json.dumps(startup))
+        return
     mcp = Mcp(args.cowboy)
     try:
         init = mcp.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "cowboy-acceptance", "version": "1"}})
@@ -144,6 +206,7 @@ return {other:!!other,event,search,configuration:!!c.revision&&!!t.revision,diag
         receipt = {"schema": "cowboy.agent-api-acceptance/v1", "api": index["api"], "revision": index["revision"],
                    "resident": size(encoded(tools) + init.get("instructions", "")), "help": help_costs,
                    "workflow": {"separate_reads": separate, "composed_selection": composed}, "checks": acceptance,
+                   "startup": startup,
                    "not_checked": ["model_billing", "prompt_cache_hits", "provider_registration", "mutations"]}
         with args.receipt.open("x", encoding="utf8") as target:
             target.write(json.dumps(receipt, indent=2) + "\n")

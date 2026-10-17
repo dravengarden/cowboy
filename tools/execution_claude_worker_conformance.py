@@ -1438,8 +1438,8 @@ def main():
                        and frame.get("subtype") == "init" for server in frame.get("mcp_servers", [])]
             require(any(server.get("name") == "cowboy" and server.get("status") == "connected" for server in servers),
                     "automatic target Cowboy MCP did not connect")
-            if "automatic_target_cowboy_mcp_connects_without_grant_or_tools" not in checks:
-                checks.append("automatic_target_cowboy_mcp_connects_without_grant_or_tools")
+            if "automatic_target_cowboy_mcp_connects_without_grant" not in checks:
+                checks.append("automatic_target_cowboy_mcp_connects_without_grant")
         for request in [*api.token_requests, *api.title_requests]:
             require(str(args.runtime) not in json.dumps(request) and
                     str(args.runtime.parent / "claude-home") not in json.dumps(request),
@@ -1447,6 +1447,9 @@ def main():
         for index, request in enumerate(requests):
             names = {definition["name"] for definition in request.get("tools", [])}
             target_mcp = {f"mcp__{name}__where" for name in MCP_CALLS}
+            if inputs.get("require_cowboy_mcp"):
+                target_mcp.update("mcp__cowboy__" + name for name in
+                                  ("cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt"))
             require(not any(name.startswith("mcp__") and name not in target_mcp and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget", "mcp__matrix__memory_read", "mcp__matrix__memory_execute", "mcp__matrix__memory_receipt"}) for name in names), "Unowned MCP tool definitions remain advertised")
             # Native's default set (2.1.287): no Glob, Grep or TodoWrite; the
             # task list, web and review tools run where the session runs.

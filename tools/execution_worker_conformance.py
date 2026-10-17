@@ -42,10 +42,13 @@ def complete_turn(client, thread, prompt="Run the fixture."):
 def cowboy_mcp_connected(client, thread):
     inventory = client.request("mcpServerStatus/list", {"threadId": thread})
     server = next((item for item in inventory["data"] if item["name"] == "cowboy"), {})
+    advertised = set(server.get("tools") or {})
     require((server.get("serverInfo") or {}).get("name") == "cowboy"
-            and server.get("toolsError") is None and not server.get("tools")
+            and server.get("runtimeStatus") == "connected"
+            and server.get("toolsError") is None
+            and advertised in (set(), {"cowboy_status", "cowboy_read", "cowboy_execute", "cowboy_receipt"})
             and server.get("httpOrigin") is None,
-            "automatic Cowboy MCP did not connect without granting tools")
+            "automatic Cowboy MCP did not connect with its compact surface")
 
 
 def main():

@@ -93,9 +93,13 @@ closed managed-call `Action` enum. Compatibility is explicit:
 - Discovery reports that authenticated grant's capabilities. A remote session's
   runtime Machine may have a different protocol from its execution Machine;
   querying the runtime's connection would advertise the wrong surface.
-- `cowboy mcp` probes `agent_status` once at startup and advertises no tools or
-  resources when it fails. Outside a Cowboy session, or before both components
-  are updated, a registered server therefore costs no tokens.
+- `cowboy mcp` probes `agent_status` once at startup. Outside a Cowboy session,
+  with invalid wiring or an explicitly unsupported peer, it advertises no tools
+  or resources. A bound parent whose gateway is starting or reconnecting retains
+  the four compact tool definitions: worker readiness can depend on MCP
+  initialization, so waiting for the grant here would create a startup cycle.
+  Definitions confer no authority; every call re-reads the context and requires
+  the current Controller grant. No background polling is added.
 
 Managed child sessions have no grant and no Agent API.
 
@@ -431,8 +435,8 @@ dispatcher.
    changing user configuration or copying gateway credentials. Local sessions
    inherit `COWBOY_CALL_CONTEXT`; Codex Remote uses native MCP `environment_id`,
    and Claude Remote uses its existing target MCP relay. Managed children omit
-   registration and retain their existing read-only isolation. Core grant
-   probing still controls advertised tools. Publishing these Plugin versions is
+   registration and retain their existing read-only isolation. Every operation
+   still requires the live core grant. Publishing these Plugin versions is
    separate from installing them on a Machine; existing sessions retain their
    pinned generation. The CLI review guidance remains until measured
    complete-flow acceptance justifies replacing it.

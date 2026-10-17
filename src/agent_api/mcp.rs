@@ -2,8 +2,8 @@
 //!
 //! It forwards each tool call as one gateway action and holds no connection
 //! between calls, so an idle server costs nothing. Outside a Cowboy session,
-//! or under a Controller without the Agent API, it advertises no tools, which
-//! keeps a globally registered server free of per-turn token cost.
+//! it advertises no tools. A bound parent retains its small discovery surface
+//! while its gateway starts; every operation still requires a live grant.
 
 use serde_json::{Value, json};
 use tokio::io::{
@@ -85,17 +85,43 @@ impl From<bool> for Surface {
     }
 }
 
-/// Whether this process can reach a Controller that serves the Agent API.
-/// Decided once at startup: a grant can change later, and a call then reports
-/// its own error, but the advertised surface stays stable for the session.
+/// Discovery is not authorization. A new parent's gateway is reconciled only
+/// after its worker is ready, which can depend on MCP initialization finishing.
+/// Do not freeze a temporary absence into an empty tool set or wait for that
+/// cycle here. Explicitly unsupported peers still advertise nothing; a bound
+/// parent keeps the stable surface through startup/reconnect and each call
+/// re-reads its context and is authorized by the Controller.
 async fn available() -> Surface {
-    let Ok(context) = wiring() else {
+    let Some(path) = std::env::var_os(crate::execution_protocol::CALL_CONTEXT_ENV) else {
         return Surface::default();
     };
+    if !std::path::Path::new(&path).is_absolute() {
+        return Surface::default();
+    }
+    let context = match wiring() {
+        Ok(context) => context,
+        Err("context_unavailable") => return Surface::from(true),
+        Err(_) => return Surface::default(),
+    };
     let reply = exchange(context, Action::AgentStatus {}, 0).await;
-    Surface {
-        enabled: reply.get("state").and_then(Value::as_str) == Some("ok"),
-        actions: reply["actions"] == true,
+    startup_surface(&reply)
+}
+
+fn startup_surface(reply: &Value) -> Surface {
+    if reply["state"] == "ok" {
+        Surface {
+            enabled: true,
+            actions: reply["actions"] == true,
+        }
+    } else if matches!(
+        reply["error"]["code"].as_str(),
+        Some("gateway_unavailable" | "permission_denied")
+    ) {
+        // An installed context can precede its Controller acknowledgement, or
+        // refer to a grant being replaced. Neither grants access to a call.
+        Surface::from(true)
+    } else {
+        Surface::default()
     }
 }
 
@@ -413,6 +439,26 @@ async fn serve_io(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_discovery_survives_pending_grants_without_ignoring_protocol_floors() {
+        for code in ["gateway_unavailable", "permission_denied"] {
+            let surface = startup_surface(&json!({"state":"error","error":{"code":code}}));
+            assert!(surface.enabled && surface.actions);
+        }
+        for code in [
+            "unsupported_capability",
+            "invalid_context",
+            "invalid_argument",
+        ] {
+            let surface = startup_surface(&json!({"state":"error","error":{"code":code}}));
+            assert!(!surface.enabled && !surface.actions);
+        }
+        let older = startup_surface(&json!({"state":"ok","actions":false}));
+        assert!(older.enabled && !older.actions);
+        let current = startup_surface(&json!({"state":"ok","actions":true}));
+        assert!(current.enabled && current.actions);
+    }
 
     async fn rpc_exchange(input: Vec<u8>) -> Vec<Value> {
         let (mut client, output) = tokio::io::duplex(4096);
