@@ -253,6 +253,103 @@ test("collector queries account quota without a user prompt and stops a lingerin
   );
 });
 
+test("collector joins reset grants to native quota after native credential refresh", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-reset-credential-"));
+  try {
+    await fixture(
+      `
+      if (process.argv[2] === "auth") {
+        console.log(JSON.stringify({loggedIn:true, subscriptionType:"max"}));
+      } else {
+        await Bun.stdin.text();
+        await Bun.write(${
+        JSON.stringify(join(directory, ".credentials.json"))
+      }, JSON.stringify({claudeAiOauth:{accessToken:"refreshed-fixture",scopes:["user:profile"],expiresAt:Date.now()+60000}}));
+        console.log(${
+        JSON.stringify(
+          JSON.stringify(
+            reply({
+              rate_limits_available: true,
+              rate_limits: { five_hour: window(45) },
+            }),
+          ),
+        )
+      });
+      }
+    `,
+      async ({ command }) => {
+        const result = await collect({
+          command,
+          env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: directory },
+          fetchImpl: async (_url, options) => {
+            equal(options.headers.Authorization, "Bearer refreshed-fixture");
+            return Response.json({
+              cedar_ember: {
+                eligible: true,
+                next_grant_id: "launch",
+                grants: [{
+                  id: "launch",
+                  resets_left: 1,
+                  clears: ["five_hour"],
+                  usable_now: true,
+                }],
+              },
+            });
+          },
+        });
+        equal(
+          result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
+            .usedPercent,
+          45,
+        );
+        equal(result.rate_limits.rateLimitResetCredits.availableCount, 1);
+        equal(
+          result.rate_limits.rateLimitResetCredits.credits[0].id,
+          "launch:1",
+        );
+        equal(JSON.stringify(result).includes("refreshed-fixture"), false);
+        for (
+          const fetchImpl of [
+            async () => {
+              throw new Error("secret-diagnostic");
+            },
+            async () => new Response("secret-diagnostic", { status: 401 }),
+            async () =>
+              Response.json({
+                cedar_ember: { eligible: true, grants: [{ id: "bad" }] },
+              }),
+          ]
+        ) {
+          const degraded = await collect({
+            command,
+            env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: directory },
+            fetchImpl,
+          });
+          equal(
+            degraded.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
+              .usedPercent,
+            45,
+          );
+          equal(degraded.rate_limits.rateLimitResetCredits, undefined);
+          equal(JSON.stringify(degraded).includes("secret-diagnostic"), false);
+        }
+        const missingCredential = await collect({
+          command,
+          env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: join(directory, "missing") },
+        });
+        equal(
+          missingCredential.rate_limits.rateLimitsByLimitId["claude-five_hour"]
+            .primary.usedPercent,
+          45,
+        );
+        equal(missingCredential.rate_limits.rateLimitResetCredits, undefined);
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("native stream bounds timeout, output, malformed JSON, EOF and wrong response ids", async () => {
   for (
     const [source, message] of [

@@ -1,14 +1,20 @@
 /* Signed Anthropic account collector. Executes outside Cowboy core.
  *
  * Queries the exact installed CLI's experimental get_usage control. The CLI
- * owns authentication; this collector never reads tokens or sends model prompts.
+ * owns authentication refresh; this collector never sends model prompts.
  * Cowboy owns refresh coalescing, cooldowns, and the last successful snapshot.
- *
- * Deliberately absent: any reset, consume, purchase or mutation verb. The
- * Provider declares no `reset` capability, so Cowboy never offers one.
+ * Reset grants use the private subscription API after the native usage query
+ * has had a chance to refresh the shared, Service-managed credential.
  */
 
 import { nativeJson, quotaView, REQUEST_ID, USAGE_ARGS } from "./usage.js";
+import {
+  consumeReset,
+  fetchResets,
+  readCredential,
+  resetClient,
+  ResetFailure,
+} from "./resets.js";
 
 const CHILD_ENV_KEYS = [
   "HOME",
@@ -88,7 +94,7 @@ function accountView(status) {
   return Object.keys(account).length > 0 ? { account: { account } } : {};
 }
 
-async function collect(options = {}) {
+async function prepare(options = {}) {
   const execution = {
     command: options.command ?? claudeCommand(),
     env: options.env ?? childEnvironment(),
@@ -104,6 +110,29 @@ async function collect(options = {}) {
     request_id: REQUEST_ID,
     request: { subtype: "get_usage", skip_behaviors: true },
   }, execution);
+  return { status, usage, execution };
+}
+
+async function collect(options = {}) {
+  const { status, usage, execution } = await prepare(options);
+  const quota = quotaView(usage);
+  let credits;
+  // Reset status is optional enrichment. Its private API or profile-scope
+  // failures must never clear a successful native quota/authentication read.
+  if (
+    usage.rate_limits_available && execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  ) {
+    try {
+      const token = await readCredential(
+        execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
+      );
+      credits = await fetchResets(
+        resetClient(token, execution.deadline, options.fetchImpl),
+      );
+    } catch {
+      credits = undefined;
+    }
+  }
   return {
     provider: "anthropic",
     status: "available",
@@ -114,7 +143,10 @@ async function collect(options = {}) {
       subscriptionType: text(usage.subscription_type) ??
         status.subscriptionType,
     }),
-    ...quotaView(usage),
+    ...quota,
+    ...(credits === undefined ? {} : {
+      rate_limits: { ...quota.rate_limits, rateLimitResetCredits: credits },
+    }),
   };
 }
 
@@ -122,13 +154,48 @@ async function main() {
   let request;
   try {
     request = await input();
-    if (request.operation !== undefined && request.operation !== "collect") {
-      throw new Error("Anthropic exposes only read-only usage collection.");
+    if (request.operation === "consume_reset") {
+      const { usage, execution } = await prepare();
+      if (!usage.rate_limits_available) {
+        throw new ResetFailure("Claude Code usage authentication required.");
+      }
+      const token = await readCredential(
+        execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
+      );
+      const client = resetClient(token, execution.deadline);
+      console.log(
+        JSON.stringify(await consumeReset(client, request, execution.deadline)),
+      );
+    } else if (
+      request.operation === undefined || request.operation === "collect"
+    ) {
+      console.log(JSON.stringify(await collect()));
+    } else {
+      throw new Error("Unsupported Anthropic usage operation.");
     }
-    console.log(JSON.stringify(await collect()));
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    if (request?.operation === "consume_reset") {
+      console.log(JSON.stringify({
+        error: {
+          message: error instanceof ResetFailure
+            ? error.message
+            : "Claude reset is temporarily unavailable.",
+          call_may_have_reached_provider: error instanceof ResetFailure &&
+            error.callMayHaveReachedProvider,
+          ...(error instanceof ResetFailure && error.creditId
+            ? { credit_id: error.creditId }
+            : {}),
+        },
+      }));
+    } else {
+      console.error(
+        error instanceof ResetFailure ||
+          (error instanceof Error && error.message.startsWith("Claude Code "))
+          ? error.message
+          : "Claude Code usage is temporarily unavailable.",
+      );
+      process.exitCode = 1;
+    }
   }
 }
 

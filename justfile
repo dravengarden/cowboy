@@ -250,12 +250,13 @@ component-package-check:
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
+    dprint check plugins/claude-code/collector/resets.js plugins/claude-code/resets.test.js
     dprint check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/collector/process.js plugins/codex/collector/process.js plugins/grok/collector/process.js plugins/claude-code/usage.test.js
     bun run typecheck
     bun test ./components/plugin-api/*.test.ts ./components/state-store/*.test.ts ./components/app-shell/*.test.ts
     bun test ./tools/check-plugin-components_test.ts ./tools/plugin-component-closure_test.ts
     bun test ./tools/plugin-source-digest_test.ts
-    cd plugins && bun test ./collector-sidecars.test.js ./claude-deepseek/pricing.test.js ./claude-code/usage.test.js
+    cd plugins && bun test ./collector-sidecars.test.js ./claude-deepseek/pricing.test.js ./claude-code/usage.test.js ./claude-code/resets.test.js
     bun tools/check-plugin-components.ts
     dprint check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
     bun test ./tools/worker-registry-input_test.ts

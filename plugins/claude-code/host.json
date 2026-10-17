@@ -44,6 +44,20 @@
       "--no-prompt",
       "--allow-env=COWBOY_PLUGIN_COMMAND_CLAUDE,CLAUDE_CODE_EXECUTABLE,CLAUDE_SECURESTORAGE_CONFIG_DIR,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
       "--allow-run=claude,${ENV:COWBOY_PLUGIN_COMMAND_CLAUDE},${ENV:CLAUDE_CODE_EXECUTABLE}",
+      "--allow-read=${ENV:CLAUDE_SECURESTORAGE_CONFIG_DIR}/.credentials.json",
+      "--allow-net=api.anthropic.com:443",
+      "${PLUGIN_DIR}/collector/index.js"
+    ],
+    "reset": "anthropic",
+    "reset_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_CLAUDE,CLAUDE_CODE_EXECUTABLE,CLAUDE_SECURESTORAGE_CONFIG_DIR,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
+      "--allow-run=claude,${ENV:COWBOY_PLUGIN_COMMAND_CLAUDE},${ENV:CLAUDE_CODE_EXECUTABLE}",
+      "--allow-read=${ENV:CLAUDE_SECURESTORAGE_CONFIG_DIR}/.credentials.json",
+      "--allow-net=api.anthropic.com:443",
       "${PLUGIN_DIR}/collector/index.js"
     ],
     "session_rate_limits": {

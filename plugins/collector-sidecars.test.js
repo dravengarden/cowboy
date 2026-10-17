@@ -190,10 +190,10 @@ test("Anthropic collector projects only renderable account fields", () => {
   equal(accountView({ subscriptionType: "   " }), {}, "blank Anthropic plan");
 });
 
-test("Anthropic exposes no reset capability to collect", () => {
+test("Anthropic declares reset through its signed collector", () => {
   const usage = claudeCodeHost.usage;
-  equal(usage.reset, undefined, "Anthropic reset verb");
-  equal(usage.reset_argv, undefined, "Anthropic reset argv");
+  equal(usage.reset, "anthropic", "Anthropic reset verb");
+  equal(usage.reset_argv, usage.collector_argv, "Anthropic reset argv");
   equal(usage.order, 0, "Anthropic card order");
   // The widget renders by shape, so the opaque id only has to be stable. It
   // stays silent until the native query or a session event reports a numeric
@@ -211,8 +211,6 @@ test("Anthropic exposes no reset capability to collect", () => {
     true,
     "top bar windows have account-wide labels",
   );
-  // Claude Code has no reset-credit concept, so the collector must refuse any
-  // operation other than the read-only collect.
   equal(
     KNOWN_PLANS.has("max") && KNOWN_PLANS.has("pro"),
     true,
