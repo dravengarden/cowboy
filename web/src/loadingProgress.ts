@@ -17,7 +17,7 @@ function loadingSize(size: number | string): string {
 }
 
 /** One motion language for every MUI loading indicator, including lazy
- * surfaces and provider UI. Session halos inherit the root's play state so
+ * surfaces and provider UI. Session dots inherit the root's play state so
  * Mobile's swipe pause also stops their motion. */
 export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
   defaultProps: { disableShrink: true },
@@ -45,14 +45,14 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
           maskRepeat: "no-repeat",
         },
         // Persistent session activity needs a quiet, legible status mark at
-        // toolbar sizes. A steady core keeps it legible at the dimmest point;
-        // only the soft halo breathes, with no hard ring or layout movement.
+        // toolbar sizes. A crisp solid dot breathes without a blurred halo,
+        // gradient or layout movement; its minimum size matches idle.
         '&[data-session-activity="true"]': {
           animation: "none",
           "@keyframes cowboy-session-breathe": {
-            "0%, 100%": { opacity: 0.18, transform: "scale(0.82)" },
-            "40%": { opacity: 0.78, transform: "scale(1.06)" },
-            "55%": { opacity: 0.72, transform: "scale(1.04)" },
+            "0%, 100%": { opacity: 0.85, transform: "scale(1)" },
+            "40%": { opacity: 1, transform: "scale(1.18)" },
+            "55%": { opacity: 0.98, transform: "scale(1.16)" },
           },
           "&::before": {
             // 52% of the 1rem slot matches the idle SVG's visible circle.
@@ -60,23 +60,15 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
             borderRadius: "50%",
             maskImage: "none",
             WebkitMaskImage: "none",
-          },
-          "&::after": {
-            content: '""',
-            position: "absolute",
-            inset: "-6%",
-            borderRadius: "50%",
-            background: "radial-gradient(circle, currentColor 35%, transparent 72%)",
-            opacity: 0.45,
             // A gentle crest and longer exhale avoid a mechanical blink.
             animation: "cowboy-session-breathe 2600ms cubic-bezier(0.45, 0, 0.25, 1) infinite",
             animationPlayState: "inherit",
           },
           "@media (prefers-reduced-motion: reduce)": {
-            "&::after": { animation: "none" },
+            "&::before": { animation: "none" },
           },
           "@media (forced-colors: active)": {
-            "&::before, &::after": { display: "none" },
+            "&::before": { display: "none" },
           },
         },
         "@media (prefers-reduced-motion: reduce)": {

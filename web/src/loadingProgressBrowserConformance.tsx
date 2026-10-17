@@ -54,7 +54,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     const determinate = container.querySelector<HTMLElement>('[aria-label="Progress"]')!;
     check(determinate.getAttribute("aria-valuenow") === "65" && getComputedStyle(determinate).width === "24px" && getComputedStyle(determinate.querySelector("svg")!).display !== "none", "Determinate progress retains value, geometry and visible SVG");
     const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
-    check(getComputedStyle(paused).animationPlayState === "paused" && getComputedStyle(paused, "::after").animationPlayState === "paused", "Mobile swipe pauses loading motion");
+    check(getComputedStyle(paused).animationPlayState === "paused" && getComputedStyle(paused, "::before").animationPlayState === "paused", "Mobile swipe pauses loading motion");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     return results;
   } finally {
