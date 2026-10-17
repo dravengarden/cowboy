@@ -16,6 +16,7 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
+  SettingsOutlined,
   Undo,
   VisibilityOutlined,
   WrapText,
@@ -59,6 +60,8 @@ import { Sheet } from "../../Sheet";
 import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsButton";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
+import { sessionExecution } from "../../sessionExecution";
+import { openAppSettings } from "../../appSettings";
 import {
   mutateMobileReview,
   notify,
@@ -151,6 +154,8 @@ import {
   pushReviewSessionHistory,
   type ReviewContextProject,
   reviewSessionProject,
+  registeredReviewWorkspace,
+  sessionReviewLocation,
   workspaceCodeContextId,
 } from "./reviewContextModel";
 import {
@@ -352,6 +357,7 @@ function ContextSessionRow({
   onPick: () => void;
   showWorktree?: boolean;
 }): React.JSX.Element {
+  const execution = sessionExecution(session);
   return (
     <ListItemButton
       selected={selected}
@@ -390,7 +396,7 @@ function ContextSessionRow({
           )}
         </Stack>
         <Typography variant="caption" color="text.secondary" noWrap>
-          {session.machine_id ?? "local"} · {session.provider} ·{" "}
+          {execution.machineId ?? (execution.state === "unavailable" ? "Unavailable" : "local")} · {session.provider} ·{" "}
           {reviewSessionProject(session)}
         </Typography>
         {showWorktree && (
@@ -400,7 +406,7 @@ function ContextSessionRow({
             sx={{ display: "block" }}
             noWrap
           >
-            {session.cwd.replace(/\/+$/, "").split("/").at(-1) || session.cwd}
+            {execution.cwd.replace(/\/+$/, "").split("/").at(-1) || execution.cwd}
           </Typography>
         )}
       </Box>
@@ -2106,8 +2112,26 @@ export function ReviewApp({
   const boundWorkspace = useActiveWorkspaceBinding();
   const activeSessionId = useActiveSessionId();
   const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-  const [projectCodeContext, setProjectCodeContext] = useState<
+  const currentSession = sessions.find((session) => session.id === boundWorkspace?.sessionId);
+  const execution = currentSession ? sessionExecution(currentSession) : undefined;
+  const executionUsable = execution?.state === "ready" || execution?.state === "local";
+  const machineInventories = useStoreSelector((snapshot) => snapshot.machines);
+  const sessionMachine = machineInventories.find((machine) =>
+    execution?.machineId ? machine.id === execution.machineId
+      : execution?.state === "unavailable" ? false : machine.local
+  );
+  const sessionRegisteredWorkspace = currentSession
+    ? registeredReviewWorkspace(currentSession, (sessionMachine?.workspaces ?? []).map((workspace) => ({
+      id: workspace.id, displayName: workspace.display_name, canonicalPath: workspace.canonical_path,
+    })))
+    : undefined;
+  const sessionLocation = currentSession ? sessionReviewLocation(currentSession, sessionRegisteredWorkspace) : undefined;
+  const boundCodeWorkspace = boundWorkspace
+    ? { ...boundWorkspace, cwd: executionUsable ? execution?.cwd ?? "" : "" }
+    : null;
+  const [selectedProjectContext, setProjectCodeContext] = useState<
     {
+      ownerSessionId: string | null;
       sessionId: string;
       cwd: string;
       provider: string;
@@ -2117,7 +2141,29 @@ export function ReviewApp({
       project: string;
     } | undefined
   >();
-  const workspace = projectCodeContext ?? boundWorkspace;
+  // A context override belongs to the session in which it was selected. Never
+  // issue even one read for that project under a newly selected session.
+  const explicitProjectContext = selectedProjectContext?.ownerSessionId === (boundWorkspace?.sessionId ?? null)
+    ? selectedProjectContext
+    : undefined;
+  const projectCodeContext = explicitProjectContext ??
+    (boundCodeWorkspace && executionUsable && !boundCodeWorkspace.cwd && sessionRegisteredWorkspace && sessionMachine
+      ? {
+        ownerSessionId: boundCodeWorkspace.sessionId,
+        sessionId: workspaceCodeContextId(sessionMachine.id, sessionRegisteredWorkspace.id),
+        cwd: sessionRegisteredWorkspace.canonicalPath,
+        provider: "read-only",
+        title: sessionRegisteredWorkspace.displayName,
+        machineId: sessionMachine.id,
+        workspaceId: sessionRegisteredWorkspace.id,
+        project: sessionRegisteredWorkspace.displayName,
+      }
+      : undefined);
+  const workspace = projectCodeContext ??
+    (boundCodeWorkspace && (boundCodeWorkspace.cwd || !executionUsable) ? boundCodeWorkspace : null);
+  const workspaceIdentity = workspace
+    ? JSON.stringify([workspace.sessionId, workspace.cwd, projectCodeContext?.machineId ?? execution?.machineId])
+    : undefined;
   const syncedReview = useMobileReviewState(workspace?.sessionId);
   const remoteSelected = !projectCodeContext && syncedReview.remote_selected === true;
   const active = surfaceActive && !remoteSelected;
@@ -2130,16 +2176,21 @@ export function ReviewApp({
   const settings = useReviewSettings();
   const [mode, setMode] = useState<ReviewMode>("git");
   const [markdownPreview, setMarkdownPreview] = useState(true);
-  const [sourceTarget, setSourceTarget] = useState<
+  const [sourceState, setSourceTarget] = useState<
     Extract<ReviewTarget, { kind: "source" }> | undefined
   >();
-  const [diffTarget, setDiffTarget] = useState<
+  const [diffState, setDiffTarget] = useState<
     Extract<ReviewTarget, { kind: "diff" }> | undefined
   >();
-  const [commitTarget, setCommitTarget] = useState<{
+  const [commitState, setCommitTarget] = useState<{
     commit: GitCommitSummary;
     path?: string;
   }>();
+  const documentContext = useRef(workspaceIdentity);
+  const sameDocumentContext = documentContext.current === workspaceIdentity;
+  const sourceTarget = sameDocumentContext ? sourceState : undefined;
+  const diffTarget = sameDocumentContext ? diffState : undefined;
+  const commitTarget = sameDocumentContext ? commitState : undefined;
   const [commitPaths, setCommitPaths] = useState<readonly string[]>([]);
   const target: ReviewTarget = mode === "files"
     ? sourceTarget ?? { kind: "changes" }
@@ -2153,7 +2204,8 @@ export function ReviewApp({
     "sessions",
   );
   const [contextProjectKey, setContextProjectKey] = useState<string>();
-  const machineInventories = useStoreSelector((snapshot) => snapshot.machines);
+  const [inlineNavigationContainer, setInlineNavigationContainer] = useState<HTMLElement | null>(null);
+  const navigationInline = !!workspace && target.kind === "changes" && !commitTarget;
   const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -2326,7 +2378,7 @@ export function ReviewApp({
     setGitComparison(undefined);
     setReviewLanguageCapabilities(undefined);
     setBufferSelection(undefined);
-  }, [workspace?.sessionId]);
+  }, [workspaceIdentity]);
 
   useEffect(() => {
     if (!active || !workspace?.sessionId) return undefined;
@@ -2406,9 +2458,10 @@ export function ReviewApp({
       globalThis.removeEventListener("online", refreshManifest);
       controller?.abort();
     };
-  }, [active, gitComparison, manifestRefreshRequest, workspace?.sessionId]);
+  }, [active, gitComparison, manifestRefreshRequest, workspace?.sessionId, workspaceIdentity]);
 
   useEffect(() => {
+    documentContext.current = workspaceIdentity;
     setGitComparison(undefined);
     setGitQueue([]);
     setSourceTarget(undefined);
@@ -2420,7 +2473,7 @@ export function ReviewApp({
     setDiffTarget(undefined);
     setCommitTarget(undefined);
     setCurrentRevision(undefined);
-  }, [workspace?.sessionId]);
+  }, [workspaceIdentity]);
 
   useEffect(() => {
     setMode(syncedReview.mode);
@@ -2913,31 +2966,26 @@ export function ReviewApp({
       revision: targetIsReviewed ? null : reviewMark,
     });
   };
-  const currentSession = sessions.find((session) =>
-    session.id === activeSessionId
-  );
   const currentProject = projectCodeContext?.project ??
-    repositoryContext?.project ??
-    (currentSession ? reviewSessionProject(currentSession) : undefined);
+    sessionLocation?.project ?? repositoryContext?.project;
+  const contextLabel = projectCodeContext ? "Project code" : sessionLocation?.kind ?? "Worktree";
   const currentMachineId = projectCodeContext?.machineId ??
-    currentSession?.machine_id ?? "local";
+    execution?.machineId ?? sessionMachine?.id ?? (execution?.state === "unavailable" ? "unavailable" : "local");
   const displayedChangeCount = gitComparison
     ? gitQueue.length
     : changeCount;
   const currentMachineInventory = machineInventories.find((machine) =>
     machine.id === currentMachineId
   );
-  const currentRegisteredWorkspace = currentMachineInventory?.workspaces.find(
-    (registered) =>
-      registered.id ===
-        (projectCodeContext?.workspaceId ?? currentSession?.workspace_id),
-  ) ?? currentMachineInventory?.workspaces.find((registered) =>
-    registered.display_name === currentProject
-  );
+  const currentRegisteredWorkspace = projectCodeContext
+    ? currentMachineInventory?.workspaces.find((registered) => registered.id === projectCodeContext.workspaceId)
+    : currentMachineInventory?.workspaces.find((registered) => registered.id === sessionRegisteredWorkspace?.id);
+  const localMachineId = machineInventories.find((machine) => machine.local)?.id;
   const currentProjectPath = projectCodeContext?.cwd ?? sessionProjectDirectory(
     currentSession,
     currentRegisteredWorkspace?.canonical_path,
   ) ?? undefined;
+  const reviewRootPath = workspace?.cwd || (projectCodeContext ? currentProjectPath : undefined);
   const contextProjects = useMemo(
     () =>
       orderReviewContextProjects(
@@ -2949,6 +2997,7 @@ export function ReviewApp({
             displayName: registered.display_name,
             canonicalPath: registered.canonical_path,
           })),
+          localMachineId,
         ),
         currentProject,
         currentMachineId,
@@ -2958,10 +3007,16 @@ export function ReviewApp({
       currentMachineInventory?.workspaces,
       currentProject,
       sessions,
+      localMachineId,
     ],
   );
   const selectedContextProject = contextProjects.find((project) =>
     project.key === contextProjectKey
+  );
+  const currentContextProject = contextProjects.find((project) =>
+    projectCodeContext
+      ? project.registeredWorkspace?.id === projectCodeContext.workspaceId
+      : project.sessions.some((session) => session.id === currentSession?.id)
   );
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const previousSessionId = previousReviewSessionId(
@@ -2972,7 +3027,7 @@ export function ReviewApp({
   const previousSession = previousSessionId
     ? sessionById.get(previousSessionId)
     : undefined;
-  const contextReturnSession = projectCodeContext
+  const contextReturnSession = explicitProjectContext
     ? currentSession
     : previousSession;
   useEffect(() => {
@@ -3043,6 +3098,7 @@ export function ReviewApp({
     const sessionId = workspaceCodeContextId(project.machineId, registered.id);
     mutateMobileReview(sessionId, "setMode", { mode: "files" });
     setProjectCodeContext({
+      ownerSessionId: boundWorkspace?.sessionId ?? null,
       sessionId,
       cwd: registered.canonicalPath,
       provider: "read-only",
@@ -3054,7 +3110,6 @@ export function ReviewApp({
     setMode("files");
     setSourceTarget(undefined);
     setSessionSwitcherOpen(false);
-    setToggleDrawerRequest((value) => value + 1);
   };
   const returnToPreviousSession = (): void => {
     if (!previousSession) return;
@@ -3094,7 +3149,8 @@ export function ReviewApp({
   };
   const openContextSwitcher = (): void => {
     navigationHaptic();
-    setContextProjectKey(undefined);
+    setContextTab("projects");
+    setContextProjectKey(currentContextProject?.key);
     setSessionSwitcherOpen(true);
   };
   const activateReviewMode = (nextMode: ReviewMode): void => {
@@ -3133,27 +3189,28 @@ export function ReviewApp({
       onOpenChange={handleDrawerOpenChange}
       closeRequest={closeRequest}
       toggleRequest={toggleDrawerRequest}
+      navigationInline={navigationInline}
+      inlineContainer={inlineNavigationContainer}
       drawer={mode === "files"
         ? (
           <ReviewFileTree
-            key={workspace
-              ? JSON.stringify([workspace.sessionId, workspace.cwd])
-              : "none"}
+            key={workspaceIdentity ?? "none"}
             sessionId={workspace?.sessionId}
             cwd={workspace?.cwd}
             onOpenFile={openSource}
             currentPath={sourceTarget?.path}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
-            contextLabel={projectCodeContext ? "Project code" : "Worktree"}
+            contextLabel={contextLabel}
+            embedded={navigationInline}
           />
         )
         : (
           <ReviewRepository
-            key={workspace?.sessionId ?? "none"}
+            key={workspaceIdentity ?? "none"}
             sessionId={workspace?.sessionId}
-            machineLabel={currentSession?.machine_id ?? "Machine"}
-            {...(currentProjectPath ? { projectPath: currentProjectPath } : {})}
+            machineLabel={currentMachineInventory?.display_name ?? currentMachineId}
+            {...(reviewRootPath ? { projectPath: reviewRootPath } : {})}
             onOpenDiff={openDiff}
             onOpenCommit={openCommit}
             reviewed={reviewedMarks}
@@ -3164,8 +3221,10 @@ export function ReviewApp({
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
             sessions={sessions}
-            machineId={currentSession?.machine_id}
+            machineId={currentMachineId}
             onOpenSession={switchSession}
+            embedded={navigationInline}
+            onBrowseFiles={() => activateReviewMode("files")}
             {...(workspace?.sessionId && !projectCodeContext &&
                 typeof syncedReview.remote_selected === "boolean"
               ? { onOpenPull: openRepositoryPull }
@@ -3193,7 +3252,13 @@ export function ReviewApp({
             borderColor: "divider",
           }}
         >
-          <Box sx={{ flex: 1, minWidth: 0 }}>
+          <ButtonBase
+            aria-label={projectCodeContext
+              ? `Open context. Current project code ${projectCodeContext.project}`
+              : `Switch session. Current session ${currentSession?.title ?? "none"}`}
+            onClick={openContextSwitcher}
+            sx={{ flex: 1, minWidth: 0, minHeight: 48, display: "flex", flexDirection: "column", alignItems: "stretch", textAlign: "left" }}
+          >
             <Typography
               variant="body2"
               fontFamily="var(--cowboy-font-mono)"
@@ -3203,19 +3268,11 @@ export function ReviewApp({
                 ? commitTarget.path ?? commitTarget.commit.subject
                 : target.kind === "changes"
                 ? mode === "files"
-                  ? projectCodeContext ? "Project code" : "Worktree"
+                  ? contextLabel
                   : "Changes"
                 : target.path}
             </Typography>
             <Box
-              component="button"
-              type="button"
-              aria-label={projectCodeContext
-                ? `Open context. Current project code ${projectCodeContext.project}`
-                : `Switch session. Current session ${
-                  currentSession?.title ?? "none"
-                }`}
-              onClick={openContextSwitcher}
               sx={{
                 display: "flex",
                 alignItems: "center",
@@ -3263,13 +3320,9 @@ export function ReviewApp({
                   : ""}
                 {projectCodeContext
                   ? `Project code · ${projectCodeContext.project}`
-                  : currentSession?.title ?? currentProject ??
-                    (workspace ? "Loading session…" : "Choose session")}
-                {!projectCodeContext && currentProject &&
-                    currentSession?.title !== currentProject
-                  ? ` · ${currentProject}`
-                  : ""}
-                {!projectCodeContext && repositoryContext?.branch
+                  : currentProject ? `${contextLabel} · ${currentProject}`
+                  : (workspace ? "Loading session…" : "Choose project or session")}
+                {!navigationInline && repositoryContext?.branch
                   ? ` · ${repositoryContext.branch}`
                   : ""}
               </Typography>
@@ -3278,7 +3331,7 @@ export function ReviewApp({
                 sx={{ fontSize: "0.9rem", flex: "0 0 auto" }}
               />
             </Box>
-          </Box>
+          </ButtonBase>
           {contextReturnSession && (
             <IconButton
               aria-label={`Back to session ${contextReturnSession.title}`}
@@ -3333,7 +3386,7 @@ export function ReviewApp({
               mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
             }}
           ><CloudOutlined /></IconButton></HintTooltip>}
-          <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={projectCodeContext?.machineId ?? currentSession?.machine_id} />
+          <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId} />
           <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
         </Stack>
         {!workspace
@@ -3347,8 +3400,9 @@ export function ReviewApp({
             >
               <FolderOpenOutlined color="disabled" />
               <Typography color="text.secondary">
-                Select an Agent session to review its worktree
+                Choose a project or session to review
               </Typography>
+              <Button onClick={openContextSwitcher}>Choose project</Button>
             </Stack>
           )
           : mode === "git" && commitTarget
@@ -3370,24 +3424,12 @@ export function ReviewApp({
           )
           : target.kind === "changes"
           ? (
-            <Stack
+            <Box
+              ref={setInlineNavigationContainer}
               component="main"
-              alignItems="center"
-              justifyContent="center"
-              spacing={1.5}
-              sx={{ flex: 1, px: 4, textAlign: "center" }}
-            >
-              {mode === "git"
-                ? <DifferenceOutlined color="disabled" />
-                : <FolderOpenOutlined color="disabled" />}
-              <Typography color="text.secondary">
-                {mode === "git"
-                  ? "Select a changed file from Git review"
-                  : projectCodeContext
-                  ? "Select a file from the registered project checkout"
-                  : "Select a file from the Worktree"}
-              </Typography>
-            </Stack>
+              aria-label={mode === "git" ? "Repository overview" : "Workspace files"}
+              sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+            />
           )
           : (
             <DocumentView
@@ -3495,7 +3537,7 @@ export function ReviewApp({
               : "0 -1px 24px rgba(0,0,0,0.07)",
           }}
         >
-          <ReviewTabStrip
+          {!navigationInline && <ReviewTabStrip
             tabs={mode === "git" && commitTarget
               ? commitFileTabs(commitPaths)
               : modeTabs}
@@ -3544,7 +3586,7 @@ export function ReviewApp({
                 });
               }
             }}
-          />
+          />}
           <Box
             component="nav"
             aria-label="Code Review controls"
@@ -3663,7 +3705,11 @@ export function ReviewApp({
                   <FormatListBulleted />
                 </IconButton>
               )}
-              <IconButton
+              {navigationInline ? (
+                <IconButton aria-label="Review settings" onClick={() => openAppSettings({ section: "code" })}>
+                  <SettingsOutlined />
+                </IconButton>
+              ) : <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen
                   ? `Close ${
@@ -3704,7 +3750,7 @@ export function ReviewApp({
                     </Badge>
                   )
                   : <AccountTreeOutlined />}
-              </IconButton>
+              </IconButton>}
             </Toolbar>
           </Box>
         </Box>
@@ -3874,9 +3920,7 @@ export function ReviewApp({
                 </Typography>
                 <Stack divider={<Divider flexItem />}>
                   {contextProjects.map((project) => {
-                    const selected = project.label === currentProject &&
-                      project.machineId ===
-                        currentMachineId;
+                    const selected = project.key === currentContextProject?.key;
                     return (
                       <ListItemButton
                         key={project.key}
@@ -3904,6 +3948,11 @@ export function ReviewApp({
                             · {project.sessions.length}{" "}
                             session{project.sessions.length === 1 ? "" : "s"}
                           </Typography>
+                          {contextProjects.some((other) => other.key !== project.key && other.label === project.label) && (
+                            <Typography variant="caption" color="text.disabled" noWrap sx={{ display: "block" }}>
+                              {project.registeredWorkspace?.canonicalPath ?? project.worktrees[0]?.path}
+                            </Typography>
+                          )}
                         </Box>
                         <ChevronRight color="disabled" fontSize="small" />
                       </ListItemButton>
@@ -3950,7 +3999,7 @@ export function ReviewApp({
                         color="text.secondary"
                         noWrap
                       >
-                        Browse the current merged checkout
+                        Registered project checkout
                       </Typography>
                       <Typography
                         variant="caption"
@@ -3975,7 +4024,7 @@ export function ReviewApp({
                   </Typography>
                 )}
                 {selectedContextProject.worktrees.map((worktree) => {
-                  const currentWorktree = worktree.path === currentSession?.cwd;
+                  const currentWorktree = worktree.path === workspace?.cwd;
                   const label = currentWorktree && repositoryContext?.branch
                     ? repositoryContext.branch
                     : worktree.label;
@@ -3985,6 +4034,7 @@ export function ReviewApp({
                   return (
                     <Stack key={worktree.key} spacing={0.375}>
                       <ListItemButton
+                        selected={currentWorktree}
                         onClick={() => {
                           const latest = worktree.sessions[0];
                           if (latest) switchSession(latest);

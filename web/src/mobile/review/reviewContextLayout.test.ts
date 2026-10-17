@@ -107,7 +107,7 @@ test("session context list consumes duplicate floating-footer clearance", () => 
 test("project targets do not inherit worktree-only labels", () => {
   assertStringIncludes(
     source,
-    'contextLabel={projectCodeContext ? "Project code" : "Worktree"}',
+    'const contextLabel = projectCodeContext ? "Project code" : sessionLocation?.kind ?? "Worktree";',
   );
   assertStringIncludes(source, "Open context. Current project code");
   assertStringIncludes(

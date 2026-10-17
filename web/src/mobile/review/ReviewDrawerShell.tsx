@@ -1,5 +1,13 @@
 import { Box } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
 import {
@@ -10,21 +18,83 @@ import {
 import { holdStorePresentation } from "../../store";
 import { useBackdropDismiss } from "../../useBackdropDismiss";
 
+type NavigationPortalProps = {
+  container: HTMLElement | null;
+  children: React.ReactNode;
+};
+type NavigationScroll = { element: HTMLElement; top: number; left: number };
+
+/** React's pre-mutation snapshot is necessary here: a layout-effect cleanup
+ * runs after the old page slot is detached, when its scroll offsets are zero.
+ * Nothing is moved or measured during drawer tracking. */
+class NavigationPortal extends Component<NavigationPortalProps> {
+  private readonly host = document.createElement("div");
+  constructor(props: NavigationPortalProps) {
+    super(props);
+    this.host.style.cssText = "height:100%;min-height:0;overflow:hidden";
+  }
+  override componentDidMount(): void {
+    this.props.container?.append(this.host);
+  }
+  override getSnapshotBeforeUpdate(
+    previous: NavigationPortalProps,
+  ): NavigationScroll[] | null {
+    if (previous.container === this.props.container) return null;
+    return [
+      ...this.host.querySelectorAll<HTMLElement>(
+        "[data-mobile-overflow-layer]",
+      ),
+    ].map((element) => ({
+      element,
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    }));
+  }
+  override componentDidUpdate(
+    _previous: NavigationPortalProps,
+    _state: unknown,
+    scroll: NavigationScroll[] | null,
+  ): void {
+    if (scroll === null) return;
+    this.props.container?.append(this.host);
+    for (const { element, top, left } of scroll) {
+      if (!this.host.contains(element)) continue;
+      element.scrollTop = top;
+      element.scrollLeft = left;
+    }
+  }
+  override componentWillUnmount(): void {
+    this.host.remove();
+  }
+  override render(): React.ReactNode {
+    return createPortal(this.props.children, this.host);
+  }
+}
+
 export function ReviewDrawerShell({
   drawer,
   children,
   onOpenChange,
   closeRequest = 0,
   toggleRequest = 0,
+  navigationInline = false,
+  inlineContainer,
 }: {
   drawer: React.ReactNode;
   children: React.ReactNode;
   onOpenChange: (open: boolean) => void;
   closeRequest?: number;
   toggleRequest?: number;
+  navigationInline?: boolean;
+  inlineContainer?: HTMLElement | null;
 }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const [drawerHost, setDrawerHost] = useState<HTMLDivElement | null>(null);
+  const attachDrawer = useCallback((element: HTMLDivElement | null): void => {
+    drawerRef.current = element;
+    setDrawerHost(element);
+  }, []);
   const maskRef = useRef<HTMLDivElement>(null);
   const dimRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -32,6 +102,11 @@ export function ReviewDrawerShell({
   const toggleRef = useRef<() => void>(() => undefined);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
+  const inlineRef = useRef(navigationInline);
+  inlineRef.current = navigationInline;
+  useLayoutEffect(() => {
+    if (navigationInline && openRef.current) closeRef.current();
+  }, [navigationInline]);
   const closePeek = useBackdropDismiss<HTMLDivElement>(() => {
     if (openRef.current) closeRef.current();
   });
@@ -66,9 +141,13 @@ export function ReviewDrawerShell({
         onOpenChange(nextOpen);
       },
       holdPresentation: holdStorePresentation,
+      ignoreSelector:
+        "[data-mobile-drawer-ignore], [data-review-navigation-inline='true']",
     });
     closeRef.current = () => binding.settle(false);
-    toggleRef.current = () => binding.settle(!openRef.current);
+    toggleRef.current = () => {
+      if (!inlineRef.current) binding.settle(!openRef.current);
+    };
     return () => {
       binding.dispose();
       closeRef.current = () => undefined;
@@ -80,6 +159,7 @@ export function ReviewDrawerShell({
     <Box
       ref={rootRef}
       data-mobile-drawer-presented={open ? "true" : undefined}
+      data-review-navigation-inline={navigationInline ? "true" : undefined}
       sx={{
         position: "relative",
         display: "flex",
@@ -94,8 +174,9 @@ export function ReviewDrawerShell({
       }}
     >
       <Box
-        ref={drawerRef}
+        ref={attachDrawer}
         aria-hidden={!open}
+        inert={!open}
         sx={{
           position: "absolute",
           zIndex: 0,
@@ -113,9 +194,12 @@ export function ReviewDrawerShell({
             pl: "calc(100% - var(--mobile-drawer-width, min(52%, 440px)))",
           },
         }}
+      />
+      <NavigationPortal
+        container={navigationInline ? inlineContainer ?? null : drawerHost}
       >
         {drawer}
-      </Box>
+      </NavigationPortal>
       <Box
         ref={maskRef}
         aria-hidden="true"

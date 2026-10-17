@@ -1,5 +1,6 @@
 import type { PullSummary, RepositoryRemote } from "../../extensions/api";
 import type { SessionMeta } from "../../protocol";
+import { sessionExecution } from "../../sessionExecution";
 import type {
   GitChangeTarget,
   GitTrackedReference,
@@ -52,8 +53,10 @@ export function groupRepositoryWorktrees(
   const machine = machineId ?? "local";
   const byPath = new Map<string, SessionMeta[]>();
   for (const session of sessions) {
-    if ((session.machine_id ?? "local") !== machine) continue;
-    const key = normalized(session.cwd);
+    const execution = sessionExecution(session);
+    if (execution.state !== "ready" && execution.state !== "local") continue;
+    if ((execution.machineId ?? "local") !== machine) continue;
+    const key = normalized(execution.cwd);
     const owners = byPath.get(key);
     if (owners) owners.push(session);
     else byPath.set(key, [session]);

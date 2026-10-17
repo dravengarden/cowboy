@@ -1,5 +1,6 @@
 import type { SessionMeta } from "../../protocol";
 import { sessionProjectLabel } from "../../sessionProject";
+import { sessionExecution } from "../../sessionExecution";
 
 export interface ReviewContextWorktree {
   readonly key: string;
@@ -23,13 +24,73 @@ export interface ReviewRegisteredWorkspace {
   readonly canonicalPath: string;
 }
 
-export function workspaceCodeContextId(machineId: string, workspaceId: string): string {
+export function workspaceCodeContextId(
+  machineId: string,
+  workspaceId: string,
+): string {
   return `workspace::${machineId}::${workspaceId}`;
 }
 
+const normalizePath = (path: string): string => path.replace(/\/+$/, "") || "/";
+
+/** Only call with the session's workspace Machine inventory. Names are labels,
+ * never identities: two registered checkouts may have the same display name. */
+export function registeredReviewWorkspace(
+  session: SessionMeta,
+  workspaces: readonly ReviewRegisteredWorkspace[],
+): ReviewRegisteredWorkspace | undefined {
+  const execution = sessionExecution(session);
+  if (execution.state !== "ready" && execution.state !== "local") {
+    return undefined;
+  }
+  const byId = session.workspace_id
+    ? workspaces.find((workspace) => workspace.id === session.workspace_id)
+    : undefined;
+  if (byId) return byId;
+  const path = session.workspace_source_path || execution.cwd;
+  return path
+    ? workspaces.find((workspace) =>
+      normalizePath(workspace.canonicalPath) === normalizePath(path)
+    )
+    : undefined;
+}
+
+export function sessionReviewLocation(
+  session: SessionMeta,
+  registered?: ReviewRegisteredWorkspace,
+): {
+  project: string;
+  cwd: string;
+  kind: "Worktree" | "Project code" | "Workspace";
+} {
+  const source = session.workspace_source_path || registered?.canonicalPath;
+  const execution = sessionExecution(session);
+  const usable = execution.state === "ready" || execution.state === "local";
+  const cwd = usable ? execution.cwd || source || "" : "";
+  return {
+    project: registered?.displayName ?? reviewSessionProject(session),
+    // The actual session directory always wins, including a caller-owned
+    // checkout unknown to the registry. Folder defaults never move live code.
+    cwd,
+    kind: usable && source
+      ? normalizePath(cwd) === normalizePath(source)
+        ? "Project code"
+        : "Worktree"
+      : "Workspace",
+  };
+}
+
+function projectKey(machineId: string, identity: string): string {
+  return `${machineId}\u0000${identity}`;
+}
+
 function fallbackProject(session: SessionMeta): string {
-  const normalized = session.cwd.replace(/\/+$/, "");
-  return normalized.split("/").at(-1) || session.cwd;
+  const execution = sessionExecution(session);
+  if (execution.state !== "ready" && execution.state !== "local") {
+    return "Workspace";
+  }
+  const normalized = execution.cwd.replace(/\/+$/, "");
+  return normalized.split("/").at(-1) || "Workspace";
 }
 
 export function reviewSessionProject(session: SessionMeta): string {
@@ -52,6 +113,7 @@ export function buildReviewContextProjects(
   sessions: readonly SessionMeta[],
   machineId?: string,
   registeredWorkspaces: readonly ReviewRegisteredWorkspace[] = [],
+  localMachineId = "local",
 ): readonly ReviewContextProject[] {
   const selectedMachineId = machineId ?? "local";
   const projects = new Map<
@@ -71,8 +133,7 @@ export function buildReviewContextProjects(
 
   for (const workspace of registeredWorkspaces) {
     if (workspace.id === "home") continue;
-    const projectKey = `${selectedMachineId}\u0000${workspace.displayName}`;
-    projects.set(projectKey, {
+    projects.set(projectKey(selectedMachineId, workspace.id), {
       label: workspace.displayName,
       machineId: selectedMachineId,
       registeredWorkspace: workspace,
@@ -82,11 +143,19 @@ export function buildReviewContextProjects(
   }
 
   for (const session of sessions) {
-    const sessionMachineId = session.machine_id ?? "local";
+    const execution = sessionExecution(session);
+    if (execution.state !== "ready" && execution.state !== "local") continue;
+    const sessionMachineId = execution.machineId ?? localMachineId;
     if (sessionMachineId !== selectedMachineId) continue;
-    const label = reviewSessionProject(session);
-    const projectKey = `${sessionMachineId}\u0000${label}`;
-    let project = projects.get(projectKey);
+    const registered = registeredReviewWorkspace(session, registeredWorkspaces);
+    const label = registered?.displayName ?? reviewSessionProject(session);
+    const key = projectKey(
+      sessionMachineId,
+      registered?.id ??
+        session.workspace_id ??
+        normalizePath(session.workspace_source_path || execution.cwd),
+    );
+    let project = projects.get(key);
     if (!project) {
       project = {
         label,
@@ -94,16 +163,20 @@ export function buildReviewContextProjects(
         sessions: [],
         worktrees: new Map(),
       };
-      projects.set(projectKey, project);
+      projects.set(key, project);
     }
     project.sessions.push(session);
 
-    const worktreeKey = `${sessionMachineId}\u0000${session.cwd}`;
+    if (!execution.cwd) continue;
+
+    const worktreeKey = `${sessionMachineId}\u0000${
+      normalizePath(execution.cwd)
+    }`;
     let worktree = project.worktrees.get(worktreeKey);
     if (!worktree) {
       worktree = {
-        path: session.cwd,
-        label: worktreeLabel(session.cwd, session.workspace_source_path),
+        path: execution.cwd,
+        label: worktreeLabel(execution.cwd, session.workspace_source_path),
         sessions: [],
       };
       project.worktrees.set(worktreeKey, worktree);
@@ -119,7 +192,9 @@ export function buildReviewContextProjects(
       ? { registeredWorkspace: project.registeredWorkspace }
       : {}),
     sessions: project.sessions,
-    worktrees: [...project.worktrees.entries()].map(([worktreeKey, worktree]) => ({
+    worktrees: [...project.worktrees.entries()].map((
+      [worktreeKey, worktree],
+    ) => ({
       key: worktreeKey,
       path: worktree.path,
       label: worktree.label,

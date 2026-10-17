@@ -356,6 +356,8 @@ export function ReviewRepository({
   machineId,
   onOpenSession,
   onOpenPull,
+  embedded = false,
+  onBrowseFiles,
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
@@ -376,8 +378,11 @@ export function ReviewRepository({
   onOpenSession?: (session: SessionMeta) => void;
   /** Review a pull request of this repository in place of the worktree. */
   onOpenPull?: (choice: Choice, pull: PullSummary) => void;
+  embedded?: boolean;
+  onBrowseFiles?: () => void;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
+  const [changesRefresh, setChangesRefresh] = useState(0);
   const [otherOpen, setOtherOpen] = useState(false);
   const [pulls, setPulls] = useState<RepositoryPulls | null>(null);
   useEffect(() => {
@@ -568,16 +573,18 @@ export function ReviewRepository({
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
       <Box
         sx={{
-          pt: "calc(var(--cowboy-system-top-clearance) + 14px)",
+          pt: embedded ? 1 : "calc(var(--cowboy-system-top-clearance) + 14px)",
           px: 1.5,
           pb: 1,
         }}
       >
         <Stack spacing={0.35} sx={{ px: 0.5, mb: 1 }}>
           <Stack direction="row" alignItems="center" spacing={0.75}>
-            <Typography variant="subtitle1" fontWeight={700}>
-              Repository
-            </Typography>
+            {!embedded && (
+              <Typography variant="subtitle1" fontWeight={700}>
+                Repository
+              </Typography>
+            )}
             {machineLabel && (
               <Chip
                 label={machineLabel}
@@ -593,8 +600,31 @@ export function ReviewRepository({
                 }}
               />
             )}
+            {embedded && (
+              <>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  title={projectPath}
+                  sx={{ flex: 1, minWidth: 0 }}
+                >
+                  {projectPath}
+                </Typography>
+                <NetworkIconButton
+                  size="small"
+                  aria-label="Refresh repository"
+                    networkAction={async () => {
+                      await load();
+                      setChangesRefresh((value) => value + 1);
+                    }}
+                >
+                  <Refresh fontSize="small" />
+                </NetworkIconButton>
+              </>
+            )}
           </Stack>
-          {projectPath && (
+          {!embedded && projectPath && (
             <HintTooltip title={projectPath}>
               <Typography
                 data-repository-project-path
@@ -628,7 +658,9 @@ export function ReviewRepository({
                 sx={{ minWidth: 0, maxWidth: 1, mr: 0.25 }}
               >
                 {target.branch ??
-                  (target.head ? `Detached ${shortOid(target.head)}` : "No HEAD")}
+                  (target.head
+                    ? `Detached ${shortOid(target.head)}`
+                    : "No HEAD")}
               </Typography>
               {targetFacts.map((fact) => (
                 <Chip
@@ -691,7 +723,9 @@ export function ReviewRepository({
               {...(comparison === undefined ? {} : { comparison })}
               onComparisonChange={onComparisonChange}
               onChanges={onChanges}
-              {...(refreshToken === undefined ? {} : { refreshToken })}
+              compact={embedded}
+              {...(onBrowseFiles ? { onBrowseFiles } : {})}
+              refreshToken={(refreshToken ?? 0) + changesRefresh}
             />
           )
           : loading && !repository
@@ -723,7 +757,7 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 0.75,
-                pb: 10,
+                pb: embedded ? 2 : 10,
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -820,7 +854,7 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 1.25,
-                pb: 10,
+                pb: embedded ? 2 : 10,
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -933,45 +967,47 @@ export function ReviewRepository({
             </Box>
           )}
       </Box>
-      <Box
-        sx={{
-          position: "absolute",
-          zIndex: 3,
-          left: 0,
-          right: 0,
-          bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-          display: "flex",
-          justifyContent: "flex-start",
-          px: 2,
-          pointerEvents: "none",
-          "& > [data-mobile-sheet-footer-shield]": {
-            width: "auto",
-            flex: "0 0 auto",
-          },
-        }}
-      >
-        <MobileSheetActionGroup
-          actions={[
-            {
-              key: "settings",
-              label: "Settings",
-              icon: <SettingsIcon fontSize="small" />,
-              onPress: (): void => openAppSettings({ section: "code" }),
+      {!embedded && (
+        <Box
+          sx={{
+            position: "absolute",
+            zIndex: 3,
+            left: 0,
+            right: 0,
+            bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+            display: "flex",
+            justifyContent: "flex-start",
+            px: 2,
+            pointerEvents: "none",
+            "& > [data-mobile-sheet-footer-shield]": {
+              width: "auto",
+              flex: "0 0 auto",
             },
-            {
-              key: "close",
-              label: "Close repository",
-              icon: (
-                <Close
-                  fontSize="small"
-                  sx={{ transform: "translate(-0.75px, -0.5px)" }}
-                />
-              ),
-              onPress: onClose,
-            },
-          ]}
-        />
-      </Box>
+          }}
+        >
+          <MobileSheetActionGroup
+            actions={[
+              {
+                key: "settings",
+                label: "Settings",
+                icon: <SettingsIcon fontSize="small" />,
+                onPress: (): void => openAppSettings({ section: "code" }),
+              },
+              {
+                key: "close",
+                label: "Close repository",
+                icon: (
+                  <Close
+                    fontSize="small"
+                    sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                  />
+                ),
+                onPress: onClose,
+              },
+            ]}
+          />
+        </Box>
+      )}
     </Stack>
   );
 }

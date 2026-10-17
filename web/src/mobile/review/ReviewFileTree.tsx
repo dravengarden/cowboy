@@ -213,6 +213,7 @@ export function ReviewFileTree({
   onClose,
   refreshToken,
   contextLabel = "Worktree",
+  embedded = false,
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
@@ -221,6 +222,7 @@ export function ReviewFileTree({
   onClose: () => void;
   refreshToken: number;
   contextLabel?: string;
+  embedded?: boolean;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
     apiVersion: 1,
@@ -655,19 +657,42 @@ export function ReviewFileTree({
         alignItems="center"
         spacing={1}
         sx={{
-          pt: "calc(var(--cowboy-system-top-clearance) + 18px)",
+          pt: embedded ? 1 : "calc(var(--cowboy-system-top-clearance) + 18px)",
           px: 2,
           pb: 1.5,
         }}
       >
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="subtitle1" fontWeight={700}>
-            {contextLabel}
-          </Typography>
+          {!embedded && (
+            <Typography variant="subtitle1" fontWeight={700}>
+              {contextLabel}
+            </Typography>
+          )}
           <Typography variant="caption" color="text.secondary" noWrap>
             {cwd ?? "No active session"}
           </Typography>
         </Box>
+        {embedded && (
+          <>
+            <IconButton
+              size="small"
+              aria-label={rootExpanded ? "Collapse folders" : "Expand folders"}
+              onClick={toggleRootDirectories}
+              disabled={rootDirectories.length === 0}
+            >
+              {rootExpanded
+                ? <UnfoldLess fontSize="small" />
+                : <UnfoldMore fontSize="small" />}
+            </IconButton>
+            <NetworkIconButton
+              size="small"
+              aria-label="Refresh files"
+              networkAction={() => load(true)}
+            >
+              <Refresh fontSize="small" />
+            </NetworkIconButton>
+          </>
+        )}
       </Stack>
       <TextField
         value={query}
@@ -712,7 +737,7 @@ export function ReviewFileTree({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: 12,
+          pb: embedded ? 2 : 12,
           ...mobileNativeYScrollSx,
         }}
       >
@@ -808,50 +833,52 @@ export function ReviewFileTree({
             </List>
           )}
       </Box>
-      <Box
-        sx={{
-          position: "absolute",
-          zIndex: 2,
-          left: 0,
-          right: 0,
-          bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-          px: 2,
-          pointerEvents: "none",
-        }}
-      >
-        <MobileSheetActionGroup
-          actions={[
-            {
-              key: "settings",
-              label: "Settings",
-              icon: <SettingsIcon fontSize="small" />,
-              onPress: (): void => openAppSettings({ section: "code" }),
-            },
-            {
-              key: "close",
-              label: `Close ${contextLabel.toLowerCase()}`,
-              icon: <Close fontSize="small" />,
-              onPress: onClose,
-            },
-            {
-              key: "expand",
-              label: rootExpanded ? "Collapse folders" : "Expand folders",
-              icon: rootExpanded
-                ? <UnfoldLess fontSize="small" />
-                : <UnfoldMore fontSize="small" />,
-              onPress: toggleRootDirectories,
-              disabled: rootDirectories.length === 0,
-            },
-            {
-              key: "locate",
-              label: "Reveal current file",
-              icon: <MyLocation fontSize="small" />,
-              onPress: () => void revealCurrentFile(),
-              disabled: !currentPath,
-            },
-          ]}
-        />
-      </Box>
+      {!embedded && (
+        <Box
+          sx={{
+            position: "absolute",
+            zIndex: 2,
+            left: 0,
+            right: 0,
+            bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+            px: 2,
+            pointerEvents: "none",
+          }}
+        >
+          <MobileSheetActionGroup
+            actions={[
+              {
+                key: "settings",
+                label: "Settings",
+                icon: <SettingsIcon fontSize="small" />,
+                onPress: (): void => openAppSettings({ section: "code" }),
+              },
+              {
+                key: "close",
+                label: `Close ${contextLabel.toLowerCase()}`,
+                icon: <Close fontSize="small" />,
+                onPress: onClose,
+              },
+              {
+                key: "expand",
+                label: rootExpanded ? "Collapse folders" : "Expand folders",
+                icon: rootExpanded
+                  ? <UnfoldLess fontSize="small" />
+                  : <UnfoldMore fontSize="small" />,
+                onPress: toggleRootDirectories,
+                disabled: rootDirectories.length === 0,
+              },
+              {
+                key: "locate",
+                label: "Reveal current file",
+                icon: <MyLocation fontSize="small" />,
+                onPress: () => void revealCurrentFile(),
+                disabled: !currentPath,
+              },
+            ]}
+          />
+        </Box>
+      )}
     </Stack>
   );
 }

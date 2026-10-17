@@ -213,6 +213,31 @@ provider-independent response model.
 
 ## Code surface
 
+Review opens the current session's actual working directory. A session-owned
+worktree takes precedence over its registered project checkout; a session
+already in that checkout is labelled Project code. If only a project binding
+is available, its workspace ID is resolved on the session's Machine. A display
+name never identifies a checkout, and changing directory defaults does not
+redirect an existing session. Reading code does not activate its Agent worker.
+For remote execution, the existing execution binding supplies the files
+Machine and worktree, independently of the Agent runtime Machine and its
+private directory. Preparing or unrecognized bindings never fall back to
+that runtime's checkout. Worktree ownership uses the same projection.
+
+With no file selected, the page shows the repository's Changes, History and
+Worktrees, or the searchable file tree in Files mode. A clean comparison offers
+Browse files. Opening a document moves that same mounted navigator into the
+sidebar, preserving its folds, scroll position and selected Git section without
+starting a second set of requests. Returning to the overview moves it back.
+Only the document transition moves the navigator; swipe tracking never does.
+
+The context control names the project and branch, opens directly on that
+project's checkout and session worktrees, and retains access to other projects
+and sessions. Selecting Project code keeps the Agent session selected; session
+updates retain this manual choice. Selecting a different session restores its
+own context, and an old document is cleared before reads can use the new root.
+File tabs and reading positions retain their existing per-context ownership.
+
 Use CodeMirror 6 in read-only mode, loaded only after the first file opens. It
 already ships with Cowboy and virtualizes the document viewport, supports
 incremental parsing, selection, wrapping, gutters, diagnostics, and merge

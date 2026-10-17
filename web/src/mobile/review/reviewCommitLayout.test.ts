@@ -57,10 +57,11 @@ test("repository tabs use the shared segmented tabs", () => {
   assertEquals(repositorySource.includes('role="tab"'), false);
 });
 
-test("repository header uses a machine chip and stable project path", () => {
+test("repository header identifies the Machine and actual review root", () => {
   assertStringIncludes(repositorySource, "label={machineLabel}");
   assertStringIncludes(repositorySource, "data-repository-project-path");
-  assertStringIncludes(appSource, "{ projectPath: currentProjectPath }");
+  assertStringIncludes(appSource, "{ projectPath: reviewRootPath }");
+  assertStringIncludes(appSource, "const reviewRootPath = workspace?.cwd || (projectCodeContext ? currentProjectPath : undefined);");
   assertStringIncludes(appSource, "currentRegisteredWorkspace?.canonical_path");
 });
 

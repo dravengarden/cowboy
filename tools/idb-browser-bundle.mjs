@@ -20,7 +20,7 @@ if (
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics"
+  suite !== "info-metrics" && suite !== "review-context"
 ) {
   throw new Error("unknown suite");
 }
@@ -50,7 +50,7 @@ await build({
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "session-maintenance" || suite === "dormant-session" ||
-        suite === "about-layout" || suite === "info-metrics"
+        suite === "about-layout" || suite === "info-metrics" || suite === "review-context"
         ? "development"
         : "production",
     ),
@@ -91,12 +91,14 @@ await build({
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "dormant-session" || suite === "info-metrics"
+        suite === "dormant-session" || suite === "info-metrics" || suite === "review-context"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "info-metrics"
+        suite === "review-context"
+          ? "../web/src/reviewContextBrowserConformance.tsx"
+          : suite === "info-metrics"
           ? "../web/src/infoMetricsBrowserConformance.tsx"
           : suite === "dormant-session"
           ? "../web/src/dormantSessionBrowserConformance.tsx"

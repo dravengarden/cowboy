@@ -102,6 +102,6 @@ test("review tree wires workspace identity and stale-folder recovery", async () 
   );
   assertStringIncludes(
     appSource,
-    "JSON.stringify([workspace.sessionId, workspace.cwd])",
+    "JSON.stringify([workspace.sessionId, workspace.cwd, projectCodeContext?.machineId ?? execution?.machineId])",
   );
 });

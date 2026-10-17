@@ -14,6 +14,7 @@ import {
   Alert,
   Autocomplete,
   Box,
+  Button,
   Chip,
   CircularProgress,
   List,
@@ -39,10 +40,7 @@ import {
   limitGitSections,
   reviewQueue,
 } from "./gitReviewModel";
-import {
-  buildGitChangeTree,
-  type GitChangeTreeNode,
-} from "./gitChangeTree";
+import { buildGitChangeTree, type GitChangeTreeNode } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
 
@@ -193,6 +191,8 @@ export function ReviewChanges({
   drawer = false,
   onClose,
   refreshToken = 0,
+  onBrowseFiles,
+  compact = false,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
@@ -204,6 +204,8 @@ export function ReviewChanges({
   drawer?: boolean;
   onClose?: () => void;
   refreshToken?: number;
+  onBrowseFiles?: () => void;
+  compact?: boolean;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
@@ -345,68 +347,89 @@ export function ReviewChanges({
 
   return (
     <Stack sx={{ position: "relative", height: "100%", minHeight: 0 }}>
+      {!compact && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{
+            px: 2,
+            pt: drawer ? "calc(var(--cowboy-system-top-clearance) + 18px)" : 1,
+            pb: 1,
+          }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="subtitle1" fontWeight={700}>
+              Git review
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {comparison
+                ? `${
+                  comparisons.find((item) => item.reference === comparison)
+                    ?.label ?? comparison
+                } → ${head ? `HEAD ${head}` : "working tree"}`
+                : head
+                ? `HEAD ${head}`
+                : "Working tree"}
+            </Typography>
+          </Box>
+          <Chip
+            size="small"
+            label={`${
+              queue.filter((entry) =>
+                reviewed.has(
+                  reviewEntryKey(
+                    entry.change.path,
+                    entry.scope,
+                    entry.comparison,
+                  ),
+                )
+              ).length
+            } / ${queue.length}`}
+          />
+        </Stack>
+      )}
       <Stack
         direction="row"
         alignItems="center"
-        sx={{
-          px: 2,
-          pt: drawer
-            ? "calc(var(--cowboy-system-top-clearance) + 18px)"
-            : 1,
-          pb: 1,
-        }}
+        spacing={1}
+        sx={{ mx: 2, mb: 1, pt: compact ? 1 : 0 }}
       >
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle1" fontWeight={700}>
-            Git review
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {comparison
-              ? `${
-                comparisons.find((item) => item.reference === comparison)
-                  ?.label ?? comparison
-              } → ${head ? `HEAD ${head}` : "working tree"}`
-              : head
-              ? `HEAD ${head}`
-              : "Working tree"}
-          </Typography>
-        </Box>
-        <Chip
+        <Autocomplete
           size="small"
-          label={`${
-            queue.filter((entry) =>
-              reviewed.has(
-                reviewEntryKey(
-                  entry.change.path,
-                  entry.scope,
-                  entry.comparison,
-                ),
-              )
-            ).length
-          } / ${queue.length}`}
+          disableClearable
+          options={[
+            { reference: "", label: "Working tree only" },
+            ...comparisons,
+          ]}
+          value={comparisons.find((item) => item.reference === comparison) ??
+            { reference: "", label: "Working tree only" }}
+          isOptionEqualToValue={(option, value) =>
+            option.reference === value.reference}
+          onChange={(_, value) => onComparisonChange?.(value.reference || null)}
+          disabled={comparison === undefined}
+          renderInput={(params) => (
+            <TextField {...params} label="Compare against" />
+          )}
+          sx={{ flex: 1, minWidth: 0 }}
         />
-      </Stack>
-      <Autocomplete
-        size="small"
-        disableClearable
-        options={[
-          { reference: "", label: "Working tree only" },
-          ...comparisons,
-        ]}
-        value={
-          comparisons.find((item) => item.reference === comparison) ??
-            { reference: "", label: "Working tree only" }
-        }
-        isOptionEqualToValue={(option, value) =>
-          option.reference === value.reference}
-        onChange={(_, value) =>
-          onComparisonChange?.(value.reference || null)}
-        disabled={comparison === undefined}
-        renderInput={(params) => (
-          <TextField {...params} label="Compare against" />
+        {compact && (
+          <Chip
+            size="small"
+            aria-label="Viewed changes"
+            label={`${
+              queue.filter((entry) =>
+                reviewed.has(
+                  reviewEntryKey(
+                    entry.change.path,
+                    entry.scope,
+                    entry.comparison,
+                  ),
+                )
+              ).length
+            } / ${queue.length}`}
+          />
         )}
-        sx={{ mx: 2, mb: 1 }}
-      />
+      </Stack>
       {truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
           Showing the first 1,000 changes
@@ -419,7 +442,7 @@ export function ReviewChanges({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: 8,
+          pb: compact ? 2 : 8,
           ...mobileNativeYScrollSx,
         }}
       >
@@ -455,6 +478,11 @@ export function ReviewChanges({
                   ? "No changes from this branch"
                   : "Working tree is clean"}
               </Typography>
+              {onBrowseFiles && (
+                <Button startIcon={<FolderOutlined />} onClick={onBrowseFiles}>
+                  Browse files
+                </Button>
+              )}
             </Stack>
           )
           : (
@@ -493,8 +521,9 @@ export function ReviewChanges({
                       onToggle={(path) =>
                         setCollapsed((current) => {
                           const next = new Set(current);
-                          if (next.has(path)) next.delete(path);
-                          else next.add(path);
+                          if (next.has(path)) {
+                            next.delete(path);
+                          } else next.add(path);
                           return next;
                         })}
                       onOpenDiff={onOpenDiff}

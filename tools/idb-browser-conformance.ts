@@ -29,11 +29,13 @@ if (
   suite !== "draft-documents" && suite !== "editor-plugin-sandbox" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics"
+  suite !== "info-metrics" && suite !== "review-context"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "info-metrics"
+const entry = suite === "review-context"
+  ? "runReviewContextBrowserConformance"
+  : suite === "info-metrics"
   ? "runInfoMetricsBrowserConformance"
   : suite === "dormant-session"
   ? "runDormantSessionBrowserConformance"
