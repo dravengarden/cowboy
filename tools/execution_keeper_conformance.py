@@ -78,7 +78,12 @@ def probe(args):
         root = Path(directory)
         state, target = root / "state", root / "target"
         state.mkdir(mode=0o700)
-        target.mkdir()
+        if args.symlink_workspace:
+            physical_target = root / "physical-target"
+            physical_target.mkdir()
+            target.symlink_to(physical_target, target_is_directory=True)
+        else:
+            target.mkdir()
         # Preserve the upstream metadata layout without borrowing an installed
         # Plugin as a running target component. The full release owns its pin.
         executor_root = root / "executor"
@@ -128,6 +133,8 @@ def probe(args):
             require(ready["kind"] == "ready", "keeper did not become ready")
             require(ready["initialization"]["environmentInfo"]["cwd"] == target.as_uri(), "wrong executor cwd")
             checks.append("exact_pinned_executor_and_target_context")
+            if args.symlink_workspace:
+                checks.append("symlink_workspace_preserves_admitted_cwd")
             content = "quotes '\" $() ${HOME} 中文 🐎\r\n".encode() + bytes(range(256))
             file = target / "quoted ' 中文.bin"
             write = keeper.invocation("fs/writeFile", {"path": file.as_uri(), "dataBase64": base64.b64encode(content).decode()})
@@ -161,7 +168,7 @@ def probe(args):
                 time.sleep(0.05)
             require((target / "starts").read_text() == "once", "target command did not execute once")
             require(Path((target / "helper-path").read_text()).resolve() == args.keeper.resolve() and
-                    (target / "helper-realpath").read_text() == str(target),
+                    (target / "helper-realpath").read_text() == str(target.resolve()),
                     "target file helper was not the owned keeper or required ambient executables")
             checks.append("owned_file_helper_works_without_python_or_path_tools")
             time.sleep(35)
@@ -203,6 +210,7 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--symlink-workspace", action="store_true")
     args = parser.parse_args()
     require(args.keeper.is_absolute() and args.native_cli.is_absolute(), "executables must be absolute")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "receipt must be a new absolute path")
@@ -215,7 +223,8 @@ def main():
     checks = probe(args)
     receipt = {"schema": "cowboy.execution-keeper-conformance/v1", "accepted": True,
                "keeper_sha256": keeper_digest, "executor": {"version": args.version, "sha256": args.sha256},
-               "checks": checks, "disconnected_ms": 35_000, "cleanup": True,
+               "checks": checks, "symlink_workspace": args.symlink_workspace,
+               "disconnected_ms": 35_000, "cleanup": True,
                "real_model_requests": 0, "production_credentials": False,
                "proves_enrolled_transport": False, "proves_provider_integration": False}
     with args.receipt.open("x") as output:

@@ -376,7 +376,8 @@ pub async fn run(args: Args) -> Result<()> {
         "executor digest differs"
     );
     let cwd = PathBuf::from(&contract.binding.workspace.cwd);
-    let metadata = std::fs::metadata(&cwd)?;
+    let physical_cwd = std::fs::canonicalize(&cwd).context("resolving execution workspace")?;
+    let metadata = std::fs::metadata(&physical_cwd)?;
     ensure!(metadata.is_dir(), "execution workspace unavailable");
     // An existing marker is never treated as a stale PID/socket to remove.
     // Lost keepers require explicit new incarnation admission by the Machine.
@@ -408,7 +409,7 @@ pub async fn run(args: Args) -> Result<()> {
     std::fs::set_permissions(&private_home, std::fs::Permissions::from_mode(0o700))?;
     let mut child = ProcessCommand::new(&contract.executor.command)
         .args(["exec-server", "--listen", "stdio"])
-        .current_dir(&cwd)
+        .current_dir(&physical_cwd)
         .env_clear()
         .envs(&contract.environment)
         .env("CODEX_HOME", &private_home)
@@ -457,10 +458,16 @@ pub async fn run(args: Args) -> Result<()> {
         write_json(&mut input, &json!({"id": 0, "method": "initialize", "params": {"clientName": "cowboy-machine-executor"}})).await?;
         let reply = read_json(&mut output).await?;
         ensure!(reply.get("id") == Some(&json!(0)) && reply.get("error").is_none(), "executor initialization refused");
-        let result = reply.get("result").context("executor initialization missing")?.clone();
+        let mut result = reply.get("result").context("executor initialization missing")?.clone();
         ensure!(result.pointer("/environmentInfo/executorVersion").and_then(Value::as_str) == Some(contract.executor.version.as_str()), "executor protocol version differs");
         let actual_cwd = result.pointer("/environmentInfo/cwd").and_then(Value::as_str).and_then(|path| url::Url::parse(path).ok()).and_then(|path| path.to_file_path().ok());
-        ensure!(actual_cwd.as_ref() == Some(&cwd), "executor working directory differs");
+        ensure!(actual_cwd.as_ref() == Some(&physical_cwd), "executor working directory differs");
+        // A storage move may retain the admitted path as a directory symlink.
+        // Verify the native physical cwd, then keep the binding's logical path
+        // on the wire for existing Provider identities. Host::current_workspace
+        // still fences changes to the directory reached through that alias.
+        *result.pointer_mut("/environmentInfo/cwd").context("executor cwd missing")? =
+            json!(url::Url::from_file_path(&cwd).map_err(|()| anyhow::anyhow!("invalid execution workspace URL"))?.as_str());
         write_json(&mut input, &json!({"method": "initialized", "params": {}})).await?;
         Ok::<_, anyhow::Error>(result)
     }).await??;
