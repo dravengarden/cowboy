@@ -56,7 +56,7 @@ test("touch icon buttons release synthetic hover and focus paint", () => {
   assertEquals(themeSource.includes("MuiButtonBase:"), true);
   assertEquals(
     themeSource.includes(
-      "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible",
+      "&:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not([aria-pressed='true']):not(.Mui-selected).Mui-focusVisible",
     ),
     true,
   );
