@@ -209,6 +209,15 @@ export function elapsedLabel(fromMs: number, toMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/** Relative start time for the narrow, two-line call preview. */
+export function callAgeLabel(atMs: number, nowMs: number): string {
+  const minutes = Math.max(0, Math.floor((nowMs - atMs) / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
+}
+
 /** When a call started, as compactly as it stays unambiguous: the time
  * today, "Yesterday" or the date before that, and the year only when it
  * differs. Paired with its duration, it also places the call's end. */
