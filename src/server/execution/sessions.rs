@@ -493,6 +493,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
                 .into(),
         );
     };
+    let mut resolved_source = None;
     if !intent.accepts(&binding) {
         let mut alias_intent = intent.clone();
         alias_intent
@@ -523,6 +524,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
                 "Prepared environment no longer matches the selected workspace or executor".into(),
             );
         }
+        resolved_source = Some(binding.workspace.source_path.clone());
     }
     let prepared = ExecutionBinding::from_record(
         serde_json::to_value(binding).map_err(|_| "Invalid execution binding")?,
@@ -551,7 +553,12 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
     state
         .supervisor
         .finish_session_preparation(session_id, |hub| {
-            hub.accept_execution_binding(session_id, &expected, prepared)
+            hub.accept_execution_binding(
+                session_id,
+                &expected,
+                prepared,
+                resolved_source.as_deref(),
+            )
         })
 }
 
