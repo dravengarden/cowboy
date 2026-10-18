@@ -187,6 +187,7 @@
           ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
+          ./src/session_workspace
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
@@ -770,6 +771,7 @@
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
+        test -e ${machine-src}/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
