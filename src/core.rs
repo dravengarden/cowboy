@@ -4815,10 +4815,10 @@ impl Hub {
     /// Prepare a session for a fresh-context worker replacement.
     ///
     /// Forget the resumable agent id so the next spawn uses `session/new`, and
-    /// release the old worker's in-flight guard. The replacement has its own
-    /// lifecycle fence; carrying this guard across the reset would leave the new
-    /// idle worker permanently unable to dispatch a queued prompt because the
-    /// normal `Starting` -> `Running` edge deliberately does not clear it.
+    /// release the old worker's in-flight guard. A prompt still owned by the
+    /// dispatcher has not reached that worker: retain its guard across reset so
+    /// a newer queued prompt cannot overtake asynchronous preflight. Once handed
+    /// to a runtime, its normal completion releases the guard.
     ///
     /// Context usage and background work describe the discarded agent context.
     /// A fresh agent reports usage only after its first model turn, and a
@@ -4829,8 +4829,7 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             sessions.get_mut(session_id).is_some_and(|s| {
                 s.meta.agent_session_id = None;
-                s.in_flight = false;
-                s.dispatch_pending = None;
+                s.in_flight = s.dispatch_pending.is_some();
                 let changed = s.meta.context_used != 0
                     || s.meta.context_size != 0
                     || s.meta.usage.is_some()
@@ -10735,6 +10734,8 @@ mod core_tests {
         hub.submit("reset-queue", "old turn".to_owned(), vec![], None);
         let old_turn = rx.recv().await.expect("old turn dispatch");
         assert_eq!(old_turn.text, "old turn");
+        // This test resets an already handed-off runtime turn.
+        drop(old_turn);
         hub.submit("reset-queue", "after reset".to_owned(), vec![], None);
         assert_eq!(queue_texts(&hub, "reset-queue"), vec!["after reset"]);
 
@@ -10746,6 +10747,59 @@ mod core_tests {
         assert_eq!(dispatched.text, "after reset");
         assert!(rx.try_recv().is_err());
         assert!(queue_texts(&hub, "reset-queue").is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_reset_preserves_pending_dispatch_order_and_failed_prompt() {
+        for failed in [false, true] {
+            let hub = hub_with_session("reset-preflight");
+            let (tx, mut rx) = mpsc::channel(4);
+            hub.set_dispatch_tx(tx);
+            hub.set_status("reset-preflight", Status::Running, None);
+            hub.submit(
+                "reset-preflight",
+                "first".into(),
+                vec![],
+                Some("first".into()),
+            );
+            let first = rx.recv().await.unwrap();
+
+            hub.prepare_context_reset("reset-preflight");
+            hub.set_status("reset-preflight", Status::Starting, None);
+            hub.set_status("reset-preflight", Status::Running, None);
+            hub.submit(
+                "reset-preflight",
+                "second".into(),
+                vec![],
+                Some("second".into()),
+            );
+            hub.drain_now("reset-preflight");
+            assert!(
+                rx.try_recv().is_err(),
+                "reset cannot supersede preflight ownership"
+            );
+            assert_eq!(queue_texts(&hub, "reset-preflight"), vec!["second"]);
+
+            if failed {
+                hub.requeue_prompt(&first.session_id, first.text, first.content, first.cmid);
+                drop(first.ownership);
+                hub.try_drain("reset-preflight");
+                let retry = rx.recv().await.unwrap();
+                assert_eq!(retry.text, "first");
+                assert_eq!(retry.cmid.as_deref(), Some("first"));
+                hub.try_drain("reset-preflight");
+                assert!(rx.try_recv().is_err());
+                drop(retry);
+            } else {
+                // Successful preflight hands off the first prompt before completion.
+                drop(first);
+            }
+            hub.set_status("reset-preflight", Status::Busy, None);
+            hub.set_status("reset-preflight", Status::Running, None);
+            let second = rx.recv().await.unwrap();
+            assert_eq!(second.text, "second");
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[tokio::test]

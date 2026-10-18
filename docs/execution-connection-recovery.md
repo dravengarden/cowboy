@@ -512,3 +512,8 @@ Operator recovery uses the same launch admission.
 Current-turn delivery is also unfinished activity. Operator diagnostics expose
 its content-free pending identities, and automatic recovery refuses replacement
 until both ordinary prompt delivery and current-turn receipts are settled.
+
+Clearing conversation context retains ownership of any prompt still awaiting
+execution preflight. Only the old runtime turn loses its in-flight guard; newer
+messages remain queued until the pending prompt is handed off or restored at
+the queue head. Reset cannot let a newer message overtake that prompt.
