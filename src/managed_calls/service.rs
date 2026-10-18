@@ -125,6 +125,9 @@ impl Ledger {
             revision: 1,
             created_at_ms: now,
             updated_at_ms: now,
+            started_at_ms: None,
+            finished_at_ms: None,
+            configuration: None,
             input_revision: None,
             result: None,
             // The child's own runtime is chosen when the call is claimed.

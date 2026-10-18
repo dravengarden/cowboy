@@ -321,6 +321,12 @@ async fn submit(
 /// printed byte is read back into the caller's context, so nothing else is.
 #[derive(Args)]
 pub struct ReviewArgs {
+    /// Short task title shown in Calls (no generated request ID).
+    #[arg(long)]
+    title: Option<String>,
+    /// Why you chose this model/effort after reading call capabilities and quota.
+    #[arg(long)]
+    reason: Option<String>,
     /// Absolute Git worktree to review on the execution target. Defaults to
     /// the current Git worktree; the target validates registration.
     #[arg(long)]
@@ -368,6 +374,10 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
     let request = json!({
         "schema": 1,
         "request_id": format!("review-{millis}-{}", std::process::id()),
+        "labels": {
+            "title": args.title.as_deref().unwrap_or(if args.design { "Design review" } else { "Code review" }),
+            "selection_reason": args.reason.as_deref().unwrap_or("Session Tools selection"),
+        },
         "purpose": if args.design { "design_review" } else { "review" },
         "instruction": super::review_instruction(args.design, focus),
         "context": {"scope": "current-worktree", "root": root},
@@ -682,6 +692,8 @@ mod tests {
 
     fn review_args(design: bool) -> ReviewArgs {
         ReviewArgs {
+            title: None,
+            reason: None,
             root: Some("/tasks/review".into()),
             design,
             ask: false,
@@ -703,6 +715,17 @@ mod tests {
         assert_eq!(request.context.root.as_deref(), Some("/tasks/review"));
         assert!(request.instruction.ends_with("reply exactly: No findings."));
         assert!(valid_id(&request.request_id));
+        let mut choice = review_args(false);
+        choice.title = Some("Permission boundaries".into());
+        choice.reason = Some("Fable model window constrained; Opus High is available".into());
+        let selected = review_request(&choice, "").unwrap();
+        assert_eq!(selected.labels["title"], "Permission boundaries");
+        assert_eq!(
+            selected.labels["selection_reason"],
+            choice.reason.as_deref().unwrap()
+        );
+        choice.title = Some("x".repeat(257));
+        assert!(review_request(&choice, "").is_err());
         let focused = review_request(&review_args(true), "Check the migration order").unwrap();
         assert_eq!(focused.purpose, super::super::Purpose::DesignReview);
         assert!(

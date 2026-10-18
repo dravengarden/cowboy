@@ -212,6 +212,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const originalFetch = globalThis.fetch;
   const tests: string[] = [];
   let calls: ManagedCallSummary[] = [];
+  const dismissed = new Set<string>();
   const cancels: string[] = [];
   const cancelCount = (): number => cancels.length;
   let sessionOverride: SessionToolsOverride = { schema: 1 };
@@ -282,8 +283,17 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     }
     if (url === "/api/sessions/parent/calls") {
       return Promise.resolve(
-        Response.json({ schema: 1, calls, next_before: null }),
+        Response.json({ schema: 1, calls: calls.filter((call) => !dismissed.has(call.call_id)), next_before: null }),
       );
+    }
+    if (url === "/api/sessions/parent/calls/dismiss" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { call_ids: string[]; dismissed: boolean };
+      check(!body.call_ids.includes("call-security"), "active call must not be selected for cleanup");
+      for (const id of body.call_ids) {
+        if (body.dismissed) dismissed.add(id);
+        else dismissed.delete(id);
+      }
+      return Promise.resolve(Response.json(body));
     }
     const detail = /^\/api\/sessions\/parent\/calls\/([^/]+)$/.exec(url);
     if (detail) {
@@ -343,6 +353,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     calls = [
       summary("call-security", "running", "security"),
       summary("call-correctness", "completed", "correctness", {
+        configuration: { model: "gpt-6-astra", reasoning_effort: "max" },
+        preset: "astra-max",
+        started_at_ms: Date.now() - 90_000,
+        finished_at_ms: Date.now() - 1_000,
+        labels: { group: "PR 7961 review", round: "1", aspect: "correctness", selection_reason: "Ample quota; strongest available reviewer" },
         verdict: "needs-attention",
         finding_count: 2,
       }),
@@ -376,7 +391,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(
       Array.from(rows).every((row) =>
         /\d{2}:\d{2} · \d+(m \d+)?s/.test(row.textContent ?? "") &&
-        row.querySelector("[title^='Started ']")
+        row.querySelector("[title^='Created ']")
       ),
       "every row must show when its call started and how long it ran",
     );
@@ -518,7 +533,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const preview = previewRail.querySelector<HTMLButtonElement>("[data-call-preview]")!;
     preview.click();
     await until(() => document.querySelector("[data-call-transcript]"), "preview opens the call directly");
-    document.querySelector<HTMLButtonElement>("[data-mobile-sheet-footer-shield] button[aria-label='Close']")!.click();
+    (await until(() => button("Close"), "preview close button missing"))!.click();
     await until(() => document.querySelector("[data-call-transcript]") ? null : true, "preview closes cleanly");
     open.click();
     const row = await until(
@@ -596,6 +611,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => text().includes("Retry duplicates the charge") ? true : null,
       "mobile detail result missing",
     );
+    check(text().includes("gpt-6-astra · max") && text().includes("Finished") && text().includes("Ample quota"), "details show model, effort, finish and choice reason");
     backButton()!.click();
     await until(
       () =>
@@ -633,6 +649,16 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => backButton() ? null : true,
       "failed call back did not return to list",
     );
+
+    button("Clear ended calls…")!.click();
+    await until(() => button("Clear 2"), "cleanup includes both terminal calls");
+    check(dismissed.size === 0, "cleanup waits for confirmation");
+    button("Clear 2")!.click();
+    await until(() => button("Undo"), "cleanup must offer undo");
+    check(dismissed.has("call-tests") && dismissed.has("call-correctness"), "selected ended calls cleared");
+    button("Undo")!.click();
+    await until(() => dismissed.size === 0 ? true : null, "undo restores cleared calls");
+    tests.push("terminal-call-cleanup-is-confirmed-and-reversible");
     // Like every Cowboy cover sheet, the page closes from the frosted
     // floating island, not from a header control.
     const dismiss = await until(
@@ -985,6 +1011,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     tests.push("call-approval-prompt-answers-and-expires");
     return tests;
+  } catch (error) {
+    throw new Error(`After ${tests.at(-1) ?? "setup"}: ${error instanceof Error ? error.stack : String(error)}`);
   } finally {
     root.unmount();
     container.remove();
@@ -1001,6 +1029,10 @@ export async function renderManagedCallsPreview(
   const calls = [
     summary("call-security", "running", "security"),
     summary("call-correctness", "completed", "correctness", {
+      configuration: { model: "gpt-6-astra", reasoning_effort: "max" },
+      preset: "astra-max",
+      started_at_ms: Date.now() - 90_000,
+      finished_at_ms: Date.now() - 1_000,
       verdict: "needs-attention",
       finding_count: 2,
     }),

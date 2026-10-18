@@ -256,6 +256,38 @@ exploratory edits never get one. It does not read capabilities first; `cowboy
 review` answers one `skipped:` line at once when the session's policy refuses
 it, and the agent then carries on without mentioning it. An explicit user
 request uses `cowboy review --ask`, which goes through the approval prompt.
+
+Before a review, the calling model reads `cowboy call capabilities`. The same
+projection is available through MCP's calls capabilities API. It includes
+signed presets, session choices, the Provider's quota account, cached account
+and model limit windows, reset times and observation freshness. Missing or stale
+quota is unknown. Oversized quota data is explicitly omitted and can be read
+through `cowboy.usage.read`; capabilities never triggers a collector.
+
+The calling model chooses the strongest available reviewer quota permits,
+preferring Max where supported: Astra/Fable with ample quota, Opus/SOL when
+constrained. It respects explicit user choices and shared account windows;
+there is no fixed percentage router or silent downgrade. It passes `--agent`,
+`--preset`, a short `--title` and `--reason` to `cowboy review`. The controller
+still enforces session authorization and signed presets. Generic managed-call
+clients may put the same display metadata in `labels.title` and
+`labels.selection_reason`; MCP `review.start` and `calls.start` accept `title`
+and `reason` directly.
+
+Calls displays the persisted dispatch configuration (model and effort), chosen
+preset and reason, created/started/finished timestamps, elapsed time, time zone,
+placement, input snapshot and failure cause. Historical records lacking these
+observations say so; current catalog defaults never rewrite history. Start is
+the recorded transition to Running before submitting the idempotent prompt,
+not the first model token; finish is the controller's terminal observation.
+
+Clear ended calls supports individual selection, bulk selection and Undo.
+`POST /api/sessions/{id}/calls/dismiss` takes
+`{"call_ids":["call-id"],"dismissed":true}` (maximum 100); `false` restores
+them. This authenticated, parent-scoped operation hides only terminal calls.
+It preserves results, child ownership, budget counts and admission receipts,
+so cleanup cannot cause a duplicate launch. It is also available to product
+CLI clients through `cowboy api`; it does not cancel active work or delete code.
 Suger's Codex reviewer adapter applies its own rule to its review rounds (it
 skips without prompting when off).
 

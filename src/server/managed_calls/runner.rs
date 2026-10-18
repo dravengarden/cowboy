@@ -90,6 +90,30 @@ async fn advance(
     change(&mut next);
     next.revision = previous.revision + 1;
     next.updated_at_ms = now_ms().max(previous.updated_at_ms);
+    if previous.state == State::Starting && next.state == State::Running {
+        next.started_at_ms = Some(next.updated_at_ms);
+        next.configuration = state
+            .hub
+            .config_options(&next.child_session_id)
+            .map(|options| {
+                ["model", "reasoning_effort", "effort"]
+                    .into_iter()
+                    .filter_map(|key| {
+                        let observed = options
+                            .as_array()
+                            .and_then(|options| options.iter().find(|option| option["id"] == key))
+                            .and_then(|option| option.get("currentValue"));
+                        observed
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|value| value.len() <= 256)
+                            .map(|value| (key.to_owned(), value.to_owned()))
+                    })
+                    .collect()
+            });
+    }
+    if next.state.terminal() {
+        next.finished_at_ms = Some(next.updated_at_ms);
+    }
     match store.advance_managed_call(previous, &next).await {
         Ok(advanced) => {
             if advanced {

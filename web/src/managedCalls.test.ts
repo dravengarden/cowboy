@@ -4,6 +4,8 @@ import {
   callsOverview,
   callStateLabel,
   callTitle,
+  callModelLabel,
+  callTimesTitle,
   isManagedChild,
   type ManagedCallSummary,
   managedChildParent,
@@ -70,6 +72,16 @@ test("managed children are recognised only from their exact binding", () => {
   } as unknown as SessionMeta;
   assert.equal(managedChildParent(split), "parent");
   assert.ok(isManagedChild(split));
+});
+
+test("review metadata distinguishes observed configuration, selected preset and missing history", () => {
+  assert.equal(callModelLabel(call("completed")), "Model not recorded");
+  assert.equal(callModelLabel(call("completed", { preset: "fable-max" })), "Selected: fable-max");
+  assert.equal(callModelLabel(call("completed", { configuration: { model: "claude-fable-5-1", effort: "max" } })), "claude-fable-5-1 · max");
+  assert.match(callTimesTitle(call("failed")), /Start not recorded.*Finish not recorded/);
+  const timed = callTimesTitle(call("completed", { started_at_ms: 1000, finished_at_ms: 2000 }));
+  assert.match(timed, /Created .*Started .*Finished /);
+  assert.equal(callTitle(call("completed", { labels: {} })), "review");
 });
 
 test("execution status, verdicts and findings stay separate facts", () => {

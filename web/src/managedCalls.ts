@@ -29,6 +29,11 @@ export interface ManagedCallSummary {
   state: ManagedCallState;
   created_at_ms: number;
   updated_at_ms: number;
+  started_at_ms?: number | null;
+  finished_at_ms?: number | null;
+  configuration?: Record<string, string> | null;
+  preset?: string | null;
+  selection?: string | null;
   input_revision: string | null;
   has_result: boolean;
   runtime_machine_id: string | null;
@@ -142,7 +147,15 @@ export function callTitle(
     round ? `round ${round}` : null,
   ].filter((value): value is string => value !== null);
   if (parts.length > 0) return parts.join(" · ");
-  return call.labels["title"] ?? `${call.purpose} · ${call.request_id}`;
+  return call.labels["title"] ?? call.purpose.replace(/_/g, " ");
+}
+
+/** Persisted observations, never today's mutable Provider catalog. */
+export function callModelLabel(call: Pick<ManagedCallSummary, "configuration" | "preset">): string {
+  const model = call.configuration?.model;
+  const effort = call.configuration?.reasoning_effort ?? call.configuration?.effort;
+  if (model) return [model, effort].filter(Boolean).join(" · ");
+  return call.preset ? `Selected: ${call.preset}` : "Model not recorded";
 }
 
 export function callGroup(
@@ -199,12 +212,12 @@ export function startedLabel(atMs: number, nowMs: number = Date.now()): string {
 
 /** Exact start and end for a hover or long-press title. */
 export function callTimesTitle(
-  call: Pick<ManagedCallSummary, "created_at_ms" | "updated_at_ms" | "state">,
+  call: Pick<ManagedCallSummary, "created_at_ms" | "started_at_ms" | "finished_at_ms" | "state">,
 ): string {
-  const started = `Started ${new Date(call.created_at_ms).toLocaleString()}`;
-  return callActive(call.state)
-    ? started
-    : `${started} · Finished ${new Date(call.updated_at_ms).toLocaleString()}`;
+  const created = `Created ${new Date(call.created_at_ms).toLocaleString()}`;
+  const started = call.started_at_ms == null ? "Start not recorded" : `Started ${new Date(call.started_at_ms).toLocaleString()}`;
+  const finished = call.finished_at_ms == null ? (callActive(call.state) ? "In progress" : "Finish not recorded") : `Finished ${new Date(call.finished_at_ms).toLocaleString()}`;
+  return `${created} · ${started} · ${finished}`;
 }
 
 export function shortRevision(revision: string | null | undefined): string {
@@ -318,6 +331,17 @@ export async function cancelCall(parent: string, call: string): Promise<void> {
   }
 }
 
+export async function dismissCalls(parent: string, ids: string[], dismissed = true): Promise<string[]> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(parent)}/calls/dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ call_ids: ids, dismissed }),
+  });
+  if (!response.ok) throw new Error(`Calls could not be cleared (${response.status}); retry safely`);
+  const result = await response.json() as { call_ids: string[] };
+  return result.call_ids;
+}
+
 /** Poll one parent's calls. Active calls refresh quickly; settled lists slowly.
  * The last observation is kept across network failures with its age. */
 export function useManagedCalls(parent: string | null): {
@@ -348,6 +372,7 @@ export function useManagedCalls(parent: string | null): {
         return;
       }
       void fetchCalls(parent, controller.signal).then((next) => {
+        if (controller.signal.aborted) return;
         setCalls(next);
         setObservedAt(Date.now());
         setError(null);

@@ -10482,6 +10482,7 @@ async fn serve_axum(
             )),
         )
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
+        .route("/api/sessions/{id}/calls/dismiss", post(managed_calls::dismiss))
         .route(
             "/api/sessions/{id}/calls/approval",
             post(managed_calls::decide_approval),

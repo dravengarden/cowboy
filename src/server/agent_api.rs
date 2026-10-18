@@ -35,7 +35,7 @@ mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
-pub(super) use actions::invoke;
+pub(super) use actions::{invoke, read_parent};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.
@@ -222,6 +222,8 @@ impl Host for SessionHost<'_> {
                         let summary = row.summary();
                         json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
                             "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
+                            "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
+                            "configuration":row.configuration,"preset":row.preset,
                             "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
                     })
                     .collect::<Vec<_>>();

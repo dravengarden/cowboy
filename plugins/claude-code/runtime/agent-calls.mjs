@@ -7,11 +7,12 @@ import { callGuidance } from "./memory.mjs";
 // It rides every turn, so it is a pointer, not a manual: the agent reads
 // `cowboy review --help` or `cowboy codex --help` only when it needs them.
 export const AGENT_CALLS_PROMPT = [
-  "`cowboy review` gets a read-only second opinion on this worktree's change from another agent and prints only its findings (optional focus text on stdin; `--help`).",
+  "`cowboy review` reviews this worktree read-only and prints findings (focus on stdin; `--help`).",
   "Skip it by default and decide for yourself: use it at most once per task, before reporting, only when a missed bug would be costly and your own checks cannot rule it out (security, permissions, concurrency, persistence or migrations, data deletion, money, large cross-cutting refactors).",
   "Never for small, mechanical, docs, test-only or exploratory edits.",
   "Fix real findings and mention them briefly; after a `skipped:` line, or if the command is missing, say nothing.",
   "If the user asks for a review, run `cowboy review --ask`.",
+  "Before review, read `cowboy call capabilities`; follow review_selection to choose --agent/--preset with --reason and --title.",
   "Other delegation: `cowboy codex --help`. Never run `codex exec`, `codex review` or `claude -p` yourself; they run hidden from the user.",
 ].join(" ");
 

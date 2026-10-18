@@ -122,7 +122,8 @@ test("ordinary sessions learn Cowboy calls without replacing user instructions",
   // pointer rather than a manual.
   assert.match(AGENT_CALLS_PROMPT, /Skip it by default/);
   assert.ok(AGENT_CALLS_PROMPT.length < 900, AGENT_CALLS_PROMPT.length);
-  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /"schema"/);
+  assert.match(AGENT_CALLS_PROMPT, /cowboy call capabilities/);
   // The user's own developer instructions, or Cowboy's, are never replaced.
   assert.deepEqual(
     agentCallsConfiguration(
@@ -164,7 +165,7 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
   );
   assert.match(prompt, /at most once per task/);
   assert.match(prompt, /cowboy review --ask/);
-  assert.ok(prompt.length < 650);
+  assert.ok(prompt.length < 800);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   const added = agentCallsConfiguration([], "", prompt);
   assert.equal(

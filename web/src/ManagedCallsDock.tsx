@@ -32,6 +32,7 @@ import {
   useState,
 } from "react";
 import { CallTranscript } from "./CallTranscript";
+import { CallCleanup } from "./CallCleanup";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
@@ -49,6 +50,7 @@ import {
 } from "./composerStackAccordion";
 import {
   callActive,
+  callModelLabel,
   callGroup,
   callsOverview,
   callStateLabel,
@@ -208,6 +210,12 @@ function CallRow({
           >
             {callTitle(call)}
           </Typography>
+          <Typography variant="caption" color="text.secondary" component="div" noWrap title={callModelLabel(call)}>
+            {callModelLabel(call)}
+          </Typography>
+          {call.error && <Typography variant="caption" color="error" component="div" noWrap>
+            {call.error.detail ?? call.error.code}
+          </Typography>}
           {
             /* The icon names the agent; the start and duration place the
               call in time. */
@@ -224,7 +232,7 @@ function CallRow({
               elapsedLabel(call.created_at_ms, end)
             }`}
           >
-            {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
+            {placementLabel(call)} · Created {startedLabel(call.created_at_ms)} ·{" "}
             {elapsedLabel(call.created_at_ms, end)}
           </Typography>
         </Box>
@@ -440,6 +448,9 @@ function CallDetailView({
       <Divider />
       <Typography variant="overline">Execution</Typography>
       <Stack spacing={0.5}>
+        <DetailRow label="Model / effort" value={callModelLabel(call)} />
+        <DetailRow label="Selected preset" value={call.preset ?? "Provider default"} />
+        <DetailRow label="Selection" value={call.labels["selection_reason"] ?? call.selection ?? "Not recorded"} />
         <DetailRow
           label="Status"
           value={call.cancel_requested && callActive(call.state)
@@ -468,9 +479,13 @@ function CallDetailView({
           mono
         />
         <DetailRow
-          label="Started"
+          label="Created"
           value={new Date(call.created_at_ms).toLocaleString()}
         />
+        <DetailRow label="Started" value={call.started_at_ms == null ? "Not recorded" : new Date(call.started_at_ms).toLocaleString()} />
+        <DetailRow label="Finished" value={call.finished_at_ms == null ? (callActive(call.state) ? "In progress" : "Not recorded") : new Date(call.finished_at_ms).toLocaleString()} />
+        <DetailRow label="Elapsed" value={call.started_at_ms == null ? "Not recorded" : elapsedLabel(call.started_at_ms, call.finished_at_ms ?? (callActive(call.state) ? Date.now() : call.updated_at_ms))} />
+        <DetailRow label="Time zone" value={Intl.DateTimeFormat().resolvedOptions().timeZone} />
         <DetailRow
           label="Updated"
           value={new Date(call.updated_at_ms).toLocaleString()}
@@ -929,7 +944,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
   desktop: boolean;
   shortcut?: ReactNode;
 }): React.JSX.Element | null {
-  const { calls, observedAt, error } = useManagedCalls(sessionId);
+  const { calls, observedAt, error, refresh } = useManagedCalls(sessionId);
   const expanded = useStore(composerStackExpandedStore()) === "calls";
   const [route, setRoute] = useState<CallRoute | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -945,7 +960,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
-  if (calls.length === 0) return null;
+  if (calls.length === 0 && (observedAt === null || (!mobileOpen && !expanded))) return null;
   const overview = callsOverview(calls);
   const routed = route
     ? calls.find((call) => call.call_id === route.call) ?? null
@@ -1146,6 +1161,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
               desktop
               onSelect={openCall}
             />
+            <CallCleanup key={sessionId} parent={sessionId} calls={calls} onChange={refresh} />
           </Stack>
         </Collapse>
       )}
@@ -1280,12 +1296,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                     />
                   )
                   : (
-                    <CallList
-                      calls={calls}
-                      selected={null}
-                      desktop={false}
-                      onSelect={openCall}
-                    />
+                    <Stack spacing={1}>
+                      <CallCleanup key={sessionId} parent={sessionId} calls={calls} onChange={refresh} />
+                      <CallList calls={calls} selected={null} desktop={false} onSelect={openCall} />
+                    </Stack>
                   )}
               </Box>
             )}
