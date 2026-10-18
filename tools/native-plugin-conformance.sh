@@ -2,6 +2,8 @@
 # Run on an arm64 Mac with Xcode. Use an exclusively-created Simulator, never
 # the developer's existing app, simulator, keychain, or authenticated browser.
 set -euo pipefail
+native_requested_runtime="${1:-auto}"
+test "$#" -le 1 || { echo "usage: $0 [installed-runtime-id|auto]" >&2; exit 2; }
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
 native_axe="$(command -v axe || true)"
@@ -35,7 +37,7 @@ xcrun --sdk iphonesimulator clang++ -fobjc-arc -fblocks \
 /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 9.8.7' "$native_app/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 987' "$native_app/Info.plist"
 codesign --sign - "$native_app"
-native_runtime="$(xcrun simctl list runtimes --json | python3 -c 'import json,sys; values=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]; values.sort(key=lambda r: tuple(map(int,r["version"].split(".")))); print(values[-1]["identifier"])')"
+native_runtime="$(xcrun simctl list runtimes --json | python3 -c 'import json,sys; values=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]; values.sort(key=lambda r: tuple(map(int,r["version"].split(".")))); requested=sys.argv[1]; print(values[-1]["identifier"] if requested=="auto" else next(r["identifier"] for r in values if r["identifier"]==requested))' "$native_requested_runtime")"
 native_simulator="$(xcrun simctl create "Cowboy Plugin Conformance ${native_revision:0:8}" \
   com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$native_runtime")"
 xcrun simctl boot "$native_simulator"

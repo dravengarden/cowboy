@@ -80,6 +80,11 @@ an existing Simulator, app or keychain. The receipt lives in
 `dist/native-plugin-conformance/receipt.json`; the temporary app/Simulator are
 removed even on failure.
 
+Pass an installed runtime ID to target a specific WebKit version, for example
+`just native-plugin-conformance com.apple.CoreSimulator.SimRuntime.iOS-26-5`.
+AXe must support the selected runtime; an automation-session timeout is a failed
+check, not keyboard acceptance. The current Mac's AXe cannot automate iOS 27.
+
 This is native bridge acceptance, not full Tauri product or physical-device/
 Associated Domains acceptance. The full shell source and build entry now live
 in the [parent directory](../README.md); an unversioned remote directory is
