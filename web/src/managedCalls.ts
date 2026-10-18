@@ -158,6 +158,21 @@ export function callModelLabel(call: Pick<ManagedCallSummary, "configuration" | 
   return call.preset ? `Selected: ${call.preset}` : "Model not recorded";
 }
 
+/** Only the call's recorded values describe its execution, including failed
+ * starts. Never fill historical gaps from a mutable Provider preset. */
+export function callExecutionParameters(call: Pick<ManagedCallSummary, "configuration" | "preset">): { label: string; value: string }[] {
+  const config = call.configuration;
+  const permission = ["permission_mode", "sandbox_mode", "approval_policy"]
+    .flatMap((key) => config?.[key] ? [`${key}: ${config[key]}`] : []);
+  return [
+    { label: "Model", value: config?.model || "Not recorded" },
+    { label: "Reasoning", value: config?.reasoning_effort || config?.effort || "Not recorded" },
+    { label: "Permission", value: permission.join(" · ") || "Not recorded" },
+    ...(config?.session_mode || config?.mode ? [{ label: "Mode", value: config.session_mode || config.mode! }] : []),
+    ...(call.preset ? [{ label: "Preset", value: call.preset }] : []),
+  ];
+}
+
 /** Compact titles omit transport IDs, but repeated tasks still need identity.
  * Number by creation order, never status or the incoming poll order. */
 export function callPreviewTitles(calls: readonly ManagedCallSummary[]): Map<string, string> {

@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
   callAgeLabel,
+  callExecutionParameters,
   callsOverview,
   callStateLabel,
   callTitle,
@@ -15,6 +16,19 @@ import {
   startedLabel,
 } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
+
+test("execution parameters preserve recorded observations and mark missing history", () => {
+  assert.deepEqual(callExecutionParameters({ configuration: null, preset: "historic-preset" }), [
+    { label: "Model", value: "Not recorded" },
+    { label: "Reasoning", value: "Not recorded" },
+    { label: "Permission", value: "Not recorded" },
+    { label: "Preset", value: "historic-preset" },
+  ]);
+  const parameters = callExecutionParameters({ configuration: { model: "recorded-model", effort: "high", permission_mode: "bypassPermissions" } });
+  assert.equal(parameters.find((row) => row.label === "Model")?.value, "recorded-model");
+  assert.equal(parameters.find((row) => row.label === "Reasoning")?.value, "high");
+  assert.equal(parameters.find((row) => row.label === "Permission")?.value, "permission_mode: bypassPermissions");
+});
 
 test("preview age retains days, hours and minutes without zero units", () => {
   const at = 1_000_000;

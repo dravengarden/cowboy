@@ -53,6 +53,7 @@ import {
   callActive,
   callAgeLabel,
   callModelLabel,
+  callExecutionParameters,
   callGroup,
   callsOverview,
   callStateLabel,
@@ -600,7 +601,7 @@ function Badge(
   );
 }
 
-/** A compact two-line phone header: title above status, placement and time.
+/** A compact phone header: title above status, placement, time and recorded configuration.
  * It replaces the sheet's grab handle. */
 function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
@@ -698,6 +699,13 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           {startedLabel(call.created_at_ms)} ·{" "}
           {elapsedLabel(call.created_at_ms, end)}
         </Box>
+      </Box>
+      <Box data-call-header-configuration sx={{ display: "flex", flexWrap: "wrap", columnGap: 1, rowGap: 0.25, fontSize: "0.6875rem", minWidth: 0 }}>
+        {callExecutionParameters(call).map(({ label, value }) => (
+          <Box component="span" key={label} sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            {label}: <Box component="span" sx={{ color: "text.primary" }}>{value}</Box>
+          </Box>
+        ))}
       </Box>
     </Box>
   );

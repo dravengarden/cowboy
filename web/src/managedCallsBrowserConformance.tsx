@@ -612,6 +612,14 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         ),
       "a mobile call must open its transcript",
     );
+    const executionHeader = document.querySelector<HTMLElement>("[data-call-header-configuration]");
+    check(executionHeader?.textContent?.includes("Model: gpt-6-astra") &&
+      executionHeader.textContent.includes("Reasoning: max") &&
+      executionHeader.textContent.includes("Permission: Not recorded") &&
+      executionHeader.textContent.includes("Preset: astra-max"),
+      "mobile transcript header exposes recorded execution settings and missing permission history");
+    check(executionHeader!.scrollWidth <= executionHeader!.clientWidth,
+      "execution parameters must wrap within the phone header");
     const backButton = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(
         "[data-mobile-sheet-footer-shield] button[aria-label='Back']",
