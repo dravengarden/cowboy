@@ -916,14 +916,14 @@ function CallPreview({ call, title, onOpen }: {
           {active && <CircularProgress size="0.6875rem" />}
           <Typography variant="caption" noWrap sx={{
             color: tone === "error" ? "error.main" : active ? "primary.main" : "text.secondary",
-            fontSize: "0.75rem",
+            fontSize: "0.75rem", flexShrink: 0,
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
+            · {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
+          </Typography>
         </Stack>
-        <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: "0.6875rem" }}>
-          {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
-        </Typography>
       </Stack>
     </ButtonBase>
   );
