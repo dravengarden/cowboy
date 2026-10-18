@@ -42,6 +42,11 @@ native_simulator="$(xcrun simctl create "Cowboy Plugin Conformance ${native_revi
   com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$native_runtime")"
 xcrun simctl boot "$native_simulator"
 xcrun simctl bootstatus "$native_simulator" -b
+# Fresh Simulators show a modal QuickPath tutorial over the keyboard. Configure
+# only this disposable guest, as Chromium's iOS test setup does, not host prefs.
+for native_tutorial in DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial DidShowGestureKeyboardIntroduction UIKeyboardDidShowInternationalInfoIntroduction; do
+  xcrun simctl spawn "$native_simulator" defaults write com.apple.keyboard.preferences "$native_tutorial" -bool YES
+done
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
 # Resolve the Web accessibility frame rather than its activation point: AXe's
@@ -57,7 +62,7 @@ import json, sys
 def find(value):
     if isinstance(value, dict):
         frame = value.get("frame", {})
-        if value.get("AXLabel") == "Show keyboard" and frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
+        if "Show keyboard" in [value.get("AXLabel"), value.get("title"), value.get("AXValue")] and frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
             return frame["x"] + frame["width"] / 2, frame["y"] + frame["height"] / 2
         for child in value.values():
             found = find(child)
@@ -77,6 +82,7 @@ mkdir -p dist/native-plugin-conformance
 if [ -z "$native_point" ]; then
   xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
   echo "Keyboard test button not exposed in accessibility" >&2
+  cp "$native_root/ui.json" dist/native-plugin-conformance/failed-ui.json
   cat "$native_root/axe-error.log" >&2
   exit 1
 fi
