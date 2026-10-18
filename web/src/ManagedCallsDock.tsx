@@ -900,6 +900,11 @@ function CallPreview({ call, title, now, onOpen }: {
   const tone = callTone(call.state);
   const end = active ? Date.now() : call.finished_at_ms ?? call.updated_at_ms;
   const time = callAgeLabel(call.started_at_ms ?? call.created_at_ms, now);
+  const execution = [
+    call.configuration?.model || call.preset,
+    call.configuration?.reasoning_effort || call.configuration?.effort,
+  ].filter(Boolean).join(" · ");
+  const permission = call.configuration?.permission_mode || call.configuration?.sandbox_mode;
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
@@ -919,7 +924,11 @@ function CallPreview({ call, title, now, onOpen }: {
       }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
-          <Typography variant="caption" noWrap sx={{ flex: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          <Typography variant="caption" noWrap sx={{ minWidth: 0, flexShrink: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          {execution && (
+            <Typography data-call-preview-configuration variant="caption" color="text.secondary" noWrap title={execution}
+              sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {execution}</Typography>
+          )}
         </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}
@@ -929,11 +938,12 @@ function CallPreview({ call, title, now, onOpen }: {
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
-            · {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
-          </Typography>
           <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
             variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontSize: "0.6875rem", fontVariantNumeric: "tabular-nums" }}>· {time}</Typography>
+          {permission && (
+            <Typography variant="caption" color="text.secondary" noWrap title={`Permission: ${permission}`}
+              sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {permission}</Typography>
+          )}
         </Stack>
       </Stack>
     </ButtonBase>

@@ -30,7 +30,7 @@ test("execution parameters preserve recorded observations and mark missing histo
   assert.equal(parameters.find((row) => row.label === "Permission")?.value, "permission_mode: bypassPermissions");
 });
 
-test("preview age retains days, hours and minutes without zero units", () => {
+test("preview age uses days and hours or hours and minutes without zero units", () => {
   const at = 1_000_000;
   for (const [minutes, expected] of [
     [0, "now"],
@@ -39,8 +39,8 @@ test("preview age retains days, hours and minutes without zero units", () => {
     [125, "2h 5m ago"],
     [1440, "1d ago"],
     [1560, "1d 2h ago"],
-    [1575, "1d 2h 15m ago"],
-    [2885, "2d 5m ago"],
+    [1575, "1d 2h ago"],
+    [2885, "2d ago"],
   ] as const) {
     assert.equal(callAgeLabel(at, at + minutes * 60_000), expected);
   }

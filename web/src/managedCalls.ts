@@ -234,7 +234,7 @@ export function callAgeLabel(atMs: number, nowMs: number): string {
   const parts = [
     days ? `${days}d` : "",
     hours ? `${hours}h` : "",
-    remainingMinutes ? `${remainingMinutes}m` : "",
+    !days && remainingMinutes ? `${remainingMinutes}m` : "",
   ].filter(Boolean);
   return `${parts.join(" ")} ago`;
 }

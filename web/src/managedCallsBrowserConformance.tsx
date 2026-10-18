@@ -540,8 +540,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "relative execution time belongs on the second preview row");
     check(/^· (now|(?:\d+d )?(?:\d+h )?(?:\d+m )?ago)$/.test(age.textContent ?? ""),
       "relative execution time distinguishes age from duration");
-    check(preview.textContent?.includes("Hawk") && preview.title.includes("Created"),
-      "call previews show execution placement and retain exact timing details");
+    check(!preview.textContent?.includes("Hawk") && preview.title.includes("Created") && preview.title.includes("Hawk"),
+      "call previews reserve visible space for execution settings and keep placement in details");
+    const configuredPreview = previewRail.querySelector<HTMLElement>('[data-call-preview="call-correctness"]')!;
+    check(configuredPreview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("gpt-6-astra · max"),
+      "call previews show recorded model and reasoning on the title row");
     // Touch dismissal can return focus to the opener with Mui-focusVisible.
     // Its permanent card fill must survive the theme's latched-hover reset.
     const previewSurface = preview.firstElementChild as HTMLElement;
