@@ -187,6 +187,7 @@ mod runtime_trace;
 pub mod runtime_wire;
 #[cfg(feature = "full")]
 mod scheduler;
+#[cfg(feature = "full")]
 pub mod send_delivery;
 #[cfg(feature = "full")]
 mod server;
