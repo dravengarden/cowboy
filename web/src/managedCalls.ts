@@ -213,9 +213,9 @@ export function elapsedLabel(fromMs: number, toMs: number): string {
 export function callAgeLabel(atMs: number, nowMs: number): string {
   const minutes = Math.max(0, Math.floor((nowMs - atMs) / 60_000));
   if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
-  return `${Math.floor(minutes / 1440)}d`;
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / 1440)}d ago`;
 }
 
 /** When a call started, as compactly as it stays unambiguous: the time

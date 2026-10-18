@@ -912,8 +912,6 @@ function CallPreview({ call, title, now, onOpen }: {
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
           <Typography variant="caption" noWrap sx={{ flex: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
-          <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
-            variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
         </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}
@@ -923,9 +921,11 @@ function CallPreview({ call, title, now, onOpen }: {
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, fontSize: "0.6875rem" }}>
             · {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
           </Typography>
+          <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
+            variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontSize: "0.6875rem", fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
         </Stack>
       </Stack>
     </ButtonBase>
