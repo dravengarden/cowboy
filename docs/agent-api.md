@@ -29,6 +29,17 @@ enforces a 4 KiB ceiling for that complete surface, in addition to the
 description budget. This is a serialization measurement, not a provider token
 count, prompt-cache measurement or successful-task cost comparison.
 
+The 2026-10-18 live check measured 2,226 bytes for the four complete definitions
+and initialization instructions: 495 tokens with `o200k_base`, or 484 with
+`cl100k_base` (tiktoken 0.12). Domain discovery took 156 tokens and one operation's
+input declaration took 91 with `o200k_base`. Five separate reads of the current
+session, ten other sessions, usage accounts, Machines and cached quota used 3,403
+tokens for tool arguments plus response text. Composing those reads and returning
+the selected fields used 805, about 76% less for that task. These counts exclude
+Provider wrappers and prompt-cache billing; payload size changes with the live
+state. Reuse known declarations at the same revision, compose related reads and
+select fields before returning them to the agent.
+
 ## Native coverage and the residual gap
 
 Claude Code's hosted programmatic tool calling excludes MCP tools, and neither
