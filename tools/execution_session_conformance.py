@@ -182,6 +182,8 @@ def main():
     require([name for _, name in socket.if_nameindex()] == ["lo"], "isolated loopback required")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "new absolute receipt required")
     inputs = json.loads(args.input.read_text())
+    require(not inputs.get("execution_boot_recovery") or inputs.get("execution_recovery"),
+            "boot recovery conformance requires the explicit recovery fixture")
     identities = {name: {"path": str(Path(inputs[name]).resolve()),
         "sha256": hashlib.sha256(Path(inputs[name]).read_bytes()).hexdigest()}
         for name in ("controller", "machine", "worker", "keeper", "pack", "native_cli")}
@@ -699,6 +701,79 @@ def main():
                     checks.extend([("lost_host_keeper_is_recovered_before_cold_prompt_delivery" if cold else "surviving_idle_agent_recovers_lost_target_before_new_turn"),
                                    "postboot_recovery_retains_native_identity_and_workspace",
                                    "postboot_recovery_executes_only_new_prompt_without_command_replay"])
+            if inputs.get("execution_boot_recovery"):
+                # Lose only the queued worker-replacement command after the
+                # target binding commits; its idle worker must survive unchanged.
+                wait(lambda: info()["status"] == "running", "idle before committed recovery loss")
+                before_commit = info()["execution_binding"]
+                before_native = info().get("agent_session_id")
+                before_effects = effects.read_bytes()
+                def execution_worker():
+                    rows = json.loads(run(*operator, "execution-sessions"))["data"]["sessions"]
+                    return next((row.get("delivery") or {}).get("worker") or {} for row in rows if row["id"] == session)
+                before_epoch = execution_worker()["epoch"]
+                committed_request = root / "committed-recovery-request.json"
+                write(committed_request, {"intent": {"schema": 1, "phase": "recovering",
+                    "operation_id": f"execution-wake-{before_commit['id']}-{before_commit['revision']}",
+                    "previous": before_commit}, "interrupt_active_turn": False})
+                runtime_machine, runtime_command = machines["runtime"]
+                runtime_machine.send_signal(signal.SIGSTOP)
+                try:
+                    committed = json.loads(run(*operator, "recover-execution", "--session", session,
+                                              "--request", committed_request))["data"]["execution_binding"]
+                    require(committed["revision"] == before_commit["revision"] + 1,
+                            "target recovery did not commit before worker replacement")
+                    controller.terminate()
+                    controller.wait(timeout=20)
+                finally:
+                    # This disposable Machine never reads its old connection's
+                    # buffered replacement command. Its separate broker survives.
+                    runtime_machine.kill()
+                    runtime_machine.wait(timeout=20)
+                machines["runtime"] = (start("runtime-after-lost-replacement", runtime_command), runtime_command)
+                controller = start("controller-after-committed-recovery", controller_command)
+                wait(lambda: call("GET", "/healthz")[0] == 200, "committed recovery Controller")
+                wait(lambda: connected("runtime") and connected("target"), "committed recovery Machines")
+                wait(lambda: execution_worker().get("epoch") == before_epoch,
+                     "original idle worker survives lost replacement command")
+                wait(lambda: info()["status"] in ("running", "exited", "crashed", "interrupted"),
+                     "idle old worker lifecycle after reconnect")
+                require(info()["execution_binding"] == committed and effects.read_bytes() == before_effects,
+                        "committed recovery was replaced again or replayed commands")
+                require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Finish committed worker recovery"})[0] == 202,
+                        "committed recovery resume refused")
+                wait(lambda: effects.read_bytes() == before_effects + first_effect, "committed recovery next command")
+                wait(lambda: info()["status"] == "running", "committed recovery next turn end")
+                require(info()["execution_binding"] == committed and info().get("agent_session_id") == before_native,
+                        "finishing committed recovery changed target or conversation")
+                checks.extend(["committed_recovery_resumes_worker_replacement_after_controller_loss",
+                               "committed_recovery_observes_original_receipt_without_replacing_target_twice"])
+            if inputs.get("execution_boot_recovery"):
+                # Preserve a prompt still owned by shutdown-time preflight.
+                wait(lambda: info()["status"] == "running", "idle before shutdown fixture")
+                shutdown_binding = info()["execution_binding"]
+                shutdown_native = info().get("agent_session_id")
+                shutdown_effects = effects.read_bytes()
+                require(info().get("paused") is True, "shutdown fixture requires inspection pause")
+                require(call("POST", f"/api/sessions/{session}/hibernate", {})[0] in (200, 202, 204), "shutdown hibernation refused")
+                wait(lambda: info()["status"] == "exited", "shutdown cold worker")
+                target_machine, _ = machines["target"]
+                target_machine.send_signal(signal.SIGSTOP)
+                try:
+                    require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Retain across pending preflight shutdown"})[0] == 202, "shutdown prompt refused")
+                    controller.terminate()
+                    controller.wait(timeout=20)
+                finally:
+                    target_machine.send_signal(signal.SIGCONT)
+                controller = start("controller-after-pending-preflight", controller_command)
+                wait(lambda: call("GET", "/healthz")[0] == 200, "post-preflight Controller")
+                wait(lambda: connected("runtime") and connected("target"), "post-preflight Machines")
+                wait(lambda: info().get("queue_count") == 1, "durable undelivered shutdown prompt")
+                require(info()["execution_binding"] == shutdown_binding
+                        and info().get("agent_session_id") == shutdown_native
+                        and effects.read_bytes() == shutdown_effects, "shutdown changed identity or ran an undelivered prompt")
+                checks.append("controller_shutdown_retains_preflight_owned_prompt_before_persistence_drain")
+
             status, dataset = call("GET", "/api/sync/dataset")
             require(status == 200, "browser dataset unavailable")
             query = urllib.parse.urlencode({"dataset": dataset["dataset_id"], "bootstrap": "lazy"})
@@ -708,10 +783,22 @@ def main():
                 browser_headers.update({"X-Forwarded-Proto": "https",
                     "x-cowboy-browser-proof": device.proof("GET", f"/ws?{query}")})
             browser = WebSocket(f"ws://127.0.0.1:{port}/ws?{query}", browser_headers)
+            if inputs.get("execution_boot_recovery"):
+                # Unpausing a queue deliberately does not revive a cold agent.
+                # Explicitly initialize only this fixture before releasing it.
+                require(call("POST", f"/api/sessions/{session}/reload")[0] == 202,
+                        "retained shutdown worker initialization refused")
+                wait(lambda: info()["status"] == "running", "retained shutdown worker ready")
+                browser.send({"type": "set_paused", "session_id": session, "paused": False})
+                wait(lambda: effects.read_bytes() == shutdown_effects + first_effect, "retained shutdown prompt executes once")
+                wait(lambda: info()["status"] == "running", "retained shutdown turn end")
+                browser.send({"type": "set_paused", "session_id": session, "paused": True})
+                wait(lambda: info().get("paused") is True, "inspection pause restored")
+                checks.append("retained_shutdown_prompt_resumes_once_with_original_conversation")
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
-            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 2 * int(bool(inputs.get("execution_boot_recovery")))), "deletion removed work or replayed tools")
+            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 4 * int(bool(inputs.get("execution_boot_recovery")))), "deletion removed work or replayed tools")
             checks.append("public_deletion_waits_for_target_stop_and_preserves_work")
         except Exception:
             for log in logs:

@@ -480,3 +480,16 @@ through channel transfer and asynchronous preflight. Idle snapshots and duplicat
 turn-completion events cannot release it before runtime handoff. The guard is
 shared by request clones and releases only its own epoch, preserving per-session
 ordering while unrelated sessions preflight concurrently.
+
+Shutdown cancels target preflight cooperatively and returns an undelivered prompt
+with its original identity before the persistence writer drains. The dispatcher
+is joined rather than aborted while it may still own prompts. The isolated
+fixture stops its Controller with a blocked target, then verifies the persisted
+prompt survives restart and executes exactly once after its inspection pause lifts.
+
+A ready replacement keeper alone does not prove that worker replacement finished.
+After a Controller interruption, a surviving worker's exact previous binding can
+reconstruct the original `execution-wake-*` operation. Cowboy must observe that
+same target-owned receipt and finish replacement before ordinary ensure or prompt
+delivery. This also checks retained declarations of exited workers. Unknown or
+nonmatching recovery identities remain fenced for explicit inspection.

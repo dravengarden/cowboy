@@ -424,7 +424,7 @@ pub(in crate::server) async fn before_dispatch(
                 .execution_readiness
                 .ready(&state.machine_control, session, &previous)
         {
-            return Ok(());
+            return finish_ready_worker(state, session, &previous).await;
         }
         let target_connection = state
             .machine_control
@@ -447,7 +447,7 @@ pub(in crate::server) async fn before_dispatch(
         match response {
             Response::Call { response: KeeperResponse::Ready { scope, .. } } if scope == Scope::from_binding(&previous) => {
                 state.execution_readiness.remember(&state.machine_control, session, &previous, target_connection);
-                return Ok(());
+                return finish_ready_worker(state, session, &previous).await;
             }
             Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {}
             _ => return Err("Execution target unavailable or identity changed; retained prompt was not delivered".into()),
@@ -459,6 +459,57 @@ pub(in crate::server) async fn before_dispatch(
             previous,
         }
     };
+    finish_auto_recovery(state, session, intent).await
+}
+
+fn wake_intent(previous: BindingV1) -> RecoveryV1 {
+    RecoveryV1 {
+        schema: 1,
+        phase: "recovering".into(),
+        operation_id: format!("execution-wake-{}-{}", previous.id, previous.revision),
+        previous,
+    }
+}
+
+async fn finish_ready_worker(
+    state: &Arc<AppState>,
+    session: &str,
+    binding: &BindingV1,
+) -> Result<(), String> {
+    let info = state
+        .hub
+        .session_info(session)
+        .ok_or("Session no longer exists")?;
+    let runtime = state
+        .runtime_router
+        .runtime(&info.meta.machine_id)
+        .ok_or("runtime disconnected")?;
+    if runtime.worker_matches_execution(session, binding) {
+        return Ok(());
+    }
+    let Some(previous) = runtime.worker_execution_binding(session) else {
+        return if runtime.has_worker(session) {
+            Err("Worker execution identity is unknown; explicit recovery is required".into())
+        } else {
+            Ok(())
+        };
+    };
+    let intent = wake_intent(previous);
+    if !intent.accepts(binding) {
+        return Err(
+            "Worker and target do not identify the same recovery; inspect before replacing".into(),
+        );
+    }
+    // A committed binding can outlive its Controller before worker replacement.
+    // Observe the same target-owned receipt, then finish the original operation.
+    finish_auto_recovery(state, session, intent).await
+}
+
+async fn finish_auto_recovery(
+    state: &Arc<AppState>,
+    session: &str,
+    intent: RecoveryV1,
+) -> Result<(), String> {
     {
         let mut maintenance = state.execution_closures.lock();
         if maintenance.contains_key(session) {
@@ -494,6 +545,21 @@ pub(in crate::server) async fn before_dispatch(
 #[cfg(test)]
 mod dispatch_safety_tests {
     use super::*;
+
+    #[test]
+    fn surviving_old_worker_reconstructs_the_original_committed_wake_identity() {
+        let previous = crate::execution_environment::fixture().decode().unwrap();
+        let mut committed = previous.clone();
+        committed.revision += 1;
+        committed.environment.id = "55555555555555555555555555555555".into();
+        committed.environment.incarnation = "44444444444444444444444444444444".into();
+        let original = wake_intent(previous.clone());
+        let after_controller_restart = wake_intent(previous);
+        assert_eq!(original, after_controller_restart);
+        assert!(after_controller_restart.accepts(&committed));
+        committed.revision += 1;
+        assert!(!after_controller_restart.accepts(&committed));
+    }
 
     #[test]
     fn ready_binding_is_invalidated_by_reconnect_even_with_a_reused_epoch() {

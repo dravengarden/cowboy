@@ -853,6 +853,13 @@ impl RemoteRuntime {
         session_id: &str,
         binding: &crate::execution_environment::BindingV1,
     ) -> bool {
+        self.worker_execution_binding(session_id).as_ref() == Some(binding)
+    }
+
+    pub(crate) fn worker_execution_binding(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::execution_environment::BindingV1> {
         self.shared
             .workers
             .lock()
@@ -860,7 +867,6 @@ impl RemoteRuntime {
             .and_then(|worker| worker.launch.as_ref())
             .and_then(|launch| launch.execution_binding.as_ref())
             .and_then(|record| record.decode().ok())
-            .is_some_and(|current| &current == binding)
     }
 
     pub fn recover_execution(
@@ -4579,6 +4585,51 @@ mod tests {
             Some("replacement".to_owned())
         );
         assert!(runtime.shared.reset_replacements.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn committed_target_binding_still_requires_old_worker_replacement() {
+        let previous = crate::execution_environment::fixture().decode().unwrap();
+        let mut replacement = previous.clone();
+        replacement.revision += 1;
+        replacement.environment.id = "55555555555555555555555555555555".into();
+        replacement.environment.incarnation = "44444444444444444444444444444444".into();
+        let record = |binding: &crate::execution_environment::BindingV1| {
+            crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(binding).unwrap(),
+            )
+        };
+        let mut old = snapshot("s");
+        old.launch.as_mut().unwrap().execution_binding = Some(record(&previous));
+        old.state = WorkerState::Running;
+        old.current_turn_id = None;
+        let runtime = RemoteRuntime::for_test(Hub::new(), vec![old.clone()]);
+        assert_eq!(
+            runtime.worker_execution_binding("s"),
+            Some(previous.clone())
+        );
+        assert!(!runtime.worker_matches_execution("s", &replacement));
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: format!("execution-wake-{}-{}", previous.id, previous.revision),
+            previous,
+        };
+        assert!(intent.accepts(&replacement));
+        let mut launch = old.launch.unwrap();
+        launch.execution_binding = Some(record(&replacement));
+        runtime.recover_execution(launch.clone(), intent.clone());
+        runtime.ensure(launch);
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| matches!(command,
+            CoreCommand::RecoverExecutionSession { session, intent: saved, .. }
+                if saved.as_ref() == &intent && session.agent_session_id.as_deref() == Some("agent-1")
+                && session.execution_binding.as_ref().unwrap().decode().unwrap() == replacement)));
+        assert!(
+            !pending
+                .iter()
+                .any(|command| matches!(command, CoreCommand::EnsureSession { .. }))
+        );
     }
 
     #[tokio::test]

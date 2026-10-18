@@ -1873,8 +1873,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
         Err(_) => {
-            tracing::error!("dispatcher did not drain within shutdown deadline");
-            dispatcher_task.abort();
+            tracing::warn!(
+                "dispatcher still returning undelivered prompts; keeping persistence alive"
+            );
+            if let Err(error) = dispatcher_task.await {
+                tracing::error!(%error, "dispatcher failed while finishing shutdown retention");
+            }
         }
     }
     if let Some(task) = purge_task {
@@ -3346,6 +3350,19 @@ async fn run_dispatcher(
     tracing::info!("dispatcher shutting down (channel closed)");
 }
 
+async fn dispatch_preflight(
+    shutdown: &mut watch::Receiver<bool>,
+    preparation: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    tokio::select! {
+        biased;
+        _ = shutdown.wait_for(|stopping| *stopping) => {
+            Err("Controller disconnected for shutdown; prompt remains queued".into())
+        }
+        result = preparation => result,
+    }
+}
+
 async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     let hub = &state.hub;
     let supervisor = &state.supervisor;
@@ -3358,7 +3375,13 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         content,
         cmid,
     } = req;
-    if let Err(error) = execution::recovery::before_dispatch(&state, &session_id).await {
+    let mut shutdown = state.shutdown.clone();
+    if let Err(error) = dispatch_preflight(
+        &mut shutdown,
+        execution::recovery::before_dispatch(&state, &session_id),
+    )
+    .await
+    {
         retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
         return;
     }
@@ -3451,6 +3474,62 @@ fn is_transient_machine_disconnect(error: &str) -> bool {
 #[cfg(test)]
 mod dispatcher_failure_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut requests) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        hub.submit(
+            "s",
+            "never delivered".into(),
+            vec![],
+            Some("original-cmid".into()),
+        );
+        let request = requests.recv().await.unwrap();
+        let (shutdown, mut stopping) = watch::channel(false);
+        let observed = Arc::new(tokio::sync::Notify::new());
+        let started = Arc::clone(&observed);
+        let owned_hub = hub.clone();
+        let task = tokio::spawn(async move {
+            let preparation = async {
+                started.notify_one();
+                std::future::pending::<Result<(), String>>().await
+            };
+            let error = dispatch_preflight(&mut stopping, preparation)
+                .await
+                .unwrap_err();
+            retain_failed_dispatch(
+                &owned_hub,
+                request.session_id.clone(),
+                request.text.clone(),
+                request.content.clone(),
+                request.cmid.clone(),
+                &error,
+            );
+        });
+        observed.notified().await;
+        shutdown.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("s") else {
+            panic!("retained queue missing")
+        };
+        assert_eq!(value["queue"][0]["text"], "never delivered");
+        assert_eq!(value["queue"][0]["cmid"], "original-cmid");
+        assert!(!hub.session_has_in_flight_prompt("s"));
+    }
 
     #[test]
     fn failed_remote_dispatch_retains_the_original_prompt() {
