@@ -473,23 +473,40 @@ static CGPoint cowboyDocumentContentOffset(UIScrollView *view, CGPoint offset) {
     return CGPointMake(-inset.left, -inset.top);
 }
 
-__attribute__((constructor)) static void cowboyPinDocumentContentOffset(void) {
-    Method setter = class_getInstanceMethod(UIScrollView.class, @selector(setContentOffset:));
+static void cowboyPinDocumentContentOffset(UIScrollView *scrollView) {
+    // WKScrollView overrides these selectors. Hook its concrete class instead
+    // of a superclass implementation that WebKit need not call.
+    Class cls = object_getClass(scrollView);
+    static NSMutableSet *installed;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ installed = [NSMutableSet set]; });
+    if ([installed containsObject:cls]) return;
+    [installed addObject:cls];
+    Method setter = class_getInstanceMethod(cls, @selector(setContentOffset:));
     IMP original = method_getImplementation(setter);
-    method_setImplementation(setter, imp_implementationWithBlock(
+    IMP replacement = imp_implementationWithBlock(
         ^(UIScrollView *view, CGPoint offset) {
             ((void (*)(id, SEL, CGPoint))original)(
                 view, @selector(setContentOffset:), cowboyDocumentContentOffset(view, offset));
-        }));
+        });
+    if (!class_addMethod(cls, @selector(setContentOffset:), replacement,
+                        method_getTypeEncoding(setter))) {
+        method_setImplementation(class_getInstanceMethod(cls, @selector(setContentOffset:)), replacement);
+    }
     Method animatedSetter = class_getInstanceMethod(
-        UIScrollView.class, @selector(setContentOffset:animated:));
+        cls, @selector(setContentOffset:animated:));
     IMP originalAnimated = method_getImplementation(animatedSetter);
-    method_setImplementation(animatedSetter, imp_implementationWithBlock(
+    IMP animatedReplacement = imp_implementationWithBlock(
         ^(UIScrollView *view, CGPoint offset, BOOL animated) {
             ((void (*)(id, SEL, CGPoint, BOOL))originalAnimated)(view,
                 @selector(setContentOffset:animated:),
                 cowboyDocumentContentOffset(view, offset), animated);
-        }));
+        });
+    if (!class_addMethod(cls, @selector(setContentOffset:animated:), animatedReplacement,
+                        method_getTypeEncoding(animatedSetter))) {
+        method_setImplementation(class_getInstanceMethod(cls, @selector(setContentOffset:animated:)),
+                                 animatedReplacement);
+    }
 }
 
 static void cowboyInstallKeyboardLayoutGuide(void);
@@ -505,6 +522,7 @@ static void cowboyInstallKeyboardLayoutGuide(void);
 static void cowboyConfigureDocumentScrollView(WKWebView *webView) {
     if (webView == nil) return;
     UIScrollView *scrollView = webView.scrollView;
+    cowboyPinDocumentContentOffset(scrollView);
     scrollView.delaysContentTouches = NO;
     scrollView.canCancelContentTouches = NO;
     scrollView.alwaysBounceVertical = NO;

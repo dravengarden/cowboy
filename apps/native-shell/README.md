@@ -218,9 +218,11 @@ fallback for older page bundles.
 ## Acceptance
 
 `just native-plugin-conformance` on a Mac compiles both production Objective-C
-bridges into an isolated WKWebView fixture and runs ten ABI/coexistence checks on
+bridges into an isolated WKWebView fixture and runs sixteen checks on
 a new disposable Simulator. This does not replace a full Tauri build or device
-acceptance. See [Apple capability policy](apple/README.md) and
+acceptance. The keyboard check opens a real system keyboard and samples the
+native root offset while the child scrollport reveals the caret. See
+[Apple capability policy](apple/README.md) and
 [Simulator controls](../../docs/ios-simulator.md).
 
 `just native-shell-smoke <ios-sim build receipt.json>` additionally verifies the
