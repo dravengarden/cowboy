@@ -930,16 +930,24 @@ function CallPreview({ call, title, now, onOpen }: {
       }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
-          <Typography variant="caption" noWrap sx={{ minWidth: 0, flexShrink: 1, maxWidth: model || reasoning ? "40%" : "100%", fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
-          {(model || reasoning) && (
-            <Box data-call-preview-configuration sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
-              {model && <Typography variant="caption" color="text.secondary" noWrap title={call.configuration?.model ? `Model: ${model}` : `Preset: ${model}`}
-                sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {model}</Typography>}
-              {reasoning && <Typography data-call-preview-reasoning variant="caption" color="text.secondary" noWrap title={`Reasoning: ${reasoning}`}
-                sx={{ flexShrink: 0, fontSize: "0.6875rem" }}>· {reasoning}</Typography>}
-            </Box>
-          )}
+          <Typography variant="caption" noWrap sx={{ minWidth: 0, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
         </Stack>
+        <Box data-call-preview-configuration sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
+          {(model || reasoning) ? (
+            <>
+              {model && <Typography variant="caption" color="text.secondary" noWrap title={call.configuration?.model ? `Model: ${model}` : `Preset: ${model}`}
+                sx={{ minWidth: 0, fontSize: "0.75rem" }}>{call.configuration?.model ? model : `Preset: ${model}`}</Typography>}
+              {reasoning && <Typography data-call-preview-reasoning variant="caption" color="text.secondary" noWrap title={`Reasoning: ${reasoning}`}
+                sx={{ flexShrink: 0, fontSize: "0.75rem" }}>{model ? "· " : ""}{reasoning}</Typography>}
+            </>
+          ) : (
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: "0.75rem" }}>Model not recorded</Typography>
+          )}
+          {permission && (
+            <Typography variant="caption" color="text.secondary" noWrap title={`Permission: ${permission}`}
+              sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {permission}</Typography>
+          )}
+        </Box>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}
           <Typography variant="caption" noWrap sx={{
@@ -950,10 +958,6 @@ function CallPreview({ call, title, now, onOpen }: {
           </Typography>
           <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
             variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontSize: "0.6875rem", fontVariantNumeric: "tabular-nums" }}>· {time}</Typography>
-          {permission && (
-            <Typography variant="caption" color="text.secondary" noWrap title={`Permission: ${permission}`}
-              sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {permission}</Typography>
-          )}
         </Stack>
       </Stack>
     </ButtonBase>

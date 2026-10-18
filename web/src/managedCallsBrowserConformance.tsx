@@ -536,8 +536,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "call previews expose when execution was requested or started");
     const age = preview.querySelector<HTMLElement>("time[datetime]")!;
     const titleRow = preview.firstElementChild!.firstElementChild!;
-    check(!titleRow.contains(age) && age.parentElement === titleRow.nextElementSibling,
-      "relative execution time belongs on the second preview row");
+    check(!titleRow.contains(age) && age.parentElement === preview.firstElementChild!.lastElementChild,
+      "relative execution time belongs on the final preview row");
     check(/^· (now|(?:\d+d )?(?:\d+h )?(?:\d+m )?ago)$/.test(age.textContent ?? ""),
       "relative execution time distinguishes age from duration");
     check(!preview.textContent?.includes("Hawk") && preview.title.includes("Created") && preview.title.includes("Hawk"),
@@ -545,15 +545,19 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const configuredPreview = previewRail.querySelector<HTMLElement>('[data-call-preview="call-correctness"]')!;
     check(configuredPreview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("gpt-6-astra") &&
       configuredPreview.querySelector("[data-call-preview-reasoning]")?.textContent?.includes("max"),
-      "call previews show recorded model and reasoning on the title row");
+      "call previews show recorded model and reasoning on a dedicated configuration row");
+    check(configuredPreview.querySelector("[data-call-preview-configuration]") === configuredPreview.firstElementChild!.children[1],
+      "configuration must occupy the middle row between title and status");
+    check(preview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("Model not recorded"),
+      "legacy calls explicitly explain missing model history");
     check(configuredPreview.textContent?.includes("Done") && !configuredPreview.textContent.includes("Completed"),
       "completed calls use the compact Done label");
     configuredPreview.style.width = "14rem";
     const reasoningLabel = configuredPreview.querySelector<HTMLElement>("[data-call-preview-reasoning]")!;
     check(reasoningLabel.scrollWidth <= reasoningLabel.clientWidth &&
       reasoningLabel.getBoundingClientRect().right <= configuredPreview.getBoundingClientRect().right &&
-      configuredPreview.firstElementChild?.children.length === 2,
-      "minimum-width preview retains readable reasoning within two rows");
+      configuredPreview.firstElementChild?.children.length === 3,
+      "minimum-width preview retains readable reasoning within three rows");
     configuredPreview.style.width = "";
     // Touch dismissal can return focus to the opener with Mui-focusVisible.
     // Its permanent card fill must survive the theme's latched-hover reset.
