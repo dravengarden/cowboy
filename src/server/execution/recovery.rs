@@ -355,6 +355,9 @@ fn replaceable_worker(delivery: &serde_json::Value) -> bool {
         && delivery["pending_prompts"]
             .as_array()
             .is_some_and(Vec::is_empty)
+        && delivery["pending_current_turn"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
         && delivery["waiting_configuration"] == false
         && delivery["resetting"] == false
         && (worker.is_null()
@@ -588,7 +591,7 @@ mod dispatch_safety_tests {
 
     #[test]
     fn only_observed_idle_workers_may_replace_a_lost_target() {
-        let idle = json!({"connected":true,"pending_prompts":[],"waiting_configuration":false,
+        let idle = json!({"connected":true,"pending_prompts":[],"pending_current_turn":[],"waiting_configuration":false,
             "resetting":false,"worker":{"state":"running","current_turn_id":null,
             "pending_prompt_count":0,"drain_requested":false}});
         assert!(replaceable_worker(&idle));
@@ -610,6 +613,7 @@ mod dispatch_safety_tests {
         for (field, value) in [
             ("connected", json!(false)),
             ("pending_prompts", json!([{"written_to_connection":false}])),
+            ("pending_current_turn", json!(["steer-one"])),
             ("waiting_configuration", json!(true)),
             ("resetting", json!(true)),
         ] {

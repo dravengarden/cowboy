@@ -3251,3 +3251,18 @@ flashing is resolved. Third-party keyboard and physical iPhone acceptance remain
 separate. Diagnostic fixtures must copy the production viewport metadata,
 including maximum-scale/user-scalable, or a small-font tap introduces an
 unrelated automatic zoom (observed scale 1.6 for 10px text).
+
+### 2026-10-18 Explicit current-turn delivery
+
+Add to turn uses the existing draft controller and durable outbox. Persist its
+identity and payload before transport; clear the editor and close fullscreen
+only after the native `injected` receipt. Unknown/rejected delivery retains the
+draft and original receipt. A restored outbox and explicit Retry only observe
+that receipt, never POST an old current-turn message into a later turn. The
+default Send/Queue and confirmation-gated interruption remain separate actions.
+
+Desktop exposes a toolbar action and command-palette entry. Touch reuses the
+existing accessory button and its stationary-touch/compatibility-click rules.
+No editor extension, native input, selection, IME or caret logic changes. The
+physical image-adjacent caret issue #69 remains open; browser coverage is not
+physical iOS acceptance.

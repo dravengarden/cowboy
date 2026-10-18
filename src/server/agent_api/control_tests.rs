@@ -274,6 +274,27 @@ fn commands_preserve_real_payloads_and_reject_unsupported_fields() {
 }
 
 #[test]
+fn explicit_send_intent_preserves_queue_default_and_rejects_contradictions() {
+    for (delivery, force) in [("next_turn", false), ("interrupt", true)] {
+        let value = command_value(
+            "queue.submit",
+            &json!({"session_id":"s","text":"message","delivery":delivery}),
+            "stable",
+        )
+        .unwrap();
+        assert_eq!(value["force"], force);
+        assert_eq!(value["cmid"], "stable");
+    }
+    for input in [
+        json!({"session_id":"s","text":"message","delivery":"next_turn","force":true}),
+        json!({"session_id":"s","text":"message","delivery":"current_turn"}),
+        json!({"session_id":"s","text":"message","delivery":"next_tool_call"}),
+    ] {
+        assert!(command_value("queue.submit", &input, "stable").is_err());
+    }
+}
+
+#[test]
 fn discovery_and_receipts_do_not_dump_the_whole_catalog_or_result() {
     let index = catalog::list(None);
     assert!(index.get("operations").is_none());

@@ -188,6 +188,8 @@ pub mod runtime_wire;
 #[cfg(feature = "full")]
 mod scheduler;
 #[cfg(feature = "full")]
+pub mod send_delivery;
+#[cfg(feature = "full")]
 mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod service_identity;

@@ -30,6 +30,7 @@ import type {
 import type { Delivery } from "../protocol";
 import {
   addDraft,
+  currentTurnPrompt,
   forcePrompt,
   frontPrompt,
   scheduleDraft,
@@ -65,6 +66,7 @@ export interface ComposerDraftController {
   submitTracked: () => Promise<void> | null;
   force: () => boolean;
   forceTracked: () => Promise<void> | null;
+  currentTurnTracked: () => Promise<void> | null;
   jumpToFront: (queueLength: number) => boolean;
   jumpToFrontTracked: (queueLength: number) => Promise<void> | null;
   saveAsDraft: () => boolean;
@@ -392,6 +394,10 @@ export function useComposerDraftController(
       commit(() => forcePrompt(sessionId, preparedText(), attachments)),
     forceTracked: () =>
       commitTracked(() => forcePrompt(sessionId, preparedText(), attachments)),
+    currentTurnTracked: () =>
+      commitTracked(() =>
+        currentTurnPrompt(sessionId, preparedText(), attachments)
+      ),
     jumpToFront: (queueLength) =>
       queueLength > 0 &&
       commit(() => frontPrompt(sessionId, preparedText(), attachments)),

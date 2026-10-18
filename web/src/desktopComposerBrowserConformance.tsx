@@ -117,6 +117,10 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             sendable
             canJumpFront
             canForce
+            canCurrentTurn
+            onCurrentTurn={() => {
+              calls.push("current-turn");
+            }}
             pending={false}
             progress={false}
             sendLabel="Send"
@@ -248,6 +252,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             "schedule",
             "next",
             "force",
+            "current-turn",
             "send",
             "source",
             "more",
@@ -387,7 +392,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "Space leader arms only on Cowboy-owned focus (not text, IME or repeat), swallows its keyup, lights ␣ slots, runs ␣A and closes on Esc/pointer",
       );
     }
-    for (const id of ["attach", "draft", "schedule", "next", "force", "send"]) {
+    for (const id of ["attach", "draft", "schedule", "next", "force", "current-turn", "send"]) {
       click(id);
       check(calls.at(-1) === id, `${id} click shares action`);
     }
@@ -458,6 +463,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "schedule",
         "next",
         "force",
+        "current-turn",
         "send",
       ]
     ) check(button(id).disabled, `${id} disabled truthfully`);

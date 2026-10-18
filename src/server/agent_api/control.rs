@@ -224,6 +224,11 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/calls",
             get(web::managed_calls::list),
         ),
+        "queue.delivery_receipt" => (
+            "GET",
+            "/api/sessions/{session_id}/delivery/{operation}",
+            get(web::send_delivery::receipt),
+        ),
         "sessions.call" => (
             "GET",
             "/api/sessions/{session_id}/calls/{call}",
@@ -434,7 +439,7 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
         "sessions.retry" => ("retry_turn", "session_id"),
         "sessions.reset" => ("reset_session", "session_id"),
         "sessions.delete" => ("delete_session", "session_id"),
-        "queue.submit" => ("submit", "session_id text content front force"),
+        "queue.submit" => ("submit", "session_id text content front force delivery"),
         "queue.edit" => ("edit_queued", "session_id id text content"),
         "queue.remove" => ("remove_queued", "session_id id"),
         "queue.clear" => ("clear_queue", "session_id"),
@@ -471,6 +476,25 @@ fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'
     }
     if matches!(name, "queue.edit" | "drafts.edit") && !fields_value.contains_key("content") {
         return Err("invalid_argument");
+    }
+    if name == "queue.submit" {
+        let delivery = fields_value
+            .remove("delivery")
+            .map(serde_json::from_value::<crate::send_delivery::SendDelivery>)
+            .transpose()
+            .map_err(|_| "invalid_argument")?;
+        let delivery = crate::send_delivery::SendDelivery::resolve(
+            delivery,
+            input["force"].as_bool().unwrap_or(false),
+            input["front"].as_bool().unwrap_or(false),
+        )?;
+        if delivery == crate::send_delivery::SendDelivery::CurrentTurn {
+            return Err("invalid_argument");
+        }
+        fields_value.insert(
+            "force".into(),
+            json!(delivery == crate::send_delivery::SendDelivery::Interrupt),
+        );
     }
     fields_value.insert("type".into(), json!(kind));
     if name == "sync.apply" {
@@ -705,7 +729,12 @@ async fn dispatch(
         return response_value(response, true).await;
     }
     if input["session_id"] == parent.id
-        && ((name == "queue.submit" && input["force"] == true)
+        && ((name == "queue.submit"
+            && (input["force"] == true
+                || matches!(
+                    input["delivery"].as_str(),
+                    Some("interrupt" | "current_turn")
+                )))
             || matches!(
                 name,
                 "sessions.delete"
@@ -718,6 +747,39 @@ async fn dispatch(
             ))
     {
         return Err("would_interrupt_caller".into());
+    }
+    if name == "queue.submit" && input["delivery"] == "current_turn" {
+        only_keys(
+            &input,
+            &[
+                "session_id",
+                "text",
+                "content",
+                "front",
+                "force",
+                "delivery",
+            ],
+        )?;
+        let session = arg_str(&input, "session_id")?;
+        let mut body = input.clone();
+        body.as_object_mut()
+            .ok_or("invalid_argument")?
+            .remove("session_id");
+        let request: web::SessionPromptRequest =
+            serde_json::from_value(body).map_err(|_| "invalid_argument")?;
+        crate::send_delivery::SendDelivery::resolve(
+            request.delivery,
+            request.force,
+            request.front,
+        )?;
+        let effect = web::send_delivery::begin(
+            state,
+            session,
+            &request.text,
+            &request.content,
+            operation.ok_or("invalid_operation")?.to_owned(),
+        )?;
+        return Ok(web::send_delivery::result(&effect.outcome().await));
     }
     if name == "usage.refresh" {
         only_keys(&input, &["account"])?;

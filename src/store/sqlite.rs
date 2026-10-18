@@ -1580,6 +1580,7 @@ impl SqliteSessionRow {
             context_size: 0,
             usage: None,
             background_tasks: 0,
+            supports_current_turn: false,
             provider_update: None,
             provider_update_available: None,
             resource_wait: None,

@@ -12,7 +12,7 @@ use anyhow::{Context as _, Result};
 use parking_lot::Mutex;
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::core::{Event, Hub, Status, config_option_accepts};
 
@@ -77,6 +77,8 @@ struct Shared {
     socket: PathBuf,
     hub: Hub,
     pending: Mutex<HashMap<String, CoreCommand>>,
+    steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
+    current_turn_protocol: bool,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
@@ -122,6 +124,34 @@ pub struct RemoteRuntime {
     notify_rx: Mutex<Option<mpsc::UnboundedReceiver<()>>>,
 }
 
+pub(crate) struct SteeringDelivery {
+    shared: Arc<Shared>,
+    key: (String, String),
+    command_id: String,
+    receiver: Option<oneshot::Receiver<String>>,
+}
+
+impl SteeringDelivery {
+    pub async fn outcome(mut self) -> String {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            self.receiver.take().expect("one receiver"),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| "unknown".into())
+    }
+}
+
+impl Drop for SteeringDelivery {
+    fn drop(&mut self) {
+        self.shared.steering.lock().remove(&self.key);
+        self.shared.pending.lock().remove(&self.command_id);
+        self.shared.sent.lock().remove(&self.command_id);
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoteRuntimeStats {
     pub workers: usize,
@@ -160,6 +190,7 @@ impl RemoteRuntime {
         socket: PathBuf,
         desired_generation: String,
         provider_auth: Arc<crate::provider_service::ProviderAuthService>,
+        machine_protocol: u16,
     ) -> Arc<Self> {
         let (notify, notify_rx) = mpsc::unbounded_channel();
         Arc::new(Self {
@@ -167,6 +198,9 @@ impl RemoteRuntime {
                 socket,
                 hub,
                 pending: Mutex::new(HashMap::new()),
+                steering: Mutex::new(HashMap::new()),
+                current_turn_protocol: machine_protocol
+                    >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
@@ -213,6 +247,8 @@ impl RemoteRuntime {
                 socket: bootstrap.socket.clone(),
                 hub,
                 pending: Mutex::new(HashMap::new()),
+                steering: Mutex::new(HashMap::new()),
+                current_turn_protocol: true,
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
@@ -580,8 +616,17 @@ impl RemoteRuntime {
                 "drain_requested": worker.drain_requested,
             })
         });
+        let current_turn: Vec<_> = self
+            .shared
+            .steering
+            .lock()
+            .keys()
+            .filter(|(session, _)| session == session_id)
+            .map(|(_, cmid)| cmid.clone())
+            .collect();
         serde_json::json!({
-            "connected": self.connected(), "pending_prompts": prompts, "worker": worker,
+            "connected": self.connected(), "pending_prompts": prompts,
+            "pending_current_turn": current_turn, "worker": worker,
             "waiting_configuration": self.shared.config_startups.lock().contains(session_id),
             "resetting": self.shared.resetting.lock().contains(session_id),
             "dispatch_guard": self.shared.hub.session_has_in_flight_prompt(session_id),
@@ -676,6 +721,62 @@ impl RemoteRuntime {
             },
         );
         command_id
+    }
+
+    /// Requires durable caller admission before entry. A timeout never admits
+    /// a replacement prompt; its original receipt remains uncertain.
+    pub(crate) fn start_steer(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+    ) -> Result<SteeringDelivery, String> {
+        if !self.shared.current_turn_protocol {
+            return Err("the connected Machine does not support current-turn delivery".into());
+        }
+        if !self.connected() {
+            return Err("runtime is disconnected".into());
+        }
+        let worker = self
+            .shared
+            .workers
+            .lock()
+            .get(session_id)
+            .cloned()
+            .ok_or("session has no live worker")?;
+        if !worker.supports_current_turn || worker.drain_requested {
+            return Err("current-turn delivery is unavailable in this running worker".into());
+        }
+        let turn_id = worker
+            .current_turn_id
+            .ok_or("session has no current turn")?;
+        let key = (session_id.to_owned(), cmid.clone());
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut steering = self.shared.steering.lock();
+            if steering.keys().any(|(session, _)| session == session_id) {
+                return Err("current-turn delivery is already pending".into());
+            }
+            steering.insert(key.clone(), tx);
+        }
+        let command_id = self.next_id("steer");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::Steer {
+                session_id: session_id.to_owned(),
+                command_id: command_id.clone(),
+                worker_epoch: worker.worker_epoch,
+                turn_id,
+                content,
+                cmid,
+            },
+        );
+        Ok(SteeringDelivery {
+            shared: Arc::clone(&self.shared),
+            key,
+            command_id,
+            receiver: Some(rx),
+        })
     }
 
     pub fn cancel(&self, session_id: &str) {
@@ -1394,9 +1495,15 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             session_id,
             worker_epoch,
             runtime_seq,
-            event,
+            mut event,
             diagnostics,
         } => {
+            if !shared.current_turn_protocol
+                && let RuntimeEvent::Update { update, .. } = &mut event
+                && crate::runtime_wire::current_turn_support(update).is_some()
+            {
+                update["currentTurn"] = serde_json::json!(false);
+            }
             let key = (session_id.clone(), worker_epoch.clone());
             let previous = shared.highwaters.lock().get(&key).copied();
             // After a Cowboy restart the worker has already discarded every
@@ -1434,6 +1541,22 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     }
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
+                    if let RuntimeEvent::Update { update, .. } = &event
+                        && update
+                            .get("sessionUpdate")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
+                        && let (Some(cmid), Some(outcome)) = (
+                            update.get("cmid").and_then(serde_json::Value::as_str),
+                            update.get("outcome").and_then(serde_json::Value::as_str),
+                        )
+                        && let Some(waiter) = shared
+                            .steering
+                            .lock()
+                            .remove(&(session_id.clone(), cmid.to_owned()))
+                    {
+                        let _ = waiter.send(outcome.to_owned());
+                    }
                     if let RuntimeEvent::TurnEnded { turn_id, .. } = &event {
                         acknowledge_prompt_finish(shared, &session_id, turn_id);
                     }
@@ -1491,6 +1614,17 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             reason,
         } => {
             let command = shared.pending.lock().remove(&command_id);
+            if !accepted
+                && let Some(CoreCommand::Steer { cmid, .. }) = &command
+                && let Some(waiter) = shared
+                    .steering
+                    .lock()
+                    .remove(&(session_id.clone(), cmid.clone()))
+            {
+                // A replay can be refused after the original was injected. Only
+                // the native result proves non-delivery, never a transport ACK.
+                let _ = waiter.send("unknown".into());
+            }
             shared.sent.lock().remove(&command_id);
             if let Some(CoreCommand::Prompt {
                 trace: Some(trace), ..
@@ -1984,6 +2118,10 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         return false;
     }
     shared.optimistic_revivals.lock().remove(&worker.session_id);
+    shared.hub.set_current_turn_support(
+        &worker.session_id,
+        shared.current_turn_protocol && worker.supports_current_turn,
+    );
     shared
         .hub
         .set_machine_lineage(&worker.session_id, worker.incarnation.as_deref());
@@ -2167,6 +2305,12 @@ fn update_snapshot_from_event(
             worker.context_size = Some(*size);
         }
         RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::current_turn_support(update).is_some() =>
+        {
+            worker.supports_current_turn =
+                crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+        }
+        RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::background_tasks_count(update).is_some() =>
         {
             worker.background_tasks = crate::runtime_wire::background_tasks_count(update);
@@ -2223,6 +2367,14 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             apply_worker_status(hub, session_id, state, detail);
         }
         RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::current_turn_support(&update).is_some() =>
+        {
+            hub.set_current_turn_support(
+                session_id,
+                crate::runtime_wire::current_turn_support(&update).unwrap_or(false),
+            );
+        }
+        RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::background_tasks_count(&update).is_some() =>
         {
             // Session metadata, never a transcript row.
@@ -2231,6 +2383,13 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             }
         }
         RuntimeEvent::Update { update, cmid } => {
+            if update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+                == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
+            {
+                return; // Consumed by the delivery waiter, not conversation content.
+            }
             let compact_failure = remote_compact_failure(hub, session_id, &update);
             hub.push_tagged(session_id, Event::Update { update }, cmid);
             if let Some(message) = compact_failure {
@@ -2663,6 +2822,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_machine_connection_cannot_inject_even_with_a_capable_worker() {
+        let mut worker = snapshot("steering");
+        worker.supports_current_turn = true;
+        worker.current_turn_id = Some("original-turn".into());
+        let mut runtime = RemoteRuntime::for_test(Hub::new(), vec![worker]);
+        Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
+            .unwrap()
+            .current_turn_protocol = false;
+        runtime.connect_for_test();
+        assert!(
+            runtime
+                .start_steer("steering", vec![], "one".into())
+                .is_err()
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        assert!(runtime.shared.steering.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn current_turn_requires_live_capability_and_retains_exact_fences() {
+        let hub = Hub::new();
+        let mut worker = snapshot("steering");
+        worker.supports_current_turn = false;
+        let runtime = RemoteRuntime::for_test(hub, vec![worker.clone()]);
+        runtime.connect_for_test();
+        assert!(
+            runtime
+                .start_steer("steering", vec![], "one".into())
+                .is_err()
+        );
+        worker.supports_current_turn = true;
+        worker.current_turn_id = Some("original-turn".into());
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("steering".into(), worker.clone());
+        let effect = runtime
+            .start_steer(
+                "steering",
+                vec![serde_json::json!({"type":"text","text":"correction"})],
+                "one".into(),
+            )
+            .unwrap();
+        assert!(runtime.pending_for_test().iter().any(|command| matches!(command,
+            CoreCommand::Steer { worker_epoch, turn_id, cmid, .. }
+            if *worker_epoch == worker.worker_epoch && turn_id == "original-turn" && cmid == "one")));
+        assert!(
+            runtime
+                .start_steer("steering", vec![], "two".into())
+                .is_err()
+        );
+        assert_eq!(
+            runtime.delivery_diagnostics("steering")["pending_current_turn"],
+            serde_json::json!(["one"])
+        );
+        drop(effect);
+        assert_eq!(
+            runtime.delivery_diagnostics("steering")["pending_current_turn"],
+            serde_json::json!([])
+        );
+        assert!(
+            !runtime
+                .pending_for_test()
+                .iter()
+                .any(|command| matches!(command, CoreCommand::Steer { .. }))
+        );
+        assert!(runtime.shared.steering.lock().is_empty());
+        runtime
+            .shared
+            .workers
+            .lock()
+            .get_mut("steering")
+            .unwrap()
+            .current_turn_id = None;
+        assert!(
+            runtime
+                .start_steer("steering", vec![], "three".into())
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     #[allow(clippy::too_many_lines)] // Exercise one ordered refusal/reconnect/recovery sequence.
     async fn refusal_holds_queued_work_through_idle_and_reconnect_until_explicit_send() {
         for (provider, stop_reason) in [("claude-code", "Refusal"), ("codex", "refusal")] {
@@ -3060,6 +3302,7 @@ mod tests {
             agent_session_id: Some("agent-1".to_owned()),
             native_thread_materialized: None,
             current_turn_id: Some("turn-1".to_owned()),
+            supports_current_turn: false,
             last_runtime_seq: 4,
             pending_permissions: Vec::new(),
             config_options: None,

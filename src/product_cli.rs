@@ -192,9 +192,23 @@ enum SessionCommand {
     /// Free an idle session's agent process and Machine slot.
     Hibernate { session: String },
     /// Send a prompt (queued if the session is busy).
-    Prompt { session: String, text: String },
+    Prompt {
+        session: String,
+        text: String,
+        /// Delivery intent; current_turn requires native support on the running worker.
+        #[arg(long, value_enum, default_value = "next_turn")]
+        delivery: crate::send_delivery::SendDelivery,
+        /// Prioritize the queued message without interrupting.
+        #[arg(long)]
+        front: bool,
+        /// Stable identity for retrying the same submission after a lost response.
+        #[arg(long)]
+        operation: Option<String>,
+    },
     /// Cancel the running turn.
     Cancel { session: String },
+    /// Read an original current-turn delivery receipt without sending again.
+    Delivery { session: String, operation: String },
     /// Clear the conversation context (destructive, like the Web UI).
     Clear {
         session: String,
@@ -577,15 +591,25 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
                 .await?;
             println!("{session}\t{}", text.trim());
         }
-        SessionCommand::Prompt { session, text } => {
-            client
+        SessionCommand::Prompt {
+            session,
+            text,
+            delivery,
+            front,
+            operation,
+        } => {
+            crate::send_delivery::SendDelivery::resolve(Some(delivery), false, front)
+                .map_err(anyhow::Error::msg)?;
+            let operation = operation.unwrap_or_else(|| format!("cli:{}", uuid::Uuid::new_v4()));
+            eprintln!("operation: {operation}");
+            let receipt = client
                 .expect(
                     Method::POST,
                     &format!("/api/sessions/{session}/prompt"),
-                    Some(&json!({ "text": text })),
+                    Some(&json!({ "text": text, "delivery": delivery, "front": front, "operation": operation })),
                 )
                 .await?;
-            println!("{session}\tsent");
+            println!("{session}\t{}", receipt.trim());
         }
         SessionCommand::Cancel { session } => {
             client
@@ -594,6 +618,16 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
                 })
                 .await?;
             println!("{session}\tcancel requested");
+        }
+        SessionCommand::Delivery { session, operation } => {
+            let receipt = client
+                .expect(
+                    Method::GET,
+                    &format!("/api/sessions/{session}/delivery/{operation}"),
+                    None,
+                )
+                .await?;
+            println!("{}", receipt.trim());
         }
         SessionCommand::Clear { session, yes } => {
             ensure!(

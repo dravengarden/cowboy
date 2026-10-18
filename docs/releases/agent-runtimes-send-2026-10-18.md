@@ -1,8 +1,7 @@
 # Agent runtime candidates and send delivery — 2026-10-18
 
-Status: candidate work in progress; no publication or installation is accepted
-by this document. Upgrade the compatible Provider runtimes before releasing
-the send interaction changes.
+Status: compatible runtime upgrades and send delivery are published and deployed.
+All four Machines are connected, schedulable and ready after final activation.
 
 ## Dependency audit
 
@@ -74,9 +73,47 @@ unforwarded negative control. The extra binary extensions receive a separate
 packaged PDF/file-type phase after the complete worker run.
 
 Receipts and native measurements are under
-`/srv/storage/fast0/agent/tmp/send-upgrade-20261018/`. Platform probes,
-generation coexistence, Catalog reader acceptance and production installation
-must still complete; source tests do not establish publication.
+`/srv/storage/fast0/agent/tmp/send-upgrade-20261018/`. All six signed releases
+passed Linux old/new generation coexistence and real macOS CLI/ACP probes.
+`release/publication.json` records ready Catalog entries and the verified bytes
+of all 26 public package/runtime URLs. These receipts establish publication,
+not replacement of existing session workers.
+
+### Initial runtime publication recovery scope
+
+The exact active Controller and accepted recovery closure both read all six
+candidates twice, before and after publication. The recovery identity comes
+from `current.json.recoveryRelease` and the `accepted-recovery` root, rather
+than the historical `previousRelease`: the installed activator's
+`checkedRollbackTarget` uses the explicit recovery release and refuses a
+predecessor downgrade if it is unavailable. No incomplete transaction existed.
+
+The historical predecessor supports Provider SDK 3.1.13 and safely omits these
+3.1.14 releases, as it already omits the preceding published Provider versions.
+It is not an accepted recovery target. The NixOS bootstrap initializer only
+sets a missing component profile; it does not replace the existing accepted
+profile during normal boot. The reader receipts distinguish availability in
+active/recovery readers from historical/bootstrap readability. Do not use a
+historical closure to recover this Catalog or reset the component profile.
+
+### Fleet installation
+
+Hawk, OVH, Falcon and macbook-air now have their declared Agent Providers at
+the signed versions above. Final convergence reports no remaining Agent Provider
+upgrades; Falcon's unrelated Zed upgrade remains outside this task.
+OVH's first Claude staging attempt expired before activation. Its exact durable
+receipt was reconciled as an activation-free staging failure before one new
+operation was submitted successfully. The uncertain operation was not replayed.
+
+Falcon and macbook-air first required the current Machine SDK. Falcon's owned
+component activator committed transaction `1792338601782363545-de3b2846538f`
+with worker `worker-feb2a5fcf757b8576126`. Mac's pinned Rust 1.98.1 build and real
+installer integration test passed; its owned `--refresh` installed the clean
+`de3b2846` bundle. Both now advertise Plugin SDK 1.12.1 / Provider SDK 3.1.14.
+Mac identity and all seven workspaces are unchanged; its previous executable
+bundle and launcher are retained in `recovery-send-provider-de3b2846`.
+Both Machines had zero active sessions before maintenance. Existing Hawk/OVH
+session workers were not recycled by these Provider installations.
 
 ## Send design constraints
 
@@ -102,10 +139,12 @@ proof that the agent received or acted on the message.
 Its presence in native Codex does not prove that an installed ACP adapter
 exposes it. Discover capabilities from the exact running adapter.
 
-The pinned Codex ACP 2.2.2 does advertise steering, but an idle/finished-turn
-race currently starts a detached prompt. Before Cowboy enables current-turn
-delivery, its adapter needs an opt-in `promptRequired` outcome equivalent to
-Claude's, with the old default retained for other ACP clients.
+Upstream Codex ACP 2.2.2 advertises steering, but its idle/finished-turn race
+starts a detached prompt. The send candidate adds an opt-in `promptRequired`
+outcome equivalent to Claude's, with the old default retained for other ACP
+clients. Its initialization snapshots include that additional capability;
+historical baseline fixtures stay unchanged, with the extension recorded as an
+explicit expected difference.
 
 Claude ACP 0.93.0 advertises `_meta.steering.supported` and implements
 `_session/steering`. Its normal delivery uses native priority `now`, while an
@@ -118,3 +157,71 @@ Unknown, timed-out or disconnected delivery must retain its original identity
 and outcome uncertainty. Never automatically resubmit as a new turn after an
 ambiguous steering result. Unsupported delivery must be visible and must not
 silently fall back to interrupting.
+
+### Send candidate verification
+
+The send candidate uses Codex Plugin 3.5.2, Claude Code Plugin 3.19.46 and
+component registry 3.58.0, without further native runtime pin changes.
+`send-check-compact-2.log` records the passing full repository gate; the final
+frontend run has 2291 passing tests. The packaged Codex ACP build passes 1510
+upstream tests, with 36 upstream skips. Native Claude, Codex, managed Claude and
+Codex image execution receipts are in `send-candidate/`. Firefox and Chromium
+passed both themes, followed by trusted keyboard acceptance; screenshots are
+under `send-desktop-acceptance-final/` and were inspected.
+
+Current-turn admission also checks the immutable negotiated Machine protocol,
+not just adapter metadata. Protocols before 34 neither advertise this action
+nor admit it, including a newer worker behind an older Machine host. Worker
+epoch, active turn, workspace identity and drain state are checked separately.
+The additional protocol-gate tests and strict Clippy check passed. The public
+session fixture passed all 10 checks, including Controller and target-Machine
+restart without replay. Its temporary directory uses `/tmp` so the disposable
+Controller socket remains within the Unix socket path limit.
+
+### Send publication and deployment
+
+Codex Plugin 3.5.2 and Claude Code Plugin 3.19.46 were signed and published
+from `d33dbcbfec99028473357e37bb972b0abb97b4b3`. Their packaged native archives
+match the accepted candidates byte for byte. `send-release/publication.json`
+records both ready Catalog entries and ten verified public artifact URLs.
+Linux old/new coexistence passed against both the retained and newly built
+workers; real macOS CLI/ACP probes passed. All five declared installations
+(Codex on four Machines, Claude Code on OVH) converged with no remaining
+upgrades. The other four Agent Providers retain the accepted first-phase releases.
+
+The application source is `caf3652aed49a096cf1d97d193c8978564de92f2`, which
+adds the required full-feature module guard for the isolated Code adapter build.
+Feature-specific and all-feature checks passed. Hawk's writer host source is
+`5acfb3e193809746973c3f0e714187659c722554`, advancing only the retained worker
+pin to that accepted application revision. Its deletion journal remains reader
+schema 1 / writer schema 1. The deployed Nix worker generation is
+`worker-33394ba271eccfdc2703`.
+
+| Target | Accepted deployment evidence |
+| --- | --- |
+| Controller | Committed transaction `1792343061495383316-caf3652aed49` |
+| Web | Committed transaction `1792343111474761148-caf3652aed49`; public SPA and service worker return HTTP 200 with no-store |
+| Hawk Machine | Committed maintenance `1792343416501830516-5acfb3e19380`; writer capability retained |
+| Falcon Machine | Committed maintenance at `caf3652a`, generation `worker-33394ba271eccfdc2703` |
+| OVH Machine | Committed receipt `/var/lib/columbus/ovh-machine-caf3652aed49-20261018T170539Z`; all six original worker PIDs and start times preserved |
+| macbook-air | Pinned Rust 1.98.1 bootstrap build and owned refresh at `caf3652a`; all three installed binaries match the build; identity and seven workspaces preserved |
+
+Mac's preceding bundle and launcher are retained in
+`recovery-send-delivery-caf3652a`. OVH received the verified Hawk-built closure;
+no build ran on OVH. Final receipts and inventory are `send-hawk-*-receipt.json`,
+`send-falcon-receipt.json`, `send-ovh-activate.log`, `send-macos-refresh.log`
+and `send-machines-final.json` under the evidence directory above.
+
+After Controller activation, its receipt has no explicit recovery override:
+the installed activator selects the previous accepted Controller instead.
+`send-release/catalog-readers-active.json` verifies both the new active closure
+and that actual rollback target against both published send Providers. This is
+the post-activation recovery selection; the initial publication scope above
+records the earlier transaction's explicit recovery selection.
+
+Live MCP discovery now exposes `next_turn`, `current_turn` and `interrupt`, and
+the deployed CLI exposes the same delivery choices and receipt lookup. Existing
+workers keep their negotiated capabilities; unsupported workers do not gain
+current-turn steering merely because a newer Provider was installed. Reload the
+PWA to load the new controls. Unknown outcomes retain the original operation
+identity and are queried rather than automatically resubmitted.

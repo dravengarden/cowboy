@@ -661,6 +661,7 @@ impl Broker {
                 agent_session_id: session.agent_session_id,
                 native_thread_materialized: None,
                 current_turn_id: None,
+                supports_current_turn: false,
                 last_runtime_seq: 0,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -1267,6 +1268,7 @@ impl Broker {
                     agent_session_id: None,
                     native_thread_materialized: None,
                     current_turn_id: None,
+                    supports_current_turn: false,
                     last_runtime_seq: 0,
                     pending_permissions: Vec::new(),
                     config_options: None,
@@ -2630,6 +2632,12 @@ impl Broker {
                 worker.snapshot.background_tasks =
                     crate::runtime_wire::background_tasks_count(update);
             }
+            RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::current_turn_support(update).is_some() =>
+            {
+                worker.snapshot.supports_current_turn =
+                    crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+            }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
             | RuntimeEvent::ScheduleWakeup { .. }
@@ -3425,7 +3433,8 @@ fn worker_unit_name(socket: &Path, session_id: &str) -> String {
 
 fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
     match command {
-        WorkerCommand::Prompt { command_id, .. }
+        WorkerCommand::Steer { command_id, .. }
+        | WorkerCommand::Prompt { command_id, .. }
         | WorkerCommand::Cancel { command_id }
         | WorkerCommand::Permission { command_id, .. }
         | WorkerCommand::SetConfigOption { command_id, .. }
@@ -3828,7 +3837,12 @@ fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
             session_id,
             command_id,
         } if command_id.starts_with("reset-") => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::Prompt {
+        CoreCommand::Steer {
+            session_id,
+            command_id,
+            ..
+        }
+        | CoreCommand::Prompt {
             session_id,
             command_id,
             ..
@@ -4077,6 +4091,47 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 echo_artifacts,
             },
         ),
+        CoreCommand::Steer {
+            session_id,
+            command_id,
+            worker_epoch,
+            turn_id,
+            content,
+            cmid,
+        } => {
+            let tx = broker
+                .workers
+                .lock()
+                .get(&session_id)
+                .filter(|worker| {
+                    worker.snapshot.worker_epoch == worker_epoch
+                        && worker.snapshot.current_turn_id.as_deref() == Some(&turn_id)
+                        && worker.snapshot.supports_current_turn
+                        && !worker.snapshot.drain_requested
+                })
+                .map(|worker| worker.tx.clone());
+            let sent = tx.is_some_and(|tx| {
+                tx.send(Frame::WorkerCommand {
+                    session_id: session_id.clone(),
+                    command: WorkerCommand::Steer {
+                        command_id: command_id.clone(),
+                        worker_epoch,
+                        turn_id,
+                        content,
+                        cmid,
+                    },
+                })
+                .is_ok()
+            });
+            if !sent {
+                broker.send_controller(Frame::CommandAck {
+                    session_id,
+                    command_id,
+                    accepted: false,
+                    reason: Some("current turn is unavailable".into()),
+                });
+            }
+        }
         CoreCommand::Cancel {
             session_id,
             command_id,
@@ -5522,6 +5577,7 @@ mod tests {
                 agent_session_id: Some("agent-1".to_owned()),
                 native_thread_materialized: None,
                 current_turn_id: Some("turn-1".to_owned()),
+                supports_current_turn: false,
                 last_runtime_seq: 10,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -9012,6 +9068,7 @@ mod tests {
                     agent_session_id: Some("agent-1".to_owned()),
                     native_thread_materialized: None,
                     current_turn_id: Some("turn-1".to_owned()),
+                    supports_current_turn: false,
                     last_runtime_seq: 1,
                     pending_permissions: Vec::new(),
                     config_options: None,

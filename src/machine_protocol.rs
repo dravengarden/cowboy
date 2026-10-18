@@ -22,7 +22,8 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 33;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 34;
+pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 /// Native image profiles, minimal input snapshots and verified deliveries.
 pub const MANAGED_IMAGE_PROTOCOL_VERSION: u16 = 33;
 /// `AgentInvoke` carries Controller-discovered operation names, not a frozen

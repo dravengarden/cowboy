@@ -508,3 +508,7 @@ cold initialization obeys drain, capacity and memory guards; replacement of an
 existing worker does not consume a second slot. A refused launch retains the
 prompt and the committed target receipt for the next admitted attempt. Explicit
 Operator recovery uses the same launch admission.
+
+Current-turn delivery is also unfinished activity. Operator diagnostics expose
+its content-free pending identities, and automatic recovery refuses replacement
+until both ordinary prompt delivery and current-turn receipts are settled.
