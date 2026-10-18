@@ -210,11 +210,15 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--parent-net-namespace", required=True)
     parser.add_argument("--symlink-workspace", action="store_true")
     args = parser.parse_args()
     require(args.keeper.is_absolute() and args.native_cli.is_absolute(), "executables must be absolute")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "receipt must be a new absolute path")
-    require(os.readlink("/proc/self/ns/net") != os.readlink("/proc/1/ns/net") and
+    # Capture the invoking namespace before unshare. Restricted /proc mounts
+    # need not allow an ordinary user to inspect PID 1's namespace symlinks.
+    require(args.parent_net_namespace.startswith("net:[") and
+            os.readlink("/proc/self/ns/net") != args.parent_net_namespace and
             [name for _, name in socket.if_nameindex()] == ["lo"], "isolated loopback required")
     with args.native_cli.open("rb") as binary:
         require(hashlib.file_digest(binary, "sha256").hexdigest() == args.sha256, "executor digest differs")

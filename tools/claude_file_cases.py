@@ -27,6 +27,7 @@ def setup(root):
     write("bom.txt", b"\xef\xbb\xbfbom old\n")
     write("utf16.txt", UTF16)
     write("latin1.txt", LATIN1)
+    write("nul.txt", b"old\x00text\n")
     write("readonly.txt", b"locked old\n", 0o444)
     write("nonl.txt", b"no newline old")
     write("unread.txt", b"never read\n")
@@ -57,6 +58,9 @@ CASES = [
     ("read_latin1", _read("latin1.txt")), ("edit_latin1", _edit("latin1.txt", "old", "new")),
     # What Read showed for the undecodable byte, written back.
     ("write_latin1_replacement", ("Write", {"file_path": "latin1.txt", "content": "caf\ufffd new\n"})),
+    ("write_latin1_plain", ("Write", {"file_path": "latin1.txt", "content": "new UTF-8 text\n"})),
+    ("read_nul", _read("nul.txt")), ("edit_nul", _edit("nul.txt", "old", "new")),
+    ("write_nul", ("Write", {"file_path": "nul.txt", "content": "new text\n"})),
     ("read_readonly", _read("readonly.txt")), ("edit_readonly", _edit("readonly.txt", "old", "new")),
     ("read_nonl", _read("nonl.txt")), ("edit_nonl", _edit("nonl.txt", "old", "new")),
     ("write_unread", ("Write", {"file_path": "unread.txt", "content": "overwritten\n"})),
@@ -69,7 +73,7 @@ CASES = [
 
 
 NAMES = ["exec.sh", "private.txt", "linked.txt", "linked-alias.txt", "crlf.txt", "bom.txt", "utf16.txt",
-         "latin1.txt", "readonly.txt", "nonl.txt", "unread.txt", "empty.txt", "missing.txt", "new/deeper/file.txt"]
+         "latin1.txt", "nul.txt", "readonly.txt", "nonl.txt", "unread.txt", "empty.txt", "missing.txt", "new/deeper/file.txt"]
 
 
 def effects(root, inodes):

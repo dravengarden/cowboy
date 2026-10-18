@@ -12,6 +12,13 @@ import re
 import struct
 import zlib
 
+NEW_BINARY_EXTENSIONS = (
+    "heic", "heif", "avif", "zst", "lz4", "whl", "dmg", "apk",
+    "docm", "dotx", "dotm", "xlsm", "xlsb", "xltx", "xltm", "pptm",
+    "ppsx", "ppsm", "potx", "potm", "numbers", "epub", "parquet",
+    "feather", "npy", "npz", "pickle",
+)
+
 
 def pdf(pages):
     """A minimal valid PDF with one line of text per page."""
@@ -77,9 +84,13 @@ def setup(directory):
     (directory / "pdf-bytes-noext").write_bytes(pdf(1))
     (directory / "pdf-note.txt").write_text("hello\n")
     (directory / "pdf-archive.ZIP").write_text("text in a zip name\n")
+    for extension in NEW_BINARY_EXTENSIONS:
+        (directory / f"binary.{extension}").write_text("text in a binary name\n")
 
 
 CASES = [
+    *[(f"binary_{extension}", {"file_path": f"binary.{extension}"})
+      for extension in NEW_BINARY_EXTENSIONS],
     ("whole_one", {"file_path": "pdf-one.pdf"}),
     ("whole_ten", {"file_path": "pdf-ten.pdf"}),
     ("whole_many", {"file_path": "pdf-many.pdf"}),
@@ -135,7 +146,14 @@ def notes(message):
 def normalize(content, project):
     """Placement-independent form of one tool result's content."""
     def text(value):
+        # Mods deliver native encoding warnings as tool context. Keep and
+        # compare their exact text while ignoring the context wrapper.
+        pattern = r"\[This file (?:has NUL bytes|is not valid UTF-8).*?\]"
+        warnings = re.findall(pattern, value, flags=re.S)
+        value = re.sub(pattern, "", value, flags=re.S)
         value = re.sub(r"\n*<system-reminder>.*?</system-reminder>\n*", "", value, flags=re.S)
+        if warnings:
+            value = value.rstrip() + "\n\n" + "\n\n".join(warnings)
         return value.replace(str(project), "<project>")
     if isinstance(content, str):
         return text(content)

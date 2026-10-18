@@ -1,8 +1,8 @@
 {
  "default_tools": {
   "Agent": {
-   "input_schema": "b5b5a652f0e0520c",
-   "description": "bf9f3782be80a421"
+   "input_schema": "2a099fe78ecec63f",
+   "description": "88a9589cfebd2385"
   },
   "AskUserQuestion": {
    "input_schema": "ca4359704f78256e",
@@ -14,7 +14,7 @@
   },
   "CronCreate": {
    "input_schema": "dcb40209c5b18a9f",
-   "description": "b38de2978e5fa257"
+   "description": "c374fd6f9bf25b52"
   },
   "CronDelete": {
    "input_schema": "4c168429a8e44b9b",
@@ -26,7 +26,7 @@
   },
   "DesignSync": {
    "input_schema": "e4b9d0b118bc2ee2",
-   "description": "a3f6041066efb685"
+   "description": "cab55d3dc4582f4e"
   },
   "Edit": {
    "input_schema": "934f1e057d134875",

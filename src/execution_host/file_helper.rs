@@ -149,7 +149,10 @@ fn range_with(
             && stamp(&after) == stamp(&std::fs::metadata(path)?),
         "file changed while reading"
     );
-    if data.starts_with(b"\x89PNG\r\n\x1a\n")
+    if data.iter().take(8192).any(|byte| *byte == 0)
+        || std::str::from_utf8(&data).is_err()
+        || data.starts_with(b"\xff\xfe")
+        || data.starts_with(b"\x89PNG\r\n\x1a\n")
         || data.starts_with(b"\xff\xd8\xff")
         || data.starts_with(b"GIF")
         || data.starts_with(b"%PDF")
@@ -165,7 +168,7 @@ fn range_with(
         return Ok(json!({"fallback": true}));
     }
     Ok(
-        json!({"schema": 1, "sha256": digest(&data), "size": data.len(), "totalLines": lines.len(),
+        json!({"schema": 1, "textEncoding": "utf8", "sha256": digest(&data), "size": data.len(), "totalLines": lines.len(),
         "startLine": offset, "numLines": selected.len(),
         "dataBase64": base64::engine::general_purpose::STANDARD.encode(content.as_bytes())}),
     )

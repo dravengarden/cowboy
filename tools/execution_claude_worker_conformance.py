@@ -617,6 +617,7 @@ def file_phases(args, api, client, checks):
     api.steps.extend([router] * (len(steps) + 20))
     client.prompt(text="Run the file parity fixture.", timeout=120)
     results = {}
+    encoding_warnings = {}
     for request in reversed(api.requests):
         for block in outputs(request):
             case = FILE_CASES[ids[block["tool_use_id"]]][0] if block.get("tool_use_id") in ids else None
@@ -624,6 +625,8 @@ def file_phases(args, api, client, checks):
                 content = block.get("content")
                 if isinstance(content, list):
                     content = "".join(item.get("text", "") for item in content)
+                if isinstance(content, str):
+                    encoding_warnings[case] = re.findall(r"\[This file (?:has NUL bytes|is not valid UTF-8).*?\]", content, re.S)
                 results[case] = {"is_error": block.get("is_error", False),
                                  "content": file_normalize(content, args.target) if isinstance(content, str) else content}
     native = json.loads((Path(__file__).parent / "claude_file_native_baseline.json").read_text())
@@ -649,6 +652,12 @@ def file_phases(args, api, client, checks):
         if "result:" + name in in_place:
             continue
         actual = dict(results.get(name, {}))
+        if name in ("read_latin1", "read_nul"):
+            expected = dict(expected)
+            warnings = re.findall(r"\[This file (?:has NUL bytes|is not valid UTF-8).*?\]", expected["content"], re.S)
+            require(bool(warnings) and encoding_warnings.get(name) == warnings,
+                    "encoding warning missing or changed: " + name)
+            expected["content"] = expected["content"].split("\n\n[This file ")[0].rstrip("\t")
         if actual.get("is_error") and isinstance(actual.get("content"), str):
             actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
             expected = dict(expected)
@@ -1627,10 +1636,10 @@ def main():
         require("\ufffdstream-marker\ufffd\ufffd" in stream_result,
                 "Bash streams were not merged in write order: " + stream_result[:300])
         checks.append("native_bash_merges_streams_in_write_order")
-        # Native validation must accept replacing a binary original, and target
+        # Native validation must refuse replacing a binary original, and target
         # path expansion must use the executor's home rather than Claude's.
         (args.target / "replace-image.png").write_bytes(pixel)
-        (args.target / "bad-utf8.data-file").write_bytes(b"\xff\xfe\0")
+        (args.target / "bad-utf8.data-file").write_bytes(b"caf\xe9\n")
         linked = args.target / "link-source.txt"
         linked.write_text("linked before\n")
         linked.chmod(0o751)
@@ -1656,20 +1665,22 @@ def main():
         client.prompt(timeout=90)
         result_blocks = list(outputs(api.requests[-1]))
         image_result = next(block for block in result_blocks if block.get("tool_use_id") == image_write[0]["id"])
-        require(not image_result.get("is_error"), "successful image replacement was reported as a failed Write")
+        require(image_result.get("is_error") and "File has NUL bytes" in json.dumps(image_result),
+                "binary image replacement was not refused as native 2.1.302 does")
         binary_result = next(block for block in result_blocks if block.get("tool_use_id") == binary_read[0]["id"])
         # Natively a file that is not valid UTF-8 still reads, its bytes
-        # decoded with replacement characters (measured on 2.1.287).
-        require(not binary_result.get("is_error") and "\\ufffd" in json.dumps(binary_result),
+        # decoded with replacement characters and an encoding warning (2.1.302).
+        require(not binary_result.get("is_error") and "\\ufffd" in json.dumps(binary_result)
+                and "Edit and Write will refuse it" in json.dumps(binary_result),
                 "binary Read did not decode as native does: " + json.dumps(binary_result)[:300])
-        require((args.target / "replace-image.png").read_text() == "image replaced with text\n",
-                "image Write did not reach target")
+        require((args.target / "replace-image.png").read_bytes() == pixel,
+                "refused image Write changed target bytes")
         require((args.target / "file-link.txt").is_symlink() and linked.read_text() == "linked after\n"
                 and linked.stat().st_mode & 0o777 == 0o751, "target symlink or executable mode was lost")
         require((args.target / "home-relative.txt").read_text() == "target home after\n",
                 "tilde Read did not authorize the same absolute target file")
         context_checked(api.requests)
-        checks.extend(["native_image_to_text_write_reports_success", "target_symlink_write_preserves_link_and_mode",
+        checks.extend(["native_binary_image_write_refuses_without_mutation", "target_symlink_write_preserves_link_and_mode",
                        "tilde_read_uses_target_home_and_shares_absolute_path_stamp", "invalid_utf8_read_decodes_as_native"])
         for kind in ["symlink", "hardlink"]:
             source = args.target / f"race-{kind}-source.txt"
