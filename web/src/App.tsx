@@ -113,7 +113,6 @@ import {
     openAppSettings,
     type SettingsProductFocus,
 } from "./appSettings";
-import { WorkspaceExtensionsButton } from "./extensions/WorkspaceExtensionsButton";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { AppIconSettings } from "./AppIconSettings";
 import { ClientUpdateSettings } from "./ClientUpdateSettings";
@@ -447,10 +446,6 @@ function DesktopSessionsRail(
     );
     return <Rail {...props} />;
 }
-const DesktopContextShortcut = lazy(async () => {
-    const module = await import("./desktop/commands/DesktopContextShortcut");
-    return { default: module.DesktopContextShortcut };
-});
 const DesktopSplitterHint = lazy(async () => {
     const module = await import("./desktop/DesktopSplitterHint");
     return { default: module.DesktopSplitterHint };
@@ -5472,9 +5467,8 @@ export function App({
                             </Stack>
                         ) : null}
                         {surface === "desktop" ? (
-                            // Session controls may fill leftover width. With no
-                            // session the settings icon stays a trailing cluster
-                            // and must not stretch across the empty pane.
+                            // Session controls may fill leftover width; an empty
+                            // toolbar does not reserve space without a session.
                             <Box
                                 // The width the top-bar strip must fit inside.
                                 // DesktopTopBarControls observes this element to
@@ -5522,35 +5516,6 @@ export function App({
                                             />
                                         </Suspense>
                                     )}
-                                    {active && (
-                                        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.75 }} />
-                                    )}
-                                    {/* The window's actions live with Sessions (its
-                                        title bar, or its collapsed rail); only a
-                                        drawer-hosted Sessions leaves them here. */}
-                                    {sessionsInDrawer && <WorkspaceExtensionsButton context={active?.id} machineId={active?.machine_id} />}
-                                    {sessionsInDrawer && <Suspense fallback={null}>
-                                        <DesktopContextShortcut
-                                            badge={DESKTOP_SHORTCUTS.settings}
-                                            placement="inline"
-                                            alwaysVisible
-                                        >
-                                            <HintTooltip
-                                                title="Settings"
-                                                shortcut={DESKTOP_SHORTCUTS.settings}
-                                            >
-                                                <IconButton
-                                                    size="small"
-                                                    data-desktop-item="topbar-settings"
-                                                    data-desktop-topbar-action="settings"
-                                                    onClick={(): void => openSettings("settings")}
-                                                    aria-label="settings"
-                                                >
-                                                    <SettingsIcon />
-                                                </IconButton>
-                                            </HintTooltip>
-                                        </DesktopContextShortcut>
-                                    </Suspense>}
                                 </Stack>
                             </Box>
                         ) : (
