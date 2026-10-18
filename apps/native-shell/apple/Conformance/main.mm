@@ -4,26 +4,27 @@
 // Exercise the production bridge in a real WKWebView. This app has no network
 // inputs, credentials, relying-party allowlist, or Associated Domains entitlement.
 @interface CowboyPluginConformance : UIResponder
-    <UIApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler>
+    <UIWindowSceneDelegate, WKNavigationDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) UIWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @end
 
 @implementation CowboyPluginConformance
-- (BOOL)application:(__unused UIApplication *)application
-    didFinishLaunchingWithOptions:(__unused NSDictionary *)options {
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+- (void)scene:(UIScene *)scene
+    willConnectToSession:(__unused UISceneSession *)session
+    options:(__unused UISceneConnectionOptions *)options {
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     UIViewController *controller = [[UIViewController alloc] init];
     self.window.rootViewController = controller;
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     [configuration.userContentController addScriptMessageHandler:self name:@"conformance"];
     self.webView = [[WKWebView alloc] initWithFrame:self.window.bounds configuration:configuration];
     self.webView.navigationDelegate = self;
+    self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [controller.view addSubview:self.webView];
     [self.window makeKeyAndVisible];
     [self.webView loadHTMLString:@"<!doctype html><title>Cowboy Plugin Conformance</title>"
                          baseURL:[NSURL URLWithString:@"https://cowboy-conformance.invalid/"]];
-    return YES;
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(__unused WKNavigation *)navigation {
@@ -72,8 +73,13 @@
 }
 @end
 
+@interface CowboyConformanceAppDelegate : UIResponder <UIApplicationDelegate>
+@end
+@implementation CowboyConformanceAppDelegate
+@end
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil, NSStringFromClass(CowboyPluginConformance.class));
+        return UIApplicationMain(argc, argv, nil, NSStringFromClass(CowboyConformanceAppDelegate.class));
     }
 }

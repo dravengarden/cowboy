@@ -80,6 +80,18 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "iOS scene lifecycle requires Tao 0.37.1 or newer",
   );
   const iosInfo = await read("tauri/Info.ios.plist");
+  const conformanceInfo = await read("apple/Conformance/Info.plist");
+  const conformanceMain = await read("apple/Conformance/main.mm");
+  requireValue(
+    conformanceInfo.includes("<key>UIApplicationSceneManifest</key>") &&
+      conformanceInfo.includes("<string>CowboyPluginConformance</string>") &&
+      conformanceInfo.includes(
+        "<key>UIWindowSceneSessionRoleApplication</key>",
+      ) &&
+      conformanceMain.includes("initWithWindowScene:") &&
+      conformanceMain.includes("<UIWindowSceneDelegate,"),
+    "native conformance fixture needs its own window-scene lifecycle",
+  );
   requireValue(
     /<key>UIApplicationSceneManifest<\/key>\s*<dict>\s*<key>UIApplicationSupportsMultipleScenes<\/key>\s*<false\/>\s*<key>UISceneConfigurations<\/key>\s*<dict>\s*<key>UIWindowSceneSessionRoleApplication<\/key>\s*<array>\s*<dict>\s*<key>UISceneConfigurationName<\/key>\s*<string>TaoScene<\/string>\s*<key>UISceneDelegateClassName<\/key>\s*<string>TaoSceneDelegate<\/string>/
       .test(iosInfo),
