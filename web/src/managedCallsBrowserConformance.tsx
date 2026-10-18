@@ -543,8 +543,18 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(!preview.textContent?.includes("Hawk") && preview.title.includes("Created") && preview.title.includes("Hawk"),
       "call previews reserve visible space for execution settings and keep placement in details");
     const configuredPreview = previewRail.querySelector<HTMLElement>('[data-call-preview="call-correctness"]')!;
-    check(configuredPreview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("gpt-6-astra · max"),
+    check(configuredPreview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("gpt-6-astra") &&
+      configuredPreview.querySelector("[data-call-preview-reasoning]")?.textContent?.includes("max"),
       "call previews show recorded model and reasoning on the title row");
+    check(configuredPreview.textContent?.includes("Done") && !configuredPreview.textContent.includes("Completed"),
+      "completed calls use the compact Done label");
+    configuredPreview.style.width = "14rem";
+    const reasoningLabel = configuredPreview.querySelector<HTMLElement>("[data-call-preview-reasoning]")!;
+    check(reasoningLabel.scrollWidth <= reasoningLabel.clientWidth &&
+      reasoningLabel.getBoundingClientRect().right <= configuredPreview.getBoundingClientRect().right &&
+      configuredPreview.firstElementChild?.children.length === 2,
+      "minimum-width preview retains readable reasoning within two rows");
+    configuredPreview.style.width = "";
     // Touch dismissal can return focus to the opener with Mui-focusVisible.
     // Its permanent card fill must survive the theme's latched-hover reset.
     const previewSurface = preview.firstElementChild as HTMLElement;

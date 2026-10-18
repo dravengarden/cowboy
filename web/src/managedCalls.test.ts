@@ -143,7 +143,7 @@ test("execution status, verdicts and findings stay separate facts", () => {
     },
     { total: 3, active: 1, failed: 1, findings: 2 },
   );
-  assert.equal(callStateLabel(completed), "Completed");
+  assert.equal(callStateLabel(completed), "Done");
   assert.equal(
     callStateLabel(call("running", { cancel_requested: true })),
     "Stopping",

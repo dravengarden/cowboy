@@ -119,7 +119,7 @@ export function callStateLabel(
     case "stopping":
       return "Stopping";
     case "completed":
-      return "Completed";
+      return "Done";
     case "failed":
       return "Failed";
     case "cancelled":

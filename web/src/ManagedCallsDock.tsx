@@ -908,10 +908,8 @@ function CallPreview({ call, title, now, onOpen }: {
   const tone = callTone(call.state);
   const end = active ? Date.now() : call.finished_at_ms ?? call.updated_at_ms;
   const time = callAgeLabel(call.started_at_ms ?? call.created_at_ms, now);
-  const execution = [
-    call.configuration?.model || call.preset,
-    call.configuration?.reasoning_effort || call.configuration?.effort,
-  ].filter(Boolean).join(" · ");
+  const model = call.configuration?.model || call.preset;
+  const reasoning = call.configuration?.reasoning_effort || call.configuration?.effort;
   const permission = call.configuration?.permission_mode || call.configuration?.sandbox_mode;
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
@@ -932,10 +930,14 @@ function CallPreview({ call, title, now, onOpen }: {
       }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
-          <Typography variant="caption" noWrap sx={{ minWidth: 0, flexShrink: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
-          {execution && (
-            <Typography data-call-preview-configuration variant="caption" color="text.secondary" noWrap title={execution}
-              sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {execution}</Typography>
+          <Typography variant="caption" noWrap sx={{ minWidth: 0, flexShrink: 1, maxWidth: model || reasoning ? "40%" : "100%", fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          {(model || reasoning) && (
+            <Box data-call-preview-configuration sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
+              {model && <Typography variant="caption" color="text.secondary" noWrap title={call.configuration?.model ? `Model: ${model}` : `Preset: ${model}`}
+                sx={{ minWidth: 0, fontSize: "0.6875rem" }}>· {model}</Typography>}
+              {reasoning && <Typography data-call-preview-reasoning variant="caption" color="text.secondary" noWrap title={`Reasoning: ${reasoning}`}
+                sx={{ flexShrink: 0, fontSize: "0.6875rem" }}>· {reasoning}</Typography>}
+            </Box>
           )}
         </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
