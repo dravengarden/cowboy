@@ -21,7 +21,7 @@
     self.webView.navigationDelegate = self;
     [controller.view addSubview:self.webView];
     [self.window makeKeyAndVisible];
-    [self.webView loadHTMLString:@"<!doctype html><title>Cowboy Plugin Conformance</title>"
+    [self.webView loadHTMLString:@"<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><title>Cowboy Plugin Conformance</title>"
                          baseURL:[NSURL URLWithString:@"https://cowboy-conformance.invalid/"]];
     return YES;
 }
