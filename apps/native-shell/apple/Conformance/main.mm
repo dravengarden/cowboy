@@ -76,7 +76,8 @@
          @"const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);"
          @"const selection=getSelection();selection.removeAllRanges();selection.addRange(range);"
          @"const offsets=[];let recording=true;const sample=()=>{offsets.push(scrollY);if(recording)requestAnimationFrame(sample)};sample();"
-         @"editor.focus();await new Promise(resolve=>setTimeout(resolve,1200));recording=false;"
+         @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready'});"
+         @"await new Promise(resolve=>setTimeout(resolve,1200));recording=false;"
          @"check('keyboard reveals the caret in the child without panning the root',"
          @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selection.anchorNode===editor.firstChild&&selection.anchorOffset===editor.textContent.length);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
@@ -86,6 +87,14 @@
 
 - (void)userContentController:(__unused WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.body isKindOfClass:NSDictionary.class] &&
+        [message.body[@"event"] isEqualToString:@"focus-ready"]) {
+        // A fresh native evaluation supplies the focus gesture after the ABI
+        // checks' asynchronous promises, like the simulator inspection bridge.
+        [self.webView evaluateJavaScript:@"document.getElementById('editor').focus()"
+                      completionHandler:nil];
+        return;
+    }
     NSError *error = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:message.body
                                                  options:NSJSONWritingPrettyPrinted
