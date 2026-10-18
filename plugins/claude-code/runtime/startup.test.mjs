@@ -155,6 +155,62 @@ async function tree(t) {
   return { root, home, cwd };
 }
 
+test("a rejected sandbox keeps its diagnostic instead of blaming Bash", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-startup-refused-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const diagnostic = "error building bubblewrap command: " +
+    "app-server socket directory must be a user-owned directory with mode 0700";
+  let starts = 0;
+  const connection = {
+    info: { userHomeDir: "file:///home/fixture" },
+    async call(method, params) {
+      if (method === "process/start") {
+        starts++;
+        return { processId: params.processId };
+      }
+      assert.equal(method, "process/read");
+      return {
+        chunks: params.afterSeq === null
+          ? [{
+            seq: 1,
+            stream: "stderr",
+            chunk: Buffer.from(diagnostic + "\nprivate-startup-value\n")
+              .toString("base64"),
+          }]
+          : [],
+        exited: true,
+        closed: true,
+        exitCode: 1,
+      };
+    },
+  };
+  const tools = new WorkspaceTools(connection, {
+    workspace: { cwd: directory },
+    environment: { id: "refused" },
+    managed: { profile: "read_only_v1" },
+  }, join(directory, "state.json"));
+  await assert.rejects(tools.begin(), {
+    message: "Target Bash probe failed (exit 1): " +
+      "execution sandbox requires a real user-owned app-server socket directory with mode 0700; symlinks are refused",
+  });
+  assert.equal(starts, 2, "survey and fallback probe; no unbounded retry");
+});
+
+test("unrecognized startup failures report status without private output", async () => {
+  const tools = new WorkspaceTools({ info: {} }, {
+    workspace: { cwd: "/fixture" },
+    environment: { id: "refused" },
+    managed: { profile: "read_only_v1" },
+  }, "/unused");
+  tools.command = async () => ({
+    exitCode: 127,
+    output: "private-startup-value\n".repeat(1000),
+  });
+  await assert.rejects(tools.begin(), {
+    message: "Target Bash probe failed (exit 127): no valid platform output",
+  });
+});
+
 async function discover(t, { home, cwd }, options) {
   const state = await mkdtemp(join(tmpdir(), "cowboy-claude-startup-state-"));
   t.after(() => rm(state, { recursive: true, force: true }));

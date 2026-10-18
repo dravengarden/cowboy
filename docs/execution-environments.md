@@ -36,6 +36,27 @@ automatically. The
 [Controller release receipt](releases/execution-binding-readers-2026-10-01.md)
 records the activated reader revision and connected Code acceptance.
 
+## Reserved sandbox directories during storage moves
+
+Codex 0.159.3 reserves `/tmp/codex-daemon-<uid>` for privileged app-server
+sockets. Its native sandbox requires a real directory owned by that user with
+mode `0700`; a symlink is rejected even when its destination has correct
+permissions. This path deliberately does not follow `TMPDIR` or `CODEX_HOME`.
+Storage migrations must leave this directory in place, not replace it with a
+symlink. Do not relax the sandbox check or fall back to unsandboxed execution.
+
+On 2026-10-18, Hawk's temporary-storage migration replaced this directory with
+a symlink into `tmp-legacy`. Both retained failed Claude Review probes returned
+`error building bubblewrap command: app-server socket directory must be a
+user-owned directory with mode 0700`; the adapter hid that behind `Target Bash
+is unavailable`. Restoring the real private directory repaired execution.
+Before repairing a similar incident, inspect the link, owner, mode, and live
+socket users; preserve its target and coordinate any active listeners. A
+successful executor handshake alone is insufficient: verify an actual
+sandboxed process start/read. Claude startup now identifies this native refusal
+with a fixed diagnostic and exit status, without echoing arbitrary startup
+output or private environment details.
+
 ## Product outcome
 
 The Agent runtime stays on OVH. Its model connection, native conversation,
