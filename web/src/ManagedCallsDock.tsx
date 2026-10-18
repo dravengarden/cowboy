@@ -943,7 +943,7 @@ function CallPreview({ call, title, now, onOpen }: {
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}
           <Typography variant="caption" noWrap sx={{
-            color: tone === "error" ? "error.main" : active ? "primary.main" : "text.secondary",
+            color: tone === "error" ? "error.main" : tone === "success" ? "success.main" : active ? "primary.main" : "text.secondary",
             fontSize: "0.75rem", flexShrink: 0,
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
