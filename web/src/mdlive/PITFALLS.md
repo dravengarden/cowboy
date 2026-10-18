@@ -3213,6 +3213,12 @@ UIScrollViews, and zoomed root views are excluded. The existing JavaScript pin
 remains a fallback for older installed shells. This corrects root motion before
 it reaches the compositor instead of interfering with text focus or selection.
 The native conformance app checks both root offset setters and child scrolling.
+The final 2026-10-18 iOS 26.5 run passed all 16 checks with the real system
+keyboard: viewport 852→517, all 15 JavaScript frame samples at zero root/visual
+offset, 38 native root samples at zero drift, and the logical selection kept.
+It waits for the actual viewport shrink, then samples its settling period;
+an initial 1.2s deadline missed first-use keyboard loading under host load.
+This is native bridge/keyboard geometry acceptance, not a physical IME test.
 
 The native integrated Draft fixture must mount `useKeyboardInset`, which the
 real app mounts in main.tsx, and match the root's locked flow and safe-area

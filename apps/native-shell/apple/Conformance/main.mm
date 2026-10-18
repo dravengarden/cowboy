@@ -111,7 +111,7 @@
          @"const caret=document.createRange();caret.selectNodeContents(editor);caret.setEnd(selection.anchorNode,selection.anchorOffset);"
          @"const selectionKept=selection.isCollapsed&&editor.contains(selection.anchorNode)&&caret.toString().length===editor.textContent.length;"
          @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionKept};"
-         @"check('keyboard reveals the caret in the child without panning the root: '+JSON.stringify(keyboardGeometry),"
+         @"check('keyboard resize preserves child scrolling and selection without panning the root: '+JSON.stringify(keyboardGeometry),"
          @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selectionKept);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";

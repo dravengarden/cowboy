@@ -224,7 +224,7 @@ fallback for older page bundles.
 bridges into an isolated WKWebView fixture and runs sixteen checks on
 a new disposable Simulator. This does not replace a full Tauri build or device
 acceptance. The keyboard check opens a real system keyboard and samples the
-native root offset while the child scrollport reveals the caret. See
+native root offset while an editable child owns focus. See
 [Apple capability policy](apple/README.md) and
 [Simulator controls](../../docs/ios-simulator.md).
 

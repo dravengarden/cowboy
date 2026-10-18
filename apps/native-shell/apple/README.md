@@ -74,8 +74,8 @@ rejection, idempotent browser close, native-tweak coexistence and foreign-origin
 clipboard rejection. Root-scroll checks wait for the animated setter to settle,
 then initiate DOM focus from native code to open the system keyboard over a
 locked page and sample native root offsets
-as well as JavaScript frames; the inner scrollport must reveal the caret without
-changing the selection. The fixture adopts the UIKit scene lifecycle required
+as well as JavaScript frames; child scrolling and the logical text selection
+must survive the resize. The fixture adopts the UIKit scene lifecycle required
 by current Apple SDKs. It neither opens a real login nor uses
 an existing Simulator, app or keychain. The receipt lives in
 `dist/native-plugin-conformance/receipt.json`; the temporary app/Simulator are
