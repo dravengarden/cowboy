@@ -4,7 +4,7 @@
 // Exercise the production bridge in a real WKWebView. This app has no network
 // inputs, credentials, relying-party allowlist, or Associated Domains entitlement.
 @interface CowboyPluginConformance : UIResponder
-    <UIApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler>
+    <UIApplicationDelegate, UIWindowSceneDelegate, WKNavigationDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) UIWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSTimer *rootSampler;
@@ -15,7 +15,21 @@
 @implementation CowboyPluginConformance
 - (BOOL)application:(__unused UIApplication *)application
     didFinishLaunchingWithOptions:(__unused NSDictionary *)options {
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    return YES;
+}
+
+- (UISceneConfiguration *)application:(__unused UIApplication *)application
+    configurationForConnectingSceneSession:(UISceneSession *)session
+    options:(__unused UISceneConnectionOptions *)options {
+    UISceneConfiguration *configuration =
+        [[UISceneConfiguration alloc] initWithName:@"Conformance" sessionRole:session.role];
+    configuration.delegateClass = CowboyPluginConformance.class;
+    return configuration;
+}
+
+- (void)scene:(UIScene *)scene willConnectToSession:(__unused UISceneSession *)session
+    options:(__unused UISceneConnectionOptions *)options {
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     UIViewController *controller = [[UIViewController alloc] init];
     self.window.rootViewController = controller;
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
@@ -26,7 +40,6 @@
     [self.window makeKeyAndVisible];
     [self.webView loadHTMLString:@"<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><title>Cowboy Plugin Conformance</title>"
                          baseURL:[NSURL URLWithString:@"https://cowboy-conformance.invalid/"]];
-    return YES;
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(__unused WKNavigation *)navigation {
