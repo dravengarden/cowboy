@@ -72,6 +72,16 @@ macro_rules! dispatch {
 }
 
 impl Store {
+    /// Hide/restore settled rows without deleting idempotency receipts, child
+    /// ownership or budget accounting. The terminal predicate wins cancel races.
+    pub async fn dismiss_managed_call(
+        &self,
+        parent: &str,
+        id: &str,
+        dismissed: bool,
+    ) -> Result<bool> {
+        dispatch!(self, dismiss_managed_call(parent, id, dismissed))
+    }
     pub(crate) async fn managed_child(&self, parent: &str, child: &str) -> Result<Option<Record>> {
         dispatch!(self, managed_child(parent, child))
     }
@@ -131,6 +141,11 @@ impl Store {
 macro_rules! implementation {
     ($backend:ty) => {
         impl $backend {
+            async fn dismiss_managed_call(&self, parent: &str, id: &str, dismissed: bool) -> Result<bool> {
+                let result = sqlx::query("UPDATE managed_agent_calls SET dismissed = $3 WHERE parent_session_id = $1 AND call_id = $2 AND state IN ('completed', 'failed', 'cancelled')")
+                    .bind(parent).bind(id).bind(dismissed).execute(&self.pool).await?;
+                Ok(result.rows_affected() == 1)
+            }
             async fn managed_child(&self, parent: &str, child: &str) -> Result<Option<Record>> {
                 sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND child_session_id = $2 ORDER BY admission_order DESC LIMIT 1")
                     .bind(parent).bind(child).fetch_optional(&self.pool).await?
@@ -155,7 +170,7 @@ macro_rules! implementation {
             }
 
             async fn managed_calls(&self, parent: &str, before: Option<&str>) -> Result<Vec<Record>> {
-                sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND ($2 IS NULL OR admission_order < (SELECT admission_order FROM managed_agent_calls WHERE parent_session_id = $1 AND call_id = $2)) ORDER BY admission_order DESC LIMIT 100")
+                sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND dismissed = FALSE AND ($2 IS NULL OR admission_order < (SELECT admission_order FROM managed_agent_calls WHERE parent_session_id = $1 AND call_id = $2)) ORDER BY admission_order DESC LIMIT 100")
                     .bind(parent).bind(before).fetch_all(&self.pool).await?
                     .into_iter().map(|row| row.decode().map(|(record, _)| record)).collect()
             }
@@ -261,6 +276,9 @@ mod tests {
             revision: 1,
             created_at_ms: 1,
             updated_at_ms: 1,
+            started_at_ms: None,
+            finished_at_ms: None,
+            configuration: None,
             input_revision: None,
             result: None,
             runtime_machine_id: None,
@@ -354,6 +372,58 @@ mod tests {
         (overlapping, overlapping_record)
     }
 
+    async fn assert_dismissal(store: &Store, first: &Record) {
+        // UI cleanup cannot stop an active child, cross parent boundaries,
+        // reset budget counts or erase the duplicate-admission receipt.
+        let counts = store.managed_call_counts("parent-1").await.unwrap();
+        assert!(
+            !store
+                .dismiss_managed_call("parent-1", "call-0", true)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .dismiss_managed_call("parent-2", "call-1", true)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .dismiss_managed_call("parent-1", "call-1", true)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .dismiss_managed_call("parent-1", "call-1", true)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.managed_calls("parent-1", None).await.unwrap().len(),
+            1
+        );
+        assert_eq!(store.managed_call_counts("parent-1").await.unwrap(), counts);
+        assert!(
+            store
+                .managed_call_request("parent-1", &first.request_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .dismiss_managed_call("parent-1", "call-1", false)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.managed_calls("parent-1", None).await.unwrap().len(),
+            2
+        );
+    }
+
     async fn assert_lifecycle(
         store: &Store,
         first: &Record,
@@ -421,6 +491,7 @@ mod tests {
             "call-1"
         );
         let mut repeated = overlapping_record.clone();
+        assert_dismissal(store, first).await;
         repeated.call_id = "call-overlap-duplicate".into();
         assert_eq!(
             store

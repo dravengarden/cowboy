@@ -57,9 +57,20 @@ commit, not ahead of it.
      `artifacts/artifacts/<digest>/<file>` as **regular files** (the artifact root is
      that outer `artifacts` directory), and an absolute, symlink-free worker path.
    - `just logs-conformance`.
-   - Not yet done and needed: Claude native execution for the repository's current
-     Claude plugin (its runtime has to be built through the release skill) and connected
-     Code with the exact native Zed pair.
+   - Claude native and managed read-only execution for the repository's current
+     Claude plugin (its runtime has to be built through the release skill), and
+     connected Code with the exact native Zed pair. Connected Code deliberately
+     discards replies and waits for production timeouts; allow the fixture's full
+     deadline instead of shortening the product timeout.
+   - Use a short fixture `TMPDIR`, such as `/tmp`, for native Unix sockets. A long
+     dev-shell temporary path can exceed the socket path limit before a test
+     reaches the operation under examination. Keep real host memory admission
+     enabled; wait for actual pressure to subside if it refuses a fixture launch.
+   - Native Codex's `/tmp/codex-daemon-<uid>` and
+     `/tmp/codex-bwrap-synthetic-mount-targets-<uid>` must be real, owner-only
+     directories, not storage-migration symlinks. Its sandbox rejects symlinks
+     intentionally. Inspect ownership, live users and registry locks before any
+     repair; preserve existing data and do not disable the native check.
 3. **Pin commit.** Change the `cowboy-workers` revision in `flake.nix`, update
    `flake.lock`, keep it a small commit on top of fresh `main` (as `48d3054d` did).
 4. **Build** `.#cowboy-machine-writer-host-release` and `.#cowboy-machine-host-release`

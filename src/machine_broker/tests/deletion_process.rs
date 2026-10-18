@@ -171,7 +171,7 @@ async fn child() {
     let (fixture, _, _) = reconnecting_worker_fixture();
     let mut args = fixture.args.clone();
     args.socket = root.join("runtime.sock");
-    args.worktree_root = root.join("worktrees");
+    args.worktree_root = root.join("worktrees").into();
     let socket = args.socket.clone();
     let server = tokio::spawn(run_broker(
         args,

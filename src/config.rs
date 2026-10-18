@@ -1093,6 +1093,127 @@ pub fn json_schema(scope: Scope) -> serde_json::Value {
 /// # Errors
 /// When the text is invalid or the filesystem write fails.
 pub fn install(scope: Scope, path: &Path, text: &str) -> anyhow::Result<Report> {
+    let _lock = writer_lock(path)?;
+    install_locked(scope, path, text)
+}
+
+fn writer_lock(path: &Path) -> anyhow::Result<std::fs::File> {
+    use fs2::FileExt as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("configuration path has no directory"))?;
+    create_private_dir(directory)?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path.with_extension("lock"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(lock)
+}
+
+/// The file revision is distinct from the running effective configuration:
+/// restart-only settings can be saved without activating them.
+///
+/// # Errors
+/// Refuses unreadable or invalid stored configuration.
+pub fn editable(scope: Scope, path: &Path) -> anyhow::Result<serde_json::Value> {
+    let text = read_file(path).map_err(|error| anyhow::anyhow!("{}", error.message))?;
+    let report = check_text(
+        scope,
+        text.as_deref().unwrap_or("schema = 1\n"),
+        Some(path.to_owned()),
+    );
+    anyhow::ensure!(report.is_valid(), "invalid current configuration");
+    let document: toml::Table = toml::from_str(text.as_deref().unwrap_or("schema = 1\n"))?;
+    Ok(serde_json::json!({"revision":file_revision(text.as_deref()),"values":document}))
+}
+
+fn file_revision(text: Option<&str>) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&text).expect("optional text serializes"))
+    )
+}
+
+/// Compare and patch declared fields under the same interprocess lock used by
+/// the CLI installer. No arbitrary path or untyped setting can be introduced.
+///
+/// # Errors
+/// Refuses stale revisions, unknown/invalid fields and failed filesystem writes.
+pub fn patch(
+    scope: Scope,
+    path: &Path,
+    expected: &str,
+    changes: &serde_json::Value,
+) -> anyhow::Result<Report> {
+    patch_checked(scope, path, expected, changes, || Ok(()))
+}
+
+pub(crate) fn patch_checked(
+    scope: Scope,
+    path: &Path,
+    expected: &str,
+    changes: &serde_json::Value,
+    authorize: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<Report> {
+    let _lock = writer_lock(path)?;
+    let text = read_file(path).map_err(|error| anyhow::anyhow!("{}", error.message))?;
+    anyhow::ensure!(
+        file_revision(text.as_deref()) == expected,
+        "revision_conflict"
+    );
+    let changes = changes
+        .as_object()
+        .filter(|v| !v.is_empty() && v.len() <= 128)
+        .ok_or_else(|| anyhow::anyhow!("invalid changes"))?;
+    let mut document: toml::Table = toml::from_str(text.as_deref().unwrap_or("schema = 1\n"))?;
+    for (key, value) in changes {
+        anyhow::ensure!(
+            scope.fields().iter().any(|field| field.key == key),
+            "unknown configuration field"
+        );
+        let parts: Vec<_> = key.split('.').collect();
+        let mut table = &mut document;
+        for part in &parts[..parts.len() - 1] {
+            table = table
+                .entry((*part).to_owned())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                .as_table_mut()
+                .ok_or_else(|| anyhow::anyhow!("invalid configuration table"))?;
+        }
+        let last = parts[parts.len() - 1];
+        if value.is_null() {
+            table.remove(last);
+        } else {
+            table.insert(last.to_owned(), toml::Value::try_from(value)?);
+        }
+    }
+    let text = toml::to_string_pretty(&document)?;
+    // The writer may have waited behind another process. Recheck the original
+    // authority immediately before committing, without recapturing its lifetime.
+    authorize()?;
+    install_locked(scope, path, &text)
+}
+
+fn install_locked(scope: Scope, path: &Path, text: &str) -> anyhow::Result<Report> {
     let report = check_text(scope, text, Some(path.to_owned()));
     anyhow::ensure!(
         report.is_valid(),
@@ -1119,6 +1240,7 @@ pub fn install(scope: Scope, path: &Path, text: &str) -> anyhow::Result<Report> 
     let temporary = directory.join(format!(".{}.{}.tmp", scope.file_name(), std::process::id()));
     write_private(&temporary, text.as_bytes())?;
     std::fs::rename(&temporary, path)?;
+    std::fs::File::open(directory)?.sync_all()?;
     Ok(report)
 }
 

@@ -3,6 +3,7 @@
 mod approval;
 mod coordinator;
 mod runner;
+mod selection;
 
 pub(super) use coordinator::{Coordinator, delete_child, dispatch_calls, handle, parent_deleted};
 
@@ -109,6 +110,59 @@ pub(super) async fn cancel(
         Some(record) => Json(json!({"schema":1,"call":record.summary()})).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Dismissal {
+    call_ids: Vec<String>,
+    dismissed: bool,
+}
+
+/// Explicit, bounded selection. Never clear calls that finished after the
+/// person selected the rows. Retries and undo are idempotent.
+pub(super) async fn dismiss(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(parent): Path<String>,
+    Json(body): Json<Dismissal>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(info) = state.hub.session_info(&parent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !authenticated
+        .principal
+        .can_mutate(info.meta.owner_user_id.as_deref())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if body.call_ids.is_empty()
+        || body.call_ids.len() > 100
+        || body
+            .call_ids
+            .iter()
+            .any(|id| !crate::managed_calls::valid_id(id))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(store) = &state.store else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let mut changed = Vec::new();
+    for id in &body.call_ids {
+        match store
+            .dismiss_managed_call(&parent, id, body.dismissed)
+            .await
+        {
+            Ok(true) => changed.push(id),
+            Ok(false) => {}
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
+    }
+    Json(json!({"call_ids":changed,"dismissed":body.dismissed})).into_response()
 }
 
 #[derive(Deserialize)]

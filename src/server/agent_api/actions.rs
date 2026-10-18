@@ -29,6 +29,10 @@ struct CallInput {
     root: Option<String>,
     #[serde(default)]
     preset: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 fn auto() -> String {
@@ -58,11 +62,18 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
     } else {
         input.instruction.ok_or("invalid_argument")?
     };
+    let mut labels = std::collections::BTreeMap::new();
+    if let Some(title) = input.title {
+        labels.insert("title", title);
+    }
+    if let Some(reason) = input.reason {
+        labels.insert("selection_reason", reason);
+    }
     let request = Request::parse(
         serde_json::to_string(&json!({
             "schema":1,"request_id":operation,"purpose":purpose,"instruction":instruction,
             "context":{"scope":"current-worktree","files":input.files,"root":input.root},
-            "access":"read-only","conversation":{"mode":"fresh"}
+            "access":"read-only","conversation":{"mode":"fresh"},"labels":labels
         }))
         .map_err(|_| "invalid_argument")?
         .as_bytes(),
@@ -165,7 +176,7 @@ pub(super) async fn preference_owner(
     active_preference_owner(&state.hub, state.store.as_ref(), meta).await
 }
 
-pub(super) async fn read_parent(
+pub(in crate::server) async fn read_parent(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,
     meta: &SessionMeta,
@@ -235,6 +246,9 @@ async fn execute(
             return Err("invalid_argument");
         }
         return match input.domain.as_str() {
+            "control" => Ok(success(
+                super::control::receipt(state, meta, &input.operation).await?,
+            )),
             "preferences" => {
                 let owner = preference_owner(state, meta).await?;
                 let receipt = state
@@ -308,6 +322,9 @@ async fn execute(
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
     match action {
+        "control.apply" => Ok(success(
+            super::control::apply(state, meta, args, operation).await?,
+        )),
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
             if args["scope"] == "zed" {
@@ -575,7 +592,7 @@ mod tests {
             request, wait_ms, ..
         } = call_action(
             "review.start",
-            json!({"focus":"check ownership","root":"/tasks/example"}),
+            json!({"focus":"check ownership","root":"/tasks/example","title":"Ownership review","reason":"Ample model quota"}),
             "op",
         )
         .unwrap()
@@ -585,6 +602,8 @@ mod tests {
         assert_eq!(wait_ms, 0);
         assert_eq!(request.request_id, "op");
         assert!(request.instruction.contains("check ownership"));
+        assert_eq!(request.labels["title"], "Ownership review");
+        assert_eq!(request.labels["selection_reason"], "Ample model quota");
         assert!(matches!(
             request.access,
             crate::managed_calls::Access::ReadOnly

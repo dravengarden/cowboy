@@ -301,7 +301,14 @@ pub(super) fn envelope(record: &Record) -> Value {
             "workspace_id": record.placement.workspace_id,
             "child_session_id": record.child_session_id,
             "input_revision": record.input_revision,
+            "preset": record.preset,
+            "configuration": record.configuration,
+            "selection": record.selection,
         },
+        "created_at_ms": record.created_at_ms,
+        "started_at_ms": record.started_at_ms,
+        "finished_at_ms": record.finished_at_ms,
+        "updated_at_ms": record.updated_at_ms,
         "labels": record.labels,
         "cancel_requested": record.cancel_requested_at_ms.is_some(),
         "error": record.error,
@@ -690,6 +697,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "reason": reason,
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
             "preset": target.and_then(|target| target.preset.as_ref()),
+            "options": target.and_then(|target| target.options.as_ref()),
+            "quota_account": readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)),
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": agent_tools::presets(state, provider),
             "access": ["read-only"],
@@ -697,11 +706,34 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "conversation": ["fresh","continue"],
         }));
     }
+    let accounts: Vec<String> = providers
+        .iter()
+        .filter_map(|provider| provider["quota_account"].as_str().map(str::to_owned))
+        .collect();
+    let quota = if !state.product_auth_enabled || meta.owner_user_id.is_some() {
+        state
+            .usage
+            .cached_view(|snapshot, _, _| {
+                super::selection::quota(snapshot, &accounts, chrono::Utc::now().timestamp_millis())
+            })
+            .await
+    } else {
+        json!({"status":"permission_denied"})
+    };
+    // Account observations must not outlive the parent/user permission that
+    // was checked before the readiness and cache awaits.
+    if let Err(code) =
+        super::super::agent_api::read_parent(&state.hub, state.store.as_ref(), meta).await
+    {
+        return error(code, "not_submitted");
+    }
     json!({
         "schema": 1,
         "state": "ok",
         "enabled": policy.enabled,
         "default": policy.default,
+        "review_selection": super::selection::GUIDANCE,
+        "quota": quota,
         "providers": providers,
         "purposes": ["review","design_review","analysis"],
         "limits": {
@@ -958,6 +990,7 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
         next.cancel_requested_at_ms = Some(next.updated_at_ms);
         if record.state == State::Queued {
             next.state = State::Cancelled;
+            next.finished_at_ms = Some(next.updated_at_ms);
         }
         if store.advance_managed_call(&record, &next).await.ok()? {
             super::runner::ensure_runner(state, &next);

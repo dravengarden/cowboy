@@ -1,9 +1,9 @@
 # Agent API: Cowboy as a token-frugal MCP surface
 
-Status: read composition and explicit scoped actions implemented; live
-discovery, Provider registration, event detail/search and infrastructure reads
-added, 2026-10-17. Activation follows the Controller and Machine compatibility
-gates below.
+Status: product control catalog, durable admission receipts and API coverage
+guards implemented, 2026-10-18. Activation follows the Controller and Machine
+compatibility gates below. Agents prefer MCP for Cowboy state and control; the
+CLI remains supported for people, unavailable capabilities and host operations.
 
 ## Problem
 
@@ -23,10 +23,22 @@ multi-step job, as Matrix CodeAct does for memory:
 - stable error codes instead of stack traces or transcript dumps.
 
 The four complete tool definitions, including JSON schemas and annotations, plus
-initialization instructions measure 2,184 UTF-8 bytes. The discovery test
+initialization instructions are bounded to 4 KiB. The 2026-10-17 baseline was
+2,184 UTF-8 bytes; additions to the operation catalog do not add tool schemas. The discovery test
 enforces a 4 KiB ceiling for that complete surface, in addition to the
 description budget. This is a serialization measurement, not a provider token
 count, prompt-cache measurement or successful-task cost comparison.
+
+The 2026-10-18 live check measured 2,226 bytes for the four complete definitions
+and initialization instructions: 495 tokens with `o200k_base`, or 484 with
+`cl100k_base` (tiktoken 0.12). Domain discovery took 156 tokens and one operation's
+input declaration took 91 with `o200k_base`. Five separate reads of the current
+session, ten other sessions, usage accounts, Machines and cached quota used 3,403
+tokens for tool arguments plus response text. Composing those reads and returning
+the selected fields used 805, about 76% less for that task. These counts exclude
+Provider wrappers and prompt-cache billing; payload size changes with the live
+state. Reuse known declarations at the same revision, compose related reads and
+select fields before returning them to the agent.
 
 ## Native coverage and the residual gap
 
@@ -90,6 +102,14 @@ closed managed-call `Action` enum. Compatibility is explicit:
   the Machine and Controller check it; reconnecting at a different floor
   replaces the grant. Protocol-30 peers keep the two read tools. An older
   Controller never receives an unknown action variant.
+- Protocol 32 makes action names and receipt domains extensible behind the
+  existing envelope. The Controller remains the closed authority/operation
+  dispatcher. Older Machines retain their original operations and all compatible
+  reads; `status.control.writes` is false for the new catalog until the execution
+  Machine reaches 32. An updated MCP executable is also required: its status
+  includes `client.action_catalog:true`; an older executable still validates its
+  original action allowlist. Future catalog additions need only a Controller
+  change, not another protocol bump or resident tool.
 - Discovery reports that authenticated grant's capabilities. A remote session's
   runtime Machine may have a different protocol from its execution Machine;
   querying the runtime's connection would advertise the wrong surface.
@@ -299,21 +319,80 @@ paths describe shape, explicit paths fetch values, and oversized selections
 request a deeper path. Service values come from the live unified config handle;
 session options and Tools defaults/overrides reuse the same owners as the UI.
 
-The read surface now covers same-owner session summaries, content, saved
-history, queues/drafts, per-session usage, cached account quota/activity,
-documents, managed calls, infrastructure and effective configuration. It is not
-full parity with every Cowboy UI/HTTP feature. Cross-session creation,
-prompting, cancellation and configuration, general Machine/Plugin
-administration, usage refresh/reset actions and arbitrary telemetry queries are
-not MCP operations. They keep their existing product/CLI permission and
-activation contracts; no read method implicitly performs them. The stages below
-track separate future additions.
+### Product control catalog
 
-These additions retain the protocol-30/31 gateway actions and work for Codex and
-Claude through the shared server. Upgrade the Controller for read behavior and
-restart the updated MCP binary for live topic discovery. Older clients can use
-`cowboy.api.help()` from a read program and retain their existing operations and
-explicit windows; no worker wire change or additional resident tools is needed.
+`cowboy.control.list()` returns domain counts and explicit owner boundaries.
+`list("sessions")` lists only that domain; `describe("sessions.configure")`
+returns its input and current availability. Discovery accounts for the live
+product role and execution Machine protocol. It never grants authority.
+Use `cowboy_read({help:"control"})` once, then reuse the API revision.
+
+The catalog covers ordinary session creation, remote placement, configuration,
+wake/hibernate/reload, queue/draft edits and scheduling, shared folders/order,
+usage refresh/reset/schedule/executor, registered projects and placement policy,
+Plugin inventory/lifecycle/commands, diagnostics and Service configuration.
+[The coverage ledger](../contracts/agent-api-coverage.json) maps every product HTTP handler,
+WebSocket command and merged protocol router to its MCP operation or concrete
+owner exception. Tests reject unclassified additions and stale entries.
+
+Read through `control.read(name,input,selection)`. Its default is a shape
+description, not a full payload. Select a JSON pointer, a short string window
+or an array page; the same bounds apply to document history, log detail and
+Plugin results. The adapter allows up to 16 MiB of internal handler data, then
+selects before the 256 KiB broker and 16 KiB final program limits. Oversized
+selection is explicit; no silently truncated JSON is presented as complete.
+
+Writes use one stable identity:
+
+```json
+{"action":"control.apply","operation":"rename-session-1","arguments":{"name":"sessions.rename","input":{"session_id":"owned-id","title":"Review API"}}}
+```
+
+The adapter invokes existing product handlers/typed command writers. It accepts
+no arbitrary URL, headers, cookies, SQL, shell command or host delegation.
+An active product Operator can write; Service configuration and shared Tools
+defaults require Owner. Session targets remain same-owner, non-system and
+non-closing even for an Owner; nested sync targets and draft moves follow the
+same boundary. Reads recheck the original permission observation after I/O.
+Self-cancellation, deletion, reset, reload and force-send are refused so the
+caller does not interrupt the operation it is trying to observe. Human approval,
+credentials/login, Device-local configuration, binary maintenance and recovery
+writer promotion keep their owning UI/CLI. Native file/Git/agent execution stays
+with native tools; browser leases and telemetry ingestion keep their protocols.
+
+Before any effect, a SQL admission row binds owner, parent, operation and exact
+input hash. Duplicate identical calls return the saved result; changed input is
+a conflict. Slow submissions return a pending receipt after 500 ms, before the
+gateway transport deadline. The admitted task survives caller disconnect. Its result is saved
+independently of the domain effect: a crash between those events leaves
+`pending/outcome:unknown`, **never permission to repeat under a new ID**.
+`cowboy_receipt({domain:"control",operation})` observes this ledger. Results over
+8 KiB return a compact pointer to `control.read("operations.receipt",
+{operation},selection)`; use it to continue the original result.
+Controller-managed Plugin install/uninstall also retain their original domain
+operation identity and use the existing live authority continuation.
+
+An `accepted` receipt means the domain accepted submission. Queue persistence,
+remote cancellation/deletion, Plugin installation and worker readiness must be
+observed through their domain state. This is not an exactly-once transaction
+across external systems. Completed and uncertain admissions survive Controller
+restart and PostgreSQL/SQLite copy; rows are not evicted by a small in-memory
+cache.
+
+`configuration.service` returns the stored file revision and overrides.
+`configuration.service_set` accepts that revision plus declared dotted keys;
+null removes an override. It uses the same interprocess lock, validation,
+history, atomic rename and fsync as `cowboy config install`. A stale revision
+is refused; unrelated overrides remain, while TOML formatting/comments may be
+normalized. The existing Service watcher owns live activation; restart fields
+wait for restart. Use `configuration.read("service")` to observe effective
+values. Account preferences, session/Tools settings and folders retain their
+existing DB ownership.
+
+Usage reads consume cached observations. `usage.refresh` enters the existing
+UsageService request path, with its persisted per-account cooldown and in-flight
+deduplication; it returns immediately and never starts a second polling loop.
+Credit resets retain the explicit confirmation/credit identity contract.
 
 The stdio server negotiates MCP through `2025-11-25` and keeps the earlier
 versions. It bounds input frames to 1 MiB and concurrent requests to 16, applies
@@ -334,6 +413,7 @@ writer. It does not evaluate code or promise atomicity across domains.
 | `calls.cancel`       | `call_id`; operation must equal that id; requesting cancellation does not prove termination                                                     |
 | `documents.mutate`   | Create, text write, attachment replacement, rename, move, trash or restore; existing owner-scoped store transaction and revision CAS            |
 | `preferences.update` | `{scope,expected_revision,changes}`; typed partial update of the current user's DB preferences, with atomic revision and receipt                |
+| `control.apply` | `{name,input}` from the on-demand catalog; durable admission and compact original-operation receipts |
 
 ### User preferences and configuration coverage
 
@@ -428,9 +508,9 @@ dispatcher.
    Machine maintenance release with an accepted worker pin for the wire floor.
 1. **Explicit writes (implemented).** Protocol 31, four tools, calls and
    documents with their own receipts. Matrix's in-memory staged batch is not
-   copied over remote call launches. Queue mutation still needs a durable
-   receipt tied atomically to dispatch/CAS; queue reads remain available.
-2. **Automatic delivery (implemented in candidate Provider releases).** Ordinary
+   copied over remote call launches. Product catalog effects use a separate
+   durable admission ledger with explicit uncertain outcomes (stage 3).
+2. **Automatic delivery (implemented).** Ordinary
    Codex and Claude sessions register the session Cowboy MCP without changing
    user configuration or copying gateway credentials. Local sessions inherit
    `COWBOY_CALL_CONTEXT`; Codex Remote uses native MCP `environment_id`, and
@@ -448,9 +528,12 @@ dispatcher.
    omit registration and retain their existing read-only isolation. Every
    operation still requires the live core grant. Publishing these Plugin
    versions is separate from installing them on a Machine; existing sessions
-   retain their pinned generation. The CLI review guidance remains until
-   measured complete-flow acceptance justifies replacing it.
-3. **Cross-session actions.** `sessions.prompt` and `sessions.new` (off by
-   default, approved like calls), project listing and `cowboy logs` queries.
+   retain their pinned generation. Review 1.0.2 prefers MCP with CLI fallback;
+   it retains optional, at-most-once review and on-demand action help.
+3. **Product control (implemented).** Protocol 32; dynamic domain catalog,
+   same-owner session actions, configuration, projects, lifecycle, usage and
+   diagnostics, using existing writers and durable admission receipts. Read
+   composition cannot invoke these writes.
 
-The CLI remains for Providers without MCP and for people.
+The CLI remains supported. Agents use it when live MCP capabilities are absent
+or an operation belongs to an explicit host/native/identity boundary.

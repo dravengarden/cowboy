@@ -81,6 +81,11 @@ const id = (id) => ({ id });
 const callId = (call_id) => ({ call_id });
 const query = (q) => q ?? {};
 const cowboy = Object.freeze({
+  control: namespace("control", {
+    list: (domain) => domain === undefined ? {} : ({ domain }),
+    describe: (name) => ({ name }),
+    read: (name, input, selection) => ({ name, input: input ?? {}, ...(selection === undefined ? {} : { selection }) }),
+  }),
   api: namespace("api", { help: (topic) => ({ topic }) }),
   preferences: namespace("preferences", {
     schema: none,

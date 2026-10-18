@@ -41,7 +41,11 @@ test("the installed Review Plugin owns guidance while legacy sessions retain the
   assert.match(prompt, /at most once per task/);
   assert.match(prompt, /cowboy review --ask/);
   assert.match(prompt, /skips\/missing commands silent/);
-  assert.ok(prompt.length < 650);
+  assert.match(prompt, /Prefer Cowboy MCP/);
+  assert.match(prompt, /review.start/);
+  assert.match(prompt, /inspect calls.result/);
+  assert.match(prompt, /review_selection/);
+  assert.ok(prompt.length < 800);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   assert.equal(
     agentCallsPrompt({ schema: 1, calls: null }),

@@ -32,6 +32,7 @@ import {
   useState,
 } from "react";
 import { CallTranscript } from "./CallTranscript";
+import { CallCleanup } from "./CallCleanup";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
@@ -49,6 +50,7 @@ import {
 } from "./composerStackAccordion";
 import {
   callActive,
+  callModelLabel,
   callGroup,
   callsOverview,
   callStateLabel,
@@ -209,6 +211,12 @@ function CallRow({
           >
             {callTitle(call)}
           </Typography>
+          <Typography variant="caption" color="text.secondary" component="div" noWrap title={callModelLabel(call)}>
+            {callModelLabel(call)}
+          </Typography>
+          {call.error && <Typography variant="caption" color="error" component="div" noWrap>
+            {call.error.detail ?? call.error.code}
+          </Typography>}
           {
             /* The icon names the agent; the start and duration place the
               call in time. */
@@ -225,7 +233,7 @@ function CallRow({
               elapsedLabel(call.created_at_ms, end)
             }`}
           >
-            {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
+            {placementLabel(call)} · Created {startedLabel(call.created_at_ms)} ·{" "}
             {elapsedLabel(call.created_at_ms, end)}
           </Typography>
         </Box>
@@ -441,6 +449,9 @@ function CallDetailView({
       <Divider />
       <Typography variant="overline">Execution</Typography>
       <Stack spacing={0.5}>
+        <DetailRow label="Model / effort" value={callModelLabel(call)} />
+        <DetailRow label="Selected preset" value={call.preset ?? "Provider default"} />
+        <DetailRow label="Selection" value={call.labels["selection_reason"] ?? call.selection ?? "Not recorded"} />
         <DetailRow
           label="Status"
           value={call.cancel_requested && callActive(call.state)
@@ -469,9 +480,13 @@ function CallDetailView({
           mono
         />
         <DetailRow
-          label="Started"
+          label="Created"
           value={new Date(call.created_at_ms).toLocaleString()}
         />
+        <DetailRow label="Started" value={call.started_at_ms == null ? "Not recorded" : new Date(call.started_at_ms).toLocaleString()} />
+        <DetailRow label="Finished" value={call.finished_at_ms == null ? (callActive(call.state) ? "In progress" : "Not recorded") : new Date(call.finished_at_ms).toLocaleString()} />
+        <DetailRow label="Elapsed" value={call.started_at_ms == null ? "Not recorded" : elapsedLabel(call.started_at_ms, call.finished_at_ms ?? (callActive(call.state) ? Date.now() : call.updated_at_ms))} />
+        <DetailRow label="Time zone" value={Intl.DateTimeFormat().resolvedOptions().timeZone} />
         <DetailRow
           label="Updated"
           value={new Date(call.updated_at_ms).toLocaleString()}
@@ -583,31 +598,32 @@ function Badge(
   );
 }
 
-/** A phone's dense header for a call's transcript: title, Provider,
- * placement and elapsed time in one draggable row, with its state and
- * findings as colored badges. It replaces the sheet's grab handle. */
+/** A compact two-line phone header: title above status, placement and time.
+ * It replaces the sheet's grab handle. */
 function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
   const tone = callTone(call.state);
-  const attention = call.verdict !== undefined && call.verdict !== null &&
+  const attention =
+    call.verdict !== undefined &&
+    call.verdict !== null &&
     call.verdict !== "approve";
-  const outcome = call.finding_count !== undefined && call.verdict
-    ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
-    : call.verdict
-    ? call.verdict.replace(/-/g, " ")
-    : null;
+  const outcome =
+    call.finding_count !== undefined && call.verdict
+      ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
+      : call.verdict
+        ? call.verdict.replace(/-/g, " ")
+        : null;
   return (
     <Box
       data-call-header={call.call_id}
       sx={{
         display: "flex",
-        alignItems: "center",
-        gap: 0.75,
+        flexDirection: "column",
+        gap: 0.5,
         minWidth: 0,
         pl: 2,
         pr: "max(env(safe-area-inset-right), 16px)",
-        pt: 1.5,
-        pb: 1.25,
+        py: 1,
         borderBottom: 1,
         borderColor: "divider",
         typography: "caption",
@@ -615,62 +631,72 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         color: "text.secondary",
       }}
     >
-      <ProviderIcon
-        provider={call.provider}
-        sx={{ fontSize: "1rem", flexShrink: 0 }}
-      />
       <Box
-        component="span"
-        role="heading"
-        aria-level={2}
-        sx={{
-          fontSize: "0.8125rem",
-          fontWeight: 700,
-          color: "text.primary",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          minWidth: 0,
-          maxWidth: "55%",
-          flexShrink: 0,
-        }}
+        sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}
       >
-        {displayTitle(call)}
+        <ProviderIcon
+          provider={call.provider}
+          sx={{ fontSize: "1rem", flexShrink: 0 }}
+        />
+        <Box
+          component="span"
+          role="heading"
+          aria-level={2}
+          sx={{
+            fontSize: "0.8125rem",
+            fontWeight: 700,
+            color: "text.primary",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          {displayTitle(call)}
+        </Box>
       </Box>
       <Box
-        component="span"
+        data-call-header-metadata
         sx={{
-          flex: 1,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          columnGap: 0.75,
+          rowGap: 0.5,
           minWidth: 0,
         }}
-        title={callTimesTitle(call)}
       >
-        {
-          /* The icon names the agent and Details its version; a phone
-            keeps where and when. */
-        }
-        {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
-        {elapsedLabel(call.created_at_ms, end)}
+        {/* A finished review's findings already say it completed. */}
+        {(call.state !== "completed" || !outcome) && (
+          <Badge
+            label={callStateLabel(call)}
+            color={
+              tone === "success"
+                ? "success"
+                : tone === "error"
+                  ? "error"
+                  : tone === "active"
+                    ? "primary"
+                    : "default"
+            }
+          />
+        )}
+        {outcome && (
+          <Badge label={outcome} color={attention ? "warning" : "success"} />
+        )}
+        <Box component="span" sx={{ whiteSpace: "nowrap" }}>
+          {placementLabel(call)}
+        </Box>
+        <Box
+          component="span"
+          title={callTimesTitle(call)}
+          sx={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+        >
+          {startedLabel(call.created_at_ms)} ·{" "}
+          {elapsedLabel(call.created_at_ms, end)}
+        </Box>
       </Box>
-      {
-        /* A finished review's findings already say it completed. */
-      }
-      {(call.state !== "completed" || !outcome) && <Badge
-        label={callStateLabel(call)}
-        color={tone === "success"
-          ? "success"
-          : tone === "error"
-          ? "error"
-          : tone === "active"
-          ? "primary"
-          : "default"}
-      />}
-      {outcome && (
-        <Badge label={outcome} color={attention ? "warning" : "success"} />
-      )}
     </Box>
   );
 }
@@ -931,7 +957,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
   desktop: boolean;
   shortcut?: ReactNode;
 }): React.JSX.Element | null {
-  const { calls, observedAt, error } = useManagedCalls(sessionId);
+  const { calls, observedAt, error, refresh } = useManagedCalls(sessionId);
   const expanded = useStore(composerStackExpandedStore()) === "calls";
   const [route, setRoute] = useState<CallRoute | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -947,7 +973,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
-  if (calls.length === 0) return null;
+  if (calls.length === 0 && (observedAt === null || (!mobileOpen && !expanded))) return null;
   const overview = callsOverview(calls);
   const routed = route
     ? calls.find((call) => call.call_id === route.call) ?? null
@@ -1148,6 +1174,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
               desktop
               onSelect={openCall}
             />
+            <CallCleanup key={sessionId} parent={sessionId} calls={calls} onChange={refresh} />
           </Stack>
         </Collapse>
       )}
@@ -1282,12 +1309,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                     />
                   )
                   : (
-                    <CallList
-                      calls={calls}
-                      selected={null}
-                      desktop={false}
-                      onSelect={openCall}
-                    />
+                    <Stack spacing={1}>
+                      <CallCleanup key={sessionId} parent={sessionId} calls={calls} onChange={refresh} />
+                      <CallList calls={calls} selected={null} desktop={false} onSelect={openCall} />
+                    </Stack>
                   )}
               </Box>
             )}

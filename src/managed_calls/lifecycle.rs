@@ -110,6 +110,13 @@ pub struct Record {
     pub revision: u64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<i64>,
+    /// Observed child configuration at dispatch, never inferred from today's catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<std::collections::BTreeMap<String, String>>,
     /// An immutable snapshot lease from the target, never the live cwd alone.
     pub input_revision: Option<String>,
     /// Retained structured result, not a shell exit code or review verdict.
@@ -192,6 +199,9 @@ pub struct Summary<'a> {
     pub revision: u64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    pub started_at_ms: Option<i64>,
+    pub finished_at_ms: Option<i64>,
+    pub configuration: &'a Option<std::collections::BTreeMap<String, String>>,
     pub input_revision: &'a Option<String>,
     pub has_result: bool,
     pub runtime_machine_id: &'a Option<String>,
@@ -226,6 +236,9 @@ impl Record {
             revision: self.revision,
             created_at_ms: self.created_at_ms,
             updated_at_ms: self.updated_at_ms,
+            started_at_ms: self.started_at_ms,
+            finished_at_ms: self.finished_at_ms,
+            configuration: &self.configuration,
             input_revision: &self.input_revision,
             has_result: self.result.is_some(),
             runtime_machine_id: &self.runtime_machine_id,
@@ -262,6 +275,21 @@ impl Record {
             && self.revision <= i64::MAX as u64
             && self.created_at_ms >= 0
             && self.updated_at_ms >= self.created_at_ms
+            && self
+                .started_at_ms
+                .is_none_or(|time| time >= self.created_at_ms && time <= self.updated_at_ms)
+            && self.finished_at_ms.is_none_or(|time| {
+                self.state.terminal()
+                    && time >= self.started_at_ms.unwrap_or(self.created_at_ms)
+                    && time <= self.updated_at_ms
+            })
+            && self.configuration.as_ref().is_none_or(|values| {
+                values.len() <= 3
+                    && values.iter().all(|(key, value)| {
+                        matches!(key.as_str(), "model" | "reasoning_effort" | "effort")
+                            && value.len() <= 256
+                    })
+            })
             && self
                 .input_revision
                 .as_ref()
@@ -314,6 +342,9 @@ impl Record {
             && next.updated_at_ms >= self.updated_at_ms
             && self.revision.checked_add(1) == Some(next.revision)
             && once(&self.input_revision, &next.input_revision)
+            && once(&self.started_at_ms, &next.started_at_ms)
+            && once(&self.finished_at_ms, &next.finished_at_ms)
+            && once(&self.configuration, &next.configuration)
             && once(&self.runtime_machine_id, &next.runtime_machine_id)
             && self.preset == next.preset
             && self.selection == next.selection
@@ -377,6 +408,9 @@ mod tests {
             revision: 1,
             created_at_ms: 1,
             updated_at_ms: 1,
+            started_at_ms: None,
+            finished_at_ms: None,
+            configuration: None,
             input_revision: None,
             result: None,
             runtime_machine_id: Some("ovh".into()),

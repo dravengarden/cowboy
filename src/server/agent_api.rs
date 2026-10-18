@@ -29,13 +29,14 @@ use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
+mod control;
 mod event_reads;
 mod json_reads;
 mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
-pub(super) use actions::invoke;
+pub(super) use actions::{invoke, read_parent};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.
@@ -57,11 +58,28 @@ pub(super) fn status(state: &Arc<AppState>, meta: &SessionMeta, grant: &Grant) -
     let Some(info) = state.hub.session_info(&meta.id) else {
         return error("not_found");
     };
-    status_view(
+    let mut value = status_view(
         &info,
         super::agent_tools::effective(state, meta).calls.enabled,
         grant,
-    )
+    );
+    value["control"] = json!({"writes": control_supported(state,meta),"minimum_execution_protocol":crate::machine_protocol::AGENT_CONTROL_PROTOCOL_VERSION});
+    value
+}
+
+fn control_supported(state: &AppState, meta: &SessionMeta) -> bool {
+    state
+        .runtime_router
+        .runtime(&meta.machine_id)
+        .and_then(|runtime| runtime.managed_call_authority(&state.service_id, meta).ok())
+        .and_then(|authority| {
+            state
+                .machine_control
+                .connection_protocol(&authority.placement().machine_id)
+        })
+        .is_some_and(|(_, protocol)| {
+            protocol >= crate::machine_protocol::AGENT_CONTROL_PROTOCOL_VERSION
+        })
 }
 
 fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value {
@@ -172,6 +190,9 @@ impl Host for SessionHost<'_> {
         // lose its account while a preceding operation is awaiting a reply.
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         match op {
+            "control.list" | "control.describe" | "control.read" => {
+                control::read(self.state, self.meta, op, args).await
+            }
             "machines.list"
             | "machines.read"
             | "configuration.schema"
@@ -222,6 +243,8 @@ impl Host for SessionHost<'_> {
                         let summary = row.summary();
                         json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
                             "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
+                            "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
+                            "configuration":row.configuration,"preset":row.preset,
                             "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
                     })
                     .collect::<Vec<_>>();

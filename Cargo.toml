@@ -65,6 +65,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -114,7 +115,7 @@ regex = "1"
 # Helix / Zed use). See src/files.rs.
 ignore = "0.4"
 nucleo-matcher = "0.3"
-toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
 
 # The long-lived control plane handles bursty restore/transcript allocations.
 # jemalloc returns those pages to the OS more predictably than glibc malloc;

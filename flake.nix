@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=79af7493081b3c6ed8a7a65bc3329a0d92c530ad";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=2ccb2a564f5067e5d293297ddc21545b802e2068";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -91,6 +91,7 @@
           ./config
           ./migrations
           ./web/src/protocol.ts
+          ./contracts/agent-api-coverage.json
           ./contracts/code-buffer-client.fixture.json
           ./contracts/code-buffer-sync.fixture.json
           ./contracts/code-buffer-sync-budget.fixture.json
@@ -187,6 +188,7 @@
           ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
+          ./src/session_workspace
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
@@ -344,7 +346,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-h/QojxLSaC7xHKbEfb48fu2MOZihHt2MqaqTVP4wQVg=";
+        hash = "sha256-hplNnXifJTcRwdNe7TUkvQF/MWccLcR0wchznDALZhQ=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -697,6 +699,8 @@
         EOF
       '';
       cowboy-machine-bootstrap-release = machine-release true false false;
+      cowboy-machine-host-bootstrap-release = assert retained-worker-interface-compatible;
+        machine-release true true false;
       cowboy-machine-release = machine-release false false false;
       cowboy-machine-host-release = assert retained-worker-interface-compatible;
         machine-release false true false;
@@ -768,6 +772,7 @@
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
+        test -e ${machine-src}/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
@@ -849,6 +854,7 @@
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
+        cowboy-machine-host-bootstrap-release = cowboy-machine-host-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
         cowboy-machine-host-release = cowboy-machine-host-release;
         cowboy-machine-writer-host-release = cowboy-machine-writer-host-release;
@@ -861,7 +867,7 @@
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-machine-bootstrap-release cowboy-machine-release
-          cowboy-machine-host-release
+          cowboy-machine-host-release cowboy-machine-host-bootstrap-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
         cowboy-worker-registry-input = worker-registry-check;
       };
