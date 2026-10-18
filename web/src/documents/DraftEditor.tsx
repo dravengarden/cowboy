@@ -228,6 +228,7 @@ function DraftEditingSession(
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
   const canvas = useRef<HTMLDivElement | null>(null);
+  const documentScroll = useRef<HTMLDivElement | null>(null);
   const titleInput = useRef<HTMLInputElement | null>(null);
   const mountSeed = useRef(initial.body);
   const owner = draftRepository().document(initial.id);
@@ -301,13 +302,20 @@ function DraftEditingSession(
   const desktop = useSurfaceProfile().kind === "desktop";
   const focusLayout = !desktop && mobileChrome !== undefined;
   useEffect(() => {
-    if (!canvas.current) return;
-    return observeDraftViewport(canvas.current, () => {
-      if (!imeOwnsEditable(composing.current, compositionEndedAt.current, Date.now()) && editor.current?.hasFocus()) {
+    const viewport = focusLayout ? documentScroll.current : canvas.current;
+    if (!viewport) return;
+    return observeDraftViewport(viewport, () => {
+      if (
+        !imeOwnsEditable(
+          composing.current,
+          compositionEndedAt.current,
+          Date.now(),
+        ) && editor.current?.hasFocus()
+      ) {
         editor.current.revealSelection();
       }
     });
-  }, []);
+  }, [focusLayout]);
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
   // The title is the document's first line (Obsidian inline title): `␣T`
@@ -634,7 +642,17 @@ function DraftEditingSession(
       value={title}
       placeholder="Untitled"
       fullWidth
-      sx={{ flex: 1, minWidth: 0 }}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        ...(focusLayout && {
+          "& .MuiInputBase-input": {
+            fontSize: "inherit",
+            fontWeight: "inherit",
+            lineHeight: "inherit",
+          },
+        }),
+      }}
       inputRef={titleInput}
       disabled={current.deleted}
       inputProps={{
@@ -683,7 +701,9 @@ function DraftEditingSession(
           disableUnderline: true,
           sx: focusLayout
             ? {
-              fontSize: "calc(1.75rem * var(--cowboy-font-scale, 1))",
+              // The root rem already includes the reading preference. A second
+              // multiplication made titles smaller than body text at 50%.
+              fontSize: "1.75rem",
               fontWeight: 700,
               lineHeight: 1.25,
               letterSpacing: "-0.01em",
@@ -845,7 +865,10 @@ function DraftEditingSession(
                           onPointerDown={(e) => e.preventDefault()}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
-                            if (editor.current && (!current.deleted || id === "sourceMode")) {
+                            if (
+                              editor.current &&
+                              (!current.deleted || id === "sourceMode")
+                            ) {
                               command.run({
                                 editor: editor.current,
                                 attach: () => filePicker.current?.click(),
@@ -1033,10 +1056,6 @@ function DraftEditingSession(
                 </IconButton>
               </Stack>
             </Stack>
-            <Box sx={{ mt: 2 }}>{titleField}</Box>
-            <Typography variant="caption" color="text.disabled" role="status">
-              {saveStatus}
-            </Typography>
           </Box>
         )
         : (
@@ -1193,7 +1212,9 @@ function DraftEditingSession(
               <Button
                 color="inherit"
                 onClick={() =>
-                  void recoverCopy().catch((e: Error) => setError(e.message))}
+                  void recoverCopy().catch((e: Error) =>
+                    setError(e.message)
+                  )}
               >
                 Keep mine as copy
               </Button>
@@ -1217,105 +1238,163 @@ function DraftEditingSession(
         </Alert>
       )}
       <Box
-        sx={{
-          display: "flex",
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          px: desktop ? 1.5 : 0.5,
-          // An empty page hints quietly (Obsidian): both engines use the
-          // disabled tone, including the touch textarea before CM6 mounts.
-          "& textarea::placeholder, & .cm-placeholder": {
-            color: "text.disabled",
-            opacity: 1,
-          },
-        }}
-        data-draft-body
-        data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
-        data-desktop-region={desktop ? "prompt.composer" : undefined}
-        onKeyDownCapture={(e) => {
-          // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
-          // into the title. A pending Vim command (`dk`, `ck`) keeps its key.
-          if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
-          if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-          const sink = e.target instanceof Element &&
-            e.target.matches("[data-vim-command-sink]");
-          const up = e.key === "ArrowUp" ||
-            (sink && e.code === "KeyK" && getVimMode() === "normal" &&
-              !vimSinkAwaitsInput(e.target));
-          if (!up || !bodyCaretOnFirstLine()) return;
-          e.preventDefault();
-          e.stopPropagation();
-          focusTitle(e.key === "ArrowUp" ? "insert" : "normal");
-        }}
-      >
-        <Box
-          ref={canvas}
-          sx={{
-            display: "flex",
+        ref={documentScroll}
+        data-draft-document-scroll={focusLayout ? "true" : undefined}
+        sx={focusLayout
+          ? {
             flex: 1,
             minHeight: 0,
             minWidth: 0,
-            width: "100%",
-            "& [data-mobile-native-editor]": {
-              flex: 1,
-              height: "100%",
-              maxHeight: "none",
-            },
-            "& textarea[data-mobile-native-textarea]": {
-              height: "100% !important",
-              maxHeight: "none !important",
-            },
-            maxWidth: readableWidth ? "85ch" : "none",
-            mx: "auto",
-          }}
+            overflowY: "auto",
+            overflowX: "hidden",
+            overscrollBehaviorY: "contain",
+            touchAction: "pan-y pinch-zoom",
+            scrollPaddingBlock: "12px",
+          }
+          : { display: "contents" }}
+      >
+        <Stack
+          sx={focusLayout
+            ? { minHeight: "100%", minWidth: 0 }
+            : { display: "contents" }}
         >
-          <PlatformComposerEditor
-            ref={editor}
-            documentId={initial.id}
-            value={mountSeed.current}
-            nativeValue={text}
-            onChange={(value) => {
-              // A merged remote update already set textRef; it is not typing.
-              const typed = value !== textRef.current;
-              textRef.current = value;
-              setText(value);
-              if (typed) schedule();
+          {focusLayout && (
+            <Box
+              data-draft-inline-title
+              sx={{ px: "18px", pt: 2, flexShrink: 0 }}
+            >
+              {titleField}
+              <Typography variant="caption" color="text.disabled" role="status">
+                {saveStatus}
+              </Typography>
+            </Box>
+          )}
+          <Box
+            sx={{
+              display: "flex",
+              flex: focusLayout ? "1 0 auto" : 1,
+              minHeight: focusLayout ? "auto" : 0,
+              minWidth: 0,
+              px: desktop ? 1.5 : 0.5,
+              // An empty page hints quietly (Obsidian): both engines use the
+              // disabled tone, including the touch textarea before CM6 mounts.
+              "& textarea::placeholder, & .cm-placeholder": {
+                color: "text.disabled",
+                opacity: 1,
+              },
             }}
-            {...(positions.has(initial.id)
-              ? { initialSelection: positions.get(initial.id)!.head }
-              : {})}
-            onPasteFiles={attach}
-            // In Trash the server refuses every write, and each refused
-            // autosave would keep the text as one more conflicted copy.
-            disabled={current.deleted}
-            placeholder="Start writing…"
-            borderless
-            fill
-            flushRightScrollbar={desktop}
-            vim={vim}
-          />
-        </Box>
-      </Box>
-      {attachments.some((a) => !a.isImage) && (
-        <Stack direction="row" sx={{ px: 1, gap: 0.5, flexWrap: "wrap" }}>
-          {attachments.filter((a) =>
-            !a.isImage
-          ).map((a) => (
-            <Chip
-              key={a.id}
-              label={a.name}
-              onDelete={current.deleted ? undefined : () => {
-                attachmentsRef.current = attachmentsRef.current.filter((item) =>
-                  item.id !== a.id
-                );
-                setAttachments(attachmentsRef.current);
-                schedule();
+            data-draft-body
+            data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
+            data-desktop-region={desktop ? "prompt.composer" : undefined}
+            onKeyDownCapture={(e) => {
+              // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
+              // into the title. A pending Vim command (`dk`, `ck`) keeps its key.
+              if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+              if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+              const sink = e.target instanceof Element &&
+                e.target.matches("[data-vim-command-sink]");
+              const up = e.key === "ArrowUp" ||
+                (sink && e.code === "KeyK" && getVimMode() === "normal" &&
+                  !vimSinkAwaitsInput(e.target));
+              if (!up || !bodyCaretOnFirstLine()) return;
+              e.preventDefault();
+              e.stopPropagation();
+              focusTitle(e.key === "ArrowUp" ? "insert" : "normal");
+            }}
+          >
+            <Box
+              ref={canvas}
+              sx={{
+                display: "flex",
+                flexDirection: focusLayout ? "column" : undefined,
+                flex: focusLayout ? "1 0 auto" : 1,
+                minHeight: focusLayout ? "auto" : 0,
+                minWidth: 0,
+                width: "100%",
+                "& [data-mobile-native-editor]": {
+                  flex: focusLayout ? "1 0 auto" : 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  height: focusLayout ? "auto" : "100%",
+                  maxHeight: "none",
+                },
+                "& textarea[data-mobile-native-textarea]": {
+                  flex: focusLayout ? "1 0 auto" : 1,
+                  ...(focusLayout
+                    ? { overflowY: "hidden" }
+                    : { height: "100% !important" }),
+                  maxHeight: "none !important",
+                },
+                ...(focusLayout && {
+                  // A Draft is a document, rather than a bounded chat input. One
+                  // ancestor scrolls its inline title and body. CM6 can virtualize
+                  // against that ancestor; native prose uses its existing fitter.
+                  "& > [data-mobile-pager-ignore], & .cm-theme-none, & .cm-editor":
+                    {
+                      flex: "1 0 auto",
+                      display: "flex",
+                      flexDirection: "column",
+                      maxHeight: "none !important",
+                      height: "auto !important",
+                    },
+                  "& .cm-scroller": {
+                    flex: "1 0 auto",
+                    maxHeight: "none !important",
+                    overflow: "visible !important",
+                  },
+                }),
+                maxWidth: readableWidth ? "85ch" : "none",
+                mx: "auto",
               }}
-            />
-          ))}
+            >
+              <PlatformComposerEditor
+                ref={editor}
+                documentId={initial.id}
+                value={mountSeed.current}
+                nativeValue={text}
+                onChange={(value) => {
+                  // A merged remote update already set textRef; it is not typing.
+                  const typed = value !== textRef.current;
+                  textRef.current = value;
+                  setText(value);
+                  if (typed) schedule();
+                }}
+                {...(positions.has(initial.id)
+                  ? { initialSelection: positions.get(initial.id)!.head }
+                  : {})}
+                onPasteFiles={attach}
+                // In Trash the server refuses every write, and each refused
+                // autosave would keep the text as one more conflicted copy.
+                disabled={current.deleted}
+                placeholder="Start writing…"
+                borderless
+                fill={!focusLayout}
+                flushRightScrollbar={desktop}
+                vim={vim}
+              />
+            </Box>
+          </Box>
+          {attachments.some((a) => !a.isImage) && (
+            <Stack direction="row" sx={{ px: 1, gap: 0.5, flexWrap: "wrap" }}>
+              {attachments.filter((a) =>
+                !a.isImage
+              ).map((a) => (
+                <Chip
+                  key={a.id}
+                  label={a.name}
+                  onDelete={current.deleted ? undefined : () => {
+                    attachmentsRef.current = attachmentsRef.current.filter((
+                      item,
+                    ) => item.id !== a.id);
+                    setAttachments(attachmentsRef.current);
+                    schedule();
+                  }}
+                />
+              ))}
+            </Stack>
+          )}
         </Stack>
-      )}
+      </Box>
       {desktop
         ? (
           <Suspense fallback={toolbarView}>
