@@ -3080,3 +3080,62 @@ The empty-state settings event carries the session id so a split pane cannot
 open another pane's modal. No editor extension, caret, IME, paste or keyboard
 focus-transfer path changed. Browser fixtures cover both themes and settings
 interactions; they do not establish physical iPhone IME or swipe acceptance.
+
+### 2026-10-18 Draft keyboard opening and viewport changes
+
+Reference checked against the official Desktop release manifest on 2026-10-18:
+Obsidian 1.14.4, `obsidian-1.14.4.asar.gz`, SHA-256 (base64)
+`0e1CjDY5aHdPDzkG5n2KU6BY7OC2zdkksHhll3sq2iE=`. This is inspection of the
+distributed JavaScript/CSS, not access to Obsidian's private source repository
+or proof of the shipped iOS native implementation. Sources:
+[release manifest](https://github.com/obsidianmd/obsidian-releases/blob/master/desktop-releases.json),
+[release](https://github.com/obsidianmd/obsidian-releases/releases/tag/v1.14.4).
+
+The shared bundle's mobile toolbar retains a keyboard-toggle element, avoids
+rebuilding commands when their configured IDs are unchanged, prevents mouse
+focus theft, and animates its position from native `keyboardWillShow` /
+`keyboardWillHide` geometry. Its editor uses nearest-selection scrolling.
+Cowboy borrows those interaction principles, without importing proprietary
+code or assuming PWA visualViewport events provide native animation timing:
+
+- Draft's Edit/Hide keyboard slot remains mounted and keeps its width, so the
+  formatting strip and its horizontal scroll do not jump when the keyboard
+  arrives. Edit resumes the existing caret rather than focusing the end.
+  Keyboard state lives in this small control rather than re-rendering the
+  entire document. Focus alone still does not lift the bar.
+- Observe the actual writing canvas. After a height reduction or width change,
+  coalesce a selection reveal into one animation frame, only for the focused
+  editor and outside composition (including the candidate-commit hold).
+  Height expansion does not pull the document back to the caret. The native
+  textarea's reveal method remains a no-op: UIKit owns its scrolling. No
+  editor remount, focus retry, selection write, or new CM6 extension is used.
+- Desktop Readable width preserves pointer focus, so rewrapping keeps the
+  current writing position visible. The fallback Attach control also preserves
+  selection before opening the file picker, matching formatting controls.
+
+Browser acceptance exercises stable toolbar identity, width and scroll across
+synthetic keyboard opening/closing, resumed focus, and long-Markdown caret
+visibility after the canvas shrinks. Physical iOS keyboard animation, native
+Pinyin/WeType, caret, long-press paste, image and expand/collapse acceptance
+remain separate device checks. This does not resolve pitfall #69. Native
+keyboard curves are deliberately not copied onto PWA layout: that would add
+a second animation after the browser has already moved the viewport.
+
+Follow-up: touch Draft titles advertise the system keyboard's `next` action.
+An unmodified Return enters the existing body at its start, in that same user
+gesture; composition, the candidate-commit hold, modified Enter, and Desktop
+title navigation retain their existing ownership. The touch formatting strip
+now hints only the edges with hidden commands. Its independent scroll/content
+ResizeObserver handles rotation, font changes and configured command counts;
+passive scroll updates coalesce to one frame without rendering the editor.
+The capsule shadow stays outside the mask. Browser checks cover both scroll
+ends, an all-visible strip, title Next, and candidate-confirmation ownership;
+these do not establish physical iOS keyboard acceptance.
+
+Trash is read-only on touch and on the Desktop fallback toolbar too: disable
+document formatting, attachment insertion and attachment removal until Restore.
+Keep the source-view toggle available because it does not edit the document.
+Previously the disabled editor could still receive imperative formatting calls
+from enabled buttons, producing changes the server would refuse. Browser checks
+exercise Trash and Restore with an attachment and verify content is unchanged
+by disabled formatting. No deletion, persistence or sync protocol changes.

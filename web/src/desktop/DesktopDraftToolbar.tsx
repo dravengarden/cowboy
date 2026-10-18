@@ -386,6 +386,8 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           color="inherit"
           data-draft-readable-width
           aria-pressed={props.readableWidth}
+          onPointerDown={(event) => event.preventDefault()}
+          onMouseDown={(event) => event.preventDefault()}
           onClick={props.onReadableWidth}
           sx={{
             textTransform: "none",

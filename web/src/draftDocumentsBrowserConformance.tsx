@@ -2090,6 +2090,100 @@ export async function runDraftDocumentsBrowserConformance(
         lifted.bottom < rest.bottom - 250,
         `A keyboard inset lifts the bar (${Math.round(rest.bottom)} → ${Math.round(lifted.bottom)})`,
       );
+      const strip = bar.querySelector<HTMLElement>("[data-draft-format-toolbar]")!;
+      const toggle = bar.querySelector<HTMLButtonElement>("[data-draft-keyboard-toggle]")!;
+      await until(() => strip.dataset.overflowRight === "true", "Hidden formatting actions have an overflow hint");
+      check(strip.dataset.overflowLeft === "false", "The first visible action is not faded");
+      check(getComputedStyle(strip.parentElement!, "::after").opacity === "1", "A visible chevron advertises more formatting actions");
+      strip.scrollLeft = strip.scrollWidth;
+      await until(() => strip.dataset.overflowRight === "false" && strip.dataset.overflowLeft === "true", "At the end, only the earlier actions are hinted");
+      strip.style.width = `${strip.scrollWidth + 20}px`;
+      await until(() => strip.dataset.overflowLeft === "false" && strip.dataset.overflowRight === "false", "No overflow hint when all actions fit");
+      check(getComputedStyle(strip).maskImage === "none", "No mask dims a toolbar that fits");
+      check(getComputedStyle(strip.parentElement!, "::after").opacity === "0", "The overflow chevron disappears when every action fits");
+      strip.style.removeProperty("width");
+      await tick();
+      const stripWidth = strip.getBoundingClientRect().width;
+      strip.scrollLeft = 90;
+      const scrollLeft = strip.scrollLeft;
+      const editable = container.querySelector<HTMLElement>("[data-draft-body] .cm-content, [data-draft-body] textarea")!;
+      const title = container.querySelector<HTMLInputElement>('[aria-label="Draft title"]')!;
+      check(title.enterKeyHint === "next", "Touch title advertises Next on the system keyboard");
+      title.focus();
+      const titleText = title.value;
+      title.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "zhong" }));
+      const confirmCandidate = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, bubbles: true, cancelable: true });
+      title.dispatchEvent(confirmCandidate);
+      check(!confirmCandidate.defaultPrevented && document.activeElement === title, "Candidate confirmation keeps title input ownership");
+      title.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      const finishingCandidate = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+      title.dispatchEvent(finishingCandidate);
+      check(!finishingCandidate.defaultPrevented && document.activeElement === title, "The post-composition Enter also stays in the title");
+      await tick(100);
+      const next = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+      title.dispatchEvent(next);
+      check(next.defaultPrevented && document.activeElement === editable && title.value === titleText, "Next enters the same body editor without altering the title");
+      const vv = window.visualViewport!;
+      const heightDescriptor = Object.getOwnPropertyDescriptor(vv, "height");
+      try {
+        Object.defineProperty(vv, "height", { configurable: true, value: window.innerHeight * 0.65 });
+        vv.dispatchEvent(new Event("resize"));
+        await until(() => toggle.getAttribute("aria-label") === "Hide keyboard", "Draft keyboard toggle follows the actual keyboard");
+        check(
+          bar.querySelector("[data-draft-keyboard-toggle]") === toggle &&
+            Math.abs(strip.getBoundingClientRect().width - stripWidth) < 1 &&
+            strip.scrollLeft === scrollLeft && editable === document.activeElement,
+          "Opening the keyboard keeps the same toggle, strip width, horizontal scroll and editor focus",
+        );
+        toggle.click();
+        check(document.activeElement !== editable, "Hide only releases the editor focus");
+        Object.defineProperty(vv, "height", { configurable: true, value: window.innerHeight });
+        vv.dispatchEvent(new Event("resize"));
+        await until(() => toggle.getAttribute("aria-label") === "Edit draft", "Draft toggle returns to Edit");
+        toggle.click();
+        check(document.activeElement === editable, "Edit resumes the same editor without remounting");
+      } finally {
+        if (heightDescriptor) Object.defineProperty(vv, "height", heightDescriptor);
+        else Reflect.deleteProperty(vv, "height");
+        vv.dispatchEvent(new Event("resize"));
+      }
+      // Rich Markdown near the bottom used to stay under the newly raised
+      // toolbar until the next keystroke. Resize the actual writing canvas.
+      const longText = Array.from({ length: 80 }, (_, index) => `Line ${index} **body**`).join("\n");
+      const native = container.querySelector<HTMLTextAreaElement>("[data-draft-body] textarea");
+      if (native) {
+        native.select();
+        const port = activeEditorExtensionPort()!;
+        check(port.replaceSelection(longText, port.read()), "Insert rich Markdown through the actual editor gateway");
+        await until(() => !!container.querySelector("[data-draft-body] .cm-content"), "Native editor promotes to rich Markdown");
+      }
+      const rich = container.querySelector<HTMLElement>("[data-draft-body] .cm-content");
+      check(rich, "Draft fixture uses the rich editor for resize acceptance");
+      const richView = EditorView.findFromDOM(rich)!;
+      richView.dispatch({ changes: { from: 0, to: richView.state.doc.length, insert: longText }, selection: { anchor: longText.length }, scrollIntoView: true });
+      richView.focus();
+      await tick(100);
+      const selection = richView.state.selection;
+      document.documentElement.style.setProperty("--kb-inset", "300px");
+      await tick(150);
+      const caret = richView.coordsAtPos(longText.length)!;
+      const bounds = richView.scrollDOM.getBoundingClientRect();
+      check(caret.bottom <= bounds.bottom && caret.top >= bounds.top, "Canvas shrink reveals the caret above the Draft toolbar");
+      check(richView.hasFocus && richView.state.selection.eq(selection) && richView.state.doc.toString() === longText, "Resize preserves focus, selection and document text");
+      document.documentElement.style.removeProperty("--kb-inset");
+      const mobileId = container.querySelector("[data-draft-editor]")!.getAttribute("data-draft-editor")!;
+      await until(() => server.get(mobileId)?.body === longText, "Long draft saved before Trash acceptance");
+      const mobileOwner = repo.document(mobileId);
+      await mobileOwner.change({ type: "write", body: longText, attachments: [{ id: "readonly-fixture", name: "notes.txt", mimeType: "text/plain", isImage: false, block: { type: "text", text: "Attachment content" } }] });
+      await until(() => !!container.querySelector(".MuiChip-deleteIcon"), "Editable attachment offers removal");
+      await mobileOwner.change({ type: "trash" });
+      await until(() => container.querySelector<HTMLButtonElement>('[aria-label="Toggle bold"]')?.disabled === true, "Trash disables content formatting");
+      check(container.querySelector<HTMLButtonElement>('[aria-label="Attach file"]')?.disabled && !container.querySelector(".MuiChip-deleteIcon"), "Trash disables attachment insertion and removal");
+      const beforeTrashClick = richView.state.doc.toString();
+      container.querySelector<HTMLButtonElement>('[aria-label="Toggle bold"]')!.click();
+      check(richView.state.doc.toString() === beforeTrashClick, "Disabled formatting cannot mutate a trashed document");
+      button("Restore draft").click();
+      await until(() => container.querySelector<HTMLButtonElement>('[aria-label="Toggle bold"]')?.disabled === false && !!container.querySelector(".MuiChip-deleteIcon"), "Restore re-enables formatting and attachment removal");
     }
     mobileRoot.unmount();
     results.push(

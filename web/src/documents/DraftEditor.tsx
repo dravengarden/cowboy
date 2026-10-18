@@ -19,11 +19,12 @@ import {
   DownloadIcon,
   EllipsisIcon,
   HistoryIcon,
-  KeyboardHideIcon,
   PanelLeftIcon,
 } from "./draftChromeIcons";
 import { alpha, type Theme } from "@mui/material/styles";
-import { useKeyboardOpen } from "../keyboardInset";
+import { DraftKeyboardToggle } from "./DraftKeyboardToggle";
+import { DraftFormatStrip } from "./DraftFormatStrip";
+import { observeDraftViewport } from "./draftViewport";
 import {
   lazy,
   type MutableRefObject,
@@ -48,7 +49,7 @@ import {
 import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
-import { isImeKeyEvent } from "../imeKey";
+import { imeOwnsEditable, isImeKeyEvent } from "../imeKey";
 import { getVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
@@ -226,6 +227,7 @@ function DraftEditingSession(
   },
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
+  const canvas = useRef<HTMLDivElement | null>(null);
   const titleInput = useRef<HTMLInputElement | null>(null);
   const mountSeed = useRef(initial.body);
   const owner = draftRepository().document(initial.id);
@@ -295,9 +297,17 @@ function DraftEditingSession(
   const filePicker = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const composing = useRef(false);
+  const compositionEndedAt = useRef(0);
   const desktop = useSurfaceProfile().kind === "desktop";
   const focusLayout = !desktop && mobileChrome !== undefined;
-  const keyboardOpen = useKeyboardOpen();
+  useEffect(() => {
+    if (!canvas.current) return;
+    return observeDraftViewport(canvas.current, () => {
+      if (!imeOwnsEditable(composing.current, compositionEndedAt.current, Date.now()) && editor.current?.hasFocus()) {
+        editor.current.revealSelection();
+      }
+    });
+  }, []);
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
   // The title is the document's first line (Obsidian inline title): `␣T`
@@ -627,10 +637,28 @@ function DraftEditingSession(
       sx={{ flex: 1, minWidth: 0 }}
       inputRef={titleInput}
       disabled={current.deleted}
-      inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
+      inputProps={{
+        "aria-label": "Draft title",
+        maxLength: 160,
+        enterKeyHint: desktop ? undefined : "next",
+      }}
       onKeyDown={(e) => {
-        if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+        if (isImeKeyEvent(e.nativeEvent)) return;
         if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (!desktop) {
+          if (
+            e.key === "Enter" && !e.shiftKey &&
+            !imeOwnsEditable(
+              composing.current,
+              compositionEndedAt.current,
+              Date.now(),
+            )
+          ) {
+            e.preventDefault();
+            editor.current?.focusSelection({ anchor: 0, head: 0 });
+          }
+          return;
+        }
         const toStart = e.key === "Enter" || e.key === "ArrowDown" ||
           (e.key === "Tab" && !e.shiftKey) ||
           (e.code === "KeyJ" && !e.shiftKey && isInputVimNormal(e.target));
@@ -695,9 +723,8 @@ function DraftEditingSession(
     onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
   };
   // Always present: a scrolling capsule of formatting that rests at the bottom
-  // and rides above the keyboard. Hide keyboard appears only while a keyboard
-  // is actually up, not merely while the body has focus: focus arrives before
-  // the keyboard, and iOS can dismiss the keyboard without blurring.
+  // and rides above the keyboard. The keyboard toggle keeps its slot throughout
+  // opening/closing; the formatting strip never changes width mid-gesture.
   const focusToolbar = (
     <Stack
       data-draft-mobile-toolbar
@@ -711,28 +738,16 @@ function DraftEditingSession(
         mb: DRAFT_MOBILE_BAR_CLEARANCE,
       }}
     >
-      <Stack
-        data-draft-format-toolbar
-        direction="row"
-        alignItems="center"
-        sx={{
-          ...floatingMaterialSx,
-          flex: 1,
-          minWidth: 0,
-          overflowX: "auto",
-          px: 0.5,
-          scrollbarWidth: "none",
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
-      >
+      <DraftFormatStrip sx={floatingMaterialSx}>
         {formatCommands.map(({ id, command }) => (
           <IconButton
             key={id}
             data-draft-tool
             aria-label={command.label}
+            disabled={current.deleted && id !== "sourceMode"}
             {...keepEditorFocus}
             onClick={() => {
-              if (editor.current) {
+              if (editor.current && (!current.deleted || id === "sourceMode")) {
                 command.run({
                   editor: editor.current,
                   attach: () => filePicker.current?.click(),
@@ -746,33 +761,25 @@ function DraftEditingSession(
         ))}
         <IconButton
           aria-label="Attach file"
+          disabled={current.deleted}
           {...keepEditorFocus}
           onClick={() => filePicker.current?.click()}
           sx={{ flexShrink: 0, width: 44, height: 44 }}
         >
           <AttachFile />
         </IconButton>
-      </Stack>
-      {keyboardOpen && (
-        <IconButton
-          data-draft-hide-keyboard
-          aria-label="Hide keyboard"
-          {...keepEditorFocus}
-          onClick={() => {
-            const active = globalThis.document.activeElement;
-            if (active instanceof HTMLElement) active.blur();
-          }}
-          sx={{
-            ...floatingMaterialSx,
-            color: "text.primary",
-            width: 48,
-            height: 48,
-            flexShrink: 0,
-          }}
-        >
-          <KeyboardHideIcon />
-        </IconButton>
-      )}
+      </DraftFormatStrip>
+      <DraftKeyboardToggle
+        editor={editor}
+        disabled={current.deleted}
+        sx={{
+          ...floatingMaterialSx,
+          color: "text.primary",
+          width: 48,
+          height: 48,
+          flexShrink: 0,
+        }}
+      />
     </Stack>
   );
   const toolbarView = (
@@ -834,10 +841,11 @@ function DraftEditingSession(
                         <IconButton
                           data-draft-tool
                           aria-label={command.label}
+                          disabled={current.deleted && id !== "sourceMode"}
                           onPointerDown={(e) => e.preventDefault()}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
-                            if (editor.current) {
+                            if (editor.current && (!current.deleted || id === "sourceMode")) {
                               command.run({
                                 editor: editor.current,
                                 attach: () => filePicker.current?.click(),
@@ -878,7 +886,9 @@ function DraftEditingSession(
         <Tooltip title="Attach file">
           <IconButton
             aria-label="Attach file"
+            disabled={current.deleted}
             sx={desktop ? desktopDraftActionSx : undefined}
+            {...keepEditorFocus}
             onClick={() => filePicker.current?.click()}
           >
             <AttachFile />
@@ -914,6 +924,7 @@ function DraftEditingSession(
               bgcolor: readableWidth ? "action.selected" : undefined,
             }}
             aria-pressed={readableWidth}
+            {...keepEditorFocus}
             onClick={() => setReadableWidth((v) => !v)}
           >
             Readable width
@@ -957,9 +968,11 @@ function DraftEditingSession(
       data-desktop-region={desktop ? "prompt.composer" : undefined}
       onCompositionStartCapture={() => {
         composing.current = true;
+        compositionEndedAt.current = 0;
       }}
       onCompositionEndCapture={() => {
         composing.current = false;
+        compositionEndedAt.current = Date.now();
       }}
     >
       {focusLayout && mobileChrome
@@ -1237,6 +1250,7 @@ function DraftEditingSession(
         }}
       >
         <Box
+          ref={canvas}
           sx={{
             display: "flex",
             flex: 1,
@@ -1291,7 +1305,7 @@ function DraftEditingSession(
             <Chip
               key={a.id}
               label={a.name}
-              onDelete={() => {
+              onDelete={current.deleted ? undefined : () => {
                 attachmentsRef.current = attachmentsRef.current.filter((item) =>
                   item.id !== a.id
                 );
