@@ -897,7 +897,7 @@ function CallPreview({ call, title, now, onOpen }: {
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
       title={`${callTimesTitle(call)} · ${placementLabel(call)} · ${callModelLabel(call)}`}
       sx={{
-        flex: "1 0 9rem", minWidth: 0, minHeight: 44,
+        flex: "1 0 16rem", minWidth: "16rem", minHeight: 44,
         borderRadius: 1, textAlign: "left",
         justifyContent: "flex-start",
         "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
