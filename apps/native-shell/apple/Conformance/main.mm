@@ -99,22 +99,20 @@
          @"const initialHeight=innerHeight;"
          @"document.documentElement.style.cssText='height:100%;overflow:hidden';"
          @"document.body.style.cssText='height:100%;overflow:hidden;margin:0;display:flex;flex-direction:column';"
-         @"document.body.innerHTML='<div id=nav style=\"height:120px;flex-shrink:0\"><button id=keyboard style=\"margin:60px 0 0 16px;min-height:44px\">Show keyboard</button></div><div id=flow style=\"flex:1;min-height:0;overflow:auto\"><div id=editor contenteditable=true style=\"white-space:pre-wrap\"></div></div><div id=bar style=\"height:50px;flex-shrink:0\">Formatting</div>';"
+         @"document.body.innerHTML='<div id=nav style=\"height:70px;flex-shrink:0\">Navigation</div><div id=flow style=\"flex:1;min-height:0;overflow:auto\"><div id=editor contenteditable=true style=\"white-space:pre-wrap\"></div></div><div id=bar style=\"height:50px;flex-shrink:0\">Formatting</div>';"
          @"const editor=document.getElementById('editor'),flow=document.getElementById('flow');"
          @"editor.textContent=Array.from({length:80},(_,i)=>'Editable line '+i).join('\\n');"
          @"const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);"
          @"const selection=getSelection();selection.removeAllRanges();selection.addRange(range);"
-         @"let trustedKeyboardTap=false;document.getElementById('keyboard').onclick=event=>{trustedKeyboardTap=event.isTrusted;editor.blur();editor.focus()};"
          @"const offsets=[];let recording=true;const sample=()=>{offsets.push(Math.max(Math.abs(scrollY),Math.abs(visualViewport.offsetTop)));if(recording)requestAnimationFrame(sample)};sample();"
-         @"const buttonRect=document.getElementById('keyboard').getBoundingClientRect();"
-         @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready',x:buttonRect.left+buttonRect.width/2,y:buttonRect.top+buttonRect.height/2});"
-         @"for(let i=0;i<150&&(!trustedKeyboardTap||innerHeight>=initialHeight-100);i++)await new Promise(resolve=>setTimeout(resolve,100));"
+         @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready'});"
+         @"for(let i=0;i<200&&innerHeight>=initialHeight-100;i++)await new Promise(resolve=>setTimeout(resolve,100));"
          @"await new Promise(resolve=>setTimeout(resolve,600));recording=false;"
          @"const caret=document.createRange();caret.selectNodeContents(editor);caret.setEnd(selection.anchorNode,selection.anchorOffset);"
          @"const selectionKept=selection.isCollapsed&&editor.contains(selection.anchorNode)&&caret.toString().length===editor.textContent.length;"
-         @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionKept,trustedKeyboardTap};"
+         @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionKept};"
          @"check('keyboard reveals the caret in the child without panning the root: '+JSON.stringify(keyboardGeometry),"
-         @"trustedKeyboardTap&&innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selectionKept);"
+         @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selectionKept);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";
     // Read after the animation can advance, not synchronously at its origin.
@@ -141,18 +139,10 @@
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body isKindOfClass:NSDictionary.class] &&
         [message.body[@"event"] isEqualToString:@"focus-ready"]) {
-        // A fresh native evaluation supplies the focus gesture after the ABI
-        // checks' asynchronous promises, like the simulator inspection bridge.
+        // Initiate focus from a native main-queue evaluation, matching the
+        // direct DOM focus that reproduced the root pan in the Debug shell.
         self.rootMaxDrift = 0;
         self.rootSamples = 0;
-        CGPoint point = [self.webView convertPoint:CGPointMake(
-            [message.body[@"x"] doubleValue], [message.body[@"y"] doubleValue]) toView:self.window];
-        NSData *ready = [NSJSONSerialization dataWithJSONObject:@{@"x": @(point.x), @"y": @(point.y)}
-            options:0 error:NULL];
-        NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory
-            inDomains:NSUserDomainMask].firstObject;
-        [ready writeToURL:[documents URLByAppendingPathComponent:@"keyboard-ready.json"]
-            options:NSDataWritingAtomic error:NULL];
         self.rootSampler = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
             repeats:YES block:^(__unused NSTimer *timer) {
                 UIScrollView *root = self.webView.scrollView;

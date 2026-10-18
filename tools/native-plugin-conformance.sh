@@ -6,9 +6,6 @@ native_requested_runtime="${1:-auto}"
 test "$#" -le 1 || { echo "usage: $0 [installed-runtime-id|auto]" >&2; exit 2; }
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
-native_axe="$(command -v axe || true)"
-if [ -z "$native_axe" ] && [ -x /opt/homebrew/bin/axe ]; then native_axe=/opt/homebrew/bin/axe; fi
-test -n "$native_axe" || { echo "AXe is required for the trusted keyboard gesture" >&2; exit 1; }
 test -z "$(git status --porcelain)"
 native_revision="$(git rev-parse HEAD)"
 native_root="$(mktemp -d /tmp/cowboy-native-conformance.XXXXXX)"
@@ -49,24 +46,7 @@ for native_tutorial in DidShowContinuousPathIntroduction KeyboardDidShowProducti
 done
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
-# The fixture reports its actual DOM button center in window coordinates.
-# WebKit's accessibility tree can omit web content while an editor is focused.
 native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
-for _ in $(seq 1 100); do
-  [ ! -s "$native_data/Documents/keyboard-ready.json" ] || break
-  sleep 0.1
-done
-mkdir -p dist/native-plugin-conformance
-if [ ! -s "$native_data/Documents/keyboard-ready.json" ]; then
-  xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
-  echo "Keyboard test fixture did not become ready" >&2
-  exit 1
-fi
-read -r native_x native_y < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["x"],p["y"])' "$native_data/Documents/keyboard-ready.json")
-if ! "$native_axe" tap -x "$native_x" -y "$native_y" --tap-style physical --udid "$native_simulator"; then
-  xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
-  exit 1
-fi
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance

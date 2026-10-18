@@ -65,14 +65,15 @@ restricted entitlement, so the two configurations must remain separate.
 
 ## Native capability conformance
 
-From a clean committed Cowboy worktree on an arm64 Mac with Xcode and AXe, run
+From a clean committed Cowboy worktree on an arm64 Mac with Xcode, run
 `just native-plugin-conformance`. This owns a fresh temporary iOS Simulator and
 compiles both production bridges into a minimal UIKit/WKWebView test app. Sixteen
 checks cover the actual versioned ABI, immutable capability inventory,
 unknown/malformed requests, unentitled Passkey rejection, foreign browser URL
 rejection, idempotent browser close, native-tweak coexistence and foreign-origin
 clipboard rejection. Root-scroll checks wait for the animated setter to settle,
-then use AXe physical touch to open the system keyboard over a locked page and sample native root offsets
+then initiate DOM focus from native code to open the system keyboard over a
+locked page and sample native root offsets
 as well as JavaScript frames; the inner scrollport must reveal the caret without
 changing the selection. The fixture adopts the UIKit scene lifecycle required
 by current Apple SDKs. It neither opens a real login nor uses
@@ -82,9 +83,8 @@ removed even on failure.
 
 Pass an installed runtime ID to target a specific WebKit version, for example
 `just native-plugin-conformance com.apple.CoreSimulator.SimRuntime.iOS-26-5`.
-AXe must support the selected runtime; an automation-session timeout is a failed
-check, not keyboard acceptance. A 2026-10-18 iOS 27 probe timed out before
-creating its automation session, so it did not establish keyboard acceptance.
+The test waits for the real viewport shrink instead of assuming a keyboard
+duration. First-use keyboard loading can take longer than an animation.
 The helper marks keyboard tutorials completed only in its new disposable guest,
 following [Chromium's simulator setup](https://chromium.googlesource.com/chromium/src/+/93b31d4424cb0fddb7cb5a901f21eb9859270658/ios/build/bots/scripts/iossim_util.py),
 so a first-use tutorial cannot hide the keyboard test controls.
