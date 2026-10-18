@@ -892,13 +892,18 @@ function CallPreview({ call, title, onOpen }: {
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
       sx={{
-        flex: "1 0 9rem", minWidth: 0, minHeight: 44, px: 1, py: 0.75,
-        borderRadius: 1, bgcolor: "action.hover", textAlign: "left",
+        flex: "1 0 9rem", minWidth: 0, minHeight: 44,
+        borderRadius: 1, textAlign: "left",
         justifyContent: "flex-start",
         "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
       }}
     >
-      <Stack spacing={0.25} sx={{ minWidth: 0, width: "100%" }}>
+      {/* Paint the permanent card surface inside the button: the touch theme
+          clears ButtonBase hover/focus fills when a sheet returns focus. */}
+      <Stack spacing={0.25} sx={{
+        minWidth: 0, width: "100%", minHeight: 44, px: 1, py: 0.75,
+        borderRadius: "inherit", bgcolor: "action.hover", justifyContent: "center",
+      }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
           <Typography variant="caption" noWrap sx={{ fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>

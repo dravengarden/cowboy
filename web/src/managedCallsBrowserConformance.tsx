@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
+import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { ManagedCallsDock, ManagedChildNotice } from "./ManagedCallsDock";
 import { getActiveSessionId, setActiveSessionId } from "./controlPlane";
@@ -531,6 +532,22 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(previewRail && getComputedStyle(previewRail).overflowX === "auto", "mobile previews provide a horizontal scroller");
     check(!previewRail.closest("button"), "preview buttons must not nest inside the overview button");
     const preview = previewRail.querySelector<HTMLButtonElement>("[data-call-preview]")!;
+    // Touch dismissal can return focus to the opener with Mui-focusVisible.
+    // Its permanent card fill must survive the theme's latched-hover reset.
+    const previewSurface = preview.firstElementChild as HTMLElement;
+    const previewFill = () => {
+      const inner = getComputedStyle(previewSurface).backgroundColor;
+      return inner === "rgba(0, 0, 0, 0)" ? getComputedStyle(preview).backgroundColor : inner;
+    };
+    const restingPreviewFill = previewFill();
+    const hadCoarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
+    document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
+    preview.classList.add("Mui-focusVisible");
+    check(restingPreviewFill !== "rgba(0, 0, 0, 0)" && previewFill() === restingPreviewFill,
+      "touch focus must preserve the Calls preview card background");
+    preview.classList.remove("Mui-focusVisible");
+    if (!hadCoarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
+    tests.push("mobile-preview-keeps-fill-after-touch-focus");
     const cards = [...previewRail.querySelectorAll<HTMLElement>("[data-call-preview]")];
     const previousWidth = container.style.width;
     container.style.width = "390px";
