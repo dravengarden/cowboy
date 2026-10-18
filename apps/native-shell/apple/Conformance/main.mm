@@ -105,7 +105,8 @@
          @"const offsets=[];let recording=true;const sample=()=>{offsets.push(scrollY);if(recording)requestAnimationFrame(sample)};sample();"
          @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready'});"
          @"await new Promise(resolve=>setTimeout(resolve,1200));recording=false;"
-         @"check('keyboard reveals the caret in the child without panning the root',"
+         @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionNode:selection.anchorNode===editor.firstChild,selectionOffset:selection.anchorOffset,length:editor.textContent.length};"
+         @"check('keyboard reveals the caret in the child without panning the root: '+JSON.stringify(keyboardGeometry),"
          @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selection.anchorNode===editor.firstChild&&selection.anchorOffset===editor.textContent.length);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";
