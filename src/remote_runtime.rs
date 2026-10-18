@@ -4720,6 +4720,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_snapshot_cannot_release_channel_or_preflight_owned_dispatch() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        hub.submit("s", "first".into(), vec![], None);
+        hub.submit("s", "second".into(), vec![], None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+        let mut idle = snapshot("s");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+        assert!(idle_snapshot_guard(&runtime.shared, &idle).is_none());
+        let first = rx.recv().await.unwrap();
+        let preflight = first.clone();
+        drop(first);
+        // The async target check still owns the same prompt, even if a
+        // duplicate idle/turn-completion edge arrives during its await.
+        assert!(idle_snapshot_guard(&runtime.shared, &idle).is_none());
+        hub.complete_turn("s");
+        assert!(rx.try_recv().is_err());
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        drop(preflight); // Model synchronous handoff to the runtime.
+        let stale_epoch = idle_snapshot_guard(&runtime.shared, &idle).unwrap();
+        reconcile_idle_guard(&runtime.shared, "s", Some(stale_epoch));
+        let second = rx.recv().await.unwrap();
+        assert_eq!(second.text, "second");
+        hub.reconcile_runtime_idle("s", stale_epoch);
+        assert!(hub.session_has_in_flight_prompt("s"));
+        assert!(idle_snapshot_guard(&runtime.shared, &idle).is_none());
+    }
+
+    #[tokio::test]
     async fn idle_snapshot_waits_for_controller_pending_prompt_before_reconciliation() {
         let hub = Hub::new();
         hub.create_local_session(

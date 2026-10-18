@@ -737,6 +737,8 @@ pub enum Delivery {
 /// is handed off over this channel — breaking the Hub→Supervisor cycle.
 #[derive(Debug, Clone)]
 pub struct DispatchReq {
+    /// Held across the channel and async preflight until runtime handoff.
+    pub(crate) ownership: std::sync::Arc<DispatchOwnership>,
     pub session_id: String,
     pub text: String,
     pub content: Vec<serde_json::Value>,
@@ -744,6 +746,42 @@ pub struct DispatchReq {
     /// user-message echo can be tagged for optimistic reconcile. None for a
     /// drained queue item (its optimistic row already reconciled via `queues`).
     pub cmid: Option<String>,
+}
+
+pub(crate) struct DispatchOwnership {
+    hub: std::sync::Weak<HubInner>,
+    session: String,
+    epoch: u64,
+}
+
+impl std::fmt::Debug for DispatchOwnership {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DispatchOwnership")
+            .field("session", &self.session)
+            .field("epoch", &self.epoch)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DispatchOwnership {
+    fn new(hub: &Hub, session: &str, epoch: u64) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            hub: std::sync::Arc::downgrade(&hub.inner),
+            session: session.into(),
+            epoch,
+        })
+    }
+}
+
+impl Drop for DispatchOwnership {
+    fn drop(&mut self) {
+        if let Some(hub) = self.hub.upgrade()
+            && let Some(session) = hub.sessions.lock().get_mut(&self.session)
+            && session.dispatch_pending == Some(self.epoch)
+        {
+            session.dispatch_pending = None;
+        }
+    }
 }
 
 /// One session's full persisted state, handed to
@@ -888,6 +926,8 @@ struct Session {
     /// reconciliation captures this before applying an idle lifecycle edge so
     /// it cannot clear a newer guard created while that edge drains the queue.
     in_flight_epoch: u64,
+    /// A channel/preflight-owned prompt has not reached its runtime yet.
+    dispatch_pending: Option<u64>,
     /// Client message ids of prompts this Hub recently handed to a worker. A
     /// reconnecting client resends every unconfirmed submit; between the dispatch
     /// and the persisted user echo only this window knows the prompt already
@@ -2483,6 +2523,7 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         in_flight_epoch: 0,
+                        dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
                         provider_generation_missing: false,
@@ -2955,14 +2996,14 @@ impl Hub {
             .is_some_and(|session| session.in_flight)
     }
 
-    /// Identity of the prompt guard currently held by this session.
+    /// Runtime-owned prompt guard, excluding channel/preflight ownership.
     #[must_use]
     pub fn in_flight_prompt_epoch(&self, session_id: &str) -> Option<u64> {
         self.inner
             .sessions
             .lock()
             .get(session_id)
-            .filter(|session| session.in_flight)
+            .filter(|session| session.in_flight && session.dispatch_pending.is_none())
             .map(|session| session.in_flight_epoch)
     }
 
@@ -3259,6 +3300,7 @@ impl Hub {
                     editing_epoch: 0,
                     in_flight: false,
                     in_flight_epoch: 0,
+                    dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
                     turn_completion_latched: false,
                     provider_generation_missing: false,
@@ -4766,6 +4808,7 @@ impl Hub {
             sessions.get_mut(session_id).is_some_and(|s| {
                 s.meta.agent_session_id = None;
                 s.in_flight = false;
+                s.dispatch_pending = None;
                 let changed = s.meta.context_used != 0
                     || s.meta.context_size != 0
                     || s.meta.usage.is_some()
@@ -4878,8 +4921,9 @@ impl Hub {
                 status,
                 Status::Exited | Status::Crashed | Status::Interrupted
             );
-            if completed_turn || terminated {
+            if (completed_turn || terminated) && s.dispatch_pending.is_none() {
                 s.in_flight = false;
+                s.dispatch_pending = None;
                 s.turn_completion_latched = true;
             }
             if was != status {
@@ -5439,7 +5483,6 @@ impl Hub {
         {
             let req = error.into_inner();
             tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.clear_in_flight(&req.session_id);
             self.requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
             self.broadcast_error(
                 Some(req.session_id),
@@ -5471,7 +5514,7 @@ impl Hub {
         } else {
             s.meta.status == Status::Running
         };
-        can && !s.in_flight
+        can && !s.in_flight && s.dispatch_pending.is_none()
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head
@@ -5512,8 +5555,10 @@ impl Hub {
             let head = s.queue.remove(0);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
+            s.dispatch_pending = Some(s.in_flight_epoch);
             Self::note_dispatched(s, head.cmid.as_deref());
             DispatchReq {
+                ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                 session_id: session_id.to_owned(),
                 text: head.text,
                 content: head.content,
@@ -5550,6 +5595,7 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             if let Some(s) = sessions.get_mut(session_id) {
                 s.in_flight = false;
+                s.dispatch_pending = None;
             }
         }
         self.try_drain(session_id);
@@ -5567,10 +5613,11 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if s.turn_completion_latched {
+            if s.turn_completion_latched || s.dispatch_pending.is_some() {
                 false
             } else {
                 s.in_flight = false;
+                s.dispatch_pending = None;
                 s.turn_completion_latched = true;
                 true
             }
@@ -5597,10 +5644,12 @@ impl Hub {
             if s.meta.status != Status::Running
                 || !s.in_flight
                 || s.in_flight_epoch != expected_epoch
+                || s.dispatch_pending.is_some()
             {
                 false
             } else {
                 s.in_flight = false;
+                s.dispatch_pending = None;
                 s.turn_completion_latched = true;
                 true
             }
@@ -5641,6 +5690,7 @@ impl Hub {
             // The in-flight turn is over (it crashed); free the guard so the queue
             // can drain again once an agent is alive.
             s.in_flight = false;
+            s.dispatch_pending = None;
             // The prompt never ran: it is no longer "delivered", so the drain (or
             // a client resend) may hand it to a worker again.
             if let Some(c) = cmid.as_deref() {
@@ -5723,8 +5773,10 @@ impl Hub {
             } else if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
+                s.dispatch_pending = Some(s.in_flight_epoch);
                 Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
+                    ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
                     text,
                     content,
@@ -5793,8 +5845,10 @@ impl Hub {
                 // Idle + nothing queued → straight dispatch, identical to submit.
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
+                s.dispatch_pending = Some(s.in_flight_epoch);
                 Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
+                    ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
                     text,
                     content,
@@ -6323,7 +6377,9 @@ impl Hub {
             if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
+                s.dispatch_pending = Some(s.in_flight_epoch);
                 dispatch = Some(DispatchReq {
+                    ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
                     session_id: session_id.to_owned(),
                     text: m.text,
                     content: m.content,
@@ -10806,6 +10862,9 @@ mod core_tests {
         );
         let first = rx.recv().await.expect("first dispatch");
         assert_eq!(first.text, "lost lifecycle turn");
+        // The dispatcher has handed this prompt to the runtime. Keeping its
+        // request alive would instead model a still-pending async preflight.
+        drop(first);
         hub.submit("runtime-reconnect", "queued turn".to_owned(), vec![], None);
         assert_eq!(queue_texts(&hub, "runtime-reconnect"), vec!["queued turn"]);
 

@@ -3352,6 +3352,7 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     let plugin_lifecycle_fences = &state.plugin_lifecycle_fences;
     let observability = &state.observability;
     let DispatchReq {
+        ownership: _ownership,
         session_id,
         text,
         content,
@@ -3378,12 +3379,16 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     };
     let title = first_prompt_title(&text, &content);
     let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
-    match supervisor.send_traced(
+    let sent = supervisor.send_traced(
         &session_id,
         AgentCommand::Prompt(blocks, cmid.clone(), None),
         trace.clone(),
-    ) {
+    );
+    match sent {
         Ok(()) => {
+            // Successful sends synchronously enter the runtime pending set.
+            // Failed sends retain dispatch ownership until requeue completes.
+            drop(_ownership);
             session_maintenance::clear_wait(hub, &session_id);
             if let Some(t) = title {
                 hub.auto_title(&session_id, t);

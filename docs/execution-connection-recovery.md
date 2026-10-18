@@ -474,3 +474,9 @@ Recovery owns the replacement worker launch until readiness is acknowledged.
 A concurrent ordinary session ensure cannot adopt the old worker with the new
 binding. Configuration and the new prompt remain queued behind the existing
 reset gate; the broker's execution identity checks remain strict.
+
+The Hub retains an epoch-scoped dispatch ownership guard from queue removal
+through channel transfer and asynchronous preflight. Idle snapshots and duplicate
+turn-completion events cannot release it before runtime handoff. The guard is
+shared by request clones and releases only its own epoch, preserving per-session
+ordering while unrelated sessions preflight concurrently.
