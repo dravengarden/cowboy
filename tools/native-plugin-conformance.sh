@@ -44,7 +44,44 @@ xcrun simctl boot "$native_simulator"
 xcrun simctl bootstatus "$native_simulator" -b
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
-"$native_axe" tap --label 'Show keyboard' --tap-style physical --wait-timeout 20 --udid "$native_simulator"
+# Resolve the Web accessibility frame rather than its activation point: AXe's
+# label tap can return an invalid translation for a WKWebView button.
+native_point=
+for _ in $(seq 1 20); do
+  "$native_axe" describe-ui --udid "$native_simulator" >"$native_root/ui.json"
+  native_point=$(python3 - "$native_root/ui.json" <<'PY'
+import json, sys
+def find(value):
+    if isinstance(value, dict):
+        frame = value.get("frame", {})
+        if value.get("AXLabel") == "Show keyboard" and frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
+            return frame["x"] + frame["width"] / 2, frame["y"] + frame["height"] / 2
+        for child in value.values():
+            found = find(child)
+            if found: return found
+    if isinstance(value, list):
+        for child in value:
+            found = find(child)
+            if found: return found
+point = find(json.load(open(sys.argv[1])))
+if point: print(*point)
+PY
+  )
+  [ -z "$native_point" ] || break
+  sleep 0.2
+done
+mkdir -p dist/native-plugin-conformance
+if [ -z "$native_point" ]; then
+  xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
+  echo "Keyboard test button not exposed in accessibility" >&2
+  exit 1
+fi
+read -r native_x native_y <<<"$native_point"
+if ! "$native_axe" tap -x "$native_x" -y "$native_y" --tap-style physical --udid "$native_simulator"; then
+  xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
+  cp "$native_root/ui.json" dist/native-plugin-conformance/failed-ui.json
+  exit 1
+fi
 native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then

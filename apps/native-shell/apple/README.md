@@ -83,7 +83,8 @@ removed even on failure.
 Pass an installed runtime ID to target a specific WebKit version, for example
 `just native-plugin-conformance com.apple.CoreSimulator.SimRuntime.iOS-26-5`.
 AXe must support the selected runtime; an automation-session timeout is a failed
-check, not keyboard acceptance. The current Mac's AXe cannot automate iOS 27.
+check, not keyboard acceptance. A 2026-10-18 iOS 27 probe timed out before
+creating its automation session, so it did not establish keyboard acceptance.
 
 This is native bridge acceptance, not full Tauri product or physical-device/
 Associated Domains acceptance. The full shell source and build entry now live
