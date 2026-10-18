@@ -7,6 +7,9 @@
     <UIApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) UIWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) NSTimer *rootSampler;
+@property(nonatomic) CGFloat rootMaxDrift;
+@property(nonatomic) NSUInteger rootSamples;
 @end
 
 @implementation CowboyPluginConformance
@@ -32,14 +35,10 @@
     root.contentOffset = CGPointMake(0, 335);
     BOOL rootPinned = CGPointEqualToPoint(root.contentOffset, rest);
     [root setContentOffset:CGPointMake(0, -228) animated:YES];
-    rootPinned = rootPinned && CGPointEqualToPoint(root.contentOffset, rest);
     UIScrollView *child = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
     child.contentSize = CGSizeMake(100, 1000);
     child.contentOffset = CGPointMake(0, 335);
     BOOL childScrolls = child.contentOffset.y == 335;
-    NSString *rootChecks = rootPinned && childScrolls ? @"true" : @"false";
-    [webView evaluateJavaScript:[@"window.__nativeRootScrollChecks=" stringByAppendingString:rootChecks]
-             completionHandler:nil];
     NSString *script =
         @"(async()=>{const tests=[];const check=(name,value)=>{if(!value)throw Error(name);tests.push(name)};"
          @"try{const host=window.__COWBOY_NATIVE_PLUGIN_HOST;"
@@ -82,7 +81,15 @@
          @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selection.anchorNode===editor.firstChild&&selection.anchorOffset===editor.textContent.length);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";
-    [webView evaluateJavaScript:script completionHandler:nil];
+    // Read after the animation can advance, not synchronously at its origin.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        BOOL settled = CGPointEqualToPoint(root.contentOffset, rest);
+        NSString *checks = rootPinned && childScrolls && settled ? @"true" : @"false";
+        [webView evaluateJavaScript:[@"window.__nativeRootScrollChecks=" stringByAppendingString:checks]
+                 completionHandler:nil];
+        [webView evaluateJavaScript:script completionHandler:nil];
+    });
 }
 
 - (void)userContentController:(__unused WKUserContentController *)controller
@@ -91,12 +98,31 @@
         [message.body[@"event"] isEqualToString:@"focus-ready"]) {
         // A fresh native evaluation supplies the focus gesture after the ABI
         // checks' asynchronous promises, like the simulator inspection bridge.
+        self.rootMaxDrift = 0;
+        self.rootSamples = 0;
+        self.rootSampler = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
+            repeats:YES block:^(__unused NSTimer *timer) {
+                UIScrollView *root = self.webView.scrollView;
+                CGFloat drift = MAX(fabs(root.contentOffset.x + root.adjustedContentInset.left),
+                                    fabs(root.contentOffset.y + root.adjustedContentInset.top));
+                self.rootMaxDrift = MAX(self.rootMaxDrift, drift);
+                self.rootSamples++;
+            }];
         [self.webView evaluateJavaScript:@"document.getElementById('editor').focus()"
                       completionHandler:nil];
         return;
     }
+    [self.rootSampler invalidate];
+    self.rootSampler = nil;
+    NSMutableDictionary *report = [message.body mutableCopy];
+    report[@"native_root_max_drift"] = @(self.rootMaxDrift);
+    report[@"native_root_samples"] = @(self.rootSamples);
+    if ([report[@"ok"] boolValue] && (self.rootMaxDrift > 1 || self.rootSamples < 10)) {
+        report[@"ok"] = @NO;
+        report[@"error"] = @"Native root moved during keyboard animation or sampling did not run";
+    }
     NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:message.body
+    NSData *data = [NSJSONSerialization dataWithJSONObject:report
                                                  options:NSJSONWritingPrettyPrinted
                                                    error:&error];
     if (data == nil) return;
