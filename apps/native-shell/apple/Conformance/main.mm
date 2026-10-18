@@ -10,6 +10,7 @@
 @property(nonatomic, strong) NSTimer *rootSampler;
 @property(nonatomic) CGFloat rootMaxDrift;
 @property(nonatomic) NSUInteger rootSamples;
+@property(nonatomic, strong) NSDictionary *rootChecks;
 @end
 
 @implementation CowboyPluginConformance
@@ -46,6 +47,7 @@
     UIScrollView *root = webView.scrollView;
     CGPoint rest = CGPointMake(-root.adjustedContentInset.left, -root.adjustedContentInset.top);
     root.contentOffset = CGPointMake(0, 335);
+    CGPoint directOffset = root.contentOffset;
     BOOL rootPinned = CGPointEqualToPoint(root.contentOffset, rest);
     [root setContentOffset:CGPointMake(0, -228) animated:YES];
     UIScrollView *child = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
@@ -98,6 +100,12 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
         BOOL settled = CGPointEqualToPoint(root.contentOffset, rest);
+        self.rootChecks = @{
+            @"class": NSStringFromClass(root.class), @"zoom": @(root.zoomScale),
+            @"direct": @(rootPinned), @"child": @(childScrolls), @"animated": @(settled),
+            @"direct_y": @(directOffset.y), @"rest_y": @(rest.y),
+            @"settled_y": @(root.contentOffset.y)
+        };
         NSString *checks = rootPinned && childScrolls && settled ? @"true" : @"false";
         [webView evaluateJavaScript:[@"window.__nativeRootScrollChecks=" stringByAppendingString:checks]
                  completionHandler:nil];
@@ -130,6 +138,7 @@
     NSMutableDictionary *report = [message.body mutableCopy];
     report[@"native_root_max_drift"] = @(self.rootMaxDrift);
     report[@"native_root_samples"] = @(self.rootSamples);
+    report[@"native_offset_checks"] = self.rootChecks;
     if ([report[@"ok"] boolValue] && (self.rootMaxDrift > 1 || self.rootSamples < 10)) {
         report[@"ok"] = @NO;
         report[@"error"] = @"Native root moved during keyboard animation or sampling did not run";
