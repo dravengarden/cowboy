@@ -53,6 +53,7 @@ import {
   callsOverview,
   callStateLabel,
   callTitle,
+  callPreviewTitles,
   callTone,
   cancelCall,
   callTimesTitle,
@@ -852,18 +853,18 @@ function CallList({
 
 /** Parent-scoped managed calls above the Prompt: a compact summary that opens
  * an inline list and detail on Desktop and a full-height page on Mobile. */
-function CallPreview({ call, onOpen }: {
+function CallPreview({ call, title, onOpen }: {
   call: ManagedCallSummary;
+  title: string;
   onOpen: () => void;
 }): React.JSX.Element {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOpen);
   const active = callActive(call.state);
   const tone = callTone(call.state);
-  const title = (call.labels["title"] || call.labels["aspect"] || call.purpose).replace(/[-_]/g, " ");
   const end = active ? Date.now() : call.updated_at_ms;
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
-      aria-label={`Open ${displayTitle(call)}: ${callStateLabel(call)}`}
+      aria-label={`Open ${title}: ${callStateLabel(call)}`}
       sx={{
         flex: "1 0 9rem", minWidth: 0, minHeight: 44, px: 1, py: 0.75,
         borderRadius: 1, bgcolor: "action.hover", textAlign: "left",
@@ -898,6 +899,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
 }): React.JSX.Element {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOverview);
   const overview = callsOverview(calls);
+  const titles = callPreviewTitles(calls);
   const ordered = [...calls].sort((a, b) => {
     const rank = (call: ManagedCallSummary): number => callActive(call.state) ? 0 : callTone(call.state) === "error" ? 1 : 2;
     return rank(a) - rank(b) || b.created_at_ms - a.created_at_ms;
@@ -914,7 +916,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
       </ButtonBase>
       <Box data-call-preview-rail data-mobile-drawer-ignore role="group" aria-label="Call previews"
         sx={{ display: "flex", minWidth: 0, flex: 1, gap: 0.5, overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
-        {ordered.map((call) => <CallPreview key={call.call_id} call={call} onOpen={() => onOpen(call.call_id)} />)}
+        {ordered.map((call) => <CallPreview key={call.call_id} call={call} title={titles.get(call.call_id)!} onOpen={() => onOpen(call.call_id)} />)}
       </Box>
     </Stack>
   );

@@ -145,6 +145,28 @@ export function callTitle(
   return call.labels["title"] ?? `${call.purpose} · ${call.request_id}`;
 }
 
+/** Compact titles omit transport IDs, but repeated tasks still need identity.
+ * Number by creation order, never status or the incoming poll order. */
+export function callPreviewTitles(calls: readonly ManagedCallSummary[]): Map<string, string> {
+  const titles = new Map<string, string>();
+  const groups = new Map<string, ManagedCallSummary[]>();
+  for (const call of calls) {
+    const title = (call.labels["title"]?.trim() || call.labels["aspect"]?.trim() || call.purpose)
+      .replace(/[-_]/g, " ");
+    titles.set(call.call_id, title);
+    const key = title.toLocaleLowerCase();
+    const group = groups.get(key) ?? [];
+    group.push(call);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.created_at_ms - b.created_at_ms || a.call_id.localeCompare(b.call_id));
+    group.forEach((call, index) => titles.set(call.call_id, `${titles.get(call.call_id)} · ${index + 1}`));
+  }
+  return titles;
+}
+
 export function callGroup(
   call: Pick<ManagedCallSummary, "labels">,
 ): string | null {
