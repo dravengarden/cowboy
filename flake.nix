@@ -596,19 +596,25 @@
         EOF
       '';
 
-      execution-configuration = pkgs.writeText "cowboy-execution.json" (builtins.toJSON {
+      # Resident-only upgrades retain the accepted native executor as well as
+      # workers: recovery intentionally preserves every saved executor digest.
+      retained-execution-runtime = cowboy-workers.packages.${system}.cowboy-execution-runtime;
+      execution-configuration-for = runtime: pkgs.writeText "cowboy-execution.json" (builtins.toJSON {
         schema = 1;
         host_command = "${cowboy-machine}/bin/cowboy-execution-host";
         executor = {
-          command = "${execution-runtime}/bin/codex";
-          sha256 = execution-runtime.executorDigest;
-          version = execution-runtime.executorVersion;
+          command = "${runtime}/bin/codex";
+          sha256 = runtime.executorDigest;
+          version = runtime.executorVersion;
         };
         retention = {
           command = "${pkgs.nix}/bin/nix-store";
-          closure = "${execution-runtime}";
+          closure = "${runtime}";
         };
       });
+
+      execution-configuration = execution-configuration-for execution-runtime;
+      retained-execution-configuration = execution-configuration-for retained-execution-runtime;
 
       retained-worker-bundle = cowboy-workers.packages.${system}.cowboy-machine-release;
       retained-worker-package = cowboy-workers.packages.${system}.cowboy;
@@ -629,7 +635,9 @@
       ) retained-worker-interface-files;
       machine-release = bootstrap: retain-workers: writer:
         assert !writer || (!bootstrap && retain-workers);
-        let native-machine = if writer then cowboy-machine-writer else cowboy-machine;
+        let
+          native-machine = if writer then cowboy-machine-writer else cowboy-machine;
+          execution-config = if retain-workers then retained-execution-configuration else execution-configuration;
         in
         pkgs.runCommand
           (if writer then "cowboy-machine-writer-host-release" else if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
@@ -641,10 +649,10 @@
         ${
           if bootstrap then
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
-              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-configuration}''
+              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-config}''
           else
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
-              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-configuration} \
+              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-config} \
               --add-flags "--desired-generation ${if retain-workers then retained-worker-package.workerGeneration else worker-generation}"''
         }
         # Registration finds companions beside the native current_exe. Keep

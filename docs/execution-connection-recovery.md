@@ -493,3 +493,10 @@ reconstruct the original `execution-wake-*` operation. Cowboy must observe that
 same target-owned receipt and finish replacement before ordinary ensure or prompt
 delivery. This also checks retained declarations of exited workers. Unknown or
 nonmatching recovery identities remain fenced for explicit inspection.
+
+Resident host releases retain both the accepted worker bundle and its native
+execution runtime from `cowboy-workers`, while selecting the current keeper.
+Advancing main's Provider runtime does not authorize changing an old binding's
+executor digest. Full worker releases remain the separately accepted upgrade
+boundary. Validate the host artifact's actual execution configuration, not only
+its worker-generation marker, before rollout.

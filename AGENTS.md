@@ -51,6 +51,9 @@ require the exact successful build receipt and published SideStore version.
   `retained-worker-source.json`; native wire/SDK/dependency source changes
   refuse this output. Advancing that pin or using `.#cowboy-machine-release`
   changes the pool/adapter boundary and needs separate maintenance acceptance.
+  Host releases also retain that pin's native execution runtime while using the
+  current keeper. Recovery must preserve saved executor digests; do not silently
+  advance the target executor when only upgrading the resident Machine.
 - Targets with an active schema-one Session deletion writer use
   `.#cowboy-machine-writer-host-release` for resident fixes. This retains the
   same accepted worker/Code/Zed bundle and the installed writer capability.

@@ -708,9 +708,11 @@ def main():
                 before_commit = info()["execution_binding"]
                 before_native = info().get("agent_session_id")
                 before_effects = effects.read_bytes()
-                def execution_worker():
+                def execution_delivery():
                     rows = json.loads(run(*operator, "execution-sessions"))["data"]["sessions"]
-                    return next((row.get("delivery") or {}).get("worker") or {} for row in rows if row["id"] == session)
+                    return next(row.get("delivery") or {} for row in rows if row["id"] == session)
+                def execution_worker():
+                    return execution_delivery().get("worker") or {}
                 before_epoch = execution_worker()["epoch"]
                 committed_request = root / "committed-recovery-request.json"
                 write(committed_request, {"intent": {"schema": 1, "phase": "recovering",
@@ -786,8 +788,11 @@ def main():
             if inputs.get("execution_boot_recovery"):
                 # Unpausing a queue deliberately does not revive a cold agent.
                 # Explicitly initialize only this fixture before releasing it.
-                require(call("POST", f"/api/sessions/{session}/reload")[0] == 202,
-                        "retained shutdown worker initialization refused")
+                wait(lambda: execution_delivery().get("connected") is True,
+                     "retained shutdown runtime session handshake")
+                initialized, initialization = call("POST", f"/api/sessions/{session}/reload")
+                require(initialized == 202,
+                        f"retained shutdown worker initialization refused ({initialized}): {initialization}")
                 wait(lambda: info()["status"] == "running", "retained shutdown worker ready")
                 browser.send({"type": "set_paused", "session_id": session, "paused": False})
                 wait(lambda: effects.read_bytes() == shutdown_effects + first_effect, "retained shutdown prompt executes once")
