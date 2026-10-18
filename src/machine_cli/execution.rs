@@ -660,7 +660,9 @@ impl Manager {
                 root: workspace.canonical_path.clone(),
                 session_id: session_id.to_owned(),
             },
-            self.worktrees.for_session(session_id),
+            self.worktrees
+                .for_source(session_id, Path::new(&workspace.canonical_path))
+                .map_err(|_| Refusal::WorkspaceUnavailable)?,
         )
         .await
         .map_err(|_| Refusal::WorkspaceUnavailable)?;
@@ -710,6 +712,24 @@ impl Manager {
         managed: Option<keeper::ManagedExecution>,
     ) -> Result<BindingV1, Refusal> {
         let path = directory.join("contract.json");
+        let mut environment: BTreeMap<String, String> = crate::execution_target_environment::BASE
+            .into_iter()
+            .chain(self.extra_environment.iter().map(String::as_str))
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+            .collect();
+        environment.extend(
+            self.worktrees
+                .storage_environment(Path::new(&binding.workspace.source_path))
+                .map_err(|_| Refusal::WorkspaceUnavailable)?,
+        );
+        environment.extend(
+            self.worktrees
+                .storage_environment(Path::new(&binding.workspace.cwd))
+                .map_err(|_| Refusal::WorkspaceUnavailable)?,
+        );
+        if environment.len() > crate::execution_target_environment::MAX {
+            return Err(Refusal::PreparationFailed);
+        }
         std::fs::create_dir(directory).map_err(|_| Refusal::EnvironmentLost)?;
         std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
             .map_err(|_| Refusal::PreparationFailed)?;
@@ -735,11 +755,6 @@ impl Manager {
                 return Err(Refusal::PreparationFailed);
             }
         }
-        let environment: BTreeMap<String, String> = crate::execution_target_environment::BASE
-            .into_iter()
-            .chain(self.extra_environment.iter().map(String::as_str))
-            .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
-            .collect();
         let contract = LaunchContract {
             schema: 1,
             session_id: session_id.to_owned(),

@@ -697,6 +697,8 @@
         EOF
       '';
       cowboy-machine-bootstrap-release = machine-release true false false;
+      cowboy-machine-host-bootstrap-release = assert retained-worker-interface-compatible;
+        machine-release true true false;
       cowboy-machine-release = machine-release false false false;
       cowboy-machine-host-release = assert retained-worker-interface-compatible;
         machine-release false true false;
@@ -849,6 +851,7 @@
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
+        cowboy-machine-host-bootstrap-release = cowboy-machine-host-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
         cowboy-machine-host-release = cowboy-machine-host-release;
         cowboy-machine-writer-host-release = cowboy-machine-writer-host-release;
@@ -861,7 +864,7 @@
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-machine-bootstrap-release cowboy-machine-release
-          cowboy-machine-host-release
+          cowboy-machine-host-release cowboy-machine-host-bootstrap-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
         cowboy-worker-registry-input = worker-registry-check;
       };
