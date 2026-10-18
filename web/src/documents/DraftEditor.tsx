@@ -752,6 +752,8 @@ function DraftEditingSession(
       alignItems="center"
       spacing={1}
       sx={{
+        position: "relative",
+        zIndex: 1,
         px: 1,
         py: 0.75,
         flexShrink: 0,
@@ -1245,6 +1247,11 @@ function DraftEditingSession(
             flex: 1,
             minHeight: 0,
             minWidth: 0,
+            // Keep WebKit's native text paint beneath the sibling chrome.
+            // A stacking context suffices; never promote the caret with a
+            // transform or -webkit-overflow-scrolling workaround.
+            position: "relative",
+            zIndex: 0,
             overflowY: "auto",
             overflowX: "hidden",
             overscrollBehaviorY: "contain",

@@ -3158,6 +3158,13 @@ from the mobile navigation chrome. Cowboy now uses that document model on touch:
   programmatically reset the reading position.
   Save-error/conflict notices and Restore remain outside the scrollport so a
   document read at its bottom cannot hide the recovery action.
+  An exclusive iOS 26.5 Simulator WebKit check found native text painting over
+  the sibling format capsule despite correct DOM bounds. Give the document
+  scrollport `position: relative; z-index: 0` and its sibling format bar
+  `position: relative; z-index: 1`. This restored the capsule in Simulator
+  screenshots after a native vertical gesture, without transforms, containment,
+  focus writes or editor changes. The retained Debug shell is not evidence of a
+  current native-binary release or physical-keyboard animation acceptance.
 - Draft opts out of the chat input's bounded fill-height layout. Its existing
   native textarea fitter grows plain prose; rich Markdown can measure its
   visible viewport against the external scrolling ancestor. Non-shrinking auto
