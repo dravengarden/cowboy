@@ -576,7 +576,9 @@ function FolderActivityBadges({
                 {parts.map((part) => (
                     <Stack key={part.key} direction="row" alignItems="center" spacing={0.4}>
                         {part.glyph}
-                        <span>{part.count}</span>
+                        <Box component="span" sx={{ minWidth: "1ch", textAlign: "center", lineHeight: 1 }}>
+                            {part.count}
+                        </Box>
                     </Stack>
                 ))}
             </Stack>
