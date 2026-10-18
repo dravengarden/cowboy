@@ -224,7 +224,24 @@ export function elapsedLabel(fromMs: number, toMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** Relative start time for the narrow, two-line call preview. */
+/** Keep preview and detail ages current without updating hidden views. */
+export function useCallClock(): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const update = (): void => {
+      if (document.visibilityState !== "hidden") setNow(Date.now());
+    };
+    const timer = globalThis.setInterval(update, 30_000);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      globalThis.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  return now;
+}
+
+/** Shared compact relative start time for call previews and detail headers. */
 export function callAgeLabel(atMs: number, nowMs: number): string {
   const minutes = Math.max(0, Math.floor((nowMs - atMs) / 60_000));
   if (minutes < 1) return "now";

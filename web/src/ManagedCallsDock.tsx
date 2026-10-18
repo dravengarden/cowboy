@@ -28,7 +28,6 @@ import {
   type KeyboardEvent,
   memo,
   type ReactNode,
-  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -74,6 +73,7 @@ import {
   shortRevision,
   useManagedCall,
   useManagedCalls,
+  useCallClock,
 } from "./managedCalls";
 
 function StateChip(
@@ -604,7 +604,12 @@ function Badge(
 /** A compact phone header: title above status, placement, time and recorded configuration.
  * It replaces the sheet's grab handle. */
 function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
-  const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
+  const now = useCallClock();
+  const end = callActive(call.state) ? now : call.finished_at_ms ?? call.updated_at_ms;
+  const parameters = callExecutionParameters(call).filter(({ label, value }) =>
+    value !== "Not recorded" && !(label === "Preset" && call.configuration?.model)
+  );
+  const configuration = parameters.map(({ value }) => value).join(" · ");
   const tone = callTone(call.state);
   const attention =
     call.verdict !== undefined &&
@@ -622,11 +627,11 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
       sx={{
         display: "flex",
         flexDirection: "column",
-        gap: 0.5,
+        gap: 0.25,
         minWidth: 0,
         pl: 2,
         pr: "max(env(safe-area-inset-right), 16px)",
-        py: 1,
+        py: 0.75,
         borderBottom: 1,
         borderColor: "divider",
         typography: "caption",
@@ -653,18 +658,26 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
             overflow: "hidden",
             textOverflow: "ellipsis",
             minWidth: 0,
-            flex: 1,
+            flexShrink: 1,
+            maxWidth: configuration ? "40%" : "100%",
           }}
         >
           {displayTitle(call)}
         </Box>
+        {configuration && (
+          <Typography data-call-header-configuration variant="caption" noWrap
+            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
+            sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
+            · {configuration}
+          </Typography>
+        )}
       </Box>
       <Box
         data-call-header-metadata
         sx={{
           display: "flex",
           alignItems: "center",
-          flexWrap: "wrap",
+          flexWrap: "nowrap",
           columnGap: 0.75,
           rowGap: 0.5,
           minWidth: 0,
@@ -688,24 +701,19 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         {outcome && (
           <Badge label={outcome} color={attention ? "warning" : "success"} />
         )}
-        <Box component="span" sx={{ whiteSpace: "nowrap" }}>
+        <Box component="span" sx={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={placementLabel(call)}>
           {placementLabel(call)}
         </Box>
         <Box
-          component="span"
+          component="time"
+          dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
+          data-call-header-age
           title={callTimesTitle(call)}
-          sx={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+          sx={{ flexShrink: 0, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
         >
-          {startedLabel(call.created_at_ms)} ·{" "}
-          {elapsedLabel(call.created_at_ms, end)}
+          {elapsedLabel(call.created_at_ms, end)} ·{" "}
+          {callAgeLabel(call.started_at_ms ?? call.created_at_ms, now)}
         </Box>
-      </Box>
-      <Box data-call-header-configuration sx={{ display: "flex", flexWrap: "wrap", columnGap: 1, rowGap: 0.25, fontSize: "0.6875rem", minWidth: 0 }}>
-        {callExecutionParameters(call).map(({ label, value }) => (
-          <Box component="span" key={label} sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
-            {label}: <Box component="span" sx={{ color: "text.primary" }}>{value}</Box>
-          </Box>
-        ))}
       </Box>
     </Box>
   );
@@ -957,18 +965,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
   stale: boolean;
 }): React.JSX.Element {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOverview);
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const update = (): void => {
-      if (document.visibilityState !== "hidden") setNow(Date.now());
-    };
-    const timer = globalThis.setInterval(update, 30_000);
-    document.addEventListener("visibilitychange", update);
-    return () => {
-      globalThis.clearInterval(timer);
-      document.removeEventListener("visibilitychange", update);
-    };
-  }, []);
+  const now = useCallClock();
   const overview = callsOverview(calls);
   const titles = callPreviewTitles(calls);
   const ordered = [...calls].sort((a, b) => {

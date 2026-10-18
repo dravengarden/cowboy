@@ -616,13 +616,20 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "a mobile call must open its transcript",
     );
     const executionHeader = document.querySelector<HTMLElement>("[data-call-header-configuration]");
-    check(executionHeader?.textContent?.includes("Model: gpt-6-astra") &&
-      executionHeader.textContent.includes("Reasoning: max") &&
-      executionHeader.textContent.includes("Permission: Not recorded") &&
-      executionHeader.textContent.includes("Preset: astra-max"),
-      "mobile transcript header exposes recorded execution settings and missing permission history");
-    check(executionHeader!.scrollWidth <= executionHeader!.clientWidth,
-      "execution parameters must wrap within the phone header");
+    const callHeader = document.querySelector<HTMLElement>("[data-call-header]")!;
+    check(executionHeader?.textContent?.includes("gpt-6-astra · max") &&
+      !callHeader.textContent?.includes("Not recorded") &&
+      !executionHeader.textContent.includes("astra-max"),
+      "mobile transcript header shows recorded parameters inline without missing-value or redundant preset labels");
+    check(callHeader.children.length === 2 && executionHeader!.parentElement === callHeader.firstElementChild,
+      "mobile transcript header must contain only title/configuration and metadata rows");
+    const headerAge = callHeader.querySelector<HTMLElement>("[data-call-header-age]")!;
+    check(headerAge.textContent?.endsWith("ago") || headerAge.textContent?.endsWith("now"),
+      "mobile transcript header uses the same relative time format as previews");
+    callHeader.style.width = "320px";
+    check(callHeader.scrollWidth <= callHeader.clientWidth,
+      "two-line call header must fit a narrow phone without horizontal overflow");
+    callHeader.style.width = "";
     const backButton = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(
         "[data-mobile-sheet-footer-shield] button[aria-label='Back']",
