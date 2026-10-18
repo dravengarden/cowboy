@@ -44,12 +44,25 @@
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(__unused WKNavigation *)navigation {
+    // Let the keyboard layout guide and initial safe-area adjustment settle
+    // before measuring the scroll view's normalized resting position.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{ [self verifyWebView:webView]; });
+}
+
+- (void)verifyWebView:(WKWebView *)webView {
     UIScrollView *root = webView.scrollView;
     CGPoint rest = CGPointMake(-root.adjustedContentInset.left, -root.adjustedContentInset.top);
     root.contentOffset = CGPointMake(0, 335);
     CGPoint directOffset = root.contentOffset;
     BOOL rootPinned = CGPointEqualToPoint(root.contentOffset, rest);
-    [root setContentOffset:CGPointMake(0, -228) animated:YES];
+    __block CGFloat animatedMaxDrift = 0;
+    NSTimer *animationSampler = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
+        repeats:YES block:^(__unused NSTimer *timer) {
+            animatedMaxDrift = MAX(animatedMaxDrift,
+                fabs(root.contentOffset.y + root.adjustedContentInset.top));
+        }];
+    [root setContentOffset:CGPointMake(0, 335) animated:YES];
     UIScrollView *child = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
     child.contentSize = CGSizeMake(100, 1000);
     child.contentOffset = CGPointMake(0, 335);
@@ -99,12 +112,15 @@
     // Read after the animation can advance, not synchronously at its origin.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
-        BOOL settled = CGPointEqualToPoint(root.contentOffset, rest);
+        [animationSampler invalidate];
+        CGPoint settledRest = CGPointMake(-root.adjustedContentInset.left, -root.adjustedContentInset.top);
+        BOOL settled = CGPointEqualToPoint(root.contentOffset, settledRest) && animatedMaxDrift < 1;
         self.rootChecks = @{
             @"class": NSStringFromClass(root.class), @"zoom": @(root.zoomScale),
             @"direct": @(rootPinned), @"child": @(childScrolls), @"animated": @(settled),
             @"direct_y": @(directOffset.y), @"rest_y": @(rest.y),
-            @"settled_y": @(root.contentOffset.y)
+            @"settled_y": @(root.contentOffset.y), @"settled_rest_y": @(settledRest.y),
+            @"animated_max_drift": @(animatedMaxDrift)
         };
         NSString *checks = rootPinned && childScrolls && settled ? @"true" : @"false";
         [webView evaluateJavaScript:[@"window.__nativeRootScrollChecks=" stringByAppendingString:checks]
