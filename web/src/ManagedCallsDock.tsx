@@ -583,31 +583,32 @@ function Badge(
   );
 }
 
-/** A phone's dense header for a call's transcript: title, Provider,
- * placement and elapsed time in one draggable row, with its state and
- * findings as colored badges. It replaces the sheet's grab handle. */
+/** A compact two-line phone header: title above status, placement and time.
+ * It replaces the sheet's grab handle. */
 function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
   const tone = callTone(call.state);
-  const attention = call.verdict !== undefined && call.verdict !== null &&
+  const attention =
+    call.verdict !== undefined &&
+    call.verdict !== null &&
     call.verdict !== "approve";
-  const outcome = call.finding_count !== undefined && call.verdict
-    ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
-    : call.verdict
-    ? call.verdict.replace(/-/g, " ")
-    : null;
+  const outcome =
+    call.finding_count !== undefined && call.verdict
+      ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
+      : call.verdict
+        ? call.verdict.replace(/-/g, " ")
+        : null;
   return (
     <Box
       data-call-header={call.call_id}
       sx={{
         display: "flex",
-        alignItems: "center",
-        gap: 0.75,
+        flexDirection: "column",
+        gap: 0.5,
         minWidth: 0,
         pl: 2,
         pr: "max(env(safe-area-inset-right), 16px)",
-        pt: 1.5,
-        pb: 1.25,
+        py: 1,
         borderBottom: 1,
         borderColor: "divider",
         typography: "caption",
@@ -615,62 +616,72 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         color: "text.secondary",
       }}
     >
-      <ProviderIcon
-        provider={call.provider}
-        sx={{ fontSize: "1rem", flexShrink: 0 }}
-      />
       <Box
-        component="span"
-        role="heading"
-        aria-level={2}
-        sx={{
-          fontSize: "0.8125rem",
-          fontWeight: 700,
-          color: "text.primary",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          minWidth: 0,
-          maxWidth: "55%",
-          flexShrink: 0,
-        }}
+        sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}
       >
-        {displayTitle(call)}
+        <ProviderIcon
+          provider={call.provider}
+          sx={{ fontSize: "1rem", flexShrink: 0 }}
+        />
+        <Box
+          component="span"
+          role="heading"
+          aria-level={2}
+          sx={{
+            fontSize: "0.8125rem",
+            fontWeight: 700,
+            color: "text.primary",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          {displayTitle(call)}
+        </Box>
       </Box>
       <Box
-        component="span"
+        data-call-header-metadata
         sx={{
-          flex: 1,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          columnGap: 0.75,
+          rowGap: 0.5,
           minWidth: 0,
         }}
-        title={callTimesTitle(call)}
       >
-        {
-          /* The icon names the agent and Details its version; a phone
-            keeps where and when. */
-        }
-        {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
-        {elapsedLabel(call.created_at_ms, end)}
+        {/* A finished review's findings already say it completed. */}
+        {(call.state !== "completed" || !outcome) && (
+          <Badge
+            label={callStateLabel(call)}
+            color={
+              tone === "success"
+                ? "success"
+                : tone === "error"
+                  ? "error"
+                  : tone === "active"
+                    ? "primary"
+                    : "default"
+            }
+          />
+        )}
+        {outcome && (
+          <Badge label={outcome} color={attention ? "warning" : "success"} />
+        )}
+        <Box component="span" sx={{ whiteSpace: "nowrap" }}>
+          {placementLabel(call)}
+        </Box>
+        <Box
+          component="span"
+          title={callTimesTitle(call)}
+          sx={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+        >
+          {startedLabel(call.created_at_ms)} ·{" "}
+          {elapsedLabel(call.created_at_ms, end)}
+        </Box>
       </Box>
-      {
-        /* A finished review's findings already say it completed. */
-      }
-      {(call.state !== "completed" || !outcome) && <Badge
-        label={callStateLabel(call)}
-        color={tone === "success"
-          ? "success"
-          : tone === "error"
-          ? "error"
-          : tone === "active"
-          ? "primary"
-          : "default"}
-      />}
-      {outcome && (
-        <Badge label={outcome} color={attention ? "warning" : "success"} />
-      )}
     </Box>
   );
 }
