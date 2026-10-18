@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
+  callAgeLabel,
   callsOverview,
   callStateLabel,
   callTitle,
@@ -14,6 +15,22 @@ import {
   startedLabel,
 } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
+
+test("preview age retains days, hours and minutes without zero units", () => {
+  const at = 1_000_000;
+  for (const [minutes, expected] of [
+    [0, "now"],
+    [5, "5m ago"],
+    [60, "1h ago"],
+    [125, "2h 5m ago"],
+    [1440, "1d ago"],
+    [1560, "1d 2h ago"],
+    [1575, "1d 2h 15m ago"],
+    [2885, "2d 5m ago"],
+  ] as const) {
+    assert.equal(callAgeLabel(at, at + minutes * 60_000), expected);
+  }
+});
 
 test("preview names distinguish repeated calls without changing when status or poll order changes", () => {
   const first = call("running", { call_id: "first", labels: {}, created_at_ms: 10 });

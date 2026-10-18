@@ -538,7 +538,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const titleRow = preview.firstElementChild!.firstElementChild!;
     check(!titleRow.contains(age) && age.parentElement === titleRow.nextElementSibling,
       "relative execution time belongs on the second preview row");
-    check(/^· (now|\d+[mhd] ago)$/.test(age.textContent ?? ""),
+    check(/^· (now|(?:\d+d )?(?:\d+h )?(?:\d+m )?ago)$/.test(age.textContent ?? ""),
       "relative execution time distinguishes age from duration");
     check(preview.textContent?.includes("Hawk") && preview.title.includes("Created"),
       "call previews show execution placement and retain exact timing details");
