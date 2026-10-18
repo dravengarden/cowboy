@@ -2382,8 +2382,23 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     dataset: dataset.dataset_id,
   });
   const socketUrl = `${proto}//${globalThis.location.host}/ws?${params.toString()}`;
-  const deviceProtocol = await browserDeviceProtocol(socketUrl);
+  let deviceProtocol: string;
+  try {
+    deviceProtocol = await browserDeviceProtocol(socketUrl);
+  } catch (error) {
+    connectionSpan?.end("error");
+    reportClientLog("warn", "websocket_device_proof_failed", "Cowboy WebSocket device proof preparation failed", {
+      duration_ms: performance.now() - connectStartedAt,
+      reason: connectReason,
+    });
+    throw error;
+  }
+  reportClientLog("info", "websocket_device_proof_ready", "Cowboy WebSocket device proof prepared", {
+    duration_ms: performance.now() - connectStartedAt,
+    reason: connectReason,
+  });
   if (productSessionAbandoned || productSessionPausedForAuth) return;
+  const transportStartedAt = performance.now();
   const ws = new WebSocket(socketUrl, [PRODUCT_SYNC_SUBPROTOCOL, deviceProtocol]);
   socket = ws;
   socketReady = false;
@@ -2487,7 +2502,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
       reason: connectReason,
       attempt: reconnecting ? reconnectAttempts : 0,
       reconnecting,
-      transport_duration_ms: openedAt - connectStartedAt,
+      transport_duration_ms: openedAt - transportStartedAt,
     });
     markAlive();
     startLiveness(ws);
@@ -2513,7 +2528,6 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     }
   };
   ws.onclose = (event): void => {
-    resetBrowserDeviceChallenge();
     clearTimeout(bootstrapGuard);
     connectionSpan?.end("error");
     clearTimeout(connectGuard);
@@ -2521,6 +2535,11 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     // longer owns global connection state and must not raise the red banner or
     // schedule another reconnect.
     if (socket !== ws) return;
+    // An admitted socket proved this epoch already. A transport disconnect
+    // does not invalidate it; refreshing here inserts an HTTP request before
+    // every reconnect, outside the WebSocket upgrade watchdog. Failed
+    // admission still refreshes (including a Controller epoch change).
+    if (!ready) resetBrowserDeviceChallenge();
     telemetryOperations.clear();
     socket = undefined;
     socketReady = false;
