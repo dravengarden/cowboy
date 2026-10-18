@@ -43,7 +43,7 @@ native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plu
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance
-    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==15 else 1)' \
+    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==16 else 1)' \
       "$native_data/Documents/conformance.json" "$native_revision" "$native_runtime"
     exit 0
   fi

@@ -67,6 +67,18 @@
          @"check('foreign authentication browser URL rejected',browser.ok===false&&browser.error.code==='invalid_request');"
          @"const closed=await window.__cowboyClosePasskeyBrowser();"
          @"check('closing absent browser is idempotent',closed.ok===true);"
+         @"const initialHeight=innerHeight;"
+         @"document.documentElement.style.cssText='height:100%;overflow:hidden';"
+         @"document.body.style.cssText='height:100%;overflow:hidden;margin:0;display:flex;flex-direction:column';"
+         @"document.body.innerHTML='<div id=nav style=\"height:70px;flex-shrink:0\">Navigation</div><div id=flow style=\"flex:1;min-height:0;overflow:auto\"><div id=editor contenteditable=true style=\"white-space:pre-wrap\"></div></div><div id=bar style=\"height:50px;flex-shrink:0\">Formatting</div>';"
+         @"const editor=document.getElementById('editor'),flow=document.getElementById('flow');"
+         @"editor.textContent=Array.from({length:80},(_,i)=>'Editable line '+i).join('\\n');"
+         @"const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);"
+         @"const selection=getSelection();selection.removeAllRanges();selection.addRange(range);"
+         @"const offsets=[];let recording=true;const sample=()=>{offsets.push(scrollY);if(recording)requestAnimationFrame(sample)};sample();"
+         @"editor.focus();await new Promise(resolve=>setTimeout(resolve,1200));recording=false;"
+         @"check('keyboard reveals the caret in the child without panning the root',"
+         @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selection.anchorNode===editor.firstChild&&selection.anchorOffset===editor.textContent.length);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";
     [webView evaluateJavaScript:script completionHandler:nil];
