@@ -34,7 +34,6 @@ import {
 } from "react";
 import { CallTranscript } from "./CallTranscript";
 import { CallCleanup } from "./CallCleanup";
-import { relativeAge } from "./syncStatus";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
@@ -52,6 +51,7 @@ import {
 } from "./composerStackAccordion";
 import {
   callActive,
+  callAgeLabel,
   callModelLabel,
   callGroup,
   callsOverview,
@@ -891,13 +891,13 @@ function CallPreview({ call, title, now, onOpen }: {
   const active = callActive(call.state);
   const tone = callTone(call.state);
   const end = active ? Date.now() : call.finished_at_ms ?? call.updated_at_ms;
-  const time = relativeAge(call.started_at_ms ?? call.created_at_ms, now);
+  const time = callAgeLabel(call.started_at_ms ?? call.created_at_ms, now);
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
       title={`${callTimesTitle(call)} · ${placementLabel(call)} · ${callModelLabel(call)}`}
       sx={{
-        flex: "1 0 9rem", minWidth: 0, minHeight: 44,
+        flex: "1 0 16rem", minWidth: "16rem", minHeight: 44,
         borderRadius: 1, textAlign: "left",
         justifyContent: "flex-start",
         "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
@@ -913,7 +913,7 @@ function CallPreview({ call, title, now, onOpen }: {
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
           <Typography variant="caption" noWrap sx={{ flex: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
           <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
-            variant="caption" color="text.secondary" noWrap sx={{ maxWidth: "55%", fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
+            variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
         </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}

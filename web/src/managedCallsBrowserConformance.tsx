@@ -556,9 +556,9 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const previousWidth = container.style.width;
     container.style.width = "390px";
     cards.slice(2).forEach((card) => card.style.display = "none");
-    check(previewRail.scrollWidth <= previewRail.clientWidth + 1 &&
-      Math.abs(cards[1]!.getBoundingClientRect().right - previewRail.getBoundingClientRect().right) < 1,
-      "two previews fill a phone-width rail without blank trailing space");
+    check(previewRail.scrollWidth > previewRail.clientWidth &&
+      cards[1]!.getBoundingClientRect().right > previewRail.getBoundingClientRect().right,
+      "phone previews retain their width and overflow into horizontal scrolling");
     cards.slice(2).forEach((card) => card.style.display = "");
     container.style.width = previousWidth;
     for (const [type, x] of [["pointerdown", 100], ["pointermove", 40], ["pointerup", 40]] as const) {
