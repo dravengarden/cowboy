@@ -1,0 +1,545 @@
+{
+  "schema": "cowboy.native-image-calls-release/v1",
+  "date": "2026-10-18",
+  "published": true,
+  "activated": true,
+  "sources": {
+    "implementation": "2e295524433901e469079f405da6fe0625a3388a",
+    "accepted_worker_pin_commit": "aca5ad9751ac33edc9d257008e12f202f32db809",
+    "active_cowboy": "337c367407f215e99ad446f87a83c54f89fea3ae",
+    "columbus": "b57888c73a0d14e8dcc8c008ad91cb947bb10d52"
+  },
+  "worker_generation": "worker-7d0bb83659a51cd6f7e6",
+  "machine_protocol": 33,
+  "component_release": "3.56.0",
+  "hawk": {
+    "controller": {
+      "outcome": "succeeded",
+      "phase": "committed",
+      "revision": "337c367407f215e99ad446f87a83c54f89fea3ae",
+      "transaction": "1792315079670764159-337c367407f2",
+      "activeRelease": "/nix/store/lg6zzpiv1i3h43m5yvjrwdz7mv82avpx-cowboy-controller-release",
+      "previousRelease": "/nix/store/fd4mzimgwmqhky5d5r4jx56va5rkbpad-cowboy-controller-release",
+      "recoveryRelease": "/nix/store/lg6zzpiv1i3h43m5yvjrwdz7mv82avpx-cowboy-controller-release",
+      "workerGeneration": null,
+      "maintenance": false
+    },
+    "machine": {
+      "outcome": "succeeded",
+      "phase": "committed",
+      "revision": "337c367407f215e99ad446f87a83c54f89fea3ae",
+      "transaction": "1792315259866618360-337c367407f2",
+      "activeRelease": "/nix/store/1rafais12d21l5hl3yr9y0ys5w018q5d-cowboy-machine-writer-host-release",
+      "previousRelease": "/nix/store/892fmzpczd6f2xylcc0yxncwffrp73sq-cowboy-machine-writer-host-release",
+      "recoveryRelease": "/nix/store/h7k3zafp29il1r9jz55gv8mwqlpas4mp-cowboy-machine-release",
+      "workerGeneration": "worker-7d0bb83659a51cd6f7e6",
+      "maintenance": true
+    },
+    "host": {
+      "outcome": "succeeded",
+      "revision": "b57888c73a0d14e8dcc8c008ad91cb947bb10d52",
+      "transaction": "1792315032390887292-b57888c73a0d",
+      "closure": "/nix/store/iab7sjjc8msyr925spjvvrwd9310cygv-nixos-system-hawk-26.05.20260731.5b4f72e",
+      "changedUnits": {
+        "system": [],
+        "user": []
+      }
+    },
+    "writer_enabled": true,
+    "worker_processes_before_machine_activation": 0,
+    "cold": {
+      "source_revision": "aca5ad9751ac33edc9d257008e12f202f32db809",
+      "controller": "/nix/store/6acw7vxyhj9dqsqrvakxmcfm7xdv9kqd-cowboy-controller-release",
+      "machine": "/nix/store/jr7j74jkkn8fiw7z2wfgn75fz94vz980-cowboy-machine-bootstrap-release",
+      "writer_enabled": false,
+      "web_bootstrap_changed": false
+    }
+  },
+  "ovh": {
+    "schema": 1,
+    "receipt": "/var/lib/columbus/ovh-native-image-calls-20261018",
+    "source_revision": "337c367407f215e99ad446f87a83c54f89fea3ae",
+    "release": "/nix/store/gxynyccs67mjzxrz05g8sfki924lxbj5-cowboy-machine-release",
+    "host_pid": 1626549,
+    "accepted_at": 1792315456,
+    "worker_generation": "worker-7d0bb83659a51cd6f7e6",
+    "workers": {
+      "retained": 44
+    },
+    "accepted_recovery_override": "/var/lib/columbus/ovh-native-image-calls-20261018/accepted-recovery.conf",
+    "configuration_sha256": "6c86329f739b36b31cc5a358201e85f79c369d36be780cbc6023fb96c1265e1b",
+    "previous_conf": "Historical pre-admission predecessor only; do not use after image records exist."
+  },
+  "plugins": [
+    {
+      "id": "claude-code",
+      "version": "3.19.44",
+      "digest": "sha256:2fa87c6e2e132c4c5d49460f4a33c5edb06d254725dcf2f40e89cc4e0b64697e",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:d244a909be446f6b6ddeadd710becf337b3f937e6457216605758257893efbbd"
+    },
+    {
+      "id": "claude-deepseek",
+      "version": "3.1.36",
+      "digest": "sha256:7849fa00ce0adac88982c8c67ecfee44e2a9ca735526d73097457e7273b1265e",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:1892fea8ef2787e0bd8a381a8c57867a867720f50de0978801830d5482fd034b"
+    },
+    {
+      "id": "codex",
+      "version": "3.5.0",
+      "digest": "sha256:64882441b5aafaabb0a18c2d37f41aecc77409a77fffe0407b542be1131b9862",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:9ca17271250535f21673f3de9490cf311785e128696c35fab439a4802cb1013f"
+    },
+    {
+      "id": "codex-deepseek",
+      "version": "3.1.35",
+      "digest": "sha256:92b12812fe8341971046001c63a3bbf9f821bcfebdf77994a5bff162f7a6573a",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:67868c2daa9cecf4162eb912de4f4811e6de470fb168dd22782fdc287356e781"
+    },
+    {
+      "id": "gemini",
+      "version": "3.1.35",
+      "digest": "sha256:c7e01e20dda9041476ac09856d99ccdd2eb8744f142db574ef8788e4adff8aba",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:99285395e70d61a340ad7b96541fb48e8e469182b16f5c1c71344b5b3ad80dd1"
+    },
+    {
+      "id": "github",
+      "version": "0.2.4",
+      "digest": "sha256:129fae7359baeec4ce59f5fef079e27155fd3a9dd01144cebecfc453dc7326a5",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        }
+      ],
+      "contract": "sha256:e178773957386a1845786787de1a116d2639e959ae433459378e5ab6b4de8f9f"
+    },
+    {
+      "id": "grok",
+      "version": "3.1.37",
+      "digest": "sha256:ee5ed5b6a800d6b1fd577865ad92e88d645e380eb27483b146b61e0a53a84aec",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        {
+          "os": "macos",
+          "architecture": "aarch64"
+        }
+      ],
+      "contract": "sha256:860f2c64d542f0f0352aab4bc0e7ec50eb8f9e0ec6cd269143a49d00918b3bc9"
+    },
+    {
+      "id": "matrix",
+      "version": "1.0.1",
+      "digest": "sha256:8e6195f8c21c7705dab21f0668eb039d180f2963eed992b3a97715de159bfeb1",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        }
+      ],
+      "contract": "sha256:09f7e9552286fd891018478622381b90935a866f2f7d8bf3275dfb4520e662ec"
+    },
+    {
+      "id": "review",
+      "version": "1.0.4",
+      "digest": "sha256:277374d1a9626204cfbd7a8de47c4f0426816b1c4810d9ff0c6bb049e610d1a7",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        }
+      ],
+      "contract": "sha256:8b8573bf6a368fb46f96ad2f958d5e2807c40dc20db4a1742023da97c3ee45b8"
+    },
+    {
+      "id": "zed",
+      "version": "1.20.8",
+      "digest": "sha256:a88dcfb9c36313f8f13dfbbbbab9540d04dd33a1c67f7363c685fadb748daabd",
+      "state": "ready",
+      "platforms": [
+        {
+          "os": "linux",
+          "architecture": "x86_64"
+        }
+      ],
+      "contract": "sha256:50fc9ab1cd97a5aed639533cc53d30e76fb68004e20fdf66ab85af9dce211cf2"
+    }
+  ],
+  "installation_receipts": [
+    {
+      "machine": "hawk",
+      "plugin": "codex",
+      "version": "3.5.0",
+      "digest": "sha256:64882441b5aafaabb0a18c2d37f41aecc77409a77fffe0407b542be1131b9862",
+      "operation": "agent-4479a94fa67c55431ed8db051ae5982ff0246a32593fcb6688396bc48eca4aa6",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-edb8c10403d27e8c4ee1dfb7428d4e972d01c65664e051c9d44230502ac5c2bd"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "claude-deepseek",
+      "version": "3.1.36",
+      "digest": "sha256:7849fa00ce0adac88982c8c67ecfee44e2a9ca735526d73097457e7273b1265e",
+      "operation": "native-images-20261018-hawk-claude-deepseek-3-1-36",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-b5b6ded57e26dab1656a5961c54b8045d6387e75371d91fa486aa1e0152a3d51"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "codex-deepseek",
+      "version": "3.1.35",
+      "digest": "sha256:92b12812fe8341971046001c63a3bbf9f821bcfebdf77994a5bff162f7a6573a",
+      "operation": "native-images-20261018-hawk-codex-deepseek-3-1-35",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-1943bcc58049ae9346f2e5dba495a5978155ae959b1d5b2cf4f5a2065074154a"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "gemini",
+      "version": "3.1.35",
+      "digest": "sha256:c7e01e20dda9041476ac09856d99ccdd2eb8744f142db574ef8788e4adff8aba",
+      "operation": "native-images-20261018-hawk-gemini-3-1-35",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-c7e4e122e082f06476124055a2b4de83497301be3176658bef4d277eefb4b061"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "grok",
+      "version": "3.1.37",
+      "digest": "sha256:ee5ed5b6a800d6b1fd577865ad92e88d645e380eb27483b146b61e0a53a84aec",
+      "operation": "native-images-20261018-hawk-grok-3-1-37",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-61ab619b9dce05f9a15596a0d1e770e79a06abe78c1685c9a12d34cd73ceb1c6"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "github",
+      "version": "0.2.4",
+      "digest": "sha256:129fae7359baeec4ce59f5fef079e27155fd3a9dd01144cebecfc453dc7326a5",
+      "operation": "native-images-20261018-hawk-github-0-2-4",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-370756c110a055b26fd753fb29cfc1fc5e3765099bb07cb4f40e68e540cba6be"
+      }
+    },
+    {
+      "machine": "hawk",
+      "plugin": "zed",
+      "version": "1.20.8",
+      "digest": "sha256:a88dcfb9c36313f8f13dfbbbbab9540d04dd33a1c67f7363c685fadb748daabd",
+      "operation": "native-images-20261018-hawk-zed-1-20-8",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-43917f61e76cc1691163e216712a41297bb412e644d4ef34cbfe6bbae5566c9e"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "codex",
+      "version": "3.5.0",
+      "digest": "sha256:64882441b5aafaabb0a18c2d37f41aecc77409a77fffe0407b542be1131b9862",
+      "operation": "native-images-20261018-ovh-codex-3-5-0",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-20a44e6252782b7bbeb97956d4ad256c0b0ff468c72891815a40c0f441fe3976"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "claude-code",
+      "version": "3.19.44",
+      "digest": "sha256:2fa87c6e2e132c4c5d49460f4a33c5edb06d254725dcf2f40e89cc4e0b64697e",
+      "operation": "native-images-20261018-ovh-claude-code-3-19-44",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-cb7b827e56d14448145b9ab42ea2dc105b7732f595101686d543c9226760d1fd"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "grok",
+      "version": "3.1.37",
+      "digest": "sha256:ee5ed5b6a800d6b1fd577865ad92e88d645e380eb27483b146b61e0a53a84aec",
+      "operation": "native-images-20261018-ovh-grok-3-1-37",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-bca36abfe1cb421f4f3fd86b949f3390fd5a47e9d7a1c919407142b38d5c36d9"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "matrix",
+      "version": "1.0.1",
+      "digest": "sha256:8e6195f8c21c7705dab21f0668eb039d180f2963eed992b3a97715de159bfeb1",
+      "operation": "native-images-20261018-ovh-matrix-1-0-1",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-7d7c5fd23e3af2e604416c044e9c5b5ab550d11e41911b8dea7f95ee09655f3c"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "review",
+      "version": "1.0.4",
+      "digest": "sha256:277374d1a9626204cfbd7a8de47c4f0426816b1c4810d9ff0c6bb049e610d1a7",
+      "operation": "native-images-20261018-ovh-review-1-0-4",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-71125455f6adf02bda5a3535c6cce93d59b24efc0552239e2563e8a91cc6484f"
+      }
+    },
+    {
+      "machine": "ovh",
+      "plugin": "zed",
+      "version": "1.20.8",
+      "digest": "sha256:a88dcfb9c36313f8f13dfbbbbab9540d04dd33a1c67f7363c685fadb748daabd",
+      "operation": "native-images-20261018-ovh-zed-1-20-8",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-2f69270d387ab6544e9c8c17746235e8f2195c67a2355e93b5ac6d7f5d119235"
+      }
+    }
+  ],
+  "inventory": {
+    "hawk": [
+      {
+        "id": "claude-deepseek",
+        "version": "3.1.36",
+        "digest": "sha256:7849fa00ce0adac88982c8c67ecfee44e2a9ca735526d73097457e7273b1265e"
+      },
+      {
+        "id": "codex",
+        "version": "3.5.0",
+        "digest": "sha256:64882441b5aafaabb0a18c2d37f41aecc77409a77fffe0407b542be1131b9862"
+      },
+      {
+        "id": "codex-deepseek",
+        "version": "3.1.35",
+        "digest": "sha256:92b12812fe8341971046001c63a3bbf9f821bcfebdf77994a5bff162f7a6573a"
+      },
+      {
+        "id": "gemini",
+        "version": "3.1.35",
+        "digest": "sha256:c7e01e20dda9041476ac09856d99ccdd2eb8744f142db574ef8788e4adff8aba"
+      },
+      {
+        "id": "github",
+        "version": "0.2.4",
+        "digest": "sha256:129fae7359baeec4ce59f5fef079e27155fd3a9dd01144cebecfc453dc7326a5"
+      },
+      {
+        "id": "grok",
+        "version": "3.1.37",
+        "digest": "sha256:ee5ed5b6a800d6b1fd577865ad92e88d645e380eb27483b146b61e0a53a84aec"
+      },
+      {
+        "id": "victoria",
+        "version": "1.1.0",
+        "digest": "sha256:e61de971b57b7a925a46cb3754270873452e883e5a52cd706343e7f450038698"
+      },
+      {
+        "id": "zed",
+        "version": "1.20.8",
+        "digest": "sha256:a88dcfb9c36313f8f13dfbbbbab9540d04dd33a1c67f7363c685fadb748daabd"
+      }
+    ],
+    "ovh": [
+      {
+        "id": "claude-code",
+        "version": "3.19.44",
+        "digest": "sha256:2fa87c6e2e132c4c5d49460f4a33c5edb06d254725dcf2f40e89cc4e0b64697e"
+      },
+      {
+        "id": "codex",
+        "version": "3.5.0",
+        "digest": "sha256:64882441b5aafaabb0a18c2d37f41aecc77409a77fffe0407b542be1131b9862"
+      },
+      {
+        "id": "grok",
+        "version": "3.1.37",
+        "digest": "sha256:ee5ed5b6a800d6b1fd577865ad92e88d645e380eb27483b146b61e0a53a84aec"
+      },
+      {
+        "id": "matrix",
+        "version": "1.0.1",
+        "digest": "sha256:8e6195f8c21c7705dab21f0668eb039d180f2963eed992b3a97715de159bfeb1"
+      },
+      {
+        "id": "review",
+        "version": "1.0.4",
+        "digest": "sha256:277374d1a9626204cfbd7a8de47c4f0426816b1c4810d9ff0c6bb049e610d1a7"
+      },
+      {
+        "id": "zed",
+        "version": "1.20.8",
+        "digest": "sha256:a88dcfb9c36313f8f13dfbbbbab9540d04dd33a1c67f7363c685fadb748daabd"
+      }
+    ]
+  },
+  "validation": {
+    "repository": "Full Cowboy gate, persistence/Clippy follow-up, Web main-integration checks; Columbus incremental verify passed. Later release-record edits are documentation only.",
+    "native_image": {
+      "checks": 13,
+      "live_provider_traffic": false,
+      "receipt_sha256": "4b93d006a353f355286994a213d7f45a8f4ed684aa478885f89e289689af9480"
+    },
+    "codex_worker": {
+      "checks": 36,
+      "accepted": true,
+      "receipt_sha256": "9b1bc17bf23aafc10bc379f2402332d571b6992ab71a2e232629e81bdb0a985a"
+    },
+    "claude_managed": {
+      "checks": 7,
+      "accepted": true,
+      "receipt_sha256": "b3914c81fc67b6e44376b69c44eaf0076418be1953d324cd3231a39038c6e78e"
+    },
+    "claude_worker": {
+      "checks": 93,
+      "accepted": true,
+      "receipt_sha256": "83f293b7e7e594893d4b25f3f8836e1a81c0775101c2ef500b2399c74dbc6f41"
+    },
+    "keeper": {
+      "checks": 12,
+      "accepted": true,
+      "receipt_sha256": "164579bfb8dcf59b66c2bde54ce0055cdc1bb6a8eb3171a742c8403ab1438f1d"
+    },
+    "sessions": {
+      "checks": 17,
+      "accepted": true,
+      "receipt_sha256": "b4a7d2648332cb9600040fae327e20fc12d895ee024e1ce419ea5a580778c0ce"
+    },
+    "catalog_readers": {
+      "cases": 30,
+      "accepted": true,
+      "scope": "Catalog decoding/skips, not image-record recovery",
+      "receipt_sha256": "8fc8b59ab9c59019b8c45a0083da55c60673b0adbc497052eb21e382012a3c11"
+    },
+    "connected_code": {
+      "checks": 38,
+      "accepted": true,
+      "receipt_sha256": "9435ea1c1635c226c0ac54e05345854f4482ab76225efb63777eebbaf94db77d",
+      "controller_and_reader_native_executables_identical_to_deployed": true
+    },
+    "production_writer": {
+      "cases": 45,
+      "accepted": true,
+      "old_writer": "/nix/store/4vnb14fgkpzhyiyqi89bgpdb13hirjvf-cowboy-machine-writer-host-release",
+      "new_writer": "/nix/store/1rafais12d21l5hl3yr9y0ys5w018q5d-cowboy-machine-writer-host-release",
+      "reader": "/nix/store/h7k3zafp29il1r9jz55gv8mwqlpas4mp-cowboy-machine-release",
+      "default_reader": "/nix/store/jr7j74jkkn8fiw7z2wfgn75fz94vz980-cowboy-machine-bootstrap-release",
+      "receipt_sha256": "c0f54219e0fc79f0cbb687e4a7651754bb422ba2245121e43f8e4cbe379222a9"
+    },
+    "agent_coexistence": {
+      "providers": 6,
+      "accepted": true,
+      "model_prompt_submitted": false
+    },
+    "zed": {
+      "packaged_install_and_drain": true,
+      "immutable_native_sync": true
+    },
+    "health": {
+      "controller": true,
+      "hawk_online": true,
+      "ovh_online": true,
+      "observed_acp_generation": "worker-7d0bb83659a51cd6f7e6"
+    }
+  },
+  "installation_authority": {
+    "path": "Delegated host Operator CLI for Service-managed membership; MCP remains preferred for supported reads/control.",
+    "initial_mcp_refusal": "service_managed_membership, before approval/install journal admission",
+    "first_domain_operation": "agent-4479a94fa67c55431ed8db051ae5982ff0246a32593fcb6688396bc48eca4aa6",
+    "initial_effect_journal_absent_confirmed": true,
+    "same_domain_operation_reused_by_host_cli": true
+  },
+  "limits": {
+    "live_image_inference_tested": false,
+    "billed_tokens_measured": false,
+    "physical_device_acceptance": false,
+    "old_strict_readers_valid_after_image_records": false
+  }
+}
