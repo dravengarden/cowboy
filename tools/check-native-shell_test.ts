@@ -68,6 +68,13 @@ test("complete native shell is owned by this checkout", () =>
 for (
   const [name, path, before, after, message] of [
     [
+      "missing conformance Scene lifecycle",
+      "apple/Conformance/Info.plist",
+      "<key>UIApplicationSceneManifest</key>",
+      "<key>UnusedManifest</key>",
+      "native conformance fixture needs its own window-scene lifecycle",
+    ],
+    [
       "CLI cannot validate the App-Bound Domains window option",
       "toolchain.json",
       '"tauriCli": "2.12.2"',

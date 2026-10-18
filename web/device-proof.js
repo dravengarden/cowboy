@@ -71,15 +71,25 @@
   async function challenge() {
     if (!challengePromise) {
       challengePromise = (async () => {
-        const response = await rawFetch(CHALLENGE, {
-          credentials: "omit", cache: "no-store", redirect: "error",
-        });
-        if (!response.ok) throw new Error("Secure device authentication is unavailable");
-        const body = await response.json();
-        if (typeof body.epoch !== "string" || !Number.isSafeInteger(body.server_time_ms)) {
-          throw new Error("Invalid device authentication challenge");
+        // This precedes WebSocket construction (and its upgrade watchdog).
+        // A stalled HTTP connection must not hold every signed request behind
+        // WebKit's multi-minute network timeout. Abort body reads as well.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8_000);
+        try {
+          const response = await rawFetch(CHALLENGE, {
+            credentials: "omit", cache: "no-store", redirect: "error",
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error("Secure device authentication is unavailable");
+          const body = await response.json();
+          if (typeof body.epoch !== "string" || !Number.isSafeInteger(body.server_time_ms)) {
+            throw new Error("Invalid device authentication challenge");
+          }
+          return { epoch: body.epoch, offset: body.server_time_ms - Date.now() };
+        } finally {
+          clearTimeout(timer);
         }
-        return { epoch: body.epoch, offset: body.server_time_ms - Date.now() };
       })().catch((error) => { challengePromise = undefined; throw error; });
     }
     return challengePromise;

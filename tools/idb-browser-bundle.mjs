@@ -5,7 +5,8 @@ import { build } from "../web/node_modules/vite/dist/node/index.js";
 const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
 if (
-  suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
+  suite !== "desktop-viewport" && suite !== "idb" && suite !== "idb-outbox" &&
+  suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
@@ -38,7 +39,8 @@ await build({
   publicDir: false,
   define: {
     "process.env.NODE_ENV": JSON.stringify(
-      suite === "provider-ui" || suite === "provider-management" ||
+      suite === "desktop-viewport" || suite === "provider-ui" ||
+        suite === "provider-management" ||
         suite === "plugin-lifecycle" || suite === "settings-recovery" ||
         suite === "code-buffers" || suite === "code-buffer-context" ||
         suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
@@ -87,7 +89,8 @@ await build({
     minify: false,
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
-    ...(suite === "review-diff" || suite === "review-document-refresh" ||
+    ...(suite === "desktop-viewport" || suite === "review-diff" ||
+        suite === "review-document-refresh" ||
         suite === "review-destination" || suite === "review-recovery" ||
         suite === "workspace-extensions" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
@@ -99,7 +102,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "loading-progress"
+        suite === "desktop-viewport"
+          ? "../web/src/desktopViewportBrowserConformance.tsx"
+          : suite === "loading-progress"
           ? "../web/src/loadingProgressBrowserConformance.tsx"
           : suite === "review-context"
           ? "../web/src/reviewContextBrowserConformance.tsx"

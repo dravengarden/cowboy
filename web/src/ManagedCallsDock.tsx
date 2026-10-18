@@ -28,11 +28,13 @@ import {
   type KeyboardEvent,
   memo,
   type ReactNode,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 import { CallTranscript } from "./CallTranscript";
 import { CallCleanup } from "./CallCleanup";
+import { relativeAge } from "./syncStatus";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
@@ -879,16 +881,17 @@ function CallList({
 
 /** Parent-scoped managed calls above the Prompt: a compact summary that opens
  * an inline list and detail on Desktop and a full-height page on Mobile. */
-function CallPreview({ call, title, onOpen }: {
+function CallPreview({ call, title, now, onOpen }: {
   call: ManagedCallSummary;
   title: string;
+  now: number;
   onOpen: () => void;
 }): React.JSX.Element {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOpen);
   const active = callActive(call.state);
   const tone = callTone(call.state);
   const end = active ? Date.now() : call.finished_at_ms ?? call.updated_at_ms;
-  const time = startedLabel(call.started_at_ms ?? call.created_at_ms);
+  const time = relativeAge(call.started_at_ms ?? call.created_at_ms, now);
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
@@ -916,14 +919,14 @@ function CallPreview({ call, title, onOpen }: {
           {active && <CircularProgress size="0.6875rem" />}
           <Typography variant="caption" noWrap sx={{
             color: tone === "error" ? "error.main" : active ? "primary.main" : "text.secondary",
-            fontSize: "0.75rem",
+            fontSize: "0.75rem", flexShrink: 0,
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
+            · {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
+          </Typography>
         </Stack>
-        <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: "0.6875rem" }}>
-          {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
-        </Typography>
       </Stack>
     </ButtonBase>
   );
@@ -936,6 +939,18 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
   stale: boolean;
 }): React.JSX.Element {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOverview);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const update = (): void => {
+      if (document.visibilityState !== "hidden") setNow(Date.now());
+    };
+    const timer = globalThis.setInterval(update, 30_000);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      globalThis.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
   const overview = callsOverview(calls);
   const titles = callPreviewTitles(calls);
   const ordered = [...calls].sort((a, b) => {
@@ -954,7 +969,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
       </ButtonBase>
       <Box data-call-preview-rail data-mobile-drawer-ignore role="group" aria-label="Call previews"
         sx={{ display: "flex", minWidth: 0, flex: 1, gap: 0.5, overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
-        {ordered.map((call) => <CallPreview key={call.call_id} call={call} title={titles.get(call.call_id)!} onOpen={() => onOpen(call.call_id)} />)}
+        {ordered.map((call) => <CallPreview key={call.call_id} call={call} title={titles.get(call.call_id)!} now={now} onOpen={() => onOpen(call.call_id)} />)}
       </Box>
     </Stack>
   );
