@@ -494,9 +494,35 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
         );
     };
     if !intent.accepts(&binding) {
-        return Err(
-            "Prepared environment no longer matches the selected workspace or executor".into(),
-        );
+        let mut alias_intent = intent.clone();
+        alias_intent
+            .source_path
+            .clone_from(&binding.workspace.source_path);
+        if intent.validate().is_err() || !alias_intent.accepts(&binding) {
+            return Err(
+                "Prepared environment no longer matches the selected workspace or executor".into(),
+            );
+        }
+        // Never canonicalize a remote Machine's paths on the Controller or
+        // weaken the binding comparison. The Machine's existing discovery
+        // operation resolves the selected source; Prepare already verified
+        // its retained contract and live keeper. Keep that binding intact.
+        let discovered = state
+            .machine_control
+            .project_request(
+                &intent.machine_id,
+                crate::machine_protocol::projects::Request::Discover {
+                    root: intent.source_path.clone(),
+                },
+            )
+            .await?;
+        if discovered.get("root").and_then(serde_json::Value::as_str)
+            != Some(binding.workspace.source_path.as_str())
+        {
+            return Err(
+                "Prepared environment no longer matches the selected workspace or executor".into(),
+            );
+        }
     }
     let prepared = ExecutionBinding::from_record(
         serde_json::to_value(binding).map_err(|_| "Invalid execution binding")?,

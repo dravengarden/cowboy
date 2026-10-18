@@ -25,6 +25,7 @@ use crate::machine_protocol::MachineWorkspace;
 use crate::machine_protocol::execution::{Action, ExecutorInventory, Refusal, Request, Response};
 
 mod abandonment;
+mod preparation;
 mod recovery;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -614,7 +615,7 @@ impl Manager {
             let contract = read_contract(&path).map_err(|_| Refusal::EnvironmentLost)?;
             if contract.session_id != session_id
                 || contract.binding.workspace.id != workspace_id
-                || contract.binding.workspace.source_path != workspace.canonical_path
+                || !preparation::same_source(&contract.binding.workspace.source_path, &workspace.canonical_path)
                 || contract.binding.environment.machine_id != self.machine_id
                 || contract.binding.runtime != runtime
                 // A managed environment never becomes an ordinary one.
@@ -678,7 +679,9 @@ impl Manager {
             workspace: WorkspaceLocation {
                 id: workspace_id.to_owned(),
                 worktree_id: session_id.to_owned(),
-                source_path: prepared.source_path,
+                // Keep the advertised identity; preparation resolves symlinks
+                // internally to perform Git operations on physical storage.
+                source_path: workspace.canonical_path.clone(),
                 cwd: prepared.path,
             },
             access: ExecutionAccess::Project,
