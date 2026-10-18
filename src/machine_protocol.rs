@@ -22,7 +22,9 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 32;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 33;
+/// Native image profiles, minimal input snapshots and verified deliveries.
+pub const MANAGED_IMAGE_PROTOCOL_VERSION: u16 = 33;
 /// `AgentInvoke` carries Controller-discovered operation names, not a frozen
 /// transport allowlist. The envelope and authority checks remain unchanged.
 pub const AGENT_CONTROL_PROTOCOL_VERSION: u16 = 32;
@@ -1065,6 +1067,15 @@ impl MachineCommand {
     #[must_use]
     pub fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Execution { request, .. }
+                if matches!(
+                    &request.action,
+                    execution::Action::DeliverManagedArtifact { .. }
+                ) || matches!(&request.action, execution::Action::PrepareManagedRound { round }
+                        if round.profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1) =>
+            {
+                MANAGED_IMAGE_PROTOCOL_VERSION
+            }
             Self::AdapterRequest { adapter, .. } if adapter == session_code::ADAPTER => {
                 session_code::PROTOCOL_VERSION
             }
@@ -1567,6 +1578,33 @@ mod tests {
             serde_json::from_value::<MachineCommand>(encoded).unwrap(),
             command
         );
+    }
+
+    #[test]
+    fn image_rounds_require_both_peers_to_understand_images() {
+        let mut round = crate::managed_calls::protocol::ChildRound {
+            child_session_id: "image-child".into(),
+            parent_session_id: "parent".into(),
+            call_id: "image-call".into(),
+            workspace_id: "project".into(),
+            source_cwd: "/workspace".into(),
+            files: vec![],
+            output_schema: None,
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+        };
+        let command = |round| MachineCommand::Execution {
+            request_id: "request".into(),
+            request: Box::new(execution::Request {
+                service_id: "service".into(),
+                machine_id: "hawk".into(),
+                action: execution::Action::PrepareManagedRound {
+                    round: Box::new(round),
+                },
+            }),
+        };
+        assert_eq!(command(round.clone()).minimum_protocol(), 33);
+        round.profile = cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1;
+        assert!(command(round).minimum_protocol() < 33);
     }
 
     #[test]

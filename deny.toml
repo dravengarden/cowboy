@@ -31,7 +31,13 @@ wildcards = "deny"
 highlight = "all"
 # WebAuthn 0.5 still requires base64 0.21; the current HTTP stack uses 0.23.
 # Permit only this exact legacy codec, keeping its advisory/license checks.
-skip = [{ name = "base64", version = "=0.21.7" }]
+# PNG 0.18 decodes with miniz_oxide 0.8; flate2 already requires 0.9.
+# Remove this exact compatibility entry when PNG adopts 0.9. Both keep their
+# advisory/license/source checks; do not downgrade the existing HTTP codec.
+skip = [
+  { name = "base64", version = "=0.21.7" },
+  { name = "miniz_oxide", version = "=0.8.9" },
+]
 # SQLx and ACP currently bridge independently versioned protocol ecosystems.
 # Their subtrees remain covered by advisory, license, and source checks.
 skip-tree = [

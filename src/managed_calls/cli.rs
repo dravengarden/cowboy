@@ -38,14 +38,17 @@ pub struct StartArgs {
 /// The request contract, shown by `--help` so the always-on agent prompt need
 /// not carry it. For a code review, `cowboy review` builds all of this.
 pub const START_HELP: &str = r#"Request (JSON on stdin with --request-file -):
-  {"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis",
+  {"schema":1,"request_id":"<new unique id>","purpose":"review|design_review|analysis|image_generate|image_edit",
    "instruction":"<self-contained task>","context":{"scope":"current-worktree"},
    "access":"read-only","conversation":{"mode":"fresh"}}
 
 The command prints a JSON envelope with a call_id. Then:
   cowboy call wait <call_id>     until the state is terminal
   cowboy call result <call_id>   the reply text
-cowboy call capabilities lists whether calls are on and each agent's presets."#;
+cowboy call capabilities lists whether calls are on, native capabilities and presets.
+Image calls copy only context.files (up to 4 relative image paths). image_edit
+requires input files or conversation:{"mode":"continue","child_session_id":"..."}.
+Results include verified artifact paths on this execution target, without bytes."#;
 
 /// How often a waiting request asks again; it also keeps the prompt shown.
 const APPROVAL_POLL: std::time::Duration = std::time::Duration::from_secs(3);

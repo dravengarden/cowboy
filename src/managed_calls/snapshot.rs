@@ -23,6 +23,9 @@ use super::round::read_round;
 use super::round::{MAX_ROUND_BYTES, RoundMarker, read_private};
 use crate::execution_environment::ManagedChildV1;
 
+mod images;
+pub use images::deliver;
+
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 static LOCKS: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<String>>> =
@@ -470,6 +473,9 @@ pub async fn prepare(
             index_tree: existing.index_tree,
             worktree_tree: existing.worktree_tree,
         });
+    }
+    if round.profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1 {
+        return images::prepare(&directory, &source, round);
     }
     let top = git
         .run(

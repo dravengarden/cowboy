@@ -36,12 +36,12 @@ class ImpactTest(unittest.TestCase):
     def test_a_codex_native_bump_selects_only_codex_suites(self):
         selected = suites(["plugins/codex/provider.json"], native_changed=["codex"])
         self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "codex-turn", "child-stop",
-                                         "codex-hooks"})
+                                         "codex-hooks", "codex-image"})
 
     def test_an_executor_bump_runs_every_executor_suite_in_full(self):
         selected = suites(["components/execution-runtime/lock.json"])
         self.assertEqual(set(selected), {"claude-worker", "codex-worker", "session", "keeper", "claude-task-stop",
-                                         "lifetime", "codex-turn", "child-stop", "codex-hooks", "handshake-recovery"})
+                                         "lifetime", "codex-turn", "child-stop", "codex-hooks", "handshake-recovery", "codex-image"})
         self.assertEqual(selected["claude-worker"]["phases"], "all")
 
     def test_a_claude_feature_module_runs_its_phase(self):
@@ -60,7 +60,7 @@ class ImpactTest(unittest.TestCase):
         self.assertIn("claude-managed", suites(["src/execution_host/read_only.rs"]))
 
     def test_a_codex_launcher_change_stays_in_its_lane(self):
-        self.assertEqual(set(suites(["plugins/codex/runtime/launch.mjs"])), {"codex-adapter-check", "codex-worker"})
+        self.assertEqual(set(suites(["plugins/codex/runtime/launch.mjs"])), {"codex-adapter-check", "codex-worker", "codex-image"})
 
     def test_the_execution_transport_runs_every_suite_built_on_it(self):
         selected = suites(["src/execution_host/ledger.rs"])
@@ -89,7 +89,7 @@ class ImpactTest(unittest.TestCase):
 
     def test_a_codex_runtime_manifest_change_runs_the_session_fixture_built_from_it(self):
         selected = suites(["plugins/codex/provider.json"], manifests_changed=["plugins/codex/provider.json"])
-        self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "session"})
+        self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "session", "codex-image"})
 
     def test_a_new_runtime_module_is_unmapped_even_under_a_unit_gate_directory(self):
         for path in [CLAUDE + "new-module.mjs", "plugins/codex/runtime/new-module.mjs"]:

@@ -30,6 +30,14 @@ The shared runtime component remains unchanged. This Provider owns the changes:
 
 ## Dependency audit (2026-10-11)
 
+The `image_v1` managed profile delegates native image generation/editing through
+ACP. It requires supported ChatGPT authentication, retains read-only execution,
+and keeps signed restrictions in thread configuration as well as process
+arguments. Generated image content appears once in ACP; Cowboy validates and
+delivers it as an artifact. Managed calls skip the extra model-generated title.
+See [native capabilities](../../../docs/managed-native-capabilities.md) for
+ownership, limits, fallback and acceptance evidence.
+
 The pin moves to ACP `2.2.2` at
 `202e66e63343ec4f5a5e35ab590251d813d129ca` with native Codex `0.160.1`. ACP
 2.2 declares `@openai/codex ^0.160.1`; native `0.161.0` to `0.162.1` are

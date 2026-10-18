@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.13" as const;
+export const PROVIDER_SDK_VERSION = "3.1.14" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -358,7 +358,7 @@ export interface ProviderManifest {
     };
     arguments: RuntimeValue[];
     managed_profiles?: Partial<
-      Record<"read_only_v1", { arguments: RuntimeValue[] }>
+      Record<"read_only_v1" | "image_v1", { arguments: RuntimeValue[] }>
     >;
     environment: Record<string, RuntimeValue>;
     sidecars: RuntimeSidecar[];
@@ -388,6 +388,7 @@ export interface ProviderManifest {
       | "provider.gateway.v1"
       | "provider.execution-jsonrpc.v1"
       | "provider.managed-profiles.v1"
+      | "provider.managed-image.v1"
     >;
   };
   authentication: {
@@ -1096,6 +1097,7 @@ function validateManagedProfiles(
   input: unknown,
   sdk: string,
   capability: boolean,
+  imageCapability: boolean,
 ): RuntimeValue[] {
   const profiles = input === undefined ? {} : input;
   if (!isRecord(profiles)) throw new Error("Invalid managed Provider profiles");
@@ -1109,9 +1111,17 @@ function validateManagedProfiles(
     );
   }
   const args: RuntimeValue[] = [];
+  if (
+    imageCapability !== Object.hasOwn(profiles, "image_v1") ||
+    (imageCapability && compareProviderVersions(sdk, "3.1.14") < 0)
+  ) {
+    throw new Error(
+      "Managed images require their signed capability and SDK 3.1.14",
+    );
+  }
   for (const [name, profile] of entries) {
     if (
-      name !== "read_only_v1" || !isRecord(profile) ||
+      !["read_only_v1", "image_v1"].includes(name) || !isRecord(profile) ||
       Object.keys(profile).some((key) => key !== "arguments") ||
       !Array.isArray(profile.arguments) || profile.arguments.length === 0 ||
       profile.arguments.length > 64 ||
@@ -1167,6 +1177,7 @@ export function validateProviderManifest(
     runtime.managed_profiles,
     String(full.sdk_version),
     runtime.required_capabilities.includes("provider.managed-profiles.v1"),
+    runtime.required_capabilities.includes("provider.managed-image.v1"),
   );
   const dependencies = new Map<string, string>();
   for (const raw of runtime.dependencies) {
@@ -1341,7 +1352,8 @@ export function validateProviderManifest(
     !runtime.required_capabilities.every((value) =>
       value === "provider.runtime.v1" || value === "provider.gateway.v1" ||
       value === "provider.execution-jsonrpc.v1" ||
-      value === "provider.managed-profiles.v1"
+      value === "provider.managed-profiles.v1" ||
+      value === "provider.managed-image.v1"
     ) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||

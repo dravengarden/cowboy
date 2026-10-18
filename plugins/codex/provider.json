@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.4.9",
+  "version": "3.5.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.13",
+  "sdk_version": "3.1.14",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
@@ -165,7 +165,52 @@
           "-c",
           "memories.use_memories=false",
           "-c",
-          "model_auto_compact_token_limit_scope=\"body_after_prefix\""
+          "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
+          "-c",
+          "features.image_generation=false"
+        ]
+      },
+      "image_v1": {
+        "arguments": [
+          "--cowboy-managed-profile=image-v1",
+          "-c",
+          "approval_policy=never",
+          "-c",
+          "sandbox_mode=read-only",
+          "-c",
+          "features.hooks=false",
+          "-c",
+          "features.apps=false",
+          "-c",
+          "features.plugins=false",
+          "-c",
+          "notify=[]",
+          "-c",
+          "memories.generate_memories=false",
+          "-c",
+          "memories.use_memories=false",
+          "-c",
+          "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
+          "-c",
+          "features.image_generation=true",
+          "-c",
+          "web_search=\"disabled\"",
+          "-c",
+          "features.shell_tool=false",
+          "-c",
+          "features.unified_exec=false",
+          "-c",
+          "features.browser_use=false",
+          "-c",
+          "features.computer_use=false",
+          "-c",
+          "features.in_app_browser=false",
+          "-c",
+          "agents.enabled=false",
+          "-c",
+          "features.skip_host_skill_discovery=true",
+          "-c",
+          "features.skill_search=false"
         ]
       }
     },
@@ -246,7 +291,8 @@
     "required_capabilities": [
       "provider.runtime.v1",
       "provider.execution-jsonrpc.v1",
-      "provider.managed-profiles.v1"
+      "provider.managed-profiles.v1",
+      "provider.managed-image.v1"
     ]
   },
   "authentication": {

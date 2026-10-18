@@ -54,6 +54,7 @@ impl std::hash::Hash for ManagedBindingV1 {
         self.parent_session_id.hash(state);
         match self.profile {
             cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1 => 1_u8.hash(state),
+            cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1 => 2_u8.hash(state),
         }
     }
 }

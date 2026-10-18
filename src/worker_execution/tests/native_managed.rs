@@ -1,5 +1,5 @@
-//! A packaged managed Claude turn against a real Machine-prepared snapshot
-//! and keeper-enforced read-only environment, through the worker transport.
+//! Packaged managed Claude and Codex image turns against a Machine-prepared
+//! snapshot and keeper-enforced read-only environment through worker transport.
 
 use super::*;
 use crate::machine_cli::execution::{Configuration, Manager};
@@ -21,6 +21,16 @@ async fn git(directory: &std::path::Path, args: &[&str]) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires pinned native binaries and an isolated PID/network namespace"]
 async fn native_managed_claude_execution() {
+    native_managed_execution(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires pinned native binaries and an isolated PID/network namespace"]
+async fn native_managed_image_execution() {
+    native_managed_execution(true).await;
+}
+
+async fn native_managed_execution(images: bool) {
     let input: Value = serde_json::from_slice(
         &std::fs::read(std::env::var("COWBOY_TEST_EXECUTION_INPUT").unwrap()).unwrap(),
     )
@@ -32,6 +42,21 @@ async fn native_managed_claude_execution() {
     std::fs::create_dir(&runtime).unwrap();
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("fixture.txt"), "snapshot fixture\n").unwrap();
+    if images {
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(std::fs::read(input_path("provider_cli")).unwrap())
+            ),
+            input["provider_sha256"].as_str().unwrap(),
+            "native image CLI differs from the accepted input"
+        );
+        let mut bytes = Vec::new();
+        let mut writer = png::Encoder::new(&mut bytes, 1, 1).write_header().unwrap();
+        writer.write_image_data(&[1]).unwrap();
+        drop(writer);
+        std::fs::write(source.join("input.png"), bytes).unwrap();
+    }
     git(&source, &["init", "--initial-branch=main"]).await;
     git(&source, &["add", "."]).await;
     git(
@@ -106,19 +131,30 @@ async fn native_managed_claude_execution() {
         machine_id: "target".into(),
         action,
     };
-    let schema = json!({
-        "type": "object", "additionalProperties": false, "required": ["verdict"],
-        "properties": {"verdict": {"type": "string", "enum": ["approve", "needs-attention"]}},
+    let schema = (!images).then(|| {
+        json!({
+            "type": "object", "additionalProperties": false, "required": ["verdict"],
+            "properties": {"verdict": {"type": "string", "enum": ["approve", "needs-attention"]}},
+        })
     });
+    let profile = if images {
+        cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
+    } else {
+        cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1
+    };
     let round = crate::managed_calls::protocol::ChildRound {
         child_session_id: "child".into(),
         parent_session_id: "parent".into(),
         call_id: "call-1".into(),
         workspace_id: "fixture".into(),
         source_cwd: source.display().to_string(),
-        files: vec![],
-        output_schema: Some(schema.clone()),
-        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        files: if images {
+            vec!["input.png".into()]
+        } else {
+            vec![]
+        },
+        output_schema: schema.clone(),
+        profile,
     };
     let prepared = match manager
         .request(
@@ -185,6 +221,8 @@ async fn native_managed_claude_execution() {
     let relay_client = Arc::clone(&client);
     let relay_manager = Arc::clone(&manager);
     let relay_service = service.clone();
+    let remote_image_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed_image_read = Arc::clone(&remote_image_read);
     let relay = tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_millis(50));
         let mut tasks = tokio::task::JoinSet::new();
@@ -196,6 +234,14 @@ async fn native_managed_claude_execution() {
                 else {
                     unreachable!()
                 };
+                if let wire::Command::Invoke { invocation, .. } = &request.command
+                    && invocation.method == "fs/readFile"
+                    && invocation.params["path"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with("/input.png"))
+                {
+                    observed_image_read.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 let manager = Arc::clone(&relay_manager);
                 let client = Arc::clone(&relay_client);
                 let service = relay_service.clone();
@@ -226,14 +272,24 @@ async fn native_managed_claude_execution() {
         }
     });
     // The runtime worker reads the round the target keeper announces.
-    let marker = client
-        .managed_round(cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1)
-        .await
-        .unwrap();
+    let marker = client.managed_round(profile).await.unwrap();
     assert_eq!(marker.call_id, "call-1");
-    assert_eq!(marker.output_schema, Some(schema));
-    let status = tokio::process::Command::new("python3")
-        .arg("tools/execution_claude_managed_conformance.py")
+    assert_eq!(marker.output_schema, schema);
+    let mut command = tokio::process::Command::new("python3");
+    command.arg(if images {
+        "tools/execution_managed_image_conformance.py"
+    } else {
+        "tools/execution_claude_managed_conformance.py"
+    });
+    if images {
+        command
+            .arg("--native-cli")
+            .arg(input_path("provider_cli"))
+            .arg("--launcher")
+            .arg(input_path("adapter_launcher"));
+    }
+    let receipt = std::env::var("COWBOY_TEST_EXECUTION_RECEIPT").unwrap();
+    let status = command
         .arg("--descriptor")
         .arg(endpoint.descriptor())
         .arg("--runtime")
@@ -241,13 +297,48 @@ async fn native_managed_claude_execution() {
         .arg("--target")
         .arg(&binding.workspace.cwd)
         .arg("--receipt")
-        .arg(std::env::var("COWBOY_TEST_EXECUTION_RECEIPT").unwrap())
+        .arg(&receipt)
         .status()
         .await
         .unwrap();
     relay.abort();
     drop(endpoint);
-    assert!(status.success(), "managed Claude execution failed");
+    assert!(status.success(), "managed native execution failed");
+    if images {
+        use crate::managed_calls::media::{self, Delivery};
+        use base64::Engine as _;
+        assert!(
+            remote_image_read.load(std::sync::atomic::Ordering::Relaxed),
+            "native image input bypassed the execution Machine"
+        );
+        let report: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        let artifacts =
+            crate::artifacts::ArtifactStore::new(root.path().join("artifacts")).unwrap();
+        for update in report["native_images"].as_array().unwrap() {
+            for artifact in media::collect(update, &artifacts).unwrap() {
+                let bytes = std::fs::read(artifacts.path(&artifact.id).unwrap()).unwrap();
+                let action = Action::DeliverManagedArtifact {
+                    delivery: Box::new(Delivery {
+                        parent_session_id: "parent".into(),
+                        child_session_id: "child".into(),
+                        call_id: "call-1".into(),
+                        artifact,
+                        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    }),
+                };
+                let MachineResponse::ManagedArtifact { path } =
+                    manager.request(request(action.clone()), &workspaces).await
+                else {
+                    panic!("image delivery failed")
+                };
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                assert_eq!(
+                    manager.request(request(action), &workspaces).await,
+                    MachineResponse::ManagedArtifact { path }
+                );
+            }
+        }
+    }
     // The source repository is untouched by the reviewed turn.
     assert_eq!(
         std::fs::read_to_string(source.join("fixture.txt")).unwrap(),
@@ -267,4 +358,23 @@ async fn native_managed_claude_execution() {
         MachineResponse::Closed
     );
     assert!(!std::path::Path::new(&binding.workspace.cwd).exists());
+    if images {
+        let mut report: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        report["checks"].as_array_mut().unwrap().extend(
+            [
+                "native_input_read_through_execution_machine",
+                "verified_png_delivery_to_execution_machine",
+                "idempotent_artifact_delivery",
+                "source_unchanged",
+                "managed_child_cleanup",
+            ]
+            .into_iter()
+            .map(Value::from),
+        );
+        report["keeper_sha256"] = Value::from(format!(
+            "{:x}",
+            Sha256::digest(std::fs::read(input_path("keeper")).unwrap())
+        ));
+        std::fs::write(&receipt, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    }
 }

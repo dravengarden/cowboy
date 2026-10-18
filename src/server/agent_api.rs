@@ -297,7 +297,34 @@ impl Host for SessionHost<'_> {
                     .map_err(str::to_owned)
             }
             "calls.capabilities" => {
-                only_keys(&args, &[])?;
+                only_keys(&args, &["capability", "if_revision"])?;
+                if let Some(capability) = args.get("capability") {
+                    let capability = capability.as_str().ok_or("invalid_argument")?;
+                    if !cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
+                        .capabilities()
+                        .contains(&capability)
+                    {
+                        return Err("unsupported_capability".into());
+                    }
+                    let if_revision = args
+                        .get("if_revision")
+                        .map(|value| value.as_str().ok_or("invalid_argument"))
+                        .transpose()?;
+                    let value = super::managed_calls::image_capabilities(
+                        self.state,
+                        self.meta,
+                        self.ledger,
+                        capability,
+                        if_revision,
+                    )
+                    .await;
+                    actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta)
+                        .await?;
+                    return Ok(value);
+                }
+                if args.get("if_revision").is_some() {
+                    return Err("invalid_argument".into());
+                }
                 self.calls(Action::Capabilities {}).await
             }
             "calls.inspect" => {

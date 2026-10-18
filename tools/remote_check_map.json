@@ -611,6 +611,23 @@
         "src/managed_calls/snapshot.rs",
         "src/machine_cli/execution.rs"
       ]
+    },
+    "codex-image": {
+      "kind": "packaged",
+      "command": "just execution-image-conformance <codex input> <new receipt>",
+      "entry": "tools/execution_managed_image_conformance.py",
+      "paths": [
+        "plugins/codex/runtime/launch.mjs",
+        "plugins/codex/runtime/adapter.patch",
+        "src/worker_execution/tests/native_managed.rs",
+        "src/managed_calls/media.rs",
+        "src/managed_calls/snapshot.rs",
+        "src/managed_calls/snapshot/images.rs",
+        "src/machine_cli/execution.rs",
+        "src/server/managed_calls/runner.rs"
+      ],
+      "manifests": ["plugins/codex/provider.json"],
+      "native": ["codex", "exec-server", "node"]
     }
   }
 }

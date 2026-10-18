@@ -311,6 +311,21 @@ impl Manager {
                 }
                 None => Response::CallGateway,
             },
+            Action::DeliverManagedArtifact { delivery } => {
+                if self.service_id.is_none() || self.machine_id == "local" {
+                    return Response::Refused {
+                        reason: Refusal::InvalidRequest,
+                    };
+                }
+                match crate::managed_calls::snapshot::deliver(
+                    &self.managed_root(),
+                    &self.machine_id,
+                    &delivery,
+                ) {
+                    Ok(path) => Response::ManagedArtifact { path },
+                    Err(code) => Response::ManagedRoundRefused { code: code.into() },
+                }
+            }
             Action::PrepareManagedRound { round } => {
                 if self.service_id.is_none() || self.machine_id == "local" || !round.validate() {
                     return Response::Refused {

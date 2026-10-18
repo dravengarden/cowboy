@@ -227,6 +227,7 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
                 &record.placement.machine_id,
                 Some(parent.meta.machine_id.as_str()),
                 &record.provider,
+                record.purpose.profile(),
             )
             .await;
             match readiness.generation {
@@ -342,7 +343,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             .unwrap_or_else(|| record.placement.cwd.clone()),
         files: request.context.files.clone(),
         output_schema: output_schema(&request),
-        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        profile: record.purpose.profile(),
     };
     let prepared = match execution_action(
         state,
@@ -407,7 +408,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     {
         state
             .hub
-            .submit_managed_prompt(child, &record.call_id, request.instruction.clone());
+            .submit_managed_prompt(child, &record.call_id, request.prompt());
     }
     Step::Again
 }
@@ -492,7 +493,7 @@ fn local_binding(record: &Record, cwd: &str) -> Result<ExecutionBinding, &'stati
         machine_id: record.placement.machine_id.clone(),
         workspace_id: record.placement.workspace_id.clone(),
         cwd: cwd.to_owned(),
-        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        profile: record.purpose.profile(),
     };
     identity.validate().map_err(|_| "identity_mismatch")?;
     Ok(ExecutionBinding::from_record(
@@ -544,7 +545,7 @@ async fn remote_binding(
     };
     let expected = crate::execution_environment::ManagedBindingV1 {
         parent_session_id: record.placement.parent_session_id.clone(),
-        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        profile: record.purpose.profile(),
     };
     if binding.validate().is_err()
         || binding.managed.as_ref() != Some(&expected)
@@ -580,6 +581,7 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         &record.placement.machine_id,
         &runtime,
         &record.provider,
+        record.purpose.profile(),
     )
     .await;
     let generation = readiness
@@ -685,6 +687,81 @@ fn result_value(text: &str, stop_reason: &str, structured: Option<&Value>) -> Va
     })
 }
 
+async fn deliver_images(
+    state: &AppState,
+    store: &Store,
+    record: &Record,
+    updates: &[Value],
+) -> Result<Vec<Value>, &'static str> {
+    use crate::managed_calls::media::{self, Delivery};
+    use base64::Engine as _;
+    let artifacts = store.artifacts();
+    let mut images = Vec::new();
+    for update in updates {
+        for image in media::collect(update, &artifacts)? {
+            if !images.contains(&image) {
+                images.push(image);
+            }
+        }
+        if images.len() > media::MAX_IMAGES {
+            return Err("artifact_too_many");
+        }
+    }
+    if images.is_empty() {
+        if updates
+            .iter()
+            .any(|update| update["rawOutput"]["failure"]["type"] == "usageLimitExceeded")
+        {
+            return Err("image_quota_exceeded");
+        }
+        if updates.iter().any(|update| update["status"] == "failed") {
+            return Err("native_image_failed");
+        }
+        return Err("image_output_missing");
+    }
+    let mut delivered = Vec::new();
+    for image in images {
+        let path = artifacts.path(&image.id).ok_or("artifact_missing")?;
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|_| "artifact_missing")?;
+        let delivery = Delivery {
+            parent_session_id: record.placement.parent_session_id.clone(),
+            child_session_id: record.child_session_id.clone(),
+            call_id: record.call_id.clone(),
+            artifact: image.clone(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let path = loop {
+            match execution_action(
+                state,
+                &record.placement.machine_id,
+                execution::Action::DeliverManagedArtifact {
+                    delivery: Box::new(delivery.clone()),
+                },
+            )
+            .await
+            {
+                Ok(execution::Response::ManagedArtifact { path }) => break path,
+                Ok(execution::Response::ManagedRoundRefused { .. }) => {
+                    return Err("artifact_delivery_failed");
+                }
+                _ if tokio::time::Instant::now() < deadline => {
+                    // Retry only the exact digest delivery, never the native turn.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                _ => return Err("artifact_delivery_unavailable"),
+            }
+        };
+        let mut value = serde_json::to_value(image).expect("artifact serializes");
+        value["path"] = json!(path);
+        value["machine_id"] = json!(record.placement.machine_id);
+        delivered.push(value);
+    }
+    Ok(delivered)
+}
+
 async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     let child = record.child_session_id.as_str();
     let Some(cursor) = record.child_cursor else {
@@ -735,12 +812,35 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         let parsed = (wants_schema && code == "completed")
             .then(|| serde_json::from_str::<Value>(turn.final_text.trim()).ok())
             .flatten();
-        let result = result_value(&turn.final_text, stop_reason, parsed.as_ref());
+        let mut result = result_value(&turn.final_text, stop_reason, parsed.as_ref());
+        if record.purpose.is_image()
+            && let Some(failure) = turn
+                .generated_images
+                .iter()
+                .find_map(crate::managed_calls::media::quota_failure)
+        {
+            result["native_failure"] = failure;
+        }
+        let image_error = if record.purpose.is_image() && code == "completed" {
+            match deliver_images(state, store, record, &turn.generated_images).await {
+                Ok(artifacts) => {
+                    result["artifacts"] = json!(artifacts);
+                    None
+                }
+                Err(code) => Some(code),
+            }
+        } else {
+            None
+        };
         let stopping = record.state == State::Stopping;
         let cancel_requested = record.cancel_requested_at_ms.is_some();
         advance(state, store, record, move |next| {
             next.result = Some(result);
             match code {
+                "completed" if image_error.is_some() => {
+                    next.state = State::Failed;
+                    next.error = image_error.map(|code| CallError::new(code, None));
+                }
                 "completed" if wants_schema && parsed.is_none() => {
                     next.state = State::Failed;
                     next.error = Some(CallError::new("structured_output_invalid", None));
@@ -802,7 +902,7 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         // previous Controller stopped between the two. Same message id.
         state
             .hub
-            .submit_managed_prompt(child, &record.call_id, request.instruction);
+            .submit_managed_prompt(child, &record.call_id, request.prompt());
     }
     Step::Wait(POLL)
 }

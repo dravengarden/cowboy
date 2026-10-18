@@ -1,16 +1,24 @@
 diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
-index f8fc938..ece1d3c 100644
+index f8fc938..4c0ef27 100644
 --- a/src/CodexAcpClient.ts
 +++ b/src/CodexAcpClient.ts
 @@ -26,6 +26,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
  import type {JsonValue} from "./app-server/serde_json/JsonValue";
  import {ModelId} from "./ModelId";
  import {AgentMode} from "./AgentMode";
-+import {MANAGED_SANDBOX_POLICY, managedProfileActive, managedTurn} from "./CowboyManagedProfile";
++import {MANAGED_SANDBOX_POLICY, managedProfileActive, managedTurn, imageProfileActive, managedConfiguration} from "./CowboyManagedProfile";
  import path from "node:path";
  import {logger} from "./Logger";
  import {isAccountReadAuthFailureError, isAccountReadUnavailableError} from "./CodexThreadErrors";
-@@ -955,14 +956,22 @@ export class CodexAcpClient {
+@@ -799,6 +800,7 @@ export class CodexAcpClient {
+             modelProvider: this.getModelProvider(),
+             cwd: request.cwd,
+             ...(developerInstructions !== undefined && {developerInstructions}),
++            ...(imageProfileActive() && {baseInstructions: "Generate or edit the requested image with the native image tool. Use only the supplied references or this conversation's images. Do not perform unrelated work. Return a short caption when complete."}),
+         });
+ 
+         const codexModels = await this.fetchAvailableModels();
+@@ -955,14 +957,22 @@ export class CodexAcpClient {
              apiType: activeProvider.apiType,
              baseUrl: activeProvider.baseUrl,
          });
@@ -32,23 +40,28 @@ index f8fc938..ece1d3c 100644
 -        const configWithWorkspaceRoots = mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
 -        if (mcpServers.length === 0) {
 +        const configWithWorkspaceRoots = managed
-+            ? mergedConfig
++            ? {...mergedConfig, ...managedConfiguration()}
 +            : mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
 +        if (managed || mcpServers.length === 0) {
              return {config: configWithWorkspaceRoots, skippedMcpServers: []};
          }
  
-@@ -1162,6 +1171,9 @@ export class CodexAcpClient {
+@@ -1162,20 +1172,30 @@ export class CodexAcpClient {
      ): Promise<TurnCompletedNotification | null> {
          const input = buildPromptItems(request.prompt);
          const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
+-        await this.refreshSkills(cwd, additionalDirectories);
 +        // Resolve before any effect: a managed turn without its metadata, or
 +        // an ordinary turn carrying it, is refused instead of downgraded.
 +        const managed = managedTurn(request._meta);
-         await this.refreshSkills(cwd, additionalDirectories);
++        if (imageProfileActive()) {
++            await this.codexClient.requireImageGeneration();
++        } else {
++            await this.refreshSkills(cwd, additionalDirectories);
++        }
          if (shouldCancel?.()) {
              return null;
-@@ -1169,13 +1181,16 @@ export class CodexAcpClient {
+         }
          return await this.codexClient.runTurn({
              threadId: request.sessionId,
              input: input,
@@ -69,14 +82,14 @@ index f8fc938..ece1d3c 100644
      }
  
 diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
-index d3f90a8..fb68c46 100644
+index d3f90a8..ca5b7a8 100644
 --- a/src/CodexAcpServer.ts
 +++ b/src/CodexAcpServer.ts
 @@ -52,6 +52,7 @@ import type {RateLimitsMap} from "./RateLimitsMap";
  import {ModelId} from "./ModelId";
  import {normalizeSessionTitle} from "./SessionTitle";
  import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
-+import {refuseManagedReconfiguration} from "./CowboyManagedProfile";
++import {refuseManagedReconfiguration, managedProfileActive} from "./CowboyManagedProfile";
  import {
      COLLABORATION_MODE_CONFIG_ID,
      createCollaborationModeConfigOption,
@@ -98,6 +111,39 @@ index d3f90a8..fb68c46 100644
  
          await this.applySessionConfigOption(sessionState, params);
  
+@@ -3706,7 +3711,7 @@ export class CodexAcpServer {
+             // Never await — must not block the prompt response.
+             // Note: turn.items contains only agent output, not the user message —
+             // extract prompt text from params instead.
+-            if (sessionState.titleGen) {
++            if (sessionState.titleGen && !managedProfileActive()) {
+                 const promptText = params.prompt
+                     .filter((b): b is Extract<acp.ContentBlock, { type: "text" }> => b.type === "text")
+                     .map(b => b.text)
+diff --git a/src/CodexAppServerClient.ts b/src/CodexAppServerClient.ts
+index 9a1f95c..9dc38a2 100644
+--- a/src/CodexAppServerClient.ts
++++ b/src/CodexAppServerClient.ts
+@@ -307,6 +307,19 @@ export class CodexAppServerClient {
+         return await this.sendRequest({ method: "turn/start", params: params });
+     }
+ 
++    /** Inspect the exact running native CLI without making a model request. */
++    async requireImageGeneration(): Promise<void> {
++        const value = await this.connection.sendRequest("modelProvider/capabilities/read", {});
++        if (value === null || typeof value !== "object"
++            || (value as Record<string, unknown>)["imageGeneration"] !== true) {
++            throw new Error("native_image_generation_unavailable");
++        }
++        const {account} = await this.accountRead({refreshToken: false});
++        if (account?.type !== "chatgpt" || account.planType === "free") {
++            throw new Error("native_image_generation_requires_supported_chatgpt_account");
++        }
++    }
++
+     async runTurn(params: TurnStartParams, onTurnStarted?: (turnId: string) => void): Promise<TurnCompletedNotification> {
+         const capturedCompletions: Array<TurnCompletedNotification> = [];
+         const releaseCapture = this.captureTurnCompletions(params.threadId, (event) => {
 diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
 index afdb53d..f3bcc83 100644
 --- a/src/CodexCommands.ts
@@ -181,10 +227,10 @@ index 94fb23b..6c94c14 100644
      // vscode-jsonrpc handles the messages that it read one by one, after the read. The marker comes after the last
 diff --git a/src/CowboyManagedProfile.ts b/src/CowboyManagedProfile.ts
 new file mode 100644
-index 0000000..6703242
+index 0000000..b2e6281
 --- /dev/null
 +++ b/src/CowboyManagedProfile.ts
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,80 @@
 +// Cowboy-owned managed read-only profile. The Provider launcher enables it
 +// only for a signed managed launch; it never widens an ordinary session.
 +import type {JsonValue} from "./app-server/serde_json/JsonValue";
@@ -192,13 +238,37 @@ index 0000000..6703242
 +
 +export const MANAGED_PROFILE_ENV = "COWBOY_PRIVATE_MANAGED_PROFILE";
 +export const MANAGED_PROFILE = "read-only-v1";
++export const IMAGE_PROFILE = "image-v1";
 +export const MANAGED_CALL_META_KEY = "cowboy.dev/managedCall";
 +
 +/** Every turn of a managed child: never ask, never write, no network. */
 +export const MANAGED_SANDBOX_POLICY: SandboxPolicy = {type: "readOnly", networkAccess: false};
 +
 +export function managedProfileActive(): boolean {
-+    return process.env[MANAGED_PROFILE_ENV] === MANAGED_PROFILE;
++    return process.env[MANAGED_PROFILE_ENV] === MANAGED_PROFILE || imageProfileActive();
++}
++
++export function imageProfileActive(): boolean {
++    return process.env[MANAGED_PROFILE_ENV] === IMAGE_PROFILE;
++}
++
++/** Thread configuration must retain the signed launch restrictions. Native
++ * thread/start can otherwise re-resolve features from the user configuration. */
++export function managedConfiguration(): Record<string, JsonValue> {
++    if (!managedProfileActive()) return {};
++    const pairs: unknown = JSON.parse(process.env["COWBOY_PRIVATE_CODEX_ARGUMENTS"] ?? "[]");
++    if (!Array.isArray(pairs) || pairs.length % 2 !== 0) throw new Error("Invalid managed configuration");
++    const result: Record<string, JsonValue> = {};
++    for (let i = 0; i < pairs.length; i += 2) {
++        const pair: unknown = pairs[i + 1];
++        if (pairs[i] !== "-c" || typeof pair !== "string" || !pair.includes("=")) throw new Error("Invalid managed configuration");
++        const at = pair.indexOf("=");
++        const value = pair.slice(at + 1);
++        // Signed profiles use JSON literals or bare TOML string values only.
++        result[pair.slice(0, at)] = /^[a-z][a-z-]*$/.test(value) && !["true", "false"].includes(value)
++            ? value : JSON.parse(value) as JsonValue;
++    }
++    return result;
 +}
 +
 +export interface ManagedTurn {
@@ -559,6 +629,43 @@ index 0000000..c9b5588
 +        {...environment, COWBOY_PRIVATE_CODEX_EXECUTABLE: '/different/codex'},
 +    ]) expect(() => startCodexConnection('/exact/codex', changed)).toThrow('exact private bridge');
 +});
+diff --git a/src/__tests__/CowboyImageProfile.test.ts b/src/__tests__/CowboyImageProfile.test.ts
+new file mode 100644
+index 0000000..1f4a9ef
+--- /dev/null
++++ b/src/__tests__/CowboyImageProfile.test.ts
+@@ -0,0 +1,31 @@
++import {afterEach, describe, expect, it} from "vitest";
++import {imageProfileActive, managedProfileActive, managedTurn, refuseManagedReconfiguration,
++    MANAGED_PROFILE_ENV, MANAGED_SANDBOX_POLICY} from "../CowboyManagedProfile";
++import {ImageGenerationReporter} from "../tool-calls/reporters/ImageGenerationReporter";
++
++afterEach(() => { delete process.env[MANAGED_PROFILE_ENV]; });
++
++describe("Cowboy native image profile", () => {
++    it("retains the same mandatory metadata and read-only execution fence", () => {
++        process.env[MANAGED_PROFILE_ENV] = "image-v1";
++        expect(imageProfileActive()).toBe(true);
++        expect(managedProfileActive()).toBe(true);
++        expect(MANAGED_SANDBOX_POLICY).toEqual({type:"readOnly", networkAccess:false});
++        expect(() => managedTurn({})).toThrow();
++        expect(() => refuseManagedReconfiguration()).toThrow();
++        expect(managedTurn({"cowboy.dev/managedCall":{callId:"c1",inputRevision:"revision",outputSchema:null}})?.callId).toBe("c1");
++    });
++
++    it("identifies generated images without duplicating bytes or rewriting native history", () => {
++        const item = {type:"imageGeneration" as const,id:"i1",status:"completed",result:"iVBORw0KGgo=",
++            revisedPrompt:null,failure:null,savedPath:"/runtime/generated.png"};
++        process.env[MANAGED_PROFILE_ENV] = "image-v1";
++        const report = ImageGenerationReporter.completed(item);
++        expect(report.standard?.rawOutput).toMatchObject({cowboyGeneratedImage:true,status:"completed"});
++        expect(report.standard?.rawOutput).not.toHaveProperty("result");
++        expect(report.standard?.content).toHaveLength(1);
++        expect(item.result).toBe("iVBORw0KGgo=");
++        delete process.env[MANAGED_PROFILE_ENV];
++        expect(ImageGenerationReporter.completed(item).standard?.rawOutput).toHaveProperty("result",item.result);
++    });
++});
 diff --git a/src/__tests__/CowboyManagedProfile.test.ts b/src/__tests__/CowboyManagedProfile.test.ts
 new file mode 100644
 index 0000000..797fbf2
@@ -742,3 +849,36 @@ index 6c566e8..e72a5a1 100644
  
          expect(messages).toEqual([
              {jsonrpc: "2.0", id: 1, result: {}},
+diff --git a/src/tool-calls/reporters/ImageGenerationReporter.ts b/src/tool-calls/reporters/ImageGenerationReporter.ts
+index 544c907..fd66fb7 100644
+--- a/src/tool-calls/reporters/ImageGenerationReporter.ts
++++ b/src/tool-calls/reporters/ImageGenerationReporter.ts
+@@ -2,6 +2,7 @@ import type * as acp from "@agentclientprotocol/sdk";
+ import type {ThreadItem} from "../../app-server/v2";
+ import {textContent} from "../AcpToolCallRenderer";
+ import type {StandardToolCallFields, ToolFacts} from "../ToolFacts";
++import {imageProfileActive} from "../../CowboyManagedProfile";
+ 
+ type ImageGenerationItem = ThreadItem & {type: "imageGeneration"};
+ 
+@@ -54,11 +55,19 @@ export class ImageGenerationReporter {
+  * A client that is not AIR gets the image only when Codex sent its data, and the item fields in `rawOutput`.
+  */
+ function standardResult(item: ImageGenerationItem): StandardToolCallFields {
+-    const rawOutput: Record<string, string | null> = {
++    const rawOutput: Record<string, unknown> = {
+         status: item.status,
+         revisedPrompt: item.revisedPrompt,
+         result: item.result,
+     };
++    // The image already appears once in typed ACP content. Do not duplicate
++    // megabytes of base64 in the managed transcript's untyped rawOutput.
++    // Native Codex history is untouched and remains the continuation owner.
++    if (imageProfileActive()) {
++        delete rawOutput["result"];
++        rawOutput["cowboyGeneratedImage"] = true;
++        rawOutput["failure"] = item.failure;
++    }
+     if ("savedPath" in item) rawOutput["savedPath"] = item.savedPath ?? null;
+     return {
+         content: imageResult(item)

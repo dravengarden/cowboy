@@ -55,6 +55,9 @@ pub enum Action {
     PrepareManagedRound {
         round: Box<crate::managed_calls::protocol::ChildRound>,
     },
+    DeliverManagedArtifact {
+        delivery: Box<crate::managed_calls::media::Delivery>,
+    },
     /// Remove a terminal managed child's owned snapshot directory.
     CloseManagedChild {
         child_session_id: String,
@@ -77,6 +80,7 @@ impl Action {
             Self::InstallCallGateway { .. }
                 | Self::RevokeCallGateway { .. }
                 | Self::PrepareManagedRound { .. }
+                | Self::DeliverManagedArtifact { .. }
                 | Self::CloseManagedChild { .. }
                 | Self::PrepareManagedEnvironment { .. }
         )
@@ -96,6 +100,7 @@ impl std::fmt::Debug for Request {
             Action::InstallCallGateway { .. } => "ManagedCallGatewayInstall",
             Action::RevokeCallGateway { .. } => "ManagedCallGatewayRevoke",
             Action::PrepareManagedRound { .. } => "ManagedRoundPrepare",
+            Action::DeliverManagedArtifact { .. } => "ManagedArtifactDeliver",
             Action::CloseManagedChild { .. } => "ManagedChildClose",
             Action::PrepareManagedEnvironment { .. } => "ManagedEnvironmentPrepare",
         })
@@ -122,6 +127,9 @@ pub enum Response {
     ManagedRound {
         prepared: crate::managed_calls::protocol::ChildPrepared,
     },
+    ManagedArtifact {
+        path: String,
+    },
     /// A typed, content-free refusal for managed round preparation.
     ManagedRoundRefused {
         code: String,
@@ -141,6 +149,7 @@ impl std::fmt::Debug for Response {
             Self::Call { .. } => "ExecutionResult",
             Self::CallGateway => "ManagedCallGateway",
             Self::ManagedRound { .. } => "ManagedRoundPrepared",
+            Self::ManagedArtifact { .. } => "ManagedArtifactDelivered",
             Self::ManagedRoundRefused { .. } => "ManagedRoundRefused",
             Self::Refused { .. } => "ExecutionRefused",
         })

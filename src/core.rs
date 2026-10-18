@@ -349,6 +349,7 @@ pub struct ManagedTurn {
     pub prompted: bool,
     pub stop_reason: Option<String>,
     pub final_text: String,
+    pub generated_images: Vec<serde_json::Value>,
     pub status: Status,
 }
 
@@ -2662,12 +2663,16 @@ impl Hub {
                 }),
             stop_reason: None,
             final_text: String::new(),
+            generated_images: Vec::new(),
             status: s.meta.status,
         };
         let mut final_text = String::new();
         for entry in s.log.iter().filter(|entry| entry.seq > after_seq) {
             match &entry.event {
                 Event::Update { update } => {
+                    if crate::managed_calls::media::generated_update(update) {
+                        turn.generated_images.push(update.clone());
+                    }
                     match update
                         .get("sessionUpdate")
                         .and_then(serde_json::Value::as_str)

@@ -5,6 +5,11 @@ and "Acceptance" for what has been proven in production.
 
 ## Implementation
 
+Image generation/editing extends this lifecycle with the separate signed
+`image_v1` profile and verified artifacts; see
+[managed native capabilities](managed-native-capabilities.md). Review and
+analysis retain their existing snapshot and read-only contracts.
+
 - **Grant.** The Controller derives `Authority` from the parent's live worker
   (connected owner, worker epoch, exact launch, owner, Provider generation and
   execution binding) and issues an opaque grant for that incarnation. It installs

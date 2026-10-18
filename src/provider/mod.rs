@@ -1213,6 +1213,7 @@ mod tests {
         for capability in [
             cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1,
             cowboy_provider_sdk::RuntimeCapability::ProviderManagedProfilesV1,
+            cowboy_provider_sdk::RuntimeCapability::ProviderManagedImageV1,
         ] {
             package
                 .manifest

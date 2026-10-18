@@ -415,6 +415,15 @@ writer. It does not evaluate code or promise atomicity across domains.
 | `preferences.update` | `{scope,expected_revision,changes}`; typed partial update of the current user's DB preferences, with atomic revision and receipt                |
 | `control.apply` | `{name,input}` from the on-demand catalog; durable admission and compact original-operation receipts |
 
+### Native image calls
+
+Image tasks use the same Calls lifecycle: discover
+`calls.capabilities({capability:"image.generate"})`, then use `calls.start` with
+`capability:"image.generate"` or `"image.edit"`. Reuse the capability revision;
+load no unrelated catalog. Results return verified artifact paths on the
+execution Machine. See [native capabilities](managed-native-capabilities.md) for
+input files, continuation, limits and rollout requirements.
+
 ### User preferences and configuration coverage
 
 About's Usage Provider order and Machine order are account-owned DB state,

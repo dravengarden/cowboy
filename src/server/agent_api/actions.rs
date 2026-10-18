@@ -24,6 +24,10 @@ struct CallInput {
     #[serde(default)]
     purpose: Option<String>,
     #[serde(default)]
+    capability: Option<String>,
+    #[serde(default)]
+    child_session_id: Option<String>,
+    #[serde(default)]
     files: Vec<String>,
     #[serde(default)]
     root: Option<String>,
@@ -42,8 +46,13 @@ fn auto() -> String {
 fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'static str> {
     let input: CallInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
     let review = action == "review.start";
-    if (review && (input.instruction.is_some() || input.purpose.is_some()))
+    if (review
+        && (input.instruction.is_some()
+            || input.purpose.is_some()
+            || input.capability.is_some()
+            || input.child_session_id.is_some()))
         || (!review && (input.focus.is_some() || input.design))
+        || (input.capability.is_some() && input.purpose.is_some())
     {
         return Err("invalid_argument");
     }
@@ -52,6 +61,13 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
             "design_review"
         } else {
             "review"
+        }
+        .to_owned()
+    } else if let Some(capability) = input.capability {
+        match capability.as_str() {
+            "image.generate" => "image_generate",
+            "image.edit" => "image_edit",
+            _ => return Err("unsupported_capability"),
         }
         .to_owned()
     } else {
@@ -69,11 +85,15 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
     if let Some(reason) = input.reason {
         labels.insert("selection_reason", reason);
     }
+    let conversation = match input.child_session_id {
+        Some(child) => json!({"mode":"continue","child_session_id":child}),
+        None => json!({"mode":"fresh"}),
+    };
     let request = Request::parse(
         serde_json::to_string(&json!({
             "schema":1,"request_id":operation,"purpose":purpose,"instruction":instruction,
             "context":{"scope":"current-worktree","files":input.files,"root":input.root},
-            "access":"read-only","conversation":{"mode":"fresh"},"labels":labels
+            "access":"read-only","conversation":conversation,"labels":labels
         }))
         .map_err(|_| "invalid_argument")?
         .as_bytes(),

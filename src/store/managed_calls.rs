@@ -291,9 +291,68 @@ mod tests {
             selection: None,
         };
         let (overlapping, overlapping_record) = assert_admission(&store, &first, &request).await;
+        assert_image_retention(&store, &first, &request).await;
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    async fn assert_image_retention(store: &Store, template: &Record, input: &Request) {
+        let parent = serde_json::from_value(serde_json::json!({"id":"image-parent","provider":"claude-code","machine_id":"hawk","cwd":"/workspace","title":"Images","origin":"api","status":"running"})).unwrap();
+        store.insert_session(&parent).await.unwrap();
+        let mut request = input.clone();
+        request.request_id = "image-retention".into();
+        request.purpose = crate::managed_calls::Purpose::ImageGenerate;
+        let mut record = template.clone();
+        record.call_id = "image-call".into();
+        record.child_session_id = "image-child".into();
+        record.placement.parent_session_id = "image-parent".into();
+        record.request_id = request.request_id.clone();
+        record.request_digest = request.digest();
+        record.purpose = request.purpose;
+        store.admit_managed_call(&record, &request).await.unwrap();
+        for state in [State::Starting, State::Running] {
+            let mut next = record.clone();
+            next.state = state;
+            next.revision += 1;
+            next.input_revision = Some(crate::managed_calls::canonical_digest(&serde_json::json!(
+                "image-input"
+            )));
+            assert!(store.advance_managed_call(&record, &next).await.unwrap());
+            record = next;
+        }
+        let url = store
+            .artifacts()
+            .put_bytes(b"retained-image-fixture", "image/png")
+            .unwrap();
+        let path = store
+            .artifact_path(url.strip_prefix("/api/artifacts/").unwrap())
+            .unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(48))
+            .unwrap();
+        let mut completed = record.clone();
+        completed.state = State::Completed;
+        completed.revision += 1;
+        completed.result = Some(serde_json::json!({"artifacts":[{"url":url}]}));
+        assert!(
+            store
+                .advance_managed_call(&record, &completed)
+                .await
+                .unwrap()
+        );
+        // No transcript event references these bytes: the retained receipt alone
+        // keeps them alive, including after UI dismissal.
+        store
+            .dismiss_managed_call("image-parent", "image-call", true)
+            .await
+            .unwrap();
+        assert_eq!(store.purge_deleted(0).await.unwrap(), 0);
+        assert!(path.is_file());
+        store.delete_session("image-parent").await.unwrap();
+        assert_eq!(store.purge_deleted(0).await.unwrap(), 1);
+        assert!(!path.exists());
     }
 
     async fn assert_admission(

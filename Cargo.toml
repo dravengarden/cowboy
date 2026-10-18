@@ -73,6 +73,7 @@ opentelemetry-proto = { version = "=0.32.0", default-features = false, features 
 prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
+png = "0.18"
 sha2 = "0.10"
 argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
 password-hash = { version = "0.5", default-features = false, features = ["alloc"] }
@@ -102,8 +103,8 @@ p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 ring = "0.17"
 rand = "0.8"
 rpassword = "=7.5.4"
-cowboy-provider-sdk = { version = "=3.1.13", path = "components/provider-sdk" }
-cowboy-plugin-sdk = { version = "=1.12.0", path = "components/plugin-sdk" }
+cowboy-provider-sdk = { version = "=3.1.14", path = "components/provider-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.1", path = "components/plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"

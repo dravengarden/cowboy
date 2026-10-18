@@ -82,10 +82,15 @@ impl ArtifactStore {
     /// Replace embedded ACP image data with a stable HTTP reference. Live ACP
     /// traffic remains inline; this runs only on the copy written to history.
     pub fn externalize_images(&self, value: &mut serde_json::Value) -> Result<()> {
+        self.externalize(value, crate::managed_calls::media::generated_update(value))
+    }
+
+    fn externalize(&self, value: &mut serde_json::Value, force: bool) -> Result<()> {
+        let force = force || crate::managed_calls::media::generated_update(value);
         match value {
             serde_json::Value::Array(values) => {
                 for value in values {
-                    self.externalize_images(value)?;
+                    self.externalize(value, force)?;
                 }
             }
             serde_json::Value::Object(object) => {
@@ -96,18 +101,18 @@ impl ArtifactStore {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("image/png")
                         .to_owned();
-                    externalize_object(self, object, &mime)?;
+                    externalize_object(self, object, &mime, force)?;
                     if let Some(serde_json::Value::Object(source)) = object.get_mut("source") {
                         let source_mime = source
                             .get("media_type")
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or(&mime)
                             .to_owned();
-                        externalize_object(self, source, &source_mime)?;
+                        externalize_object(self, source, &source_mime, force)?;
                     }
                 }
                 for child in object.values_mut() {
-                    self.externalize_images(child)?;
+                    self.externalize(child, force)?;
                 }
             }
             _ => {}
@@ -149,7 +154,13 @@ impl ArtifactStore {
                 return Ok(None);
             }
         };
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        self.put_bytes(&bytes, mime).map(Some)
+    }
+
+    /// Explicit binary deliveries also persist small images. Callers validate
+    /// the format and limits before publishing a managed artifact.
+    pub(crate) fn put_bytes(&self, bytes: &[u8], mime: &str) -> Result<String> {
+        let hash = format!("{:x}", Sha256::digest(bytes));
         let extension = extension_for_mime(mime);
         let name = format!("{hash}.{extension}");
         let path = self.root.join(&name);
@@ -167,7 +178,7 @@ impl ArtifactStore {
             ));
             let mut file = std::fs::File::create(&temp)
                 .with_context(|| format!("creating artifact {}", temp.display()))?;
-            file.write_all(&bytes).context("writing artifact")?;
+            file.write_all(bytes).context("writing artifact")?;
             file.sync_all().context("syncing artifact")?;
             match std::fs::rename(&temp, &path) {
                 Ok(()) => {}
@@ -178,7 +189,7 @@ impl ArtifactStore {
                 Err(error) => return Err(error).context("publishing artifact"),
             }
         }
-        Ok(Some(format!("/api/artifacts/{name}")))
+        Ok(format!("/api/artifacts/{name}"))
     }
 
     pub fn path(&self, name: &str) -> Option<PathBuf> {
@@ -258,11 +269,22 @@ fn externalize_object(
     store: &ArtifactStore,
     object: &mut serde_json::Map<String, serde_json::Value>,
     mime: &str,
+    force: bool,
 ) -> Result<()> {
     let Some(data) = object.get("data").and_then(serde_json::Value::as_str) else {
         return resolve_echo_reference(store, object, mime);
     };
-    if let Some(url) = store.put(data, mime)? {
+    let url = if force {
+        anyhow::ensure!(
+            data.len() <= crate::managed_calls::media::MAX_IMAGE_BYTES.div_ceil(3) * 4,
+            "generated image exceeds the artifact limit"
+        );
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+        Some(store.put_bytes(&bytes, mime)?)
+    } else {
+        store.put(data, mime)?
+    };
+    if let Some(url) = url {
         object.remove("data");
         object.insert("url".to_owned(), serde_json::Value::String(url));
     }

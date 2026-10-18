@@ -84,7 +84,11 @@ const cowboy = Object.freeze({
   control: namespace("control", {
     list: (domain) => domain === undefined ? {} : ({ domain }),
     describe: (name) => ({ name }),
-    read: (name, input, selection) => ({ name, input: input ?? {}, ...(selection === undefined ? {} : { selection }) }),
+    read: (name, input, selection) => ({
+      name,
+      input: input ?? {},
+      ...(selection === undefined ? {} : { selection }),
+    }),
   }),
   api: namespace("api", { help: (topic) => ({ topic }) }),
   preferences: namespace("preferences", {
@@ -104,7 +108,7 @@ const cowboy = Object.freeze({
   }),
   calls: namespace("calls", {
     list: query,
-    capabilities: none,
+    capabilities: query,
     inspect: callId,
     wait: (call_id, timeout_ms) => ({ call_id, timeout_ms }),
     result: (call_id, q) => ({ ...q, call_id }),

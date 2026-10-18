@@ -148,6 +148,13 @@ profile names managed-call purposes and agent-facing guidance; grants,
 snapshots, the read-only sandbox and placement stay core. See
 [session extension Plugins](session-extension-plugins.md).
 
+Native cross-Provider capabilities MUST be declared by a signed Provider profile
+and discovered on demand through the existing MCP tools. Native runtimes own
+their tools, authentication and model context; Cowboy owns scoped scheduling
+and artifact transport. A media profile MUST retain read-only code execution,
+avoid copying unrelated context, and require verified artifact delivery before
+reporting success. See [managed native capabilities](managed-native-capabilities.md).
+
 Telemetry integrations use the data-only `telemetry_backend` kind. Payload
 schema 2 requires Plugin SDK 1.8+ and Machine protocol 9+ for OTLP/HTTP protobuf
 logs, metrics and traces. Retained schema 1 requires SDK 1.7+/protocol 8+ for

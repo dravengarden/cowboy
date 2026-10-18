@@ -485,12 +485,31 @@ pub(super) async fn child_runtime(
     execution_machine: &str,
     parent_runtime: Option<&str>,
     provider: &str,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
 ) -> (String, ProviderReadiness) {
-    let local = provider_readiness(state, execution_machine, provider).await;
+    if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
+        && state
+            .machine_control
+            .connection_protocol(execution_machine)
+            .is_none_or(|(_, version)| {
+                version < crate::machine_protocol::MANAGED_IMAGE_PROTOCOL_VERSION
+            })
+    {
+        return (
+            execution_machine.into(),
+            ProviderReadiness {
+                available: false,
+                reason: Some("unsupported_capability"),
+                generation: None,
+                structured_output: false,
+            },
+        );
+    }
+    let local = provider_readiness(state, execution_machine, provider, profile).await;
     if local.available
         || !matches!(
             local.reason,
-            Some("runtime_policy" | "provider_unavailable")
+            Some("runtime_policy" | "provider_unavailable" | "unsupported_capability")
         )
     {
         return (execution_machine.to_owned(), local);
@@ -514,7 +533,8 @@ pub(super) async fn child_runtime(
         if !state.supervisor.runtime_allowed(provider, &runtime) {
             continue;
         }
-        let readiness = runtime_readiness(state, execution_machine, &runtime, provider).await;
+        let readiness =
+            runtime_readiness(state, execution_machine, &runtime, provider, profile).await;
         if readiness.available {
             return (runtime, readiness);
         }
@@ -539,8 +559,9 @@ pub(super) async fn runtime_readiness(
     execution_machine: &str,
     runtime: &str,
     provider: &str,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
 ) -> ProviderReadiness {
-    let readiness = provider_readiness(state, runtime, provider).await;
+    let readiness = provider_readiness(state, runtime, provider, profile).await;
     if runtime == execution_machine || !readiness.available {
         return readiness;
     }
@@ -589,6 +610,7 @@ pub(super) async fn provider_readiness(
     state: &AppState,
     machine: &str,
     provider: &str,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
 ) -> ProviderReadiness {
     let unavailable = |reason| ProviderReadiness {
         available: false,
@@ -610,6 +632,16 @@ pub(super) async fn provider_readiness(
     };
     if !state.runtime_router.connected(machine) {
         return unavailable("machine_unavailable");
+    }
+    if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
+        && state
+            .machine_control
+            .connection_protocol(machine)
+            .is_none_or(|(_, version)| {
+                version < crate::machine_protocol::MANAGED_IMAGE_PROTOCOL_VERSION
+            })
+    {
+        return unavailable("unsupported_capability");
     }
     // Host policy may pin a Provider's runtime to other Machines. A managed
     // child runs on the parent's execution Machine, never elsewhere.
@@ -641,7 +673,7 @@ pub(super) async fn provider_readiness(
             package
                 .manifest
                 .runtime
-                .launch_arguments(Some(cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1))
+                .launch_arguments(Some(profile))
                 .is_ok()
         });
     if !supports {
@@ -658,8 +690,69 @@ pub(super) async fn provider_readiness(
         generation: Some(generation),
         // The managed read-only profile contract includes the native turn
         // constraint; an adapter declaring it must apply the schema.
-        structured_output: true,
+        structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
     }
+}
+
+/// On-demand native capability discovery. No reviewer prompt, preset catalog,
+/// quota refresh or external Provider request is needed to ask for an image.
+pub(in crate::server) async fn image_capabilities(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    capability: &str,
+    if_revision: Option<&str>,
+) -> Value {
+    let profile = cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1;
+    if !profile.capabilities().contains(&capability) {
+        return error("unsupported_capability", "not_submitted");
+    }
+    let policy = agent_tools::effective(state, meta).calls;
+    let mut providers = Vec::new();
+    for provider in agent_tools::CALL_TARGETS {
+        let target = policy
+            .targets
+            .iter()
+            .find(|target| target.agent == provider);
+        let (runtime, readiness) = child_runtime(
+            state,
+            &ledger.placement().machine_id,
+            Some(meta.machine_id.as_str()),
+            provider,
+            profile,
+        )
+        .await;
+        let reason = if agent_tools::same_family(provider, &meta.provider) {
+            Some("same_agent")
+        } else if !policy.enabled {
+            Some("calls_disabled")
+        } else if target.is_none() {
+            Some("policy_denied")
+        } else {
+            readiness.reason
+        };
+        providers.push(
+            json!({"id":provider,"available":reason.is_none() && readiness.available,
+            "reason":reason,"runtime_machine_id":runtime,
+            "version":readiness.generation.as_ref().map(|g| &g.version),
+            "generation":readiness.generation.as_ref().map(|g| &g.digest),
+            "preset":target.and_then(|t| t.preset.as_ref())}),
+        );
+    }
+    let mut value = json!({"capability":capability,"providers":providers,
+        "action":"calls.start","receipt_domain":"calls",
+        "input":{"instruction":"required","files":"up to 4 relative PNG/JPEG/WebP paths; only these are copied",
+            "child_session_id":"optional: continue this parent's image conversation; edit needs files or continuation",
+            "provider":"auto or an available provider","preset":"optional signed preset"},
+        "output":"calls.result: verified artifacts with path on execution machine; no inline bytes",
+        "limits":{"max_images":crate::managed_calls::media::MAX_IMAGES,"max_image_bytes":crate::managed_calls::media::MAX_IMAGE_BYTES},
+        "availability":"installed signed capability; native availability and quota are checked by the Provider at execution"});
+    let revision = crate::managed_calls::canonical_digest(&value);
+    if if_revision == Some(revision.as_str()) {
+        return json!({"revision":revision,"unchanged":true});
+    }
+    value["revision"] = json!(revision);
+    value
 }
 
 async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger: &Ledger) -> Value {
@@ -676,6 +769,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             &placement.machine_id,
             Some(meta.machine_id.as_str()),
             provider,
+            cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
         )
         .await;
         // The session's policy decides first; readiness explains the rest.
@@ -689,10 +783,28 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             readiness.reason
         };
         let available = reason.is_none() && readiness.available;
+        let native_capabilities: Vec<_> = readiness
+            .generation
+            .as_ref()
+            .and_then(|g| {
+                state
+                    .provider_catalog
+                    .package(provider, &g.version, &g.digest)
+            })
+            .map(|p| {
+                p.manifest
+                    .runtime
+                    .managed_profiles
+                    .keys()
+                    .flat_map(|profile| profile.capabilities().iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default();
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
             "available": available,
+            "native_capabilities":native_capabilities,
             "runtime_machine_id": available.then_some(runtime),
             "reason": reason,
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
@@ -864,6 +976,7 @@ async fn start(
             &ledger.placement().machine_id,
             Some(ledger.runtime_machine_id()),
             &target.agent,
+            request.purpose.profile(),
         )
         .await;
         if readiness.available {

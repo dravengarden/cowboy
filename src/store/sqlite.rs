@@ -5338,7 +5338,10 @@ impl SqliteStorage {
              FROM events \
              CROSS JOIN json_tree(events.payload) AS tree \
              WHERE instr(events.payload, '/api/artifacts/') > 0 \
-             AND tree.type = 'text' AND tree.value LIKE '/api/artifacts/%'",
+             AND tree.type = 'text' AND tree.value LIKE '/api/artifacts/%' \
+             UNION SELECT json_extract(image.value, '$.url') AS reference \
+             FROM managed_agent_calls CROSS JOIN json_each(document, '$.result.artifacts') AS image \
+             WHERE json_type(image.value, '$.url') = 'text'",
         )
         .fetch(&self.pool);
         while let Some(row) = rows

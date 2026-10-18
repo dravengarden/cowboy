@@ -75,6 +75,7 @@ function userCodexConfig() {
 // A signed managed launch profile selects this mode explicitly. It never
 // inherits ordinary full-access arguments and never starts Matrix memory.
 export const MANAGED_PROFILE_FLAG = "--cowboy-managed-profile=read-only-v1";
+export const IMAGE_PROFILE_FLAG = "--cowboy-managed-profile=image-v1";
 
 // ExecPolicy `allow` rules run matching commands outside the sandbox, so a
 // read-only child refuses to start while any such rule is configured.
@@ -116,7 +117,7 @@ export function managedMcpOverrides(listing) {
   return overrides;
 }
 
-async function managedMain(args) {
+async function managedMain(args, profile) {
   const { configuration, arguments: forwarded } = splitConfigurationArguments(
     args,
   );
@@ -145,9 +146,18 @@ async function managedMain(args) {
   }
   configuration.push(...managedMcpOverrides(listing.stdout));
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
-  process.env.COWBOY_PRIVATE_MANAGED_PROFILE = "read-only-v1";
-  delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
-  delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
+  process.env.COWBOY_PRIVATE_MANAGED_PROFILE = profile;
+  if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
+    // Use the same native execution binding, without the ordinary session's
+    // memory / Cowboy MCP enrollment. The keeper still enforces read-only.
+    process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE = codex;
+    process.env.COWBOY_PRIVATE_CODEX_BRIDGE = fileURLToPath(
+      new URL("./cowboy-execution.mjs", import.meta.url),
+    );
+  } else {
+    delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
+    delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
+  }
   const upstream = fileURLToPath(
     new URL(
       "./node_modules/@agentclientprotocol/codex-acp/dist/index.js",
@@ -159,8 +169,11 @@ async function managedMain(args) {
 }
 
 export async function main(args) {
-  if (args[0] === MANAGED_PROFILE_FLAG) {
-    await managedMain(args.slice(1));
+  if (args[0] === MANAGED_PROFILE_FLAG || args[0] === IMAGE_PROFILE_FLAG) {
+    await managedMain(
+      args.slice(1),
+      args[0] === IMAGE_PROFILE_FLAG ? "image-v1" : "read-only-v1",
+    );
     return;
   }
   // An inherited marker must never put an ordinary session into managed mode.

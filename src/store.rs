@@ -6216,7 +6216,11 @@ impl PostgresStorage {
              CROSS JOIN LATERAL jsonb_path_query( \
                  payload, \
                  'strict $.** ? (@.type() == \"string\" && @ starts with \"/api/artifacts/\")'::jsonpath \
-             ) AS value",
+             ) AS value \
+             UNION SELECT value #>> ARRAY[]::text[] AS reference \
+             FROM managed_agent_calls \
+             CROSS JOIN LATERAL jsonb_path_query(document::jsonb, 'lax $.result.artifacts[*].url') AS value \
+             WHERE jsonb_typeof(value) = 'string'",
         )
         .fetch(&self.pool);
         while let Some(row) = rows

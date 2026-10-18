@@ -5,7 +5,9 @@ mod coordinator;
 mod runner;
 mod selection;
 
-pub(super) use coordinator::{Coordinator, delete_child, dispatch_calls, handle, parent_deleted};
+pub(super) use coordinator::{
+    Coordinator, delete_child, dispatch_calls, handle, image_capabilities, parent_deleted,
+};
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use axum::{

@@ -103,7 +103,8 @@ impl Ledger {
                     previous.state.terminal()
                         && previous.provider == provider
                         && previous.placement.same_location(&self.placement)
-                        && previous.access == request.access,
+                        && previous.access == request.access
+                        && previous.purpose.profile() == request.purpose.profile(),
                     "managed child unavailable or incompatible"
                 );
                 child_session_id

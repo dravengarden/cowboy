@@ -20,6 +20,7 @@ pub mod snapshot;
 #[cfg(feature = "full")]
 pub mod authority;
 pub mod lifecycle;
+pub mod media;
 pub mod protocol;
 #[cfg(feature = "full")]
 pub mod service;
@@ -68,6 +69,22 @@ pub enum Purpose {
     /// A review of design artifacts (specs, plans, records) rather than code.
     DesignReview,
     Analysis,
+    ImageGenerate,
+    ImageEdit,
+}
+
+impl Purpose {
+    pub fn profile(self) -> cowboy_provider_sdk::ManagedRuntimeProfile {
+        use cowboy_provider_sdk::ManagedRuntimeProfile;
+        match self {
+            Self::ImageGenerate | Self::ImageEdit => ManagedRuntimeProfile::ImageV1,
+            _ => ManagedRuntimeProfile::ReadOnlyV1,
+        }
+    }
+
+    pub fn is_image(self) -> bool {
+        matches!(self, Self::ImageGenerate | Self::ImageEdit)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,7 +305,34 @@ impl Request {
         if !self.output.validate() {
             return Err(InputError::InvalidOutput);
         }
+        if self.purpose.is_image()
+            && (!self.output.is_text()
+                || self.context.files.len() > media::MAX_IMAGES
+                || (self.purpose == Purpose::ImageEdit
+                    && self.context.files.is_empty()
+                    && matches!(self.conversation, Conversation::Fresh {})))
+        {
+            return Err(InputError::InvalidContext);
+        }
         Ok(())
+    }
+
+    /// The explicit task and file names only; never copy the parent's history
+    /// or all project guidance into a native image turn.
+    pub fn prompt(&self) -> String {
+        if !self.purpose.is_image() {
+            return self.instruction.clone();
+        }
+        format!(
+            "Use native image generation to {} the requested image. Return the generated image through the native tool, with a brief final caption. Do not substitute code, an SVG, a URL or a claim of success. Input image paths relative to this workspace: {}.\n{}",
+            if self.purpose == Purpose::ImageEdit {
+                "edit"
+            } else {
+                "generate"
+            },
+            serde_json::to_string(&self.context.files).expect("paths serialize"),
+            self.instruction,
+        )
     }
 
     /// Canonical semantic digest. This covers request bytes only; admission must
@@ -337,6 +381,34 @@ mod tests {
 
     fn parse(value: &Value) -> Result<Request, InputError> {
         Request::parse(&serde_json::to_vec(value).unwrap())
+    }
+
+    #[test]
+    fn image_calls_are_explicit_bounded_and_keep_review_constraints() {
+        let mut value = example();
+        value["purpose"] = json!("image_generate");
+        value["context"]["files"] = json!([]);
+        let image = parse(&value).unwrap();
+        assert!(image.purpose.is_image());
+        assert_eq!(
+            image.purpose.profile(),
+            cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
+        );
+        value["purpose"] = json!("image_edit");
+        assert!(parse(&value).is_err());
+        value["conversation"] = json!({"mode":"continue","child_session_id":"image-child"});
+        assert!(parse(&value).is_ok());
+        value["output"] = json!({"format":"json_schema","schema":{"type":"object"}});
+        assert!(parse(&value).is_err());
+        value["output"] = json!({"format":"text"});
+        value["context"]["files"] = json!(["1.png", "2.png", "3.png", "4.png", "5.png"]);
+        assert!(parse(&value).is_err());
+        let review = parse(&example()).unwrap();
+        assert_eq!(review.prompt(), review.instruction);
+        assert_eq!(
+            review.purpose.profile(),
+            cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1
+        );
     }
 
     #[test]

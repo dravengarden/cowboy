@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "codex-deepseek",
-  "version": "3.1.34",
-  "component_release": "3.53.0",
+  "version": "3.1.35",
+  "component_release": "3.56.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.12.0"
+      "version": "1.12.1"
     },
     {
       "id": "cowboy.plugin-api",
@@ -21,11 +21,11 @@
     },
     {
       "id": "cowboy.provider-sdk",
-      "version": "3.1.13"
+      "version": "3.1.14"
     },
     {
       "id": "cowboy.provider-ui",
-      "version": "3.1.19"
+      "version": "3.1.20"
     },
     {
       "id": "cowboy.provider-runtime",
