@@ -102,12 +102,14 @@
          @"editor.textContent=Array.from({length:80},(_,i)=>'Editable line '+i).join('\\n');"
          @"const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);"
          @"const selection=getSelection();selection.removeAllRanges();selection.addRange(range);"
-         @"const offsets=[];let recording=true;const sample=()=>{offsets.push(scrollY);if(recording)requestAnimationFrame(sample)};sample();"
+         @"const offsets=[];let recording=true;const sample=()=>{offsets.push(Math.max(Math.abs(scrollY),Math.abs(visualViewport.offsetTop)));if(recording)requestAnimationFrame(sample)};sample();"
          @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready'});"
          @"await new Promise(resolve=>setTimeout(resolve,1200));recording=false;"
-         @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionNode:selection.anchorNode===editor.firstChild,selectionOffset:selection.anchorOffset,length:editor.textContent.length};"
+         @"const caret=document.createRange();caret.selectNodeContents(editor);caret.setEnd(selection.anchorNode,selection.anchorOffset);"
+         @"const selectionKept=selection.isCollapsed&&editor.contains(selection.anchorNode)&&caret.toString().length===editor.textContent.length;"
+         @"const keyboardGeometry={initialHeight,height:innerHeight,frames:offsets.length,offsets:[...new Set(offsets)],flow:flow.scrollTop,focused:document.activeElement===editor,selectionKept};"
          @"check('keyboard reveals the caret in the child without panning the root: '+JSON.stringify(keyboardGeometry),"
-         @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selection.anchorNode===editor.firstChild&&selection.anchorOffset===editor.textContent.length);"
+         @"innerHeight<initialHeight-100&&offsets.length>10&&offsets.every(y=>Math.abs(y)<1)&&flow.scrollTop>0&&document.activeElement===editor&&selectionKept);"
          @"window.webkit.messageHandlers.conformance.postMessage({ok:true,tests});"
          @"}catch(error){window.webkit.messageHandlers.conformance.postMessage({ok:false,tests,error:String(error)})}})();";
     // Read after the animation can advance, not synchronously at its origin.
@@ -146,8 +148,12 @@
                 self.rootMaxDrift = MAX(self.rootMaxDrift, drift);
                 self.rootSamples++;
             }];
-        [self.webView evaluateJavaScript:@"document.getElementById('editor').focus()"
-                      completionHandler:nil];
+        // Leave the script-message callback before initiating native focus,
+        // matching the simulator bridge's fresh main-queue evaluation.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.webView evaluateJavaScript:@"document.getElementById('editor').focus()"
+                          completionHandler:nil];
+        });
         return;
     }
     [self.rootSampler invalidate];
