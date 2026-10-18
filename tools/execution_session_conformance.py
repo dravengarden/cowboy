@@ -648,6 +648,57 @@ def main():
                                "same_recovery_receipt_never_replaces_twice_or_replays_commands",
                                "observing_recovery_receipt_does_not_fence_healthy_native_tools",
                                "recovered_environment_executes_native_target_tools"])
+            if inputs.get("execution_boot_recovery"):
+                for cold in (True, False):
+                    wait(lambda: info()["status"] == "running", "idle before host reboot fixture")
+                    old = info()["execution_binding"]
+                    was_paused = info().get("paused")
+                    native_id = info().get("agent_session_id")
+                    expected = first_effect * ((4 if inputs.get("execution_recovery") else 3) + int(not cold))
+                    if cold:
+                        require(call("POST", f"/api/sessions/{session}/hibernate", {})[0] in (200, 202, 204), "cold fixture hibernation refused")
+                        wait(lambda: info()["status"] == "exited", "cold worker departure")
+                    contracts = list((root / "target/execution").glob(f"*/{session}/contract.json"))
+                    require(len(contracts) == 1, "fixture keeper contract ambiguous")
+                    directory = contracts[0].parent
+                    marker = directory / "host-boot-id"
+                    require(marker.is_file(), "keeper launch omitted its host boot identity")
+                    marker.write_text("00000000-0000-0000-0000-000000000000")
+                    # Only the disposable keeper with this exact contract is lost.
+                    # The PID namespace contains no production process or credential.
+                    owners = []
+                    for process in Path("/proc").iterdir():
+                        if not process.name.isdigit():
+                            continue
+                        try:
+                            arguments = (process / "cmdline").read_bytes().split(b"\0")
+                        except OSError:
+                            continue
+                        if str(contracts[0]).encode() in arguments and b"--contract" in arguments:
+                            owners.append(int(process.name))
+                    require(len(owners) == 1, "disposable keeper owner ambiguous")
+                    os.killpg(owners[0], signal.SIGKILL)
+                    # A host reboot also replaces its enrolled Machine connection.
+                    # The agent on the separate runtime host remains untouched.
+                    target_machine, target_command = machines["target"]
+                    target_machine.terminate()
+                    target_machine.wait(timeout=20)
+                    wait(lambda: not connected("target"), "reboot target disconnect")
+                    machines["target"] = (start("target-after-host-boot", target_command), target_command)
+                    wait(lambda: connected("target"), "reboot target reconnect")
+                    require(effects.read_bytes() == expected, "host loss replayed an old command")
+                    require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run after host reboot"})[0] == 202, "cold postboot prompt refused")
+                    wait(lambda: info()["execution_binding"].get("revision") == old["revision"] + 1, "automatic lost-lifetime recovery")
+                    wait(lambda: effects.read_bytes() == expected + first_effect, "single postboot target command")
+                    wait(lambda: info()["status"] == "running", "postboot native turn end")
+                    recovered = info()["execution_binding"]
+                    require(recovered["workspace"] == old["workspace"] and recovered["runtime"] == old["runtime"]
+                            and recovered["environment"]["incarnation"] != old["environment"]["incarnation"]
+                            and info().get("agent_session_id") == native_id, "postboot recovery changed conversation or workspace")
+                    require(info().get("paused") == was_paused, "automatic recovery changed the user queue policy")
+                    checks.extend([("lost_host_keeper_is_recovered_before_cold_prompt_delivery" if cold else "surviving_idle_agent_recovers_lost_target_before_new_turn"),
+                                   "postboot_recovery_retains_native_identity_and_workspace",
+                                   "postboot_recovery_executes_only_new_prompt_without_command_replay"])
             status, dataset = call("GET", "/api/sync/dataset")
             require(status == 200, "browser dataset unavailable")
             query = urllib.parse.urlencode({"dataset": dataset["dataset_id"], "bootstrap": "lazy"})
@@ -660,7 +711,7 @@ def main():
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
-            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * (4 if inputs.get("execution_recovery") else 3), "deletion removed work or replayed tools")
+            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 2 * int(bool(inputs.get("execution_boot_recovery")))), "deletion removed work or replayed tools")
             checks.append("public_deletion_waits_for_target_stop_and_preserves_work")
         except Exception:
             for log in logs:

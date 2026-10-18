@@ -300,6 +300,7 @@ struct AppState {
     code_navigation_admission: bool,
     project_placement: crate::project_placement::Store,
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
+    execution_readiness: execution::recovery::Readiness,
     execution_closures:
         Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
     managed_calls: Arc<managed_calls::Coordinator>,
@@ -1701,31 +1702,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    runtime_health.set_dispatcher(true);
-    let dispatcher_health = Arc::clone(&runtime_health);
-    let dispatcher_hub = hub.clone();
-    let dispatcher_supervisor = Arc::clone(&supervisor);
-    let dispatcher_plugin_fences = Arc::clone(&plugin_lifecycle_fences);
-    let dispatcher_telemetry = observability.clone();
-    let dispatcher_shutdown = shutdown_rx.clone();
-    let dispatcher_exit_state = dispatcher_shutdown.clone();
-    let mut dispatcher_task = tokio::spawn(async move {
-        run_dispatcher(
-            dispatcher_hub,
-            dispatcher_supervisor,
-            dispatcher_plugin_fences,
-            dispatcher_telemetry,
-            dispatch_rx,
-            dispatcher_shutdown,
-        )
-        .await;
-        dispatcher_health.set_dispatcher(false);
-        if *dispatcher_exit_state.borrow() {
-            tracing::info!("dispatcher stopped after shutdown");
-        } else {
-            tracing::error!("dispatcher exited while Cowboy was still serving");
-        }
-    });
 
     // Honor agent `ScheduleWakeup`s: fires a wake-prompt (via the same dispatch
     // path) at the scheduled time. Without this, an ACP-driven agent's scheduled
@@ -1807,74 +1783,85 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&provider_catalog),
         shutdown_rx.clone(),
     );
-    let result = serve_axum(
-        args.bind,
-        args.data_dir.clone(),
-        AppState {
-            service_id,
-            service_config_path,
-            service_config,
-            hub,
-            supervisor,
-            store,
-            persistence_health,
-            shutdown: shutdown_rx,
-            runtime_health,
-            runtime_router,
-            machine_control,
-            machine_snapshots,
-            session_maintenance: session_maintenance::Coordinator::default(),
-            plugin_catalog,
-            plugin_storage,
-            provider_catalog,
-            provider_auth,
-            provider_auth_sync: provider_auth_sync::Coordinator::default(),
-            provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
-            plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
-            plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
-            telemetry_resolution_plans: Arc::default(),
-            telemetry_recovery_plans: Arc::default(),
-            telemetry_binding_plans: Arc::default(),
-            telemetry_binding_fence,
-            telemetry_writer_admission,
-            plugin_lifecycle_fences,
-            session_create_replays: Arc::default(),
-            desired_machine_components,
-            component_convergence,
-            convergence_freeze,
-            desired_machine_plugins,
-            web_roots: web_roots::WebRoots::new(args.web_root.clone()),
-            web_root: args.web_root,
-            usage,
-            diff_snapshots: DiffSnapshotCache::default(),
-            file_cursors: code_reads::file_pages::PageCursors::default(),
-            code_cache,
-            code_buffers: Arc::default(),
-            code_navigation_admission: args.code_navigation_admission
-                == crate::cli::CodeNavigationAdmission::Candidate,
-            project_placement: crate::project_placement::Store::new(
-                &args.data_dir,
-                args.execution_runtime_machine,
-            )?,
-            execution_preparations: parking_lot::Mutex::default(),
-            execution_closures: Arc::default(),
-            managed_calls: Arc::default(),
-            colocated_machines: args.colocated_machines.iter().cloned().collect(),
-            zed_adapter_socket: args.zed_adapter_socket,
-            observability,
-            web_push,
-            public_origins: Arc::new(crate::product_auth::load_public_origins()),
-            product_auth_enabled: args.product_auth_enabled,
-            product_authentication,
-            oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
-            oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
-            device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
-            device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
-            capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
-        },
-        shutdown_tx,
-    )
-    .await;
+    let state = Arc::new(AppState {
+        service_id,
+        service_config_path,
+        service_config,
+        hub,
+        supervisor,
+        store,
+        persistence_health,
+        shutdown: shutdown_rx,
+        runtime_health,
+        runtime_router,
+        machine_control,
+        machine_snapshots,
+        session_maintenance: session_maintenance::Coordinator::default(),
+        plugin_catalog,
+        plugin_storage,
+        provider_catalog,
+        provider_auth,
+        provider_auth_sync: provider_auth_sync::Coordinator::default(),
+        provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
+        plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
+        plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
+        telemetry_resolution_plans: Arc::default(),
+        telemetry_recovery_plans: Arc::default(),
+        telemetry_binding_plans: Arc::default(),
+        telemetry_binding_fence,
+        telemetry_writer_admission,
+        plugin_lifecycle_fences,
+        session_create_replays: Arc::default(),
+        desired_machine_components,
+        component_convergence,
+        convergence_freeze,
+        desired_machine_plugins,
+        web_roots: web_roots::WebRoots::new(args.web_root.clone()),
+        web_root: args.web_root,
+        usage,
+        diff_snapshots: DiffSnapshotCache::default(),
+        file_cursors: code_reads::file_pages::PageCursors::default(),
+        code_cache,
+        code_buffers: Arc::default(),
+        code_navigation_admission: args.code_navigation_admission
+            == crate::cli::CodeNavigationAdmission::Candidate,
+        project_placement: crate::project_placement::Store::new(
+            &args.data_dir,
+            args.execution_runtime_machine,
+        )?,
+        execution_preparations: parking_lot::Mutex::default(),
+        execution_readiness: Default::default(),
+        execution_closures: Arc::default(),
+        managed_calls: Arc::default(),
+        colocated_machines: args.colocated_machines.iter().cloned().collect(),
+        zed_adapter_socket: args.zed_adapter_socket,
+        observability,
+        web_push,
+        public_origins: Arc::new(crate::product_auth::load_public_origins()),
+        product_auth_enabled: args.product_auth_enabled,
+        product_authentication,
+        oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
+        oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
+        device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
+        device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
+        capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
+    });
+    state.runtime_health.set_dispatcher(true);
+    let dispatcher_health = Arc::clone(&state.runtime_health);
+    let dispatcher_state = Arc::clone(&state);
+    let dispatcher_shutdown = state.shutdown.clone();
+    let dispatcher_exit_state = dispatcher_shutdown.clone();
+    let mut dispatcher_task = tokio::spawn(async move {
+        run_dispatcher(dispatcher_state, dispatch_rx, dispatcher_shutdown).await;
+        dispatcher_health.set_dispatcher(false);
+        if *dispatcher_exit_state.borrow() {
+            tracing::info!("dispatcher stopped after shutdown");
+        } else {
+            tracing::error!("dispatcher exited while Cowboy was still serving");
+        }
+    });
+
+    let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
     if let Err(error) = catalog_watcher.shutdown().await {
         tracing::error!(%error, "Catalog observer failed during shutdown");
     }
@@ -3328,69 +3315,88 @@ fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), 
 /// first); on failure, clear the in-flight guard (so the queue can keep
 /// draining) and surface the error to every client.
 async fn run_dispatcher(
-    hub: Hub,
-    supervisor: Arc<Supervisor>,
-    plugin_lifecycle_fences: PluginLifecycleFences,
-    observability: Observability,
+    state: Arc<AppState>,
     mut rx: mpsc::Receiver<DispatchReq>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    // A slow cold target must not hold up prompts for other sessions. Hub
+    // admission still permits only one outstanding dispatch per session.
+    let mut dispatches = tokio::task::JoinSet::new();
     loop {
         let req = tokio::select! {
             biased;
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    rx.close();
-                }
+                if changed.is_err() || *shutdown.borrow() { rx.close(); }
                 rx.recv().await
             }
-            req = rx.recv() => req,
+            result = dispatches.join_next(), if !dispatches.is_empty() => {
+                if let Some(Err(error)) = result { tracing::error!(%error, "dispatch task failed"); }
+                continue;
+            }
+            req = rx.recv(), if dispatches.len() < 32 => req,
         };
         let Some(req) = req else { break };
-        let DispatchReq {
-            session_id,
-            text,
-            content,
-            cmid,
-        } = req;
-        let plugin_key = provider_fence_key_for_session(&hub, &session_id);
-        let dispatch_fence = plugin_lifecycle_fences.read();
-        if plugin_key
-            .as_ref()
-            .and_then(|key| dispatch_fence.get(key))
-            .is_some_and(|state| *state != PluginFenceState::Installing)
-        {
-            hub.requeue_prompt(&session_id, text, content, cmid);
-            continue;
-        }
-        let Some(blocks) = build_prompt_blocks(&text, &content) else {
-            tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
-            hub.clear_in_flight(&session_id);
-            continue;
-        };
-        let title = first_prompt_title(&text, &content);
-        let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
-        match supervisor.send_traced(
-            &session_id,
-            AgentCommand::Prompt(blocks, cmid.clone(), None),
-            trace.clone(),
-        ) {
-            Ok(()) => {
-                session_maintenance::clear_wait(&hub, &session_id);
-                if let Some(t) = title {
-                    hub.auto_title(&session_id, t);
-                }
-            }
-            Err(e) => {
-                if let Some(trace) = &trace {
-                    observability.finish_delivery_trace(trace, false);
-                }
-                tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
-                retain_failed_dispatch(&hub, session_id, text, content, cmid, &e);
-            }
+        dispatches.spawn(dispatch_one(Arc::clone(&state), req));
+    }
+    while let Some(result) = dispatches.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(%error, "dispatch task failed while draining");
         }
     }
     tracing::info!("dispatcher shutting down (channel closed)");
+}
+
+async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
+    let hub = &state.hub;
+    let supervisor = &state.supervisor;
+    let plugin_lifecycle_fences = &state.plugin_lifecycle_fences;
+    let observability = &state.observability;
+    let DispatchReq {
+        session_id,
+        text,
+        content,
+        cmid,
+    } = req;
+    if let Err(error) = execution::recovery::before_dispatch(&state, &session_id).await {
+        retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
+        return;
+    }
+    let plugin_key = provider_fence_key_for_session(hub, &session_id);
+    let dispatch_fence = plugin_lifecycle_fences.read();
+    if plugin_key
+        .as_ref()
+        .and_then(|key| dispatch_fence.get(key))
+        .is_some_and(|state| *state != PluginFenceState::Installing)
+    {
+        hub.requeue_prompt(&session_id, text, content, cmid);
+        return;
+    }
+    let Some(blocks) = build_prompt_blocks(&text, &content) else {
+        tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
+        hub.clear_in_flight(&session_id);
+        return;
+    };
+    let title = first_prompt_title(&text, &content);
+    let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
+    match supervisor.send_traced(
+        &session_id,
+        AgentCommand::Prompt(blocks, cmid.clone(), None),
+        trace.clone(),
+    ) {
+        Ok(()) => {
+            session_maintenance::clear_wait(hub, &session_id);
+            if let Some(t) = title {
+                hub.auto_title(&session_id, t);
+            }
+        }
+        Err(e) => {
+            if let Some(trace) = &trace {
+                observability.finish_delivery_trace(trace, false);
+            }
+            tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
+            retain_failed_dispatch(hub, session_id, text, content, cmid, &e);
+        }
+    }
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.
@@ -10208,10 +10214,9 @@ async fn api_admin_set_password(
 async fn serve_axum(
     bind: std::net::SocketAddr,
     data_dir: PathBuf,
-    state: AppState,
+    state: Arc<AppState>,
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(state);
     session_maintenance::start(&state);
     session_reclaim::listen_for_wakes(&state);
     memory_reclaim::start(&state);

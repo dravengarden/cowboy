@@ -604,7 +604,12 @@ impl RemoteRuntime {
                 .insert(session_id.clone());
             self.shared.config_sync_epochs.lock().remove(&session_id);
         }
-        self.queue(key, CoreCommand::EnsureSession { session });
+        // Recovery and reset own the replacement launch. An ordinary ensure
+        // racing that command would try to adopt the old worker with the new
+        // execution binding before the replacement has acknowledged readiness.
+        if !self.shared.resetting.lock().contains(&session_id) {
+            self.queue(key, CoreCommand::EnsureSession { session });
+        }
         // Queue session-owned preferences before any prompt. Validate them
         // against a live or persisted options snapshot when one exists; a
         // truly fresh session has no snapshot yet, so its provider-authored
@@ -4633,6 +4638,19 @@ mod tests {
                 .filter(|command| matches!(command, CoreCommand::RecoverExecutionSession { .. }))
                 .count(),
             1
+        );
+        // A newly submitted prompt ensures its session immediately after
+        // recovery is queued. Only the recovery command may launch this worker.
+        runtime.ensure(snapshot("s").launch.unwrap());
+        assert!(runtime.shared.resetting.lock().contains("s"));
+        assert!(runtime.shared.config_startups.lock().contains("s"));
+        assert!(
+            !runtime
+                .shared
+                .pending
+                .lock()
+                .values()
+                .any(|command| matches!(command, CoreCommand::EnsureSession { .. }))
         );
         runtime.shared.hub.set_status("s", Status::Running, None);
         assert_eq!(

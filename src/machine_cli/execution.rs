@@ -25,6 +25,7 @@ use crate::machine_protocol::MachineWorkspace;
 use crate::machine_protocol::execution::{Action, ExecutorInventory, Refusal, Request, Response};
 
 mod abandonment;
+mod liveness;
 mod preparation;
 mod recovery;
 
@@ -816,6 +817,7 @@ impl Manager {
         directory: &Path,
         binding: &BindingV1,
     ) -> Result<()> {
+        liveness::record_boot(directory)?;
         let mut process = if self.systemd {
             let mut process = tokio::process::Command::new("systemd-run");
             process.args([
@@ -901,9 +903,16 @@ impl Manager {
             )
         };
         let _permit = gate.try_acquire().map_err(|_| Refusal::Capacity)?;
-        exchange(&directory, &contract, command)
-            .await
-            .map_err(|_| Refusal::Unavailable)
+        match exchange(&directory, &contract, command).await {
+            Ok(response) => Ok(response),
+            Err(error)
+                if liveness::missing_endpoint(&error)
+                    && liveness::lifetime_gone(&directory, binding, self.systemd).await =>
+            {
+                Err(Refusal::EnvironmentLost)
+            }
+            Err(_) => Err(Refusal::Unavailable),
+        }
     }
 
     async fn close(&self, session_id: &str, binding: &BindingV1) -> Result<(), Refusal> {
@@ -970,7 +979,7 @@ impl Manager {
                     return Err(Refusal::Unavailable);
                 }
             }
-        } else {
+        } else if !liveness::boot_changed(&directory) {
             let response = exchange(&directory, &contract, keeper::Command::Shutdown)
                 .await
                 .map_err(|_| Refusal::Unavailable)?;

@@ -26,6 +26,16 @@ pub(super) async fn forward(
 ) -> RuntimeReply {
     let started = std::time::Instant::now();
     let response = forward_checked(state, connection, runtime_machine, &request).await;
+    if matches!(
+        &response,
+        Response::Refused {
+            reason: Refusal::EnvironmentLost
+        }
+    ) {
+        state
+            .execution_readiness
+            .forget(&request.session_id, &request.binding);
+    }
     observe_slow_forward(&request, started.elapsed());
     RuntimeReply {
         session_id: request.session_id,

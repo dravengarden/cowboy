@@ -408,3 +408,69 @@ records native acceptance without an interpreter on PATH, Hawk activation and
 OVH installation. The affected session's keeper has been recovered with its
 native identity and worktree preserved; adoption of the new Provider remains
 separate from installation and must be verified per session.
+
+
+## Host reboot and execution lifetimes
+
+A Machine connection and a saved Unix socket pathname do not prove that a
+session's execution keeper survived a host reboot. Previously, connecting to
+that stale socket returned `Unavailable`. The worker retried the same dead
+binding until ACP initialization or native resume timed out. Recreating only
+the agent worker could not repair the target lifetime.
+
+Before delivering a session's next queued prompt, the Controller now checks
+readiness of its exact target binding. Cold agents and cache misses ask the
+target to `Describe` itself. A healthy keeper is reused, including
+after a Machine process reconnect. A missing/refused socket is classified as
+`EnvironmentLost` only when a private launch-time host boot marker differs from
+the current Linux boot, or the exact transient systemd unit is both absent and
+inactive. Timeouts, permission failures, connection resets, active/failed units,
+and invalid identities never authorize replacement.
+
+For a proven lost lifetime with no active worker turn, outstanding runtime
+prompt, managed call or background work, dispatch runs the existing durable recovery
+transaction before starting the native agent. It records a non-runnable intent,
+archives the old target contract, creates a fresh execution incarnation, and
+CAS-publishes its receipt. The native conversation ID, provider generation,
+workspace and queued prompt identity stay unchanged. Recovery does not cancel a
+live turn or replay an earlier tool invocation. An uncertain effect stays
+uncertain; loss of a command's receipt is never permission to run it again.
+Only the newly dispatched prompt can run after the fresh native resume.
+
+Dormant historical sessions are repaired when the user next sends work; startup
+does not launch every old worker. Interrupted automatic transactions retain their
+exact `execution-wake-*` identity for observation on retry. Explicit Operator
+maintenance remains separately fenced and keeps its queue paused for inspection.
+Turn preflights are bounded and concurrent across sessions so an unavailable
+target cannot block unrelated message delivery.
+
+The disposable execution-session conformance fixture can enable
+`execution_boot_recovery`. It loses only its own keeper process, changes its
+private boot marker, then checks a fresh execution incarnation, the unchanged
+native conversation and worktree, and exactly one new command effect. The same
+fixture first checks ordinary Machine restart without replacing the live keeper.
+This simulates process loss across a boot boundary without rebooting production
+or force-triggering a panic. Unit coverage rejects transient transport failures
+and refuses reuse of a launch contract from another boot.
+
+Codex and Claude still own their native conversations and turn semantics. This
+reconciliation belongs to Cowboy's external target-process lifecycle, outside
+those native runtimes; both providers share it.
+
+The reboot fixture covers both a cold agent and an idle agent that remains on
+the runtime host while only the target keeper is lost. Automatic replacement
+also preserves the user's queue pause setting.
+
+A live agent may reuse a readiness result tied to the exact binding and the
+current authenticated target connection. Reconnecting the Machine invalidates
+it even if an epoch string is reused. A terminal `EnvironmentLost` reply also
+invalidates its matching result; a late reply for an older binding cannot erase
+a newer result. The bounded cache avoids putting a second target round trip in
+front of every healthy warm turn, and preserves tools during observation of an
+already committed recovery receipt. Cache eviction only requires another
+`Describe`; it never permits recovery without target-owned proof of loss.
+
+Recovery owns the replacement worker launch until readiness is acknowledged.
+A concurrent ordinary session ensure cannot adopt the old worker with the new
+binding. Configuration and the new prompt remain queued behind the existing
+reset gate; the broker's execution identity checks remain strict.
