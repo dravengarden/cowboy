@@ -538,7 +538,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const titleRow = preview.firstElementChild!.firstElementChild!;
     check(!titleRow.contains(age) && age.parentElement === titleRow.nextElementSibling,
       "relative execution time belongs on the second preview row");
-    check(/^(now|\d+[mhd] ago)$/.test(age.textContent ?? ""),
+    check(/^· (now|\d+[mhd] ago)$/.test(age.textContent ?? ""),
       "relative execution time distinguishes age from duration");
     check(preview.textContent?.includes("Hawk") && preview.title.includes("Created"),
       "call previews show execution placement and retain exact timing details");
@@ -560,6 +560,22 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     tests.push("mobile-preview-keeps-fill-after-touch-focus");
     const cards = [...previewRail.querySelectorAll<HTMLElement>("[data-call-preview]")];
     const previousWidth = container.style.width;
+    container.style.width = "900px";
+    cards.slice(1).forEach((card) => card.style.display = "none");
+    const cardStyle = getComputedStyle(preview);
+    check(preview.getBoundingClientRect().width < previewRail.clientWidth &&
+      preview.getBoundingClientRect().width >= parseFloat(cardStyle.minWidth) &&
+      preview.getBoundingClientRect().width <= parseFloat(cardStyle.maxWidth),
+      "one preview fits its content within minimum and maximum widths instead of filling the rail");
+    check(age.getBoundingClientRect().left - age.previousElementSibling!.getBoundingClientRect().right <= 8,
+      "relative time follows the metadata without an expanding gap");
+    const title = titleRow.lastElementChild!;
+    const originalTitle = title.textContent;
+    title.textContent = "A much longer call title ".repeat(12);
+    check(Math.abs(preview.getBoundingClientRect().width - parseFloat(cardStyle.maxWidth)) <= 1,
+      "long call titles stop growing at the maximum card width");
+    title.textContent = originalTitle;
+    cards.slice(1).forEach((card) => card.style.display = "");
     container.style.width = "390px";
     cards.slice(2).forEach((card) => card.style.display = "none");
     check(previewRail.scrollWidth > previewRail.clientWidth &&

@@ -897,7 +897,7 @@ function CallPreview({ call, title, now, onOpen }: {
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
       title={`${callTimesTitle(call)} · ${placementLabel(call)} · ${callModelLabel(call)}`}
       sx={{
-        flex: "1 0 16rem", minWidth: "16rem", minHeight: 44,
+        flex: "0 0 auto", width: "max-content", minWidth: "14rem", maxWidth: "22rem", minHeight: 44,
         borderRadius: 1, textAlign: "left",
         justifyContent: "flex-start",
         "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
@@ -921,11 +921,11 @@ function CallPreview({ call, title, now, onOpen }: {
           }}>
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, fontSize: "0.6875rem" }}>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
             · {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
           </Typography>
           <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
-            variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontSize: "0.6875rem", fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
+            variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0, fontSize: "0.6875rem", fontVariantNumeric: "tabular-nums" }}>· {time}</Typography>
         </Stack>
       </Stack>
     </ButtonBase>
