@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=2ccb2a564f5067e5d293297ddc21545b802e2068";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=2e295524433901e469079f405da6fe0625a3388a";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let

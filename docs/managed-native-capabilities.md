@@ -5,6 +5,39 @@ the existing four Cowboy MCP tools. The calling agent decides when it needs an
 image. CLI calls remain supported. Installation and production acceptance are
 separate from the source contract described here.
 
+## Calls extension contract
+
+Calls is the common lifecycle for on-demand Provider capabilities. Review,
+analysis and native image generation/editing are its initial task types. Future
+capabilities reuse parent-scoped admission, placement, durable operation IDs,
+status, cancellation, history, supported continuation and verified artifacts.
+Each capability retains its own typed inputs, signed runtime profile, execution
+limits and success criteria; sharing the lifecycle does not widen its authority.
+
+For each extension:
+
+1. Identify native Provider coverage and the residual cross-Provider,
+   cross-machine or workspace gap. Prefer the native tool and narrowest adapter;
+   record when native support would let Cowboy remove that adapter. Classify
+   Claude support as shared, adapter-backed or an explicit unavailable fallback.
+2. Discover support from installed signed Provider declarations. Keep capability
+   and input help on demand, revision-cache unchanged discovery, and reuse the
+   four MCP tools with `calls.start` and `calls.result`. Agents prefer MCP;
+   the CLI remains a supported fallback. Discovery must not prompt a model or
+   refresh quota merely to enumerate support.
+3. Pass only the requested task and necessary inputs. Return a bounded result
+   and artifact references instead of the full child transcript or inline
+   binary payloads. Evaluate whole-task model/image costs as well as MCP prompt
+   overhead; do not infer billed savings from request bytes alone.
+4. Reuse the Calls lifecycle while implementing capability-specific validation,
+   cancellation and exact original-operation recovery. Never replay a model turn
+   to repair uncertain delivery. Add configuration through Cowboy's shared
+   scoped config/control mechanism when a behavioral choice is needed.
+5. Preserve observed behavior in focused tests and this documentation. On later
+   Provider upgrades, select incremental checks from the actual runtime/contract
+   changes and retained evidence. Accept new worker and persisted-record readers
+   before production admission; record exact release and recovery receipts.
+
 ## Ownership and discovery
 
 Codex owns the image tool, model, authentication, native conversation and native

@@ -25,8 +25,8 @@ primary phone/desktop product path.
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
-- [`managed-agent-calls.md`](managed-agent-calls.md) — Implementation design for parent-scoped cross-Provider calls, AI-facing CLI, Suger integration and desktop/mobile lifecycle UI; not yet shipped
-- [`managed-native-capabilities.md`](managed-native-capabilities.md) — On-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
+- [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
+- [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, ownership and OVH Remote deployment invariants
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Target architecture: fixed core, typed components and Plugin composition across Service/Machine; first read-only structural slice implemented
