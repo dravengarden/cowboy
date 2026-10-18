@@ -1066,10 +1066,13 @@ export function DetentSheet(
                       gap: 1,
                       px: 2,
                       visibility: topMost ? "visible" : "hidden",
-                      // Overlay footers sit on the scroll body. Keep this strip
-                      // exclusive so a tap on the close island cannot activate
-                      // the card underneath, then fall through to the page.
-                      pointerEvents: topMost ? "auto" : "none",
+                      // Blank overlay space belongs to the scroll body. Ordinary
+                      // action shelves remain interactive; floating island rows
+                      // restore hits only on their bounded glass/control targets.
+                      pointerEvents: topMost && !footerOverlay ? "auto" : "none",
+                      "& > :not([data-mobile-sheet-footer-shield])": {
+                        pointerEvents: topMost ? "auto" : "none",
+                      },
                       // The circular dismiss island already has its own internal
                       // glass breathing room; a full 8px footer lead made it look
                       // detached from the final control. Keep a compact 4px seam.

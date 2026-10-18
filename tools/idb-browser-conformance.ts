@@ -287,7 +287,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "workspace-picker"
         ? 10
         : suite === "sheet-keyboard"
-        ? 3
+        ? 4
         : suite === "workspace-extensions"
         ? 25
         : suite === "review-destination"

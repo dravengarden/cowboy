@@ -457,7 +457,6 @@ export function ObsidianSheet({
                 px: 2,
                 pb: SAFE_INSIDE,
                 pointerEvents: "none",
-                "& > *": { pointerEvents: "auto" },
               }}
             >
               <MobileSheetDismiss onClose={dismiss} />

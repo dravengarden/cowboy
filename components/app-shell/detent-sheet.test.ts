@@ -27,14 +27,11 @@ test("cover sheets clear Cowboy's iPad PWA top inset when the host publishes it"
   );
 });
 
-test("overlay footers own the exclusive hit strip over the scroll body", () => {
+test("overlay footers pass blank space to the scroll body and keep ordinary shelves interactive", () => {
   const footer = source.slice(source.indexOf("data-detent-sheet-footer"));
   assert(footer.includes('data-detent-sheet-footer={footerOverlay ? "overlay" : "row"}'));
   assert(footer.includes("onPointerDown={(event) => event.stopPropagation()}"));
   assert(footer.includes("onClick={(event) => event.stopPropagation()}"));
-  assertEquals(
-    footer.slice(0, 800).includes('pointerEvents: "none"'),
-    false,
-  );
-  assert(footer.includes('pointerEvents: topMost ? "auto" : "none"'));
+  assert(footer.includes('pointerEvents: topMost && !footerOverlay ? "auto" : "none"'));
+  assert(footer.includes('"& > :not([data-mobile-sheet-footer-shield])"'));
 });

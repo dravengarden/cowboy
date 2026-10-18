@@ -260,6 +260,7 @@ export function FloatingActionIsland(
     <Box
       sx={{
         position: "relative",
+        pointerEvents: "auto",
         isolation: "isolate",
         overflow: "hidden",
         width: "100%",
@@ -368,7 +369,9 @@ export function MobileSheetActionGroup(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        pointerEvents: "auto",
+        // Only the glass island owns hits; the full-width alignment row must
+        // leave the underlying scroll body reachable beside it.
+        pointerEvents: "none",
       }}
     >
       <Box
@@ -528,7 +531,7 @@ export function MobileSheetBackDismiss(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        pointerEvents: "auto",
+        pointerEvents: "none",
       }}
     >
       <FloatingActionIsland
@@ -574,7 +577,7 @@ export function MobileSheetDismiss(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        pointerEvents: "auto",
+        pointerEvents: "none",
       }}
     >
       <ButtonBase
@@ -590,6 +593,7 @@ export function MobileSheetDismiss(
           maxWidth: "100%",
           borderRadius: 999,
           display: "block",
+          pointerEvents: "auto",
           touchAction: "manipulation",
           transition: "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
           "&:active": { transform: "scale(0.94)" },

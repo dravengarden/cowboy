@@ -2,7 +2,8 @@
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { BrowserProductTheme } from "./browserProductTheme";
-import { DetentSheet } from "@cowboy/app-shell";
+import { DetentSheet, MobileSheetActionGroup, MobileSheetDismiss } from "@cowboy/app-shell";
+import { MobileSheetBackDismiss } from "../../components/app-shell/bottom-sheet";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { inferKeyboardOpen } from "./keyboardGeometry";
 import { ObsidianSheet } from "./ObsidianSheet";
@@ -160,10 +161,68 @@ export async function runCoverKeyboardBrowserConformance(keepFixture = false): P
       if (heightDescriptor) Object.defineProperty(vv, "height", heightDescriptor);
       else Reflect.deleteProperty(vv, "height");
     }
+    // Use the real hit-test tree: dispatching synthetic events directly to a
+    // body would bypass the transparent overlay that caused this regression.
+    let closed = 0;
+    let ancestorClicks = 0;
+    const onClose = () => { closed++; };
+    const content = <div style={{ height: 2400 }}>Long scrollable settings</div>;
+    for (const cover of [false, true]) {
+      for (const footer of [
+        <MobileSheetDismiss onClose={onClose} />,
+        <MobileSheetBackDismiss onBack={() => {}} onClose={onClose} />,
+        <MobileSheetActionGroup actions={[{ key: "close", label: "Close", icon: "×", onPress: onClose }]} />,
+      ]) {
+        flushSync(() => root.render(
+          <BrowserProductTheme>
+            <CssBaseline />
+            <div onClick={() => { ancestorClicks++; }}>
+              <DetentSheet open onClose={onClose} cover={cover} footerOverlay footer={footer} haptic={false} animateOnOpen={false}>
+                {content}
+              </DetentSheet>
+            </div>
+          </BrowserProductTheme>,
+        ));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await checkFooterHitTargets();
+      }
+    }
+    flushSync(() => root.render(
+      <BrowserProductTheme>
+        <CssBaseline />
+        <ObsidianSheet open onClose={onClose} floatingDismiss>{content}</ObsidianSheet>
+      </BrowserProductTheme>,
+    ));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await checkFooterHitTargets();
+    async function checkFooterHitTargets() {
+      const button = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+      check(button, "missing floating close control");
+      const rect = button.getBoundingClientRect();
+      const dialog = button.closest<HTMLElement>('[role="dialog"]')!;
+      const bounds = dialog.getBoundingClientRect();
+      for (const x of [bounds.left + 25, bounds.right - 25]) {
+        const hit = document.elementFromPoint(x, rect.y + rect.height / 2);
+        check(hit && dialog.contains(hit), "footer gap must hit the sheet content");
+        let scrollport: Element | null = hit;
+        while (scrollport && scrollport !== dialog && getComputedStyle(scrollport).overflowY !== "auto") {
+          scrollport = scrollport.parentElement;
+        }
+        check(scrollport && scrollport !== dialog && scrollport.scrollHeight > scrollport.clientHeight,
+          "both footer gaps must reach an overflowing native scrollport");
+      }
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      check(hit && button.contains(hit), "floating control must retain its hit target");
+      const before = closed;
+      hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      check(closed === before + 1 && ancestorClicks === 0, "close must activate exactly once without reaching its owner");
+    }
     return [
       "overlay and resized keyboards retain identical compact footer spacing",
       "keyboard dismissal restores home-indicator clearance",
       "form actions use stationary state feedback; keyboard dismissal preserves the form without submitting or cancelling",
+      "cover, content and compact sheet footer gaps reach the native scrollport while close, back and action islands retain exclusive hits",
     ];
   } finally {
     if (keepFixture) {
