@@ -3227,3 +3227,27 @@ The retained Debug shell proves the diagnosis and rejected Web-only trials;
 it is not evidence of the new native fix shipping or physical IME acceptance.
 The browser/PWA inset calculation and its cover-sheet viewport ownership are
 unchanged. Physical third-party keyboard and image Return (#69) remain separate.
+
+### 2026-10-18 Draft floating navigation and keyboard reveal scheduling
+
+The navigation capsules looked floating but occupied a full flex row outside
+`data-draft-document-scroll`. The scrollport clipped the title and prose across
+the whole row, including the transparent gap between the buttons. Touch Draft
+now overlays the controls on the document; only buttons receive pointer input.
+Initial document padding keeps the title below the controls at rest, and scroll
+padding supports native focus reveal. Restore/error notices retain their own
+clearance. Desktop and the bottom formatting scroll boundary are unchanged.
+
+The viewport observer also added rAF before CM6's already deferred scroll
+measurement. An isolated iOS 26.5 WKWebView using the shipped 0.1.35 native
+bridge and the actual Draft fixture showed a 69ms gap from viewport shrink to
+caret reveal on a physical Simulator tap (root offset remained zero). Remove
+that extra scheduling hop: the observer dispatches the existing editor effect,
+which still owns measurement and nearest-selection scrolling. No synchronous
+layout writes, focus/selection changes or IME handling were added. A follow-up
+tap retained scale 1, root offset 0 and all 15 rendered lines, but still measured
+64ms from viewport shrink to scrolling; this is not evidence that physical
+flashing is resolved. Third-party keyboard and physical iPhone acceptance remain
+separate. Diagnostic fixtures must copy the production viewport metadata,
+including maximum-scale/user-scalable, or a small-font tap introduces an
+unrelated automatic zoom (observed scale 1.6 for 10px text).

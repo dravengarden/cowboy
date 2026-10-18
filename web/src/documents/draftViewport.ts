@@ -7,22 +7,20 @@ export function observeDraftViewport(
 ): () => void {
   let width = canvas.clientWidth;
   let height = canvas.clientHeight;
-  let frame = 0;
   const observer = new ResizeObserver(() => {
     const nextWidth = canvas.clientWidth;
     const nextHeight = canvas.clientHeight;
     const changed = nextWidth !== width || nextHeight < height;
     width = nextWidth;
     height = nextHeight;
-    if (!changed || frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      reveal();
-    });
+    // The rich editor queues its own measure/scroll frame. Adding another
+    // rAF here paints the shrunken canvas with the old scroll position first,
+    // then visibly jumps to the caret during keyboard opening. This callback
+    // only schedules the editor effect; it does not measure/write layout.
+    if (changed) reveal();
   });
   observer.observe(canvas);
   return () => {
     observer.disconnect();
-    if (frame) cancelAnimationFrame(frame);
   };
 }

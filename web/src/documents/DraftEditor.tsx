@@ -1002,7 +1002,20 @@ function DraftEditingSession(
     >
       {focusLayout && mobileChrome
         ? (
-          <Box sx={{ px: "18px", pt: 1, flexShrink: 0 }}>
+          <Box
+            data-draft-floating-navigation
+            sx={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              px: "18px",
+              pt: 1,
+              zIndex: 1,
+              pointerEvents: "none",
+              "& button": { pointerEvents: "auto" },
+            }}
+          >
             <Stack
               direction="row"
               alignItems="center"
@@ -1185,6 +1198,7 @@ function DraftEditingSession(
         )}
       {current.deleted && (
         <Alert
+          sx={focusLayout ? { mt: "56px" } : undefined}
           severity="warning"
           action={
             <Button
@@ -1203,6 +1217,7 @@ function DraftEditingSession(
       )}
       {(error || syncError) && (
         <Alert
+          sx={focusLayout && !current.deleted ? { mt: "56px" } : undefined}
           // Waiting for the server is not a failure: the text is saved here.
           severity={phase === "conflict"
             ? "warning"
@@ -1256,13 +1271,20 @@ function DraftEditingSession(
             overflowX: "hidden",
             overscrollBehaviorY: "contain",
             touchAction: "pan-y pinch-zoom",
-            scrollPaddingBlock: "12px",
+            // Native focus reveal clears the floating controls. The space
+            // between them stays part of the visible, touchable document.
+            scrollPaddingTop: "68px",
+            scrollPaddingBottom: "12px",
           }
           : { display: "contents" }}
       >
         <Stack
           sx={focusLayout
-            ? { minHeight: "100%", minWidth: 0 }
+            ? {
+              minHeight: "100%",
+              minWidth: 0,
+              pt: current.deleted || error || syncError ? 0 : "56px",
+            }
             : { display: "contents" }}
         >
           {focusLayout && (

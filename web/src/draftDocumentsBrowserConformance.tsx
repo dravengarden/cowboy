@@ -2020,7 +2020,10 @@ export async function runDraftDocumentsBrowserConformance(
     touchCreate = true;
     localStorage.setItem("cowboy:mobile-product", "review");
     const mobileRoot = createRoot(container);
-    container.style.cssText = "width:390px;height:800px;position:relative";
+    // This is an isolated viewport, not content in the runner's scrollable
+    // page. Otherwise Chromium focus reveal can move the entire fixture
+    // above y=0 and make hit-testing the floating controls meaningless.
+    container.style.cssText = "width:390px;height:800px;position:fixed;top:0;left:0";
     flushSync(() =>
       mobileRoot.render(
         <SurfaceProvider>
@@ -2218,6 +2221,20 @@ export async function runDraftDocumentsBrowserConformance(
         );
         flow.scrollTop = 0;
         await tick();
+        const navigation = container.querySelector<HTMLElement>("[data-draft-floating-navigation]")!;
+        const navigationBounds = navigation.getBoundingClientRect();
+        check(
+          flow.getBoundingClientRect().top <= navigationBounds.top &&
+            title.getBoundingClientRect().top >= navigationBounds.bottom,
+          "Floating navigation overlaps the scrollport while the initial title clears its controls",
+        );
+        const gapX = (button("Open sessions").getBoundingClientRect().right +
+          button("Recovery history").parentElement!.getBoundingClientRect().left) / 2;
+        const gapY = navigationBounds.top + 24;
+        check(
+          !navigation.contains(document.elementFromPoint(gapX, gapY)),
+          "The gap between floating controls passes input to the document",
+        );
         const titleTop = title.getBoundingClientRect().top;
         const bodyTop = native.getBoundingClientRect().top;
         const barTop = bar.getBoundingClientRect().top;
@@ -2231,6 +2248,11 @@ export async function runDraftDocumentsBrowserConformance(
         check(
           Math.abs(bar.getBoundingClientRect().top - barTop) < 1,
           "Formatting stays above the keyboard while the document scrolls",
+        );
+        check(
+          Math.abs(navigation.getBoundingClientRect().top - navigationBounds.top) < 1 &&
+            flow.contains(document.elementFromPoint(gapX, gapY)),
+          `Scrolled document remains visible and touchable between stationary navigation controls: ${document.elementFromPoint(gapX, gapY)?.outerHTML.slice(0, 180)}; navigation ${navigation.getBoundingClientRect().top}/${navigationBounds.top}`,
         );
         native.select();
         const port = activeEditorExtensionPort()!;
