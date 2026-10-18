@@ -582,6 +582,11 @@ def main():
             if inputs.get("execution_recovery"):
                 wait(lambda: info()["status"] == "running", "idle before explicit recovery")
                 operator = [inputs["controller"], "operator", "--data-dir", root / "controller"]
+                def execution_delivery():
+                    rows = json.loads(run(*operator, "execution-sessions"))["data"]["sessions"]
+                    return next(row.get("delivery") or {} for row in rows if row["id"] == session)
+                def execution_worker():
+                    return execution_delivery().get("worker") or {}
                 require(call("GET", "/v1/execution-sessions")[0] == 404,
                         "private recovery route leaked onto public TCP")
                 run(*operator, "enable")
@@ -616,6 +621,8 @@ def main():
                 controller = start("controller-recovery-resumed", controller_command)
                 wait(lambda: call("GET", "/healthz")[0] == 200, "recovery Controller restart")
                 wait(lambda: connected("runtime") and connected("target"), "recovery Machines reconnect")
+                wait(lambda: execution_delivery().get("connected") is True,
+                     "recovery runtime session handshake")
                 require(info()["execution_binding"] == pending, "restart lost recovery intent")
                 checks.append("lost_controller_reply_and_older_cold_readers_preserve_recovery_fence")
                 first = json.loads(run(*operator, "recover-execution", "--session", session,
@@ -708,11 +715,6 @@ def main():
                 before_commit = info()["execution_binding"]
                 before_native = info().get("agent_session_id")
                 before_effects = effects.read_bytes()
-                def execution_delivery():
-                    rows = json.loads(run(*operator, "execution-sessions"))["data"]["sessions"]
-                    return next(row.get("delivery") or {} for row in rows if row["id"] == session)
-                def execution_worker():
-                    return execution_delivery().get("worker") or {}
                 before_epoch = execution_worker()["epoch"]
                 committed_request = root / "committed-recovery-request.json"
                 write(committed_request, {"intent": {"schema": 1, "phase": "recovering",
@@ -736,6 +738,8 @@ def main():
                 controller = start("controller-after-committed-recovery", controller_command)
                 wait(lambda: call("GET", "/healthz")[0] == 200, "committed recovery Controller")
                 wait(lambda: connected("runtime") and connected("target"), "committed recovery Machines")
+                wait(lambda: execution_delivery().get("connected") is True,
+                     "committed recovery runtime session handshake")
                 wait(lambda: execution_worker().get("epoch") == before_epoch,
                      "original idle worker survives lost replacement command")
                 wait(lambda: info()["status"] in ("running", "exited", "crashed", "interrupted"),

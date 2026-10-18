@@ -3350,10 +3350,10 @@ async fn run_dispatcher(
     tracing::info!("dispatcher shutting down (channel closed)");
 }
 
-async fn dispatch_preflight(
+async fn dispatch_preflight<T>(
     shutdown: &mut watch::Receiver<bool>,
-    preparation: impl std::future::Future<Output = Result<(), String>>,
-) -> Result<(), String> {
+    preparation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
     tokio::select! {
         biased;
         _ = shutdown.wait_for(|stopping| *stopping) => {
@@ -3376,15 +3376,18 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         cmid,
     } = req;
     let mut shutdown = state.shutdown.clone();
-    if let Err(error) = dispatch_preflight(
+    let recovery = match dispatch_preflight(
         &mut shutdown,
         execution::recovery::before_dispatch(&state, &session_id),
     )
     .await
     {
-        retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
-        return;
-    }
+        Ok(recovery) => recovery,
+        Err(error) => {
+            retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
+            return;
+        }
+    };
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     let dispatch_fence = plugin_lifecycle_fences.read();
     if plugin_key
@@ -3402,10 +3405,11 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     };
     let title = first_prompt_title(&text, &content);
     let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
-    let sent = supervisor.send_traced(
+    let sent = supervisor.send_traced_after_execution_recovery(
         &session_id,
         AgentCommand::Prompt(blocks, cmid.clone(), None),
         trace.clone(),
+        recovery,
     );
     match sent {
         Ok(()) => {

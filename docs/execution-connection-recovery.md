@@ -500,3 +500,11 @@ Advancing main's Provider runtime does not authorize changing an old binding's
 executor digest. Full worker releases remain the separately accepted upgrade
 boundary. Validate the host artifact's actual execution configuration, not only
 its worker-generation marker, before rollout.
+
+Target readiness and runtime admission are separate steps. Automatic preflight
+may finish a target transaction without allocating an agent. The Supervisor then
+holds one existing reload lease across worker replacement and prompt handoff:
+cold initialization obeys drain, capacity and memory guards; replacement of an
+existing worker does not consume a second slot. A refused launch retains the
+prompt and the committed target receipt for the next admitted attempt. Explicit
+Operator recovery uses the same launch admission.

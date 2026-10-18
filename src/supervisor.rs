@@ -62,6 +62,7 @@ pub struct Supervisor {
     /// return its Device to capacity. Opening a session no longer wakes it.
     wake_listener: parking_lot::Mutex<Option<WakeListener>>,
     wake_admission: parking_lot::Mutex<Option<WakeAdmission>>,
+    recovery_admission: parking_lot::Mutex<Option<WakeAdmission>>,
 }
 
 /// Receives the id of a dormant session that a prompt is waking.
@@ -128,6 +129,7 @@ impl Supervisor {
             runtime_restrictions: Arc::default(),
             wake_listener: parking_lot::Mutex::new(None),
             wake_admission: parking_lot::Mutex::new(None),
+            recovery_admission: parking_lot::Mutex::new(None),
         }
     }
 
@@ -137,6 +139,10 @@ impl Supervisor {
 
     pub(crate) fn set_wake_admission(&self, admission: WakeAdmission) {
         *self.wake_admission.lock() = Some(admission);
+    }
+
+    pub(crate) fn set_recovery_admission(&self, admission: WakeAdmission) {
+        *self.recovery_admission.lock() = Some(admission);
     }
 
     /// The isolated workspace is ready, but no AI process is needed until use.
@@ -423,7 +429,38 @@ impl Supervisor {
         command: AgentCommand,
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> Result<(), String> {
+        self.send_traced_after_execution_recovery(session_id, command, trace, None)
+    }
+
+    fn delivery_admission(
+        &self,
+        session_id: &str,
+        command: &AgentCommand,
+        recovering: bool,
+    ) -> Result<Option<Box<dyn Send>>, String> {
+        let admission = if recovering {
+            self.recovery_admission.lock().clone()
+        } else if matches!(command, AgentCommand::Prompt(..))
+            && !self.runtime_for_session(session_id)?.has_worker(session_id)
+        {
+            self.wake_admission.lock().clone()
+        } else {
+            None
+        };
+        admission.map(|admit| admit(session_id)).transpose()
+    }
+
+    pub(crate) fn send_traced_after_execution_recovery(
+        &self,
+        session_id: &str,
+        command: AgentCommand,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
+        recovery: Option<crate::execution_environment::RecoveryV1>,
+    ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        if recovery.is_some() && !matches!(command, AgentCommand::Prompt(..)) {
+            return Err("execution recovery requires prompt delivery".into());
+        }
         if matches!(command, AgentCommand::Cancel) {
             // Stopping a retained turn must never require starting or repairing
             // a worker, including after host policy has denied its placement.
@@ -437,10 +474,13 @@ impl Supervisor {
             // repair or runtime admission: neither belongs to a settings edit.
             return Ok(());
         }
+        // A verified target replacement changes the failed restore's execution
+        // conditions. Unchanged targets retain the explicit Reload boundary.
         if matches!(
             command,
             AgentCommand::Prompt(..) | AgentCommand::SetConfigOption { .. }
-        ) && self.should_hold_native_restore_failure(session_id)
+        ) && recovery.is_none()
+            && self.should_hold_native_restore_failure(session_id)
         {
             tracing::info!(
                 session = session_id,
@@ -471,17 +511,10 @@ impl Supervisor {
         {
             return Err("Waiting for resources: session is finishing hibernation".into());
         }
-        let _admission = if matches!(command, AgentCommand::Prompt(..))
-            && !self.runtime_for_session(session_id)?.has_worker(session_id)
-        {
-            self.wake_admission
-                .lock()
-                .clone()
-                .map(|admit| admit(session_id))
-                .transpose()?
-        } else {
-            None
-        };
+        let _admission = self.delivery_admission(session_id, &command, recovery.is_some())?;
+        if let Some(intent) = recovery {
+            self.recover_execution_session_inner(session_id, intent)?;
+        }
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
         match command {
@@ -812,6 +845,20 @@ impl Supervisor {
         intent: crate::execution_environment::RecoveryV1,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        let _admission = self
+            .recovery_admission
+            .lock()
+            .clone()
+            .map(|admit| admit(session_id))
+            .transpose()?;
+        self.recover_execution_session_inner(session_id, intent)
+    }
+
+    fn recover_execution_session_inner(
+        &self,
+        session_id: &str,
+        intent: crate::execution_environment::RecoveryV1,
+    ) -> Result<(), String> {
         let runtime = self.runtime_for_session(session_id)?;
         let session = self.start_session(session_id)?;
         if !session
@@ -1372,6 +1419,121 @@ mod tests {
         });
         hub.set_status("s", Status::Exited, None);
         hub
+    }
+
+    fn recovered_session_fixture(
+        root: &TestDir,
+    ) -> (Hub, crate::execution_environment::RecoveryV1) {
+        let cwd = root.path().join("workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut previous = crate::execution_environment::fixture().decode().unwrap();
+        previous.runtime.machine_id = "hawk".into();
+        previous.runtime.cwd = cwd.display().to_string();
+        previous.workspace.worktree_id = "s".into();
+        let mut replacement = previous.clone();
+        replacement.revision += 1;
+        replacement.environment.id = "55555555555555555555555555555555".into();
+        replacement.environment.incarnation = "44444444444444444444444444444444".into();
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "execution-wake-fixture-1".into(),
+            previous,
+        };
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "s".into(),
+            provider: "codex".into(),
+            provider_version: "1.0.0".into(),
+            provider_generation_digest: "fixture".into(),
+            provider_auth_generation: None,
+            provider_behavior: Some(serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "permission": "acp_config_full_access_v1",
+                "session": "portable_v1", "turn_end": "portable_v1", "configuration": "acp_config_options_v1",
+                "execution": {"interface": "jsonrpc_v1", "executor_digests": [intent.previous.environment.executor_digest.clone()]}
+            })).unwrap()),
+            machine_id: "hawk".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: Some(crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(replacement).unwrap(),
+            )),
+            cwd: cwd.display().to_string(),
+            title: "test".into(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.push("s", crate::core::Event::Update {
+            update: serde_json::json!({"sessionUpdate":"user_message_chunk", "content":{"type":"text", "text":"existing durable history"}}),
+        });
+        hub.set_agent_session_id("s", "native-original".into());
+        hub.set_status("s", Status::Exited, None);
+        (hub, intent)
+    }
+
+    #[tokio::test]
+    async fn recovered_prompt_uses_one_admission_before_any_worker_launch() {
+        let root = TestDir::new();
+        let (hub, intent) = recovered_session_fixture(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        supervisor.set_wake_admission(Arc::new(|_| {
+            panic!("recovery must not pay a second wake admission")
+        }));
+        supervisor.set_recovery_admission(Arc::new(|_| Err("Waiting for resources: full".into())));
+        let prompt = || AgentCommand::Prompt(Vec::new(), Some("new-prompt".into()), None);
+        assert!(
+            supervisor
+                .send_traced_after_execution_recovery("s", prompt(), None, Some(intent.clone()))
+                .unwrap_err()
+                .contains("Waiting for resources")
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(
+            supervisor
+                .recover_execution_session("s", intent.clone())
+                .unwrap_err()
+                .contains("Waiting for resources")
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        let admissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&admissions);
+        supervisor.set_recovery_admission(Arc::new(move |_| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(()))
+        }));
+        supervisor
+            .send_traced_after_execution_recovery("s", prompt(), None, Some(intent))
+            .unwrap();
+        assert_eq!(admissions.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let pending = runtime.pending_for_test();
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|c| matches!(c, CoreCommand::RecoverExecutionSession { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|c| matches!(c, CoreCommand::Prompt { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !pending
+                .iter()
+                .any(|c| matches!(c, CoreCommand::EnsureSession { .. }))
+        );
+        assert_eq!(
+            hub.agent_session_id_for_resume("s").as_deref(),
+            Some("native-original")
+        );
     }
 
     #[tokio::test]

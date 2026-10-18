@@ -193,6 +193,13 @@ pub(super) fn start(state: &Arc<AppState>) {
             admit(&state, session)
         }));
     let weak = Arc::downgrade(state);
+    state
+        .supervisor
+        .set_recovery_admission(Arc::new(move |session| {
+            let state = weak.upgrade().ok_or("Controller is stopping")?;
+            reload_lease(&state, session)
+        }));
+    let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         // Seed offline Machines once. Accepted handshakes carry subsequent
         // capacity changes; do not reload full Plugin inventories every tick.

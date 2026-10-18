@@ -372,17 +372,17 @@ fn replaceable_worker(delivery: &serde_json::Value) -> bool {
 pub(in crate::server) async fn before_dispatch(
     state: &Arc<AppState>,
     session: &str,
-) -> Result<(), String> {
+) -> Result<Option<RecoveryV1>, String> {
     use crate::execution_protocol::{Command, Response as KeeperResponse, Scope};
     let info = state
         .hub
         .session_info(session)
         .ok_or("Session no longer exists")?;
     let Some(record) = &info.meta.execution_binding else {
-        return Ok(());
+        return Ok(None);
     };
     if record.managed().is_some() {
-        return Ok(());
+        return Ok(None);
     }
     if !state.runtime_router.connected(&info.meta.machine_id) {
         return Err("runtime is not connected".into());
@@ -424,7 +424,7 @@ pub(in crate::server) async fn before_dispatch(
                 .execution_readiness
                 .ready(&state.machine_control, session, &previous)
         {
-            return finish_ready_worker(state, session, &previous).await;
+            return worker_recovery_for_ready_target(state, session, &previous).await;
         }
         let target_connection = state
             .machine_control
@@ -447,7 +447,7 @@ pub(in crate::server) async fn before_dispatch(
         match response {
             Response::Call { response: KeeperResponse::Ready { scope, .. } } if scope == Scope::from_binding(&previous) => {
                 state.execution_readiness.remember(&state.machine_control, session, &previous, target_connection);
-                return finish_ready_worker(state, session, &previous).await;
+                return worker_recovery_for_ready_target(state, session, &previous).await;
             }
             Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {}
             _ => return Err("Execution target unavailable or identity changed; retained prompt was not delivered".into()),
@@ -459,7 +459,7 @@ pub(in crate::server) async fn before_dispatch(
             previous,
         }
     };
-    finish_auto_recovery(state, session, intent).await
+    prepare_auto_recovery(state, session, intent).await
 }
 
 fn wake_intent(previous: BindingV1) -> RecoveryV1 {
@@ -471,11 +471,11 @@ fn wake_intent(previous: BindingV1) -> RecoveryV1 {
     }
 }
 
-async fn finish_ready_worker(
+async fn worker_recovery_for_ready_target(
     state: &Arc<AppState>,
     session: &str,
     binding: &BindingV1,
-) -> Result<(), String> {
+) -> Result<Option<RecoveryV1>, String> {
     let info = state
         .hub
         .session_info(session)
@@ -485,13 +485,13 @@ async fn finish_ready_worker(
         .runtime(&info.meta.machine_id)
         .ok_or("runtime disconnected")?;
     if runtime.worker_matches_execution(session, binding) {
-        return Ok(());
+        return Ok(None);
     }
     let Some(previous) = runtime.worker_execution_binding(session) else {
         return if runtime.has_worker(session) {
             Err("Worker execution identity is unknown; explicit recovery is required".into())
         } else {
-            Ok(())
+            Ok(None)
         };
     };
     let intent = wake_intent(previous);
@@ -502,14 +502,14 @@ async fn finish_ready_worker(
     }
     // A committed binding can outlive its Controller before worker replacement.
     // Observe the same target-owned receipt, then finish the original operation.
-    finish_auto_recovery(state, session, intent).await
+    prepare_auto_recovery(state, session, intent).await
 }
 
-async fn finish_auto_recovery(
+async fn prepare_auto_recovery(
     state: &Arc<AppState>,
     session: &str,
     intent: RecoveryV1,
-) -> Result<(), String> {
+) -> Result<Option<RecoveryV1>, String> {
     {
         let mut maintenance = state.execution_closures.lock();
         if maintenance.contains_key(session) {
@@ -530,16 +530,10 @@ async fn finish_auto_recovery(
     };
     let (_, reload) = checked(state, session, None, request).await?;
     drop(fence);
-    if reload {
-        state
-            .supervisor
-            .recover_execution_session(session, intent)?;
-    }
-    tracing::info!(
-        session,
-        "recovered proven lost execution lifetime before prompt delivery"
-    );
-    Ok(())
+    tracing::info!(session, "prepared lost target for admitted prompt delivery");
+    // Runtime worker replacement belongs to the same admission lease as the
+    // prompt. Target readiness alone must never allocate a cold worker.
+    Ok(reload.then_some(intent))
 }
 
 #[cfg(test)]
