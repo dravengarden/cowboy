@@ -1,5 +1,140 @@
 {
  "results": {
+  "binary_heic": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .heic file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_heif": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .heif file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_avif": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .avif file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_zst": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zst file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_lz4": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .lz4 file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_whl": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .whl file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_dmg": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .dmg file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_apk": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .apk file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_docm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .docm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_dotx": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .dotx file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_dotm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .dotm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_xlsm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .xlsm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_xlsb": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .xlsb file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_xltx": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .xltx file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_xltm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .xltm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_pptm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .pptm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_ppsx": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .ppsx file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_ppsm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .ppsm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_potx": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .potx file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_potm": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .potm file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_numbers": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .numbers file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_epub": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .epub file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_parquet": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .parquet file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_feather": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .feather file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_npy": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .npy file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_npz": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .npz file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
+  "binary_pickle": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .pickle file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
+   "notes": []
+  },
   "whole_one": {
    "is_error": false,
    "content": [
@@ -308,7 +443,7 @@
   },
   "image_bytes_text_name": {
    "is_error": false,
-   "content": "1\t�PNG\n2\t\u001a\n3\t\u0000\u0000\u0000\rIHDR\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0002\b\u0002\u0000\u0000\u0000�Ԛs\u0000\u0000\u0000\u0010IDATx\u0001c���\u0000D \fD\u0000\u001f�\u0003�FA�\u0000\u0000\u0000\u0000IEND�B`�",
+   "content": "1\t�PNG\n2\t\u001a\n3\t\u0000\u0000\u0000\rIHDR\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0002\b\u0002\u0000\u0000\u0000�Ԛs\u0000\u0000\u0000\u0010IDATx\u0001c���\u0000D \fD\u0000\u001f�\u0003�FA�\u0000\u0000\u0000\u0000IEND�B`�\n\n[This file has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs. Edit and Write will refuse it: change it with a shell command that keeps its encoding, or ask the user whether to convert it to UTF-8.]",
    "notes": []
   }
  }

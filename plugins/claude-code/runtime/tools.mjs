@@ -644,7 +644,7 @@ function decode(bytes) {
   }
 }
 
-// A text file as native's file tools read it (2.1.296, measured): UTF-16LE
+// A text file as native's file tools read it (2.1.302, measured): UTF-16LE
 // when it starts with that byte order mark, otherwise UTF-8 with invalid
 // bytes replaced and a byte order mark set aside; CRLF read as LF. `lossy`
 // says that bytes were replaced, so writing the text back would lose them.
@@ -665,12 +665,27 @@ export function textFile(bytes) {
   };
 }
 
-// Native's refusals to save a file it could not decode (2.1.296): an Edit of
-// it, and a Write of the replacement characters Read showed for it.
-const LOSSY_EDIT =
-  "File is not valid UTF-8. It may use a legacy encoding such as Windows-1252, Shift-JIS or GBK, or be binary. This tool saves the whole file as UTF-8, which would replace every byte it cannot decode with U+FFFD. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first.";
-const LOSSY_WRITE =
-  "The file on disk is not valid UTF-8, and the new content holds U+FFFD, which is what Read shows for the bytes of that file it cannot decode. If the content came from Read, writing it destroys those characters. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first.";
+// Native 2.1.302 refuses both Edit and Write on undecodable or NUL-bearing
+// files, even when the replacement text itself is valid UTF-8.
+function encodingRefusal(bytes, file) {
+  const reason = !file.utf16 && bytes.subarray(0, 8192).includes(0)
+    ? "File has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
+    : file.lossy
+    ? "File is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary."
+    : null;
+  return reason && reason +
+      " These tools write UTF-8 (or UTF-16LE behind its byte-order mark) and never convert a file's encoding on their own, so nothing was written. If the file is text, make the change with a shell command that reads and writes it in its own encoding (iconv, or PowerShell Get-Content/Set-Content -Encoding), or ask the user whether to convert it to UTF-8 first. To replace the whole file with new UTF-8 text anyway, delete it first, then Write it.";
+}
+
+function encodingWarning(bytes, file) {
+  const reason = !file.utf16 && bytes.subarray(0, 8192).includes(0)
+    ? "This file has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
+    : file.lossy
+    ? "This file is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary. Its undecodable bytes show above as U+FFFD."
+    : null;
+  return reason &&
+    `[${reason} Edit and Write will refuse it: change it with a shell command that keeps its encoding, or ask the user whether to convert it to UTF-8.]`;
+}
 // Native's answer to allow_large where the read does not run beside it. The
 // target's limits bound what one call returns, so the flag raises nothing.
 const ALLOW_LARGE_UNAVAILABLE =
@@ -793,7 +808,7 @@ export function endedCommand(shell, script, end, cwdFile) {
   ];
 }
 
-// Extensions native's Read refuses as binary (2.1.287); images and PDFs
+// Extensions native's Read refuses as binary (2.1.302); images and PDFs
 // among them have readers of their own.
 const BINARY_EXTENSIONS = new Set(
   (".png .jpg .jpeg .gif .bmp .ico .webp .tiff .tif .mp4 .mov .avi .mkv " +
@@ -803,7 +818,9 @@ const BINARY_EXTENSIONS = new Set(
     ".xlsx .ppt .pptx .odt .ods .odp .ttf .otf .woff .woff2 .eot .pyc .pyo " +
     ".class .jar .war .ear .node .wasm .rlib .sqlite .sqlite3 .db .mdb .idx " +
     ".psd .ai .eps .sketch .fig .xd .blend .3ds .max .swf .fla .lockb .dat " +
-    ".data").split(" "),
+    ".data .heic .heif .avif .zst .lz4 .whl .dmg .apk .docm .dotx .dotm " +
+    ".xlsm .xlsb .xltx .xltm .pptm .ppsx .ppsm .potx .potm .numbers .epub " +
+    ".parquet .feather .npy .npz .pickle").split(" "),
 );
 
 // Native's PDF limits and `pages` grammar ("3", "1-5", "10-").
@@ -2047,8 +2064,12 @@ export class WorkspaceTools {
     const data = JSON.parse(result.output);
     if (data.fallback === true) return null;
     if (data.error) throw new Error(data.error);
+    // Older helpers decode UTF-16 as UTF-8. Without an explicit encoding
+    // observation use the bounded full-file path, including on retained hosts.
+    if (data.textEncoding === undefined) return null;
     if (
-      data.schema !== 1 || !/^[a-f0-9]{64}$/.test(data.sha256) ||
+      data.schema !== 1 || data.textEncoding !== "utf8" ||
+      !/^[a-f0-9]{64}$/.test(data.sha256) ||
       !Number.isSafeInteger(data.size) || data.size < 0 ||
       data.size > MAX_FILE ||
       !Number.isSafeInteger(data.totalLines) || data.totalLines < 1 ||
@@ -2063,7 +2084,6 @@ export class WorkspaceTools {
     if (bytes.toString("base64") !== data.dataBase64) {
       throw new Error("Invalid target range encoding");
     }
-    // Shown as a whole-file Read is: lossy UTF-8, BOM aside, CRLF as LF.
     // Shown as a whole-file Read is: a BOM only at the file's start, and a
     // CR only where an LF follows (the range ends before its last LF, if the
     // file goes on).
@@ -3563,10 +3583,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       // As natively, `pages` means nothing for a file not named .pdf.
       const offset = bounded(args.offset, 1, 1, 10000000) - 1;
       const limit = bounded(args.limit, 2000, 1, 10000);
-      // As natively: shown as UTF-8 (invalid bytes replaced, even for a
-      // UTF-16 file Edit would detect), BOM aside and CRLF as LF.
-      const lines = new TextDecoder("utf-8").decode(bytes)
-        .replaceAll("\r\n", "\n").split("\n");
+      // Read and Edit now agree on BOM-marked UTF-16LE decoding.
+      const decoded = textFile(bytes);
+      const warning = encodingWarning(bytes, decoded);
+      const lines = decoded.text.split("\n");
       const selected = lines.slice(offset, offset + limit);
       const result = selected.map((line, index) =>
         `${offset + index + 1}\t${line}`
@@ -3578,16 +3598,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         );
       }
       return await remember(
-        text(result, {
-          type: "text",
-          file: {
-            filePath: shown,
-            content: selected.join("\n"),
-            numLines: selected.length,
-            startLine: offset + 1,
-            totalLines: lines.length,
-          },
-        }),
+        {
+          ...text(result, {
+            type: "text",
+            file: {
+              filePath: shown,
+              content: selected.join("\n"),
+              numLines: selected.length,
+              startLine: offset + 1,
+              totalLines: lines.length,
+            },
+          }),
+          ...(warning ? { context: [warning] } : {}),
+        },
       );
     }
     // Natively an unread file may be written or edited; one read since and
@@ -3606,14 +3629,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     let notebookResult;
     let written;
     let originalText = null;
-    // What Read showed for the file is not what Edit decodes (a UTF-16 file
-    // reads as UTF-8), so the edited text is not what the model holds.
-    let unseen = false;
+    if (bytes && (name === "write" || name === "edit")) {
+      const refusal = encodingRefusal(bytes, textFile(bytes));
+      if (refusal) throw new Error(refusal);
+    }
     if (name === "write") {
       content = checkedString(args.content, "content");
-      if (bytes && textFile(bytes).lossy && content.includes("\ufffd")) {
-        throw new Error(LOSSY_WRITE);
-      }
     } else if (name === "edit") {
       // Matched against the file's LF form, the strings as given (a CR in
       // old_string does not match a CRLF file, natively).
@@ -3626,8 +3647,6 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         written = Buffer.from(content);
       } else {
         const file = textFile(bytes);
-        if (file.lossy) throw new Error(LOSSY_EDIT);
-        unseen = file.utf16;
         const original = file.text;
         originalText = original;
         if (!old) {
@@ -3825,9 +3844,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         structuredPatch: patch(originalFile, content),
         userModified: false,
         replaceAll: args.replace_all === true,
-        // Natively an edit of an unread file, or of one Read showed in
-        // another decoding, says its content is not known.
-        ...((known === undefined && bytes) || unseen
+        // Natively an edit of an unread file says its content is not known.
+        ...(known === undefined && bytes
           ? { contentNotInModelContext: true }
           : {}),
       }
@@ -4242,6 +4260,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (result.task) return { result: result.native, task: result.task };
     const answer = {
       result: result.native,
+      ...(result.context ? { context: result.context } : {}),
       // A command still running whose output has no task notification.
       ...(result.running ? { running: true } : {}),
       ...(result.localRead

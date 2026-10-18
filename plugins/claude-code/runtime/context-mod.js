@@ -1706,6 +1706,7 @@ export function register(on) {
           // Nested instruction files follow the result, as natively.
           const reminders = [
             ...pre.context,
+            ...(result.context ?? []),
             ...(Array.isArray(nested)
               ? nested.map((file) =>
                 `Contents of ${file.path}:\n\n${file.content}`

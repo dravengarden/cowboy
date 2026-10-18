@@ -1,9 +1,9 @@
 {
   "name": "cowboy-runtime-claude-agent-acp",
-  "version": "0.89.1",
+  "version": "0.93.0",
   "private": true,
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.89.1",
+    "@agentclientprotocol/claude-agent-acp": "0.93.0",
     "ws": "8.22.0"
   }
 }

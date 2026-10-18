@@ -467,7 +467,7 @@ execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
 
 # Real detached target keeper; its control clients all disconnect for 35 seconds.
 execution-keeper-conformance KEEPER CLI VERSION SHA256 RECEIPT:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_keeper_conformance.py "$@"' conformance --keeper "{{KEEPER}}" --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_keeper_conformance.py "$@"' conformance --parent-net-namespace "$(readlink /proc/self/ns/net)" --keeper "{{KEEPER}}" --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
 
 # Actual native Provider launcher -> worker WS -> Machine manager -> keeper.
 # The PID namespace owns all detached fixture processes; no production auth.

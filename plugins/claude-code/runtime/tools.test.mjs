@@ -113,12 +113,13 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
   );
   assert.match(run(join(directory, "missing")).error, /failed/);
   assert.match(run(directory).error, /failed/);
-  // Invalid UTF-8 reads with replacement characters, as natively.
+  // Encoding-sensitive reads use the full reader so its warning is preserved.
   await writeFile(target, Buffer.from([255]));
-  assert.equal(
-    Buffer.from(run(target).dataBase64, "base64").toString(),
-    "\ufffd",
-  );
+  assert.equal(run(target).fallback, true);
+  await writeFile(target, Buffer.from("text\0tail"));
+  assert.equal(run(target).fallback, true);
+  await writeFile(target, Buffer.from([255, 254, 65, 0]));
+  assert.equal(run(target).fallback, true);
   // A racing write is exercised deterministically in the Rust helper tests.
   await writeFile(
     target,
@@ -133,7 +134,12 @@ test("range results fail closed without granting edit authority", async (t) => {
   tools.fileHelper = fileHelper;
   tools.command = async () => ({
     exitCode: 0,
-    output: JSON.stringify({ schema: 1, sha256: "bad", size: 10 }),
+    output: JSON.stringify({
+      schema: 1,
+      textEncoding: "utf8",
+      sha256: "bad",
+      size: 10,
+    }),
   });
   assert.match(
     (await tools.nativeCall("Read", { file_path: "file" })).deny,
@@ -157,6 +163,40 @@ test("small files retain two native RPCs without a utility startup", async (t) =
     "fs/getMetadata",
     "fs/readFile",
   ]);
+});
+
+test("retained range helpers fall back to a fresh correctly decoded UTF-16 read", async (t) => {
+  const { tools, files, calls } = await fixture(t);
+  tools.fileHelper = fileHelper;
+  const original = Buffer.concat([
+    Buffer.from([0xff, 0xfe]),
+    Buffer.from("line\n".repeat(15000), "utf16le"),
+  ]);
+  files.set("/target with space/file", original);
+  let ranged = false;
+  tools.command = async () => {
+    ranged = true;
+    return {
+      exitCode: 0,
+      output: JSON.stringify({ schema: 1, dataBase64: "" }),
+    };
+  };
+  const read = await tools.nativeCall("Read", { file_path: "file", limit: 2 });
+  assert.equal(ranged, true);
+  assert.equal(read.result.file.content, "line\nline");
+  assert.equal(read.context, undefined);
+  assert.equal(calls.filter((call) => call.method === "fs/readFile").length, 1);
+  files.set(
+    "/target with space/file",
+    Buffer.concat([original, Buffer.from("changed")]),
+  );
+  const edit = await tools.nativeCall("Edit", {
+    file_path: "file",
+    old_string: "line",
+    new_string: "new",
+    replace_all: true,
+  });
+  assert.match(edit.deny, /modified since read/);
 });
 
 test("an undelivered Read leaves the file unread, which natively may be written", async (t) => {
@@ -867,7 +907,7 @@ test("tilde paths use executor home and share read stamps with absolute target p
   );
 });
 
-test("Write can replace a previously read image without a post-write decode failure", async (t) => {
+test("Write refuses a previously read binary image without changing it", async (t) => {
   const { tools, files, calls } = await fixture(t);
   files.set(
     "/target with space/pixel",
@@ -881,16 +921,14 @@ test("Write can replace a previously read image without a post-write decode fail
     file_path: "pixel",
     content: "replacement\n",
   });
-  assert.equal(result.deny, undefined);
-  assert.equal(result.result.originalFile, null);
-  assert.equal(result.result.type, "update");
+  assert.match(result.deny, /File has NUL bytes/);
   assert.equal(
-    files.get("/target with space/pixel").toString(),
-    "replacement\n",
+    files.get("/target with space/pixel").toString("hex"),
+    "89504e470d0a1a0a0001020304",
   );
   assert.equal(
     calls.filter((call) => call.method === "fs/writeFile").length,
-    1,
+    0,
   );
 });
 
@@ -1253,41 +1291,47 @@ test("a file that is not UTF-8 is not saved as UTF-8, as natively", async (t) =>
   const { tools, files } = await fixture(t);
   const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0x6f, 0x6c, 0x64]);
   files.set("/target with space/latin1", latin1);
-  await tools.nativeCall("Read", { file_path: "latin1" });
+  const read = await tools.nativeCall("Read", { file_path: "latin1" });
+  assert.equal(read.result.file.content, "caf\ufffd old");
+  assert.match(read.context[0], /Edit and Write will refuse it/);
   assert.match(
     (await tools.nativeCall("Edit", {
       file_path: "latin1",
       old_string: "old",
       new_string: "new",
     })).deny,
-    /^File is not valid UTF-8\. .* Nothing was written\. /,
+    /^File is not valid UTF-8: .* nothing was written\. /,
   );
   assert.match(
     (await tools.nativeCall("Write", {
       file_path: "latin1",
       content: "caf\ufffd new",
     })).deny,
-    /^The file on disk is not valid UTF-8, and the new content holds U\+FFFD/,
+    /^File is not valid UTF-8:/,
   );
   assert.deepEqual(files.get("/target with space/latin1"), latin1);
-  // Content of its own replaces the file, as any Write does.
-  await tools.nativeCall("Write", { file_path: "latin1", content: "cafe\n" });
-  assert.equal(files.get("/target with space/latin1").toString(), "cafe\n");
+  const plain = await tools.nativeCall("Write", {
+    file_path: "latin1",
+    content: "cafe\n",
+  });
+  assert.match(plain.deny, /^File is not valid UTF-8:/);
+  assert.deepEqual(files.get("/target with space/latin1"), latin1);
 });
 
-test("an edit of a file Read showed in another decoding is not in context", async (t) => {
+test("UTF-16 Read and Edit share the same decoded context", async (t) => {
   const { tools, files } = await fixture(t);
   files.set(
     "/target with space/utf16",
     Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("one\n", "utf16le")]),
   );
-  await tools.nativeCall("Read", { file_path: "utf16" });
+  const read = await tools.nativeCall("Read", { file_path: "utf16" });
+  assert.equal(read.result.file.content, "one\n");
   const edited = await tools.nativeCall("Edit", {
     file_path: "utf16",
     old_string: "one",
     new_string: "uno",
   });
-  assert.equal(edited.result.contentNotInModelContext, true);
+  assert.equal(edited.result.contentNotInModelContext, undefined);
   files.set("/target with space/utf8", Buffer.from("one\n"));
   await tools.nativeCall("Read", { file_path: "utf8" });
   const plain = await tools.nativeCall("Edit", {
@@ -1296,6 +1340,28 @@ test("an edit of a file Read showed in another decoding is not in context", asyn
     new_string: "uno",
   });
   assert.equal(plain.result.contentNotInModelContext, undefined);
+});
+
+test("NUL reads warn without contaminating content and refuse both mutations", async (t) => {
+  const { tools, files } = await fixture(t);
+  const original = Buffer.from("old\0text\n");
+  files.set("/target with space/nul.txt", original);
+  const read = await tools.nativeCall("Read", { file_path: "nul.txt" });
+  assert.equal(read.result.file.content, original.toString());
+  assert.match(read.context[0], /NUL bytes in its first 8 KB/);
+  for (
+    const [name, input] of [
+      ["Edit", { old_string: "old", new_string: "new" }],
+      ["Write", { content: "new UTF-8 text" }],
+    ]
+  ) {
+    const result = await tools.nativeCall(name, {
+      file_path: "nul.txt",
+      ...input,
+    });
+    assert.match(result.deny, /nothing was written/);
+    assert.deepEqual(files.get("/target with space/nul.txt"), original);
+  }
 });
 
 test("allow_large reads as usual and says that it raises no limit here", async (t) => {
