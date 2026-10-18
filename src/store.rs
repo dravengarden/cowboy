@@ -34,6 +34,7 @@ use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
+pub(crate) mod agent_api_operations;
 mod browser_devices;
 mod cardea_operations;
 mod copy;

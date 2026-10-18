@@ -75,6 +75,12 @@ require the exact successful build receipt and published SideStore version.
   credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
+- Agents use Cowboy MCP first for Cowboy state and control. Load only the
+  needed help topic/domain, reuse its revision, compose reads, and return a small
+  projection. Use a stable operation ID and inspect its receipt after uncertainty.
+  CLI remains supported for unavailable live MCP capabilities and the explicit
+  native/host/identity boundaries in `docs/agent-api.md`. Do not replay an unknown
+  effect under a new ID or interpret accepted submission as confirmed completion.
 - **Configuration**: the Service and each Device own one TOML file through the
   unified framework in `src/config.rs`; see `docs/configuration.md`. Decide
   every new setting with its "Where a setting belongs" rule (wiring/secret →

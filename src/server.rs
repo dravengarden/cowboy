@@ -256,6 +256,7 @@ fn resumed_provider_authentication_response(
 
 struct AppState {
     service_id: String,
+    service_config_path: PathBuf,
     /// The Service configuration file, with live fields following edits.
     service_config: crate::config::Handle,
     hub: Hub,
@@ -1157,7 +1158,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     )?);
     // Lives for the whole process; it only reads the file and swaps values.
     let _service_config_watch =
-        service_config.watch(crate::config::Scope::Service, service_config_path);
+        service_config.watch(crate::config::Scope::Service, service_config_path.clone());
     plugin_catalog.initialize()?;
     let plugin_dir =
         crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
@@ -1811,6 +1812,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         args.data_dir.clone(),
         AppState {
             service_id,
+            service_config_path,
             service_config,
             hub,
             supervisor,

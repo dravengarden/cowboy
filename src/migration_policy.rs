@@ -6,6 +6,10 @@ use sha2::Digest as _;
 
 const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
+        "0061_agent_api_operations.sql",
+        "c44c52215b76d3cdc6577fba9c562feeec159bb4fb656df936b52cee78a1804c",
+    ),
+    (
         "0060_user_preferences.sql",
         "7c997785347c87aad5a87f6211b2cf43671820343a1bf15338cb99c4b2242d98",
     ),
@@ -115,6 +119,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0035_agent_api_operations.sql",
+        "2f11dadc50d2b88f370c28d461b7d92699ed189e58f909bd4ce52fc5d2ab150e",
+    ),
     (
         "0034_user_preferences.sql",
         "7c997785347c87aad5a87f6211b2cf43671820343a1bf15338cb99c4b2242d98",

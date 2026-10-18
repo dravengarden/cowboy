@@ -91,6 +91,7 @@
           ./config
           ./migrations
           ./web/src/protocol.ts
+          ./contracts/agent-api-coverage.json
           ./contracts/code-buffer-client.fixture.json
           ./contracts/code-buffer-sync.fixture.json
           ./contracts/code-buffer-sync-budget.fixture.json
@@ -344,7 +345,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-h/QojxLSaC7xHKbEfb48fu2MOZihHt2MqaqTVP4wQVg=";
+        hash = "sha256-hplNnXifJTcRwdNe7TUkvQF/MWccLcR0wchznDALZhQ=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';

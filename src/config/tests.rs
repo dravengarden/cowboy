@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn a_missing_config_file_can_be_created_with_its_observed_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("service.toml");
+    let view = editable(Scope::Service, &path).unwrap();
+    assert_eq!(view["values"]["schema"], 1);
+    patch(
+        Scope::Service,
+        &path,
+        view["revision"].as_str().unwrap(),
+        &serde_json::json!({"plugins.auto_update_idle_sessions":false}),
+    )
+    .unwrap();
+    assert_ne!(
+        editable(Scope::Service, &path).unwrap()["revision"],
+        view["revision"]
+    );
+    assert!(
+        check_text(
+            Scope::Service,
+            &std::fs::read_to_string(path).unwrap(),
+            None
+        )
+        .is_valid()
+    );
+}
+
 fn codes(report: &Report) -> Vec<&'static str> {
     report
         .diagnostics
@@ -353,4 +380,107 @@ fn install_validates_keeps_history_and_rejects_unsafe_files() {
         vec!["not-a-regular-file"]
     );
     assert!(load(Scope::Device, &link).is_err());
+}
+#[test]
+fn agent_patch_compares_persisted_revision_and_serializes_competing_writers() {
+    let root = tempfile::tempdir().unwrap();
+    let path = Scope::Service.path_in(root.path());
+    install(
+        Scope::Service,
+        &path,
+        "schema = 1\n[plugins]\nauto_update_idle_sessions = false\n",
+    )
+    .unwrap();
+    let initial = editable(Scope::Service, &path).unwrap();
+    let revision = initial["revision"].as_str().unwrap();
+    std::thread::scope(|threads| {
+        let one = threads.spawn(|| {
+            patch(
+                Scope::Service,
+                &path,
+                revision,
+                &serde_json::json!({"plugins.auto_update_idle_sessions":true}),
+            )
+        });
+        let two = threads.spawn(|| {
+            patch(
+                Scope::Service,
+                &path,
+                revision,
+                &serde_json::json!({"plugins.auto_update_idle_sessions":true}),
+            )
+        });
+        let (one, two) = (one.join().unwrap(), two.join().unwrap());
+        assert_ne!(one.is_ok(), two.is_ok());
+        assert_eq!(
+            one.err().or_else(|| two.err()).unwrap().to_string(),
+            "revision_conflict"
+        );
+    });
+    let current = editable(Scope::Service, &path).unwrap();
+    assert_eq!(
+        current["values"]["plugins"]["auto_update_idle_sessions"],
+        true
+    );
+    assert_ne!(current["revision"], initial["revision"]);
+    let revision = current["revision"].as_str().unwrap();
+    assert!(
+        patch(
+            Scope::Service,
+            &path,
+            revision,
+            &serde_json::json!({"not.a.setting":true})
+        )
+        .is_err()
+    );
+    assert_eq!(editable(Scope::Service, &path).unwrap(), current);
+    patch(
+        Scope::Service,
+        &path,
+        revision,
+        &serde_json::json!({"plugins.auto_update_idle_sessions":null}),
+    )
+    .unwrap();
+    assert!(
+        !load(Scope::Service, &path)
+            .unwrap()
+            .get(&schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS)
+    );
+}
+#[test]
+fn patch_rechecks_original_authority_after_waiting_for_the_shared_writer() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("service.toml");
+    install(Scope::Service, &path, "schema = 1\n").unwrap();
+    let revision = editable(Scope::Service, &path).unwrap()["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let lock = writer_lock(&path).unwrap();
+    let allowed = Arc::new(AtomicBool::new(true));
+    let worker_allowed = Arc::clone(&allowed);
+    let worker_path = path.clone();
+    let worker = std::thread::spawn(move || {
+        patch_checked(
+            Scope::Service,
+            &worker_path,
+            &revision,
+            &serde_json::json!({"plugins.auto_update_idle_sessions":true}),
+            || {
+                anyhow::ensure!(worker_allowed.load(Ordering::Acquire), "permission_denied");
+                Ok(())
+            },
+        )
+    });
+    allowed.store(false, Ordering::Release);
+    drop(lock);
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().to_string(),
+        "permission_denied"
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "schema = 1\n");
 }

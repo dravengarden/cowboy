@@ -22,7 +22,10 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 31;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 32;
+/// `AgentInvoke` carries Controller-discovered operation names, not a frozen
+/// transport allowlist. The envelope and authority checks remain unchanged.
+pub const AGENT_CONTROL_PROTOCOL_VERSION: u16 = 32;
 pub const EXECUTION_RECOVERY_PROTOCOL_VERSION: u16 = 27;
 /// Machines host parent-scoped managed-call gateways and managed child rounds.
 pub const MANAGED_CALL_PROTOCOL_VERSION: u16 = 28;

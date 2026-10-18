@@ -59,7 +59,7 @@ fn tools(actions: bool) -> Value {
         {
             "name":"cowboy_receipt","description":RECEIPT_DESCRIPTION,
             "inputSchema":{"type":"object","properties":{
-                "domain":{"enum":["calls","documents","preferences"]},"operation":{"type":"string"}
+                "domain":{"type":"string"},"operation":{"type":"string"}
             },"required":["domain","operation"],"additionalProperties":false},
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
@@ -159,10 +159,9 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
     }
     if name == "cowboy_receipt" {
         if tagged.as_object().is_none_or(|map| map.len() != 2)
-            || !matches!(
-                tagged["domain"].as_str(),
-                Some("calls" | "documents" | "preferences")
-            )
+            || tagged["domain"]
+                .as_str()
+                .is_none_or(|id| !crate::managed_calls::valid_id(id))
             || tagged["operation"]
                 .as_str()
                 .is_none_or(|id| !crate::managed_calls::valid_id(id))
@@ -302,7 +301,11 @@ async fn handle(
                 ));
             };
             let timeout = action.wait_ms();
-            Ok(tool_result(exchange(context, action, timeout).await))
+            let mut reply = exchange(context, action, timeout).await;
+            if name == "cowboy_status" && reply["state"] == "ok" {
+                reply["client"] = json!({"action_catalog":true,"receipt_domains":"dynamic"});
+            }
+            Ok(tool_result(reply))
         }
         _ => Err((-32601, "method not found".into())),
     }
@@ -682,11 +685,25 @@ mod tests {
             })
         ));
         for arguments in [
-            json!({"action":"shell","arguments":{},"operation":"x"}),
+            json!({"action":"shell/exec","arguments":{},"operation":"x"}),
             json!({"action":"review.start","arguments":{},"operation":"../x"}),
             json!({"action":"review.start","arguments":[],"operation":"x"}),
         ] {
             assert!(action("cowboy_execute", &arguments).is_err());
         }
+        assert!(
+            action(
+                "cowboy_execute",
+                &json!({"action":"future.operation","arguments":{},"operation":"x"})
+            )
+            .is_ok()
+        );
+        assert!(
+            action(
+                "cowboy_receipt",
+                &json!({"domain":"future","operation":"x"})
+            )
+            .is_ok()
+        );
     }
 }

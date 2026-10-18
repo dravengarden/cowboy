@@ -29,6 +29,7 @@ use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
+mod control;
 mod event_reads;
 mod json_reads;
 mod observations;
@@ -57,11 +58,28 @@ pub(super) fn status(state: &Arc<AppState>, meta: &SessionMeta, grant: &Grant) -
     let Some(info) = state.hub.session_info(&meta.id) else {
         return error("not_found");
     };
-    status_view(
+    let mut value = status_view(
         &info,
         super::agent_tools::effective(state, meta).calls.enabled,
         grant,
-    )
+    );
+    value["control"] = json!({"writes": control_supported(state,meta),"minimum_execution_protocol":crate::machine_protocol::AGENT_CONTROL_PROTOCOL_VERSION});
+    value
+}
+
+fn control_supported(state: &AppState, meta: &SessionMeta) -> bool {
+    state
+        .runtime_router
+        .runtime(&meta.machine_id)
+        .and_then(|runtime| runtime.managed_call_authority(&state.service_id, meta).ok())
+        .and_then(|authority| {
+            state
+                .machine_control
+                .connection_protocol(&authority.placement().machine_id)
+        })
+        .is_some_and(|(_, protocol)| {
+            protocol >= crate::machine_protocol::AGENT_CONTROL_PROTOCOL_VERSION
+        })
 }
 
 fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value {
@@ -172,6 +190,9 @@ impl Host for SessionHost<'_> {
         // lose its account while a preceding operation is awaiting a reply.
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
         match op {
+            "control.list" | "control.describe" | "control.read" => {
+                control::read(self.state, self.meta, op, args).await
+            }
             "machines.list"
             | "machines.read"
             | "configuration.schema"

@@ -127,7 +127,10 @@ impl Action {
                 arguments,
                 operation,
             } => {
-                if !crate::agent_api::INVOKE_OPERATIONS.contains(&action.as_str())
+                // The Controller owns live operation discovery. Transport
+                // validates the bounded envelope, never a frozen SDK allowlist.
+                // Unknown operations still fail closed in its dispatcher.
+                if !valid_id(action)
                     || !arguments.is_object()
                     || operation.as_ref().is_some_and(|id| !valid_id(id))
                     || (action == "receipts.get") != operation.is_none()

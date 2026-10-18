@@ -11,6 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 enum Credential {
+    Agent {
+        parent: Box<crate::core::SessionMeta>,
+        permissions: crate::core::ProductPermissionObservation,
+    },
     Cardea(Box<super::cardea_authorization::Grant>),
     Product(super::product_continuation::ProductContinuation),
     #[cfg(unix)]
@@ -29,6 +33,36 @@ pub(super) struct OperatorApproval {
 }
 
 impl OperatorApproval {
+    /// A native session's live product authority, never a host delegation or
+    /// a synthetic browser cookie. Captured only after gateway admission.
+    pub(super) fn capture_agent(
+        service: &str,
+        parent: &crate::core::SessionMeta,
+        authenticated: &AuthenticatedProductRequest,
+    ) -> Result<Self, StatusCode> {
+        let permissions = authenticated
+            .permissions
+            .clone()
+            .ok_or(StatusCode::FORBIDDEN)?;
+        if parent.system
+            || parent.closing
+            || parent.owner_user_id.as_deref() != Some(&authenticated.principal.user_id)
+            || !authenticated.principal.role.at_least(AdminRole::Operator)
+        {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        Ok(Self {
+            service: service.to_owned(),
+            actor: Actor::Product {
+                user_id: authenticated.principal.user_id.clone(),
+            },
+            credential: Credential::Agent {
+                parent: Box::new(parent.clone()),
+                permissions,
+            },
+            received: TimeSample::now(),
+        })
+    }
     fn require_general_purpose(&self) -> Result<()> {
         ensure!(
             !matches!(self.credential, Credential::Cardea(_)),
@@ -266,10 +300,35 @@ impl OperatorApproval {
         &self,
         auth: ProductRequestAuth<'_>,
     ) -> Option<ProductPrincipal> {
-        let Credential::Product(continuation) = &self.credential else {
-            return None;
+        let principal = match &self.credential {
+            Credential::Product(continuation) => continuation.current(auth).await?,
+            Credential::Agent {
+                parent,
+                permissions,
+            } => {
+                let owner = parent.owner_user_id.as_deref()?;
+                let user = auth.store?.user_by_id(owner).await.ok()??;
+                let current = auth.hub.session_info(&parent.id)?.meta;
+                if user.disabled_at_ms.is_some()
+                    || !permissions.current(auth.hub, &user.username)
+                    || current.system
+                    || current.closing
+                    || current.owner_user_id != parent.owner_user_id
+                    || current.provider_generation_digest != parent.provider_generation_digest
+                    || current.provider != parent.provider
+                    || current.provider_version != parent.provider_version
+                    || current.cwd != parent.cwd
+                    || current.provider_auth_generation != parent.provider_auth_generation
+                    || current.machine_id != parent.machine_id
+                    || current.execution_binding != parent.execution_binding
+                    || current.agent_session_id != parent.agent_session_id
+                {
+                    return None;
+                }
+                super::product_principal(auth.hub, &user)
+            }
+            _ => return None,
         };
-        let principal = continuation.current(auth).await?;
         (principal.role.at_least(AdminRole::Operator)
             && self.actor
                 == (Actor::Product {
