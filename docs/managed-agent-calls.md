@@ -287,7 +287,8 @@ Clear ended calls supports individual selection, bulk selection and Undo.
 them. This authenticated, parent-scoped operation hides only terminal calls.
 It preserves results, child ownership, budget counts and admission receipts,
 so cleanup cannot cause a duplicate launch. It is also available to product
-CLI clients through `cowboy api`; it does not cancel active work or delete code.
+CLI clients through `cowboy api` and MCP `control.apply` with
+`sessions.calls_dismiss`; it does not cancel active work or delete code.
 Suger's Codex reviewer adapter applies its own rule to its review rounds (it
 skips without prompting when off).
 

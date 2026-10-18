@@ -153,7 +153,10 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
     schema: 1,
     calls: { profiles: [{ guidance }] },
   });
-  assert.match(prompt, /Other delegation: `cowboy claude --help`/);
+  assert.match(
+    prompt,
+    /Other delegation: MCP calls.start; fallback `cowboy claude --help`/,
+  );
   assert.doesNotMatch(prompt, /\{\{|cowboy codex/);
   assert.equal(
     prompt,
@@ -164,8 +167,11 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
   );
   assert.match(prompt, /at most once per task/);
   assert.match(prompt, /cowboy review --ask/);
+  assert.match(prompt, /Prefer Cowboy MCP/);
+  assert.match(prompt, /review.start/);
+  assert.match(prompt, /inspect calls.result/);
+  assert.match(prompt, /review_selection/);
   assert.ok(prompt.length < 800);
-  assert.match(prompt, /cowboy call capabilities/);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   const added = agentCallsConfiguration([], "", prompt);
   assert.equal(

@@ -8,6 +8,7 @@
 //! background traffic; one `cowboy_read` program composes many reads inside a
 //! contained runtime beside the Controller's state and returns only its result.
 
+pub mod control;
 #[cfg(unix)]
 pub mod mcp;
 
@@ -31,6 +32,9 @@ pub const MAX_BROKER_BYTES: usize = 1024 * 1024;
 /// Every operation a read program may call, in SDK order. The Controller's
 /// dispatcher and [`SDK`] are checked against this list.
 pub const READ_OPERATIONS: &[&str] = &[
+    "control.list",
+    "control.describe",
+    "control.read",
     "api.help",
     "session.info",
     "session.usage",
@@ -72,6 +76,7 @@ pub const READ_OPERATIONS: &[&str] = &[
 
 /// Explicit actions use existing domain writers. Read programs cannot call them.
 pub const INVOKE_OPERATIONS: &[&str] = &[
+    "control.apply",
     "calls.start",
     "calls.cancel",
     "review.start",
@@ -81,7 +86,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
 ];
 
 pub const EXECUTE_DESCRIPTION: &str = "Perform one scoped Cowboy action; discover arguments with cowboy_read(help). action + arguments, and a stable operation ID for writes. Reuse identical input/ID after uncertainty; query cowboy_receipt. Actions have individual receipts, never a cross-action transaction. Calls obey the session's Tools policy.";
-pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply the original operation and domain (calls, documents, preferences). unknown does not prove failure; never retry under a new ID blindly.";
+pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply its original operation and domain from live help. unknown does not prove failure; never retry under a new ID blindly.";
 
 pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the GUI and persisted in DB.
 // Read: cowboy.preferences.schema(); cowboy.preferences.get("about") returns
@@ -112,6 +117,7 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string}
 // calls.cancel: {call_id:string}; operation MUST equal call_id. Cancellation is idempotent.
 // documents.mutate: {document_id:string,expected_revision:number,change:DraftChange}
+// control.apply: {name:string,input:object}; discover via cowboy.control.list(domain)/describe(name).
 // All mutations require a stable operation. Receipts are scoped to this parent session.
 // Documents require the parent's active operator account. Native calls keep their own policy.
 // Use body_revision for write_text/write; metadata_revision for rename/move; revision for trash/restore; 0 for create.
@@ -121,7 +127,7 @@ export type DraftChange =
   | {type:"write";body:string;attachments:unknown[]} // explicit replacement
   | {type:"rename";title:string} | {type:"move";parent_id:string|null}
   | {type:"trash"} | {type:"restore"};
-// cowboy_receipt({domain:"calls"|"documents"|"preferences",operation}) needs no sandbox.
+// cowboy_receipt({domain:"calls"|"documents"|"preferences"|"control",operation}) needs no sandbox.
 // Call admission returns call_id/state; use cowboy_read to wait/result. A running,
 // failed, interrupted or partial review is never evidence of a clean review.
 // Document receipt returns committed + document_id, or unknown. A replay never edits twice.
@@ -130,13 +136,16 @@ export type DraftChange =
 pub fn help(topic: &str) -> Option<serde_json::Value> {
     use serde_json::json;
     let mut value = match topic {
+        "control" => Some(
+            json!({"api":API_VERSION,"types":control::SDK,"domains":["sessions","queue","drafts","configuration","tools","folders","usage","machines","projects","plugins","diagnostics","sync"]}),
+        ),
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
+            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","control","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
         "preferences" => Some(
             json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
         ),
-        "read" => Some(json!({"api":API_VERSION,"types":SDK})),
+        "read" => Some(json!({"api":API_VERSION,"types":([SDK,control::SDK].concat())})),
         "session" => Some(
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_TYPES,SESSION_SDK].concat())}),
         ),
@@ -172,8 +181,13 @@ pub fn revision() -> &'static str {
     use sha2::{Digest as _, Sha256};
     static REVISION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         let mut hash = Sha256::new();
-        for source in [SDK, ACTION_SDK, PREFERENCES_SDK] {
+        for source in [SDK, ACTION_SDK, PREFERENCES_SDK, control::SDK] {
             hash.update(source.as_bytes());
+        }
+        for op in control::OPERATIONS {
+            hash.update(
+                serde_json::to_vec(&control::describe(op.name)).expect("catalog serializes"),
+            );
         }
         format!("{:x}", hash.finalize())[..16].to_owned()
     });
@@ -387,7 +401,7 @@ pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, q
 pub const READ_DESCRIPTION: &str = "Read Cowboy state and preferences. Pass help:'index' for on-demand APIs, or code: the body of async ({cowboy}) => { CODE }. Await calls, return selected JSON. TS/JS; no network/files; 16 calls, result16KiB, timeout_ms<=60000. Full SDK: cowboy://sdk/v1. Errors have .code.";
 
 /// Short server instructions, sent once at MCP initialization.
-pub const INSTRUCTIONS: &str = "Cowboy session tools. Prefer one cowboy_read program over several calls; cowboy_status needs no program.";
+pub const INSTRUCTIONS: &str = "Prefer Cowboy MCP for Cowboy state/control; CLI is a fallback. Compose reads in one cowboy_read; discover domain help only when needed and reuse its revision. cowboy_status needs no program.";
 
 #[cfg(test)]
 mod tests {
@@ -395,10 +409,11 @@ mod tests {
 
     #[test]
     fn every_operation_is_declared_in_the_sdk_and_the_description() {
+        let sdk = [SDK, control::SDK].concat();
         for operation in READ_OPERATIONS {
             let (namespace, method) = operation.split_once('.').unwrap();
-            assert!(SDK.contains(&format!("{namespace}: {{")), "{namespace}");
-            assert!(SDK.contains(&format!("    {method}(")), "{operation}");
+            assert!(sdk.contains(&format!("{namespace}: {{")), "{namespace}");
+            assert!(sdk.contains(&format!("{method}(")), "{operation}");
         }
     }
 

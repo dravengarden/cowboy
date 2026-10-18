@@ -246,6 +246,9 @@ async fn execute(
             return Err("invalid_argument");
         }
         return match input.domain.as_str() {
+            "control" => Ok(success(
+                super::control::receipt(state, meta, &input.operation).await?,
+            )),
             "preferences" => {
                 let owner = preference_owner(state, meta).await?;
                 let receipt = state
@@ -319,6 +322,9 @@ async fn execute(
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
     match action {
+        "control.apply" => Ok(success(
+            super::control::apply(state, meta, args, operation).await?,
+        )),
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
             if args["scope"] == "zed" {

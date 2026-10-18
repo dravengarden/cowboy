@@ -6,6 +6,65 @@ mod installation;
 mod telemetry_recovery;
 
 #[tokio::test]
+async fn agent_approval_retains_parent_identity_and_cannot_survive_permission_revocation() {
+    for change in ["none", "role", "disabled", "native_identity", "deleted"] {
+        let h = Harness::new().await;
+        h.hub.create_session(crate::core::SessionRegistration {
+            id: "parent".into(),
+            provider: "codex".into(),
+            provider_version: "1".into(),
+            provider_generation_digest: "digest".into(),
+            provider_auth_generation: Some(1),
+            provider_behavior: None,
+            machine_id: "machine".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tasks/project".into(),
+            title: String::new(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some(h.user.id.clone()),
+            owner_username: Some(h.user.username.clone()),
+        });
+        h.hub.set_agent_session_id("parent", "native-one".into());
+        let parent = h.hub.session_info("parent").unwrap().meta;
+        let authenticated = AuthenticatedProductRequest {
+            principal: product_principal(&h.hub, &h.user),
+            cookie_session: None,
+            device_identity: None,
+            permissions: None,
+        }
+        .observe_permissions(&h.hub)
+        .unwrap();
+        let approval =
+            OperatorApproval::capture_agent("service-test", &parent, &authenticated).unwrap();
+        match change {
+            "role" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
+            "disabled" => h
+                .store
+                .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
+                .await
+                .unwrap(),
+            "native_identity" => h.hub.set_agent_session_id("parent", "native-two".into()),
+            "deleted" => {
+                h.hub.delete_session("parent");
+            }
+            _ => {}
+        }
+        assert_eq!(
+            approval.current_operator(h.context()).await.is_some(),
+            change == "none",
+            "{change}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn telemetry_resolution_has_new_purpose_original_credential_and_nonrenewing_budget() {
     use crate::telemetry_binding::{
         Operation, Progress, resolution::tests::intent as resolution_intent,
