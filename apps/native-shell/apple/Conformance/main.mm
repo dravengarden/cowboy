@@ -25,12 +25,14 @@
     UISceneConfiguration *configuration =
         [[UISceneConfiguration alloc] initWithName:@"Conformance" sessionRole:session.role];
     configuration.delegateClass = CowboyPluginConformance.class;
+    configuration.sceneClass = UIWindowScene.class;
     return configuration;
 }
 
 - (void)scene:(UIScene *)scene willConnectToSession:(__unused UISceneSession *)session
     options:(__unused UISceneConnectionOptions *)options {
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+    self.window.frame = ((UIWindowScene *)scene).coordinateSpace.bounds;
     UIViewController *controller = [[UIViewController alloc] init];
     self.window.rootViewController = controller;
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
