@@ -79,6 +79,10 @@ require the exact successful build receipt and published SideStore version.
   credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
+- Storage moves must preserve `/tmp/codex-daemon-<uid>` as a real user-owned
+  `0700` directory. Codex's native sandbox rejects a symlink there, even with
+  a correctly permissioned target. See the
+  [sandbox directory recovery contract](docs/execution-environments.md#reserved-sandbox-directories-during-storage-moves).
 - Agents use Cowboy MCP first for Cowboy state and control. Load only the
   needed help topic/domain, reuse its revision, compose reads, and return a small
   projection. Use a stable operation ID and inspect its receipt after uncertainty.

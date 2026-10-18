@@ -2493,7 +2493,18 @@ export class WorkspaceTools {
         'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}" "${COWBOY_EXECUTION_FILE_HELPER:-}"',
       ]);
       if (probe.exitCode !== 0 || !probe.output.startsWith("/")) {
-        throw new Error("Target Bash is unavailable");
+        // A rejected sandbox also exits before Bash runs. Identify this
+        // native refusal without exposing arbitrary startup output (which
+        // could contain private environment or transport information).
+        const socketRefusal = probe.output.includes(
+          "app-server socket directory must be a user-owned directory with mode 0700",
+        );
+        throw new Error(
+          `Target Bash probe failed (exit ${probe.exitCode ?? "unknown"}): ` +
+            (socketRefusal
+              ? "execution sandbox requires a real user-owned app-server socket directory with mode 0700; symlinks are refused"
+              : "no valid platform output"),
+        );
       }
       platform = probe.output;
     }

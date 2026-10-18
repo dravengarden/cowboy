@@ -887,10 +887,12 @@ function CallPreview({ call, title, onOpen }: {
   const tap = useReliableTouchTap<HTMLButtonElement>(onOpen);
   const active = callActive(call.state);
   const tone = callTone(call.state);
-  const end = active ? Date.now() : call.updated_at_ms;
+  const end = active ? Date.now() : call.finished_at_ms ?? call.updated_at_ms;
+  const time = startedLabel(call.started_at_ms ?? call.created_at_ms);
   return (
     <ButtonBase {...tap} data-call-preview={call.call_id}
       aria-label={`Open ${title}: ${callStateLabel(call)}`}
+      title={`${callTimesTitle(call)} · ${placementLabel(call)} · ${callModelLabel(call)}`}
       sx={{
         flex: "1 0 9rem", minWidth: 0, minHeight: 44,
         borderRadius: 1, textAlign: "left",
@@ -906,7 +908,9 @@ function CallPreview({ call, title, onOpen }: {
       }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
-          <Typography variant="caption" noWrap sx={{ fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          <Typography variant="caption" noWrap sx={{ flex: 1, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          <Typography component="time" dateTime={new Date(call.started_at_ms ?? call.created_at_ms).toISOString()}
+            variant="caption" color="text.secondary" noWrap sx={{ maxWidth: "55%", fontVariantNumeric: "tabular-nums" }}>{time}</Typography>
         </Stack>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {active && <CircularProgress size="0.6875rem" />}
@@ -917,6 +921,9 @@ function CallPreview({ call, title, onOpen }: {
             {callStateLabel(call)}{end - call.created_at_ms >= 1000 ? ` · ${elapsedLabel(call.created_at_ms, end)}` : ""}
           </Typography>
         </Stack>
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: "0.6875rem" }}>
+          {placementLabel(call)}{call.configuration?.model || call.preset ? ` · ${callModelLabel(call)}` : ""}
+        </Typography>
       </Stack>
     </ButtonBase>
   );
