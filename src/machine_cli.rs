@@ -260,6 +260,11 @@ pub struct Args {
     /// `<state-dir>/worktrees`; sessions already created there stay in place.
     #[arg(long, env = "COWBOY_MACHINE_WORKTREE_ROOT")]
     worktree_root: Option<PathBuf>,
+    /// Place a source checkout's new worktrees and build caches on another
+    /// disk. Repeat /absolute/source=/absolute/storage; both must exist and
+    /// storage needs the host-provisioned .cowboy-storage marker (see docs).
+    #[arg(long = "workspace-storage-root", value_name = "SOURCE=STORAGE")]
+    workspace_storage_roots: Vec<crate::session_workspace::WorkspaceStorage>,
     /// Extra variable names copied from the Machine into execution
     /// environments, such as host tool locations. Comma-separated in the
     /// environment variable.
@@ -506,12 +511,19 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         crate::config::file_buffers::POLICY_ENV.into(),
         file_buffers_policy.display().to_string(),
     );
-    let worktree_roots = machine_worktree_roots(args.worktree_root.clone(), &args.state_dir);
+    let worktree_roots = machine_worktree_roots(args.worktree_root.clone(), &args.state_dir)
+        .with_storage(args.workspace_storage_roots)?;
     let execution_env = validate_execution_env(args.execution_env.clone())?;
-    // Deleted-session Cargo cleanup covers the primary root only. A session
-    // that predates a root move keeps its artifacts on deletion, which the
-    // previous behaviour also did whenever the worktree could not be captured.
-    let worktree_root = worktree_roots.primary().to_path_buf();
+    let environment_names: BTreeSet<_> = crate::execution_target_environment::BASE
+        .into_iter()
+        .chain(worktree_roots.storage_environment_names())
+        .map(str::to_owned)
+        .chain(execution_env.iter().cloned())
+        .collect();
+    anyhow::ensure!(
+        environment_names.len() <= crate::execution_target_environment::MAX,
+        "execution environment including workspace storage exceeds the variable limit"
+    );
     let mut broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
@@ -522,7 +534,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         },
         worker_environment,
         provider_store: Arc::clone(&providers),
-        worktree_root,
+        worktree_root: worktree_roots.clone(),
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
         call_context_root: Some(args.state_dir.clone()),
     };
@@ -3285,7 +3297,7 @@ async fn run_adapter_request(
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
-            let root = worktree_roots.for_session(&request.session_id).to_path_buf();
+            let root = worktree_roots.for_source(&request.session_id, Path::new(&request.root))?.to_path_buf();
             return serde_json::to_value(
                 crate::session_workspace::prepare(request, &root).await?,
             )

@@ -324,9 +324,9 @@ pub struct MachineBrokerArgs {
     /// Content-addressed Provider generations and Service-auth projections used
     /// to build each session's process environment.
     pub provider_store: Arc<crate::machine_plugins::MachinePluginStore>,
-    /// Root containing Machine-owned session worktrees. Permanent session
-    /// deletion may reclaim marked Cargo targets below this exact boundary.
-    pub worktree_root: PathBuf,
+    /// Roots containing Machine-owned session worktrees. Permanent session
+    /// deletion may reclaim marked Cargo targets below these exact boundaries.
+    pub worktree_root: crate::session_workspace::WorktreeRoots,
     pub worker_ready_timeout: Duration,
     /// Machine state directory whose `calls/sessions` holds managed-call
     /// contexts and `extensions/sessions` session-extension descriptors.
@@ -1470,12 +1470,12 @@ impl Broker {
                         "cleanup continuation has no committed terminal deletion; leaving it untouched");
                     continue;
                 }
-                let worktree_root = broker.args.worktree_root.clone();
+                let worktree_roots = broker.args.worktree_root.clone();
                 let observed = {
                     let session_id = session_id.clone();
                     tokio::task::spawn_blocking(move || {
                         crate::session_workspace::resume_cleanup_workspace(
-                            &worktree_root,
+                            worktree_roots.for_cleanup(&session_id)?,
                             &session_id,
                             &root,
                         )
@@ -3050,6 +3050,16 @@ impl Broker {
                 session.session_id
             );
         }
+        // A bound worker is only the runtime; its cwd may belong to another
+        // Machine. The target Manager owns that binding's cache environment.
+        // Only caller-owned local ACP workspaces use the broker's cwd here.
+        let storage_environment = if session.execution_binding.is_none() {
+            self.args
+                .worktree_root
+                .storage_environment(Path::new(&session.cwd))?
+        } else {
+            BTreeMap::new()
+        };
         let mut command = match self.args.spawn_mode {
             SpawnMode::Direct => {
                 let mut command = Command::new(&worker_command);
@@ -3075,6 +3085,7 @@ impl Broker {
                 for (name, value) in &session_environment {
                     command.env(name, value);
                 }
+                command.envs(&storage_environment);
                 command
             }
             SpawnMode::SystemdUser => {
@@ -3128,6 +3139,10 @@ impl Broker {
                     }
                 }
                 for (name, value) in &session_environment {
+                    command.env(name, value);
+                    command.arg(format!("--setenv={name}"));
+                }
+                for (name, value) in &storage_environment {
                     command.env(name, value);
                     command.arg(format!("--setenv={name}"));
                 }
@@ -4175,7 +4190,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             }
             if let Some(cwd) = cleanup_cwd {
                 match crate::session_workspace::capture_cleanup_workspace(
-                    &broker.args.worktree_root,
+                    broker.args.worktree_root.for_session(&session_id),
                     &session_id,
                     Path::new(&cwd),
                 ) {
@@ -4491,7 +4506,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: root.path().join("worktrees"),
+            worktree_root: root.path().join("worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -4714,7 +4729,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -4792,7 +4807,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: ready_timeout,
             call_context_root: None,
         }));
@@ -4997,7 +5012,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(10),
             call_context_root: None,
         });
@@ -5045,7 +5060,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -5142,7 +5157,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -5220,7 +5235,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -5290,7 +5305,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp"),
+            worktree_root: PathBuf::from("/tmp").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -5367,7 +5382,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -5461,7 +5476,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -5532,7 +5547,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -6837,7 +6852,7 @@ mod tests {
         let (fixture, mut launch, _) = reconnecting_worker_fixture();
         let mut args = fixture.args.clone();
         args.socket = socket.clone();
-        args.worktree_root = root.path().join("worktrees");
+        args.worktree_root = root.path().join("worktrees").into();
         let journal =
             deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap();
         let server = tokio::spawn(run_broker(
@@ -7046,7 +7061,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -7087,7 +7102,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -7236,7 +7251,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -7333,7 +7348,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -7365,7 +7380,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -7423,7 +7438,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -7465,7 +7480,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -7558,7 +7573,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -7629,7 +7644,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -7692,7 +7707,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         }));
@@ -7774,7 +7789,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: worktree_root.clone(),
+            worktree_root: worktree_root.clone().into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         }));
@@ -7862,7 +7877,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         });
@@ -7901,7 +7916,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         }));
@@ -7960,7 +7975,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         }));
@@ -8081,7 +8096,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -8166,7 +8181,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         });
@@ -8250,7 +8265,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: managed.clone(),
+            worktree_root: managed.clone().into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -8293,12 +8308,25 @@ mod tests {
 
     #[tokio::test]
     async fn confirmed_process_exit_reclaims_targets_and_preserves_the_worktree() {
+        confirmed_process_exit_cleanup_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn confirmed_process_exit_cleans_routed_storage_without_touching_default_root() {
+        confirmed_process_exit_cleanup_case(true).await;
+    }
+
+    async fn confirmed_process_exit_cleanup_case(routed: bool) {
         let root = std::env::temp_dir().join(format!(
             "cowboy-deleted-session-cleanup-{}-{}",
             std::process::id(),
             broker_nonce()
         ));
-        let worktree_root = root.join("worktrees");
+        let worktree_root = root.join(if routed {
+            "storage/worktrees/sessions"
+        } else {
+            "worktrees"
+        });
         let workspace = worktree_root.join("sess-delete");
         let target = workspace.join("target");
         std::fs::create_dir_all(target.join("debug/deps")).expect("target");
@@ -8310,6 +8338,23 @@ mod tests {
         )
         .expect("cache tag");
         std::fs::write(target.join("debug/deps/libtest.rlib"), "generated\n").expect("artifact");
+        let mut roots = crate::session_workspace::WorktreeRoots::single(root.join("worktrees"));
+        if routed {
+            let source = root.join("source");
+            std::fs::create_dir(&source).unwrap();
+            std::fs::write(
+                root.join("storage/.cowboy-storage"),
+                "cowboy-workspace-storage-v1\n",
+            )
+            .unwrap();
+            roots = roots
+                .with_storage(vec![
+                    format!("{}={}", source.display(), root.join("storage").display())
+                        .parse()
+                        .unwrap(),
+                ])
+                .unwrap();
+        }
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: root.join("unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
@@ -8317,7 +8362,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: worktree_root.clone(),
+            worktree_root: roots,
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -8371,6 +8416,9 @@ mod tests {
         assert!(!target.join("debug/deps/libtest.rlib").exists());
         assert!(workspace.join("source.rs").is_file());
         assert!(workspace.is_dir());
+        if routed {
+            assert!(!root.join("worktrees").exists());
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -8400,7 +8448,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: worktree_root.clone(),
+            worktree_root: worktree_root.clone().into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -8477,7 +8525,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: root.join("worktrees"),
+            worktree_root: root.join("worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
         }));
@@ -8846,7 +8894,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         });
@@ -8896,7 +8944,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
         }));
@@ -8934,7 +8982,7 @@ mod tests {
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
             provider_store: test_provider_store(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
         }));

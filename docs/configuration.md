@@ -102,6 +102,50 @@ thread pools, capacity advertised at connect).
 
 ## Adding a setting
 
+### Workspace storage paths
+
+The Machine accepts repeatable
+`--workspace-storage-root /absolute/source=/absolute/storage` path wiring.
+Both directories must already exist. After mounting the intended storage, the
+host provisions a regular, storage-owner-owned `.cowboy-storage` file containing
+exactly `cowboy-workspace-storage-v1` and a newline. Cowboy never creates this
+marker: an empty mountpoint is not sufficient startup admission. The host
+must also gate startup on its mounts (system services can use
+`RequiresMountsFor=`; user services need a mount precheck and retry).
+New sessions for that source (including
+source aliases and subdirectories) use `storage/worktrees/sessions`. Existing
+sessions keep their previous root; all configured roots remain discoverable
+and trusted for workspace adapters and bounded deleted-session Cargo cleanup.
+Overlapping storage destinations, repeated sources and destinations inside a
+source checkout or default worktree root are rejected. A missing or replaced
+storage root fails closed instead of falling back to the default disk.
+
+New execution environments and local ACP workers receive these cache paths:
+
+| Variable | Value |
+| --- | --- |
+| `CARGO_BUILD_BUILD_DIR` | `{workspace-root}/target` |
+| `GOCACHE` | `<storage>/cache/go` |
+| `BUN_INSTALL_CACHE_DIR` | `<storage>/cache/bun` |
+| `TMPDIR` | `<storage>/tmp` |
+
+Cargo keeps each worktree's intermediates inside its marked `target` directory,
+so bounded session-deletion cleanup reclaims them with the final outputs. Its
+workspace template also keeps independent build locks and incremental state.
+Existing caller-owned checkouts must already be on the intended disk; this
+option does not relocate them.
+Go and Bun share their project cache. Provider homes, credentials and shared
+toolchain installations keep their existing ownership. Already running keepers
+retain their original launch contract; this option does not move active
+worktrees or rewrite admitted environments. Commands outside Cowboy keep their
+host defaults unless the caller supplies these variables.
+
+This is operator-owned host path wiring, so it deliberately uses CLI discovery
+(`cowboy-machine --help`) rather than a UI/MCP setting. Applying a change needs
+the host's Machine maintenance boundary.
+
+### Behaviour settings
+
 1. Append a `Field` to `SERVICE_FIELDS` or `DEVICE_FIELDS` in
    `src/config/schema.rs`: dotted key inside a section, kind with bounds,
    default, reload class and documentation.

@@ -188,6 +188,7 @@
           ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
+          ./src/session_workspace
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
@@ -698,6 +699,8 @@
         EOF
       '';
       cowboy-machine-bootstrap-release = machine-release true false false;
+      cowboy-machine-host-bootstrap-release = assert retained-worker-interface-compatible;
+        machine-release true true false;
       cowboy-machine-release = machine-release false false false;
       cowboy-machine-host-release = assert retained-worker-interface-compatible;
         machine-release false true false;
@@ -769,6 +772,7 @@
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
+        test -e ${machine-src}/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
@@ -850,6 +854,7 @@
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
+        cowboy-machine-host-bootstrap-release = cowboy-machine-host-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
         cowboy-machine-host-release = cowboy-machine-host-release;
         cowboy-machine-writer-host-release = cowboy-machine-writer-host-release;
@@ -862,7 +867,7 @@
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-machine-bootstrap-release cowboy-machine-release
-          cowboy-machine-host-release
+          cowboy-machine-host-release cowboy-machine-host-bootstrap-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
         cowboy-worker-registry-input = worker-registry-check;
       };
