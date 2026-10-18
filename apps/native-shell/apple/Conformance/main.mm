@@ -27,10 +27,24 @@
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(__unused WKNavigation *)navigation {
+    UIScrollView *root = webView.scrollView;
+    CGPoint rest = CGPointMake(-root.adjustedContentInset.left, -root.adjustedContentInset.top);
+    root.contentOffset = CGPointMake(0, 335);
+    BOOL rootPinned = CGPointEqualToPoint(root.contentOffset, rest);
+    [root setContentOffset:CGPointMake(0, -228) animated:YES];
+    rootPinned = rootPinned && CGPointEqualToPoint(root.contentOffset, rest);
+    UIScrollView *child = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
+    child.contentSize = CGSizeMake(100, 1000);
+    child.contentOffset = CGPointMake(0, 335);
+    BOOL childScrolls = child.contentOffset.y == 335;
+    NSString *rootChecks = rootPinned && childScrolls ? @"true" : @"false";
+    [webView evaluateJavaScript:[@"window.__nativeRootScrollChecks=" stringByAppendingString:rootChecks]
+             completionHandler:nil];
     NSString *script =
         @"(async()=>{const tests=[];const check=(name,value)=>{if(!value)throw Error(name);tests.push(name)};"
          @"try{const host=window.__COWBOY_NATIVE_PLUGIN_HOST;"
          @"check('versioned immutable native ABI',host?.version==='1.0.0'&&Object.isFrozen(host));"
+         @"check('native root rejects focus reveal while child scrollers retain offsets',window.__nativeRootScrollChecks===true);"
          @"check('native tweaks coexist with Passkey swizzle',window.__cowboyNativeShell===true&&typeof window.__cowboySelectionHaptic==='function'&&window.__cowboyAuthenticationBrowserBridgeVersion===2);"
          @"let clipboardDenied=false;try{await window.__cowboyReadClipboard()}catch{clipboardDenied=true}"
          @"check('foreign origin cannot read clipboard',clipboardDenied);"

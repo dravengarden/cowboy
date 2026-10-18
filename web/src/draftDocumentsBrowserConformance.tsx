@@ -38,6 +38,7 @@ import {
 import { editorPluginHost } from "./editorPlugins/appHost";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { isMac } from "./platform";
+import { useKeyboardInset } from "./keyboardInset";
 
 /** Visible operable controls without any keyboard slot (FOCUS.md "Leader").
  *  A control counts as keyboard-reachable when it shows a keycap, declares
@@ -416,16 +417,29 @@ export async function runDraftDocumentsBrowserConformance(
       resync: true,
     });
     if (nativeMode) {
+      // main.tsx owns this hook in production; the isolated native fixture
+      // must mount it too, including its document-focus-reveal guard.
+      function NativeApp() {
+        useKeyboardInset();
+        return <MobileApp themeMode="light" onSetThemeMode={() => {}} />;
+      }
       const id = await repo.create("Native Draft", folder, "document", "");
       globalThis.location.hash = `drafts/${id}`;
       container.style.cssText = "height:100dvh;width:100%;position:relative";
       document.body.style.margin = "0";
+      for (const element of [document.documentElement, document.body]) {
+        element.style.height = "100%";
+        element.style.overflow = "hidden";
+      }
+      document.documentElement.style.setProperty(
+        "--cowboy-system-top-clearance", "env(safe-area-inset-top, 0px)",
+      );
       root.render(
         <SurfaceProvider>
           <BrowserProductTheme>
             <CssBaseline />
             <AppErrorBoundary>
-              <MobileApp themeMode="light" onSetThemeMode={() => {}} />
+              <NativeApp />
             </AppErrorBoundary>
             <DocumentNotifications />
           </BrowserProductTheme>
