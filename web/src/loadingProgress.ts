@@ -7,6 +7,11 @@ function loadingSize(size: number | string): string {
   return size.replace("var(--cowboy-desktop-size-unit, 16px)", "1rem");
 }
 
+function loadingCircumference(thickness: number): number {
+  // MUI's circle uses a 44-unit viewBox, inset by half the stroke width.
+  return Math.PI * (44 - thickness);
+}
+
 // Agent work and general waits use MUI's native ring; startup keeps its blue bars.
 export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
   defaultProps: { disableShrink: true, enableTrackSlot: true },
@@ -20,16 +25,19 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         height: `${loadingSize(ownerState.size ?? 40)} !important`,
         flexShrink: 0,
         verticalAlign: "middle",
-        // Keep the full track on a fixed pixel grid; only the bright arc moves.
+        // Animate paint rather than transforming the SVG circle: WebKit can
+        // clip a rotating circle's composited layer in these tiny status slots.
+        // The full track and SVG geometry stay on a fixed pixel grid.
         animation: "none",
         "@keyframes cowboy-loading-rotate": {
-          from: { transform: "rotate(0deg)" },
-          to: { transform: "rotate(360deg)" },
+          from: { strokeDashoffset: 0 },
+          to: { strokeDashoffset: "var(--cowboy-loading-offset)" },
         },
+        "--cowboy-loading-offset": `${-loadingCircumference(ownerState.thickness ?? 3.6)}px`,
+        "& .MuiCircularProgress-svg": { overflow: "visible" },
         "& .MuiCircularProgress-circle": {
           animation: "cowboy-loading-rotate 800ms linear infinite",
-          transformOrigin: "center",
-          transformBox: "fill-box",
+          strokeDasharray: `${loadingCircumference(ownerState.thickness ?? 3.6) * 0.65}px ${loadingCircumference(ownerState.thickness ?? 3.6) * 0.35}px`,
         },
         // The full ring must remain readable in the 12–16px status slots.
         "& .MuiCircularProgress-track": { opacity: 0.55 },
