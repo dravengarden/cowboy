@@ -164,11 +164,8 @@ import { lowPriorityInterval } from "../network/bandwidth";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
-// The region keycap, divider, Settings and Code controls that App.tsx renders
-// after this strip inside the same scroller. They are not ours to collapse, but
-// they DO consume the width we are deciding against.
-// Settings carries its sequence as two compact keycaps (`⌘K` `,`).
-const TOPBAR_TRAILING_WIDTH_PX = 124;
+// App.tsx renders only the Top Bar region keycap after this strip.
+const TOPBAR_TRAILING_WIDTH_PX = 36;
 
 /** Run configuration budget in 100%-scale px: its floor in the density math,
  *  and the most it may claim from slack before truncating. */
