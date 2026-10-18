@@ -209,8 +209,8 @@ build-machine-bootstrap:
 macos-installer-test:
     swift test --package-path apps/macos-installer
 
-native-plugin-conformance:
-    bash tools/native-plugin-conformance.sh
+native-plugin-conformance RUNTIME="auto":
+    bash tools/native-plugin-conformance.sh "{{RUNTIME}}"
 
 # Source/dependency and keyboard checks also run on Linux in the pinned shell.
 native-shell-check:

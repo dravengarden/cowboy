@@ -89,7 +89,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
         "<key>UIWindowSceneSessionRoleApplication</key>",
       ) &&
       conformanceMain.includes("initWithWindowScene:") &&
-      conformanceMain.includes("<UIWindowSceneDelegate,"),
+      conformanceMain.includes("UIWindowSceneDelegate,"),
     "native conformance fixture needs its own window-scene lifecycle",
   );
   requireValue(
@@ -136,6 +136,16 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     );
   }
   const config = JSON.parse(await read("tauri/tauri.conf.json"));
+  const [cliMajor, cliMinor] = String(toolchain.tauriCli).split(".").map(
+    Number,
+  );
+  requireValue(
+    !config.app.windows.some(
+      (window: { limitNavigationsToAppBoundDomains?: boolean }) =>
+        window.limitNavigationsToAppBoundDomains === true,
+    ) || cliMajor > 2 || (cliMajor === 2 && cliMinor >= 12),
+    "App-Bound Domains configuration requires the Tauri CLI 2.12 schema",
+  );
   const frontend = resolve(native, "tauri", config.build.frontendDist);
   const local = relative(native, frontend);
   requireValue(

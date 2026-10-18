@@ -1,6 +1,6 @@
 {
   "rust": "1.98.1",
-  "tauriCli": "2.11.2",
+  "tauriCli": "2.12.2",
   "xcodegen": "2.46.0",
   "swiftPackages": {
     "Tauri": {

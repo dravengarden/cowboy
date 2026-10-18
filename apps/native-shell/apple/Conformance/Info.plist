@@ -18,10 +18,13 @@
         <key>UISceneConfigurations</key>
         <dict>
             <key>UIWindowSceneSessionRoleApplication</key>
-            <array><dict>
-                <key>UISceneConfigurationName</key><string>Conformance</string>
-                <key>UISceneDelegateClassName</key><string>CowboyPluginConformance</string>
-            </dict></array>
+            <array>
+                <dict>
+                    <key>UISceneConfigurationName</key><string>Conformance</string>
+                    <key>UISceneClassName</key><string>UIWindowScene</string>
+                    <key>UISceneDelegateClassName</key><string>CowboyPluginConformance</string>
+                </dict>
+            </array>
         </dict>
     </dict>
 </dict>

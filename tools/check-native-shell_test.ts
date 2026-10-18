@@ -75,6 +75,13 @@ for (
       "native conformance fixture needs its own window-scene lifecycle",
     ],
     [
+      "CLI cannot validate the App-Bound Domains window option",
+      "toolchain.json",
+      '"tauriCli": "2.12.2"',
+      '"tauriCli": "2.11.2"',
+      "App-Bound Domains configuration requires the Tauri CLI 2.12 schema",
+    ],
+    [
       "missing Scene delegate",
       "tauri/Info.ios.plist",
       "<string>TaoSceneDelegate</string>",
