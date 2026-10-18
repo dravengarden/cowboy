@@ -3139,3 +3139,49 @@ Previously the disabled editor could still receive imperative formatting calls
 from enabled buttons, producing changes the server would refuse. Browser checks
 exercise Trash and Restore with an attachment and verify content is unchanged
 by disabled formatting. No deletion, persistence or sync protocol changes.
+
+### 2026-10-18 Touch Draft title belongs to the scrolling document
+
+Physical iPhone report: the keyboard moved the document body while the title
+stayed pinned below the top controls. The title and Synced status were siblings
+of a fill-height editor, whose textarea/CM6 scroller owned all vertical motion.
+The same report showed a disproportionately small title at a reduced font size.
+
+Rechecked the official release manifest and the hash-verified 1.14.4 archive
+listed above. Obsidian prepends `inlineTitleEl` to its editing `cm-sizer`, which
+is inside the document scroller. Its title is part of the document, separate
+from the mobile navigation chrome. Cowboy now uses that document model on touch:
+
+- Title, status, body and attachment chips share one scrollport; the
+  top controls and formatting capsule stay outside it. Keyboard reveal can move
+  the title off screen together with the body. Growing the viewport does not
+  programmatically reset the reading position.
+  Save-error/conflict notices and Restore remain outside the scrollport so a
+  document read at its bottom cannot hide the recovery action.
+  An exclusive iOS 26.5 Simulator WebKit check found native text painting over
+  the sibling format capsule despite correct DOM bounds. Give the document
+  scrollport `position: relative; z-index: 0` and its sibling format bar
+  `position: relative; z-index: 1`. This restored the capsule in Simulator
+  screenshots after a native vertical gesture, without transforms, containment,
+  focus writes or editor changes. The retained Debug shell is not evidence of a
+  current native-binary release or physical-keyboard animation acceptance.
+- Draft opts out of the chat input's bounded fill-height layout. Its existing
+  native textarea fitter grows plain prose; rich Markdown can measure its
+  visible viewport against the external scrolling ancestor. Non-shrinking auto
+  flex bases preserve the measured textarea height instead of silently clipping
+  it back to the available viewport. No CM6 extension, marked-text handling,
+  caret paint, focus retry or native input replacement is added.
+- The common scrollport is outside both editor engines, rather than adding an
+  editable title widget inside CM6. This preserves the native plain-text path
+  required for reliable iOS long-press selection in blank writing space. The
+  nested rich-editor scrollport is disabled only on this touch Draft surface;
+  bounded chat/row editors and Desktop retain their own scroll owners (#71).
+- Title size is `1.75rem`: the root already incorporates the user's font scale.
+  Multiplying by `--cowboy-font-scale` again made a 50% title smaller than its
+  body. Apply the title typography to the actual input as well.
+
+Browser checks cover long plain prose without a nested textarea scroll,
+proportional title/body movement, a stationary format bar, rich-editor keyboard
+reveal against the common viewport, and 50–150% title/body font ratios. Native
+Pinyin/WeType, the painted iPhone caret, long-press menu, image Return and real
+keyboard animation remain device acceptance boundaries; #69 is still open.

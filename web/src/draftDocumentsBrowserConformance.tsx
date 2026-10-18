@@ -2149,9 +2149,75 @@ export async function runDraftDocumentsBrowserConformance(
       }
       // Rich Markdown near the bottom used to stay under the newly raised
       // toolbar until the next keystroke. Resize the actual writing canvas.
-      const longText = Array.from({ length: 80 }, (_, index) => `Line ${index} **body**`).join("\n");
+      const longText = Array.from({ length: 1200 }, (_, index) => `Line ${index} **body**`).join("\n");
       const native = container.querySelector<HTMLTextAreaElement>("[data-draft-body] textarea");
       if (native) {
+        const flow = container.querySelector<HTMLElement>(
+          "[data-draft-document-scroll]",
+        )!;
+        check(
+          flow.contains(title) && flow.contains(native),
+          "Title and native body belong to one document scrollport",
+        );
+        check(
+          parseFloat(getComputedStyle(title).fontSize) >=
+            parseFloat(getComputedStyle(native).fontSize) * 1.5,
+          "Inline title retains its document heading size on touch",
+        );
+        const html = document.documentElement;
+        const previousFont = html.style.fontSize;
+        const previousScale = html.style.getPropertyValue(
+          "--cowboy-font-scale",
+        );
+        try {
+          for (const scale of [0.5, 1, 1.5]) {
+            html.style.fontSize = `${16 * scale}px`;
+            html.style.setProperty("--cowboy-font-scale", String(scale));
+            await tick();
+            check(
+              Math.abs(
+                parseFloat(getComputedStyle(title).fontSize) /
+                    parseFloat(getComputedStyle(native).fontSize) - 1.75,
+              ) < 0.01,
+              `Title follows font scaling exactly once at ${scale}`,
+            );
+          }
+        } finally {
+          html.style.fontSize = previousFont;
+          if (previousScale) {
+            html.style.setProperty("--cowboy-font-scale", previousScale);
+          } else html.style.removeProperty("--cowboy-font-scale");
+        }
+        native.select();
+        const plainPort = activeEditorExtensionPort()!;
+        const prose = Array.from({ length: 80 }, (_, index) =>
+          `Plain prose line ${index}`).join("\n");
+        check(
+          plainPort.replaceSelection(prose, plainPort.read()),
+          "Insert a long plain document without changing editor engines",
+        );
+        await until(
+          () =>
+            native.scrollHeight <= native.clientHeight + 2 &&
+            flow.scrollHeight > flow.clientHeight + 200,
+          "Plain prose grows in the document instead of a nested textarea scroller",
+        );
+        flow.scrollTop = 0;
+        await tick();
+        const titleTop = title.getBoundingClientRect().top;
+        const bodyTop = native.getBoundingClientRect().top;
+        const barTop = bar.getBoundingClientRect().top;
+        flow.scrollTop = 120;
+        await tick();
+        check(
+          Math.abs(title.getBoundingClientRect().top - titleTop + 120) < 2 &&
+            Math.abs(native.getBoundingClientRect().top - bodyTop + 120) < 2,
+          "Title and plain body move together while the document scrolls",
+        );
+        check(
+          Math.abs(bar.getBoundingClientRect().top - barTop) < 1,
+          "Formatting stays above the keyboard while the document scrolls",
+        );
         native.select();
         const port = activeEditorExtensionPort()!;
         check(port.replaceSelection(longText, port.read()), "Insert rich Markdown through the actual editor gateway");
@@ -2164,11 +2230,24 @@ export async function runDraftDocumentsBrowserConformance(
       richView.focus();
       await tick(100);
       const selection = richView.state.selection;
+      const flow = container.querySelector<HTMLElement>(
+        "[data-draft-document-scroll]",
+      )!;
+      check(
+        flow.contains(title) && flow.contains(rich),
+        "Rich Markdown keeps the same inline title scroll owner",
+      );
       document.documentElement.style.setProperty("--kb-inset", "300px");
       await tick(150);
       const caret = richView.coordsAtPos(longText.length)!;
-      const bounds = richView.scrollDOM.getBoundingClientRect();
+      const bounds = flow.getBoundingClientRect();
       check(caret.bottom <= bounds.bottom && caret.top >= bounds.top, "Canvas shrink reveals the caret above the Draft toolbar");
+      check(rich.querySelectorAll(".cm-line").length < 300, "A long touch document stays viewport-rendered with the external scroll owner");
+      check(
+        flow.scrollTop > 0 && richView.scrollDOM.scrollTop === 0 &&
+          title.getBoundingClientRect().bottom < bounds.top,
+        "Keyboard reveal scrolls the title with the body, without a nested rich-editor scroll",
+      );
       check(richView.hasFocus && richView.state.selection.eq(selection) && richView.state.doc.toString() === longText, "Resize preserves focus, selection and document text");
       document.documentElement.style.removeProperty("--kb-inset");
       const mobileId = container.querySelector("[data-draft-editor]")!.getAttribute("data-draft-editor")!;
@@ -2179,6 +2258,7 @@ export async function runDraftDocumentsBrowserConformance(
       await mobileOwner.change({ type: "trash" });
       await until(() => container.querySelector<HTMLButtonElement>('[aria-label="Toggle bold"]')?.disabled === true, "Trash disables content formatting");
       check(container.querySelector<HTMLButtonElement>('[aria-label="Attach file"]')?.disabled && !container.querySelector(".MuiChip-deleteIcon"), "Trash disables attachment insertion and removal");
+      check(!flow.contains(button("Restore draft")) && button("Restore draft").getBoundingClientRect().bottom <= bar.getBoundingClientRect().top, "A long document cannot scroll the Restore action out of reach");
       const beforeTrashClick = richView.state.doc.toString();
       container.querySelector<HTMLButtonElement>('[aria-label="Toggle bold"]')!.click();
       check(richView.state.doc.toString() === beforeTrashClick, "Disabled formatting cannot mutate a trashed document");
