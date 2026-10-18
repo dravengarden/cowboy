@@ -49,50 +49,24 @@ for native_tutorial in DidShowContinuousPathIntroduction KeyboardDidShowProducti
 done
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
-# Resolve the Web accessibility frame rather than its activation point: AXe's
-# label tap can return an invalid translation for a WKWebView button.
-native_point=
-for _ in $(seq 1 20); do
-  if ! "$native_axe" describe-ui --udid "$native_simulator" >"$native_root/ui.json" 2>"$native_root/axe-error.log"; then
-    sleep 0.2
-    continue
-  fi
-  native_point=$(python3 - "$native_root/ui.json" <<'PY'
-import json, sys
-def find(value):
-    if isinstance(value, dict):
-        frame = value.get("frame", {})
-        if "Show keyboard" in [value.get("AXLabel"), value.get("title"), value.get("AXValue")] and frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
-            return frame["x"] + frame["width"] / 2, frame["y"] + frame["height"] / 2
-        for child in value.values():
-            found = find(child)
-            if found: return found
-    if isinstance(value, list):
-        for child in value:
-            found = find(child)
-            if found: return found
-point = find(json.load(open(sys.argv[1])))
-if point: print(*point)
-PY
-  )
-  [ -z "$native_point" ] || break
-  sleep 0.2
+# The fixture reports its actual DOM button center in window coordinates.
+# WebKit's accessibility tree can omit web content while an editor is focused.
+native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
+for _ in $(seq 1 100); do
+  [ ! -s "$native_data/Documents/keyboard-ready.json" ] || break
+  sleep 0.1
 done
 mkdir -p dist/native-plugin-conformance
-if [ -z "$native_point" ]; then
+if [ ! -s "$native_data/Documents/keyboard-ready.json" ]; then
   xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
-  echo "Keyboard test button not exposed in accessibility" >&2
-  cp "$native_root/ui.json" dist/native-plugin-conformance/failed-ui.json
-  cat "$native_root/axe-error.log" >&2
+  echo "Keyboard test fixture did not become ready" >&2
   exit 1
 fi
-read -r native_x native_y <<<"$native_point"
+read -r native_x native_y < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["x"],p["y"])' "$native_data/Documents/keyboard-ready.json")
 if ! "$native_axe" tap -x "$native_x" -y "$native_y" --tap-style physical --udid "$native_simulator"; then
   xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
-  cp "$native_root/ui.json" dist/native-plugin-conformance/failed-ui.json
   exit 1
 fi
-native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance

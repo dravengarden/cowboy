@@ -106,7 +106,8 @@
          @"const selection=getSelection();selection.removeAllRanges();selection.addRange(range);"
          @"let trustedKeyboardTap=false;document.getElementById('keyboard').onclick=event=>{trustedKeyboardTap=event.isTrusted;editor.blur();editor.focus()};"
          @"const offsets=[];let recording=true;const sample=()=>{offsets.push(Math.max(Math.abs(scrollY),Math.abs(visualViewport.offsetTop)));if(recording)requestAnimationFrame(sample)};sample();"
-         @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready'});"
+         @"const buttonRect=document.getElementById('keyboard').getBoundingClientRect();"
+         @"window.webkit.messageHandlers.conformance.postMessage({event:'focus-ready',x:buttonRect.left+buttonRect.width/2,y:buttonRect.top+buttonRect.height/2});"
          @"for(let i=0;i<150&&(!trustedKeyboardTap||innerHeight>=initialHeight-100);i++)await new Promise(resolve=>setTimeout(resolve,100));"
          @"await new Promise(resolve=>setTimeout(resolve,600));recording=false;"
          @"const caret=document.createRange();caret.selectNodeContents(editor);caret.setEnd(selection.anchorNode,selection.anchorOffset);"
@@ -144,6 +145,14 @@
         // checks' asynchronous promises, like the simulator inspection bridge.
         self.rootMaxDrift = 0;
         self.rootSamples = 0;
+        CGPoint point = [self.webView convertPoint:CGPointMake(
+            [message.body[@"x"] doubleValue], [message.body[@"y"] doubleValue]) toView:self.window];
+        NSData *ready = [NSJSONSerialization dataWithJSONObject:@{@"x": @(point.x), @"y": @(point.y)}
+            options:0 error:NULL];
+        NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory
+            inDomains:NSUserDomainMask].firstObject;
+        [ready writeToURL:[documents URLByAppendingPathComponent:@"keyboard-ready.json"]
+            options:NSDataWritingAtomic error:NULL];
         self.rootSampler = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
             repeats:YES block:^(__unused NSTimer *timer) {
                 UIScrollView *root = self.webView.scrollView;
