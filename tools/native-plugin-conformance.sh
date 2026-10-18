@@ -4,6 +4,9 @@
 set -euo pipefail
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
+native_axe="$(command -v axe || true)"
+if [ -z "$native_axe" ] && [ -x /opt/homebrew/bin/axe ]; then native_axe=/opt/homebrew/bin/axe; fi
+test -n "$native_axe" || { echo "AXe is required for the trusted keyboard gesture" >&2; exit 1; }
 test -z "$(git status --porcelain)"
 native_revision="$(git rev-parse HEAD)"
 native_root="$(mktemp -d /tmp/cowboy-native-conformance.XXXXXX)"
@@ -39,10 +42,12 @@ xcrun simctl boot "$native_simulator"
 xcrun simctl bootstatus "$native_simulator" -b
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
+"$native_axe" tap --label 'Show keyboard' --tap-style physical --wait-timeout 20 --udid "$native_simulator"
 native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance
+    xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
     python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==16 else 1)' \
       "$native_data/Documents/conformance.json" "$native_revision" "$native_runtime"
     exit 0

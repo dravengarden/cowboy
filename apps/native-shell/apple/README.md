@@ -65,14 +65,14 @@ restricted entitlement, so the two configurations must remain separate.
 
 ## Native capability conformance
 
-From a clean committed Cowboy worktree on an arm64 Mac with Xcode, run
+From a clean committed Cowboy worktree on an arm64 Mac with Xcode and AXe, run
 `just native-plugin-conformance`. This owns a fresh temporary iOS Simulator and
 compiles both production bridges into a minimal UIKit/WKWebView test app. Sixteen
 checks cover the actual versioned ABI, immutable capability inventory,
 unknown/malformed requests, unentitled Passkey rejection, foreign browser URL
 rejection, idempotent browser close, native-tweak coexistence and foreign-origin
 clipboard rejection. Root-scroll checks wait for the animated setter to settle,
-then open the system keyboard over a locked page and sample native root offsets
+then use AXe physical touch to open the system keyboard over a locked page and sample native root offsets
 as well as JavaScript frames; the inner scrollport must reveal the caret without
 changing the selection. The fixture adopts the UIKit scene lifecycle required
 by current Apple SDKs. It neither opens a real login nor uses
