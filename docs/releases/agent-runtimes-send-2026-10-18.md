@@ -1,7 +1,7 @@
 # Agent runtime candidates and send delivery — 2026-10-18
 
-Status: compatible runtime releases published from `de3b2846538f6244935e9e86e42917e016a7320b`;
-fleet Provider installation is complete. Send interaction changes are not released.
+Status: compatible runtime upgrades and send delivery are published and deployed.
+All four Machines are connected, schedulable and ready after final activation.
 
 ## Dependency audit
 
@@ -79,7 +79,7 @@ passed Linux old/new generation coexistence and real macOS CLI/ACP probes.
 of all 26 public package/runtime URLs. These receipts establish publication,
 not replacement of existing session workers.
 
-### Catalog recovery scope
+### Initial runtime publication recovery scope
 
 The exact active Controller and accepted recovery closure both read all six
 candidates twice, before and after publication. The recovery identity comes
@@ -177,3 +177,51 @@ The additional protocol-gate tests and strict Clippy check passed. The public
 session fixture passed all 10 checks, including Controller and target-Machine
 restart without replay. Its temporary directory uses `/tmp` so the disposable
 Controller socket remains within the Unix socket path limit.
+
+### Send publication and deployment
+
+Codex Plugin 3.5.2 and Claude Code Plugin 3.19.46 were signed and published
+from `d33dbcbfec99028473357e37bb972b0abb97b4b3`. Their packaged native archives
+match the accepted candidates byte for byte. `send-release/publication.json`
+records both ready Catalog entries and ten verified public artifact URLs.
+Linux old/new coexistence passed against both the retained and newly built
+workers; real macOS CLI/ACP probes passed. All five declared installations
+(Codex on four Machines, Claude Code on OVH) converged with no remaining
+upgrades. The other four Agent Providers retain the accepted first-phase releases.
+
+The application source is `caf3652aed49a096cf1d97d193c8978564de92f2`, which
+adds the required full-feature module guard for the isolated Code adapter build.
+Feature-specific and all-feature checks passed. Hawk's writer host source is
+`5acfb3e193809746973c3f0e714187659c722554`, advancing only the retained worker
+pin to that accepted application revision. Its deletion journal remains reader
+schema 1 / writer schema 1. The deployed Nix worker generation is
+`worker-33394ba271eccfdc2703`.
+
+| Target | Accepted deployment evidence |
+| --- | --- |
+| Controller | Committed transaction `1792343061495383316-caf3652aed49` |
+| Web | Committed transaction `1792343111474761148-caf3652aed49`; public SPA and service worker return HTTP 200 with no-store |
+| Hawk Machine | Committed maintenance `1792343416501830516-5acfb3e19380`; writer capability retained |
+| Falcon Machine | Committed maintenance at `caf3652a`, generation `worker-33394ba271eccfdc2703` |
+| OVH Machine | Committed receipt `/var/lib/columbus/ovh-machine-caf3652aed49-20261018T170539Z`; all six original worker PIDs and start times preserved |
+| macbook-air | Pinned Rust 1.98.1 bootstrap build and owned refresh at `caf3652a`; all three installed binaries match the build; identity and seven workspaces preserved |
+
+Mac's preceding bundle and launcher are retained in
+`recovery-send-delivery-caf3652a`. OVH received the verified Hawk-built closure;
+no build ran on OVH. Final receipts and inventory are `send-hawk-*-receipt.json`,
+`send-falcon-receipt.json`, `send-ovh-activate.log`, `send-macos-refresh.log`
+and `send-machines-final.json` under the evidence directory above.
+
+After Controller activation, its receipt has no explicit recovery override:
+the installed activator selects the previous accepted Controller instead.
+`send-release/catalog-readers-active.json` verifies both the new active closure
+and that actual rollback target against both published send Providers. This is
+the post-activation recovery selection; the initial publication scope above
+records the earlier transaction's explicit recovery selection.
+
+Live MCP discovery now exposes `next_turn`, `current_turn` and `interrupt`, and
+the deployed CLI exposes the same delivery choices and receipt lookup. Existing
+workers keep their negotiated capabilities; unsupported workers do not gain
+current-turn steering merely because a newer Provider was installed. Reload the
+PWA to load the new controls. Unknown outcomes retain the original operation
+identity and are queried rather than automatically resubmitted.
