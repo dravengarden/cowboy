@@ -252,8 +252,8 @@ default. It reviews at most once per task, before reporting, and only when a
 missed bug would be costly and its own checks cannot rule it out: security or
 permissions, concurrency, persistence or migrations, data deletion, money, or a
 large cross-cutting refactor. Small, mechanical, docs-only, test-only and
-exploratory edits never get one. It does not read capabilities first; `cowboy
-review` answers one `skipped:` line at once when the session's policy refuses
+exploratory edits never get one. `cowboy review` answers one `skipped:` line
+at once when the session's policy refuses
 it, and the agent then carries on without mentioning it. An explicit user
 request uses `cowboy review --ask`, which goes through the approval prompt.
 

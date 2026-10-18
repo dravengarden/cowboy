@@ -20,7 +20,9 @@ impl Manager {
         // unreadable contract is uncertainty, never evidence of an absent job.
         let contract = match read_contract(&directory.join("contract.json")) {
             Ok(contract) => {
-                if contract.session_id != session_id || !preparation.accepts(&contract.binding) {
+                if contract.session_id != session_id
+                    || !super::preparation::accepts_source_alias(preparation, &contract.binding)
+                {
                     return Err(Refusal::IdentityMismatch);
                 }
                 Some(contract)

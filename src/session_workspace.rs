@@ -14,6 +14,9 @@ use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
+mod storage;
+pub use storage::WorkspaceStorage;
+
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
 const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
@@ -31,15 +34,22 @@ const MAX_CLEANUP_CONTENT_DEPTH: usize = 64;
 #[cfg(target_os = "linux")]
 const MAX_CLEANUP_CONTENT_ENTRIES: usize = 1_000_000;
 
-/// Where a Machine keeps session worktrees. New sessions are created under
-/// `primary`. After an operator moves the root, sessions created under the
+/// Where a Machine keeps session worktrees. New sessions use a matching
+/// source/storage route, otherwise `primary`. After a root move, sessions in the
 /// previous default stay there until they are deleted: Cowboy never moves a
 /// live checkout, so the previous root remains trusted and is still used for
 /// those session IDs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct WorktreeRoots {
     primary: PathBuf,
     legacy: Option<PathBuf>,
+    storage: Vec<WorkspaceStorage>,
+}
+
+impl From<PathBuf> for WorktreeRoots {
+    fn from(root: PathBuf) -> Self {
+        Self::single(root)
+    }
 }
 
 impl WorktreeRoots {
@@ -47,13 +57,18 @@ impl WorktreeRoots {
         Self {
             primary: root,
             legacy: None,
+            storage: Vec::new(),
         }
     }
 
     /// `legacy` is the previous default; it is ignored when it is `primary`.
     pub fn moved(primary: PathBuf, legacy: PathBuf) -> Self {
         let legacy = (legacy != primary).then_some(legacy);
-        Self { primary, legacy }
+        Self {
+            primary,
+            legacy,
+            storage: Vec::new(),
+        }
     }
 
     pub fn primary(&self) -> &Path {
@@ -61,23 +76,105 @@ impl WorktreeRoots {
     }
 
     pub fn all(&self) -> impl Iterator<Item = &Path> {
-        std::iter::once(self.primary.as_path()).chain(self.legacy.as_deref())
+        std::iter::once(self.primary.as_path())
+            .chain(self.legacy.as_deref())
+            .chain(self.storage.iter().map(WorkspaceStorage::worktrees))
     }
 
-    /// The root that owns `session_id`: a session whose worktree already exists
-    /// under the previous root keeps it there; every other session, including
-    /// an invalid ID that preparation later rejects, uses the primary root.
-    pub fn for_session(&self, session_id: &str) -> &Path {
-        match &self.legacy {
-            Some(legacy)
-                if validate_session_id(session_id).is_ok()
-                    && std::fs::symlink_metadata(legacy.join(session_id))
-                        .is_ok_and(|metadata| metadata.is_dir()) =>
-            {
-                legacy
-            }
-            _ => &self.primary,
+    /// Host-owned path wiring, validated before accepting sessions. The host
+    /// creates each storage root; Cowboy must never recreate a missing disk.
+    pub fn with_storage(mut self, storage: Vec<WorkspaceStorage>) -> Result<Self> {
+        storage::validate_routes(&storage, self.all())?;
+        for route in &storage {
+            route.prepare_worktrees()?;
         }
+        self.storage = storage;
+        Ok(self)
+    }
+
+    /// Keep existing checkouts where they are; route only new session IDs.
+    pub fn for_source(&self, session_id: &str, source: &Path) -> Result<&Path> {
+        validate_session_id(session_id)?;
+        if let Some(root) = self.existing_session(session_id) {
+            if let Some(route) = self.storage.iter().find(|route| route.worktrees() == root) {
+                route.prepare_worktrees()?;
+            }
+            return Ok(root);
+        }
+        match storage::select(&self.storage, source)? {
+            Some(route) => {
+                route.prepare_worktrees()?;
+                Ok(route.worktrees())
+            }
+            None => Ok(&self.primary),
+        }
+    }
+
+    /// Fixed cache variables only; never change Provider credentials or homes.
+    pub fn storage_environment(
+        &self,
+        cwd: &Path,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        storage::select(&self.storage, cwd)?.map_or_else(
+            || Ok(std::collections::BTreeMap::new()),
+            WorkspaceStorage::environment,
+        )
+    }
+
+    pub fn storage_environment_names(&self) -> impl Iterator<Item = &'static str> {
+        self.storage
+            .first()
+            .into_iter()
+            .flat_map(|_| storage::ENVIRONMENT_NAMES)
+    }
+
+    fn existing_session(&self, session_id: &str) -> Option<&Path> {
+        // Legacy precedence preserves the root-move contract. A compatibility
+        // symlink is not an owned checkout; its actual configured root is.
+        self.legacy
+            .as_deref()
+            .into_iter()
+            .chain(std::iter::once(self.primary.as_path()))
+            .chain(self.storage.iter().map(WorkspaceStorage::worktrees))
+            .find(|root| {
+                std::fs::symlink_metadata(root.join(session_id))
+                    .is_ok_and(|metadata| metadata.is_dir())
+            })
+    }
+
+    /// Locate an existing checkout for access and cleanup. Unknown or invalid
+    /// IDs fall back to primary; preparation uses `for_source` to route new IDs.
+    pub fn for_session(&self, session_id: &str) -> &Path {
+        if validate_session_id(session_id).is_ok() {
+            self.existing_session(session_id).unwrap_or(&self.primary)
+        } else {
+            &self.primary
+        }
+    }
+
+    /// A transient storage failure must not be mistaken for deletion of the
+    /// original directory. Resume callers preserve the durable continuation
+    /// on these ordinary I/O/admission errors.
+    pub fn for_cleanup(&self, session_id: &str) -> Result<&Path> {
+        validate_session_id(session_id)?;
+        for route in &self.storage {
+            route.validate_root()?;
+        }
+        for root in self
+            .legacy
+            .as_deref()
+            .into_iter()
+            .chain(std::iter::once(self.primary.as_path()))
+            .chain(self.storage.iter().map(WorkspaceStorage::worktrees))
+        {
+            match std::fs::symlink_metadata(root.join(session_id)) {
+                Ok(metadata) if metadata.is_dir() => return Ok(root),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("locating cleanup worktree"),
+            }
+        }
+        Ok(&self.primary)
     }
 }
 
@@ -1503,7 +1600,7 @@ mod tests {
         );
 
         let unmoved = WorktreeRoots::moved(legacy.clone(), legacy.clone());
-        assert_eq!(unmoved, WorktreeRoots::single(legacy.clone()));
+        assert_eq!(unmoved.all().collect::<Vec<_>>(), [legacy.as_path()]);
         assert_eq!(unmoved.for_session("sess-old"), legacy);
     }
 

@@ -16,8 +16,7 @@ test("the agent-calls prompt routes reviews through Cowboy", () => {
   assert.match(AGENT_CALLS_PROMPT, /say nothing/);
   assert.match(AGENT_CALLS_PROMPT, /cowboy review --ask/);
   // No capability dump or JSON template on every turn.
-  assert.doesNotMatch(AGENT_CALLS_PROMPT, /"schema"/);
-  assert.match(AGENT_CALLS_PROMPT, /cowboy call capabilities/);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /capabilities|"schema"/);
 });
 
 test("the installed Review Plugin owns guidance while legacy sessions retain their fallback", () => {
@@ -43,6 +42,7 @@ test("the installed Review Plugin owns guidance while legacy sessions retain the
   assert.match(prompt, /cowboy review --ask/);
   assert.match(prompt, /skips\/missing commands silent/);
   assert.ok(prompt.length < 800);
+  assert.match(prompt, /cowboy call capabilities/);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   assert.equal(
     agentCallsPrompt({ schema: 1, calls: null }),

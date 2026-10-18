@@ -4672,6 +4672,7 @@ impl Hub {
         session_id: &str,
         expected: &crate::execution_environment::ExecutionBinding,
         prepared: crate::execution_environment::ExecutionBinding,
+        resolved_source: Option<&str>,
     ) -> Result<(), String> {
         {
             let mut sessions = self.inner.sessions.lock();
@@ -4682,10 +4683,18 @@ impl Hub {
                 return Err("execution preparation changed".into());
             }
             let binding = prepared.for_runtime(&session.meta.machine_id, &session.meta.cwd)?;
-            if !expected
-                .preparation()
-                .is_some_and(|intent| intent.accepts(&binding))
-            {
+            if !expected.preparation().is_some_and(|mut intent| {
+                if intent.validate().is_err() {
+                    return false;
+                }
+                // Only the owning Machine's discovery reply may provide
+                // this physical source. The durable intent remains the
+                // exact CAS identity and every other field stays fenced.
+                if let Some(source) = resolved_source {
+                    intent.source_path = source.to_owned();
+                }
+                intent.accepts(&binding)
+            }) {
                 return Err("prepared execution environment does not match the session".into());
             }
             let mut candidate = session.meta.clone();
@@ -7717,6 +7726,72 @@ mod runtime_reconciliation_tests {
 mod core_tests {
     use super::*;
     use base64::Engine as _;
+
+    #[test]
+    fn publishing_preparation_retains_target_verified_source_and_identity_fences() {
+        use crate::execution_environment::{ExecutionBinding, PreparationV1};
+        let hub = hub_with_session("preparing");
+        let ready = crate::execution_environment::fixture();
+        let binding = ready.decode().unwrap();
+        let intent = PreparationV1 {
+            schema: 1,
+            phase: "preparing".into(),
+            runtime: binding.runtime.clone(),
+            machine_id: binding.environment.machine_id.clone(),
+            workspace_id: binding.workspace.id.clone(),
+            source_path: "/logical/source".into(),
+            executor_digest: binding.environment.executor_digest.clone(),
+        };
+        let expected = ExecutionBinding::from_record(serde_json::to_value(intent).unwrap());
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let meta = &mut sessions.get_mut("preparing").unwrap().meta;
+            meta.machine_id = binding.runtime.machine_id.clone();
+            meta.cwd = binding.runtime.cwd.clone();
+            meta.execution_binding = Some(expected.clone());
+            meta.provider_version = "1.0.0".into();
+            meta.provider_generation_digest = "fixture".into();
+            meta.provider_behavior = Some(serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "permission": "acp_config_full_access_v1",
+                "session": "portable_v1", "turn_end": "portable_v1", "configuration": "acp_config_options_v1",
+                "execution": {"interface": "jsonrpc_v1", "executor_digests": [binding.environment.executor_digest]}
+            })).unwrap());
+        }
+        assert!(
+            hub.accept_execution_binding("preparing", &expected, ready.clone(), None)
+                .is_err()
+        );
+        assert!(
+            hub.accept_execution_binding("preparing", &expected, ready.clone(), Some("/unrelated"))
+                .is_err()
+        );
+        let mut wrong = ready.record().clone();
+        wrong["environment"]["executor_digest"] =
+            serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+        assert!(
+            hub.accept_execution_binding(
+                "preparing",
+                &expected,
+                ExecutionBinding::from_record(wrong),
+                Some(&binding.workspace.source_path)
+            )
+            .is_err()
+        );
+        hub.accept_execution_binding(
+            "preparing",
+            &expected,
+            ready.clone(),
+            Some(&binding.workspace.source_path),
+        )
+        .unwrap();
+        assert_eq!(
+            hub.session_info("preparing")
+                .unwrap()
+                .meta
+                .execution_binding,
+            Some(ready)
+        );
+    }
 
     #[test]
     fn watchdog_revision_does_not_claim_the_replacement_turn() {

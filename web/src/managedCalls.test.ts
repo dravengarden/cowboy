@@ -6,6 +6,7 @@ import {
   callTitle,
   callModelLabel,
   callTimesTitle,
+  callPreviewTitles,
   isManagedChild,
   type ManagedCallSummary,
   managedChildParent,
@@ -13,6 +14,18 @@ import {
   startedLabel,
 } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
+
+test("preview names distinguish repeated calls without changing when status or poll order changes", () => {
+  const first = call("running", { call_id: "first", labels: {}, created_at_ms: 10 });
+  const second = call("failed", { call_id: "second", labels: {}, created_at_ms: 20 });
+  const unique = call("completed", { call_id: "unique", labels: { aspect: "security" } });
+  const titles = callPreviewTitles([second, unique, first]);
+  assert.equal(titles.get("first"), "review · 1");
+  assert.equal(titles.get("second"), "review · 2");
+  assert.equal(titles.get("unique"), "security");
+  const refreshed = callPreviewTitles([{ ...first, state: "completed" }, second, unique]);
+  for (const [id, title] of titles) assert.equal(refreshed.get(id), title);
+});
 
 function call(
   state: ManagedCallSummary["state"],

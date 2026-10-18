@@ -444,8 +444,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => modal.querySelector("[data-call-details-panel]"),
       "i must show the details panel again",
     );
-    check(
-      text().includes("internal/billing/charge.go:42"),
+    await until(
+      () => text().includes("internal/billing/charge.go:42") ? true : null,
       "finding location missing",
     );
     check(
@@ -531,6 +531,19 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(previewRail && getComputedStyle(previewRail).overflowX === "auto", "mobile previews provide a horizontal scroller");
     check(!previewRail.closest("button"), "preview buttons must not nest inside the overview button");
     const preview = previewRail.querySelector<HTMLButtonElement>("[data-call-preview]")!;
+    const cards = [...previewRail.querySelectorAll<HTMLElement>("[data-call-preview]")];
+    const previousWidth = container.style.width;
+    container.style.width = "390px";
+    cards.slice(2).forEach((card) => card.style.display = "none");
+    check(previewRail.scrollWidth <= previewRail.clientWidth + 1 &&
+      Math.abs(cards[1]!.getBoundingClientRect().right - previewRail.getBoundingClientRect().right) < 1,
+      "two previews fill a phone-width rail without blank trailing space");
+    cards.slice(2).forEach((card) => card.style.display = "");
+    container.style.width = previousWidth;
+    for (const [type, x] of [["pointerdown", 100], ["pointermove", 40], ["pointerup", 40]] as const) {
+      preview.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 77, pointerType: "touch", isPrimary: true, clientX: x, clientY: 10 }));
+    }
+    check(!document.querySelector("[data-call-transcript]"), "horizontal drag must not open a call");
     preview.click();
     await until(() => document.querySelector("[data-call-transcript]"), "preview opens the call directly");
     (await until(() => button("Close"), "preview close button missing"))!.click();
@@ -540,7 +553,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () =>
         [...document.querySelectorAll<HTMLButtonElement>("button")].find((
           node,
-        ) => node.getAttribute("aria-label")?.includes("correctness")),
+        ) => !node.hasAttribute("data-call-preview") && node.getAttribute("aria-label")?.includes("correctness")),
       "mobile list missing",
     );
     check(
@@ -682,7 +695,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     const callRow = (): HTMLButtonElement | undefined =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find((
         node,
-      ) => node.getAttribute("aria-label")?.includes("correctness"));
+      ) => !node.hasAttribute("data-call-preview") && node.getAttribute("aria-label")?.includes("correctness"));
     button("Open calls")!.click();
     (await until(callRow, "reopened calls page lacks its list")).click();
     await until(backButton, "a reopened call must show its transcript");

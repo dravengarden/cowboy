@@ -57,6 +57,10 @@ require the exact successful build receipt and published SideStore version.
   Its startup admission requires the fixed root component selection, exact
   native build and existing Hawk reader floor. Ordinary/bootstrap builds stay
   read-only; reader-only artifacts remain compatible explicit recovery targets.
+- Host configuration that adds mandatory Machine arguments also advances its
+  cold recovery input. Use `.#cowboy-machine-host-bootstrap-release` to retain
+  the accepted worker bundle while supplying the new resident CLI; it remains
+  a read-only bootstrap and never enables the deletion writer.
 - Web releases atomically move only `/run/cowboy-web` and restart no process.
   Controller releases restart only `cowboy.service`. Machine releases are a
   separate explicit maintenance boundary for the resident Machine, worker
