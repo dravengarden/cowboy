@@ -35,7 +35,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
           </Stack>
         ))}
         <Stack direction="row" spacing={2} alignItems="center">
-          {[12, 16, 24, 40].map((size) => <CircularProgress key={size} size={size} aria-label={`Loading ${size}`} />)}
+          {[11, 12, 16, 24, 40].map((size) => <CircularProgress key={size} size={size} thickness={size === 11 ? 5 : 3.6} aria-label={`Loading ${size}`} />)}
         </Stack>
         <Stack direction="row" spacing={2} alignItems="center">
           {[12, 14, 16, 24].map((size) => <CircularProgress key={size} data-session-activity="true" size={size} aria-label={`Working ${size}`} />)}
@@ -95,20 +95,32 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     }) && getComputedStyle(determinate.querySelector(".MuiCircularProgress-track")!).display === "none" &&
       getComputedStyle(starting.querySelector(".MuiCircularProgress-track")!).display === "none",
       "Native full tracks show for waits without changing startup or determinate progress");
-    const arc = busy.querySelector(".MuiCircularProgress-circle")!;
-    const track = busy.querySelector(".MuiCircularProgress-track")!;
-    const motion = arc.getAnimations()[0]!;
-    const anchor = track.getBoundingClientRect();
-    motion.pause();
-    check([0, 175, 350, 700, 1050].every((time) => {
-      motion.currentTime = time;
-      const fixed = track.getBoundingClientRect();
-      const moving = arc.getBoundingClientRect();
-      return Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
-        Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
-        Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
-    }), "Full track stays fixed and the moving arc remains concentric throughout rotation");
-    motion.play();
+    check([busy, numeric, container.querySelector('[aria-label="Loading 11"]')!].every((node) => {
+      const svg = node.querySelector("svg")!;
+      const arc = node.querySelector<SVGCircleElement>(".MuiCircularProgress-circle")!;
+      const track = node.querySelector(".MuiCircularProgress-track")!;
+      const motion = arc.getAnimations()[0]!;
+      const anchor = track.getBoundingClientRect();
+      const circumference = 2 * Math.PI * arc.r.baseVal.value;
+      motion.pause();
+      try {
+        return getComputedStyle(svg).overflow === "visible" && [0, 100, 200, 400, 600, 799].every((time) => {
+          motion.currentTime = time;
+          const style = getComputedStyle(arc);
+          const fixed = track.getBoundingClientRect();
+          const moving = arc.getBoundingClientRect();
+          const pattern = style.strokeDasharray.split(/[, ]+/).map(Number.parseFloat);
+          return style.transform === "none" &&
+            Math.abs(pattern.reduce((sum, length) => sum + length, 0) - circumference) < 0.01 &&
+            Math.abs(Number.parseFloat(style.strokeDashoffset) + time / 800 * circumference) < 0.01 &&
+            Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
+            Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
+            Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
+        });
+      } finally {
+        motion.play();
+      }
+    }), "Status and sending rings move paint through a full loop without transformed SVG clipping or track movement");
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;
