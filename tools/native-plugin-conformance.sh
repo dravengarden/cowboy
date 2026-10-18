@@ -48,7 +48,10 @@ xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
 # label tap can return an invalid translation for a WKWebView button.
 native_point=
 for _ in $(seq 1 20); do
-  "$native_axe" describe-ui --udid "$native_simulator" >"$native_root/ui.json"
+  if ! "$native_axe" describe-ui --udid "$native_simulator" >"$native_root/ui.json" 2>"$native_root/axe-error.log"; then
+    sleep 0.2
+    continue
+  fi
   native_point=$(python3 - "$native_root/ui.json" <<'PY'
 import json, sys
 def find(value):
@@ -74,6 +77,7 @@ mkdir -p dist/native-plugin-conformance
 if [ -z "$native_point" ]; then
   xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
   echo "Keyboard test button not exposed in accessibility" >&2
+  cat "$native_root/axe-error.log" >&2
   exit 1
 fi
 read -r native_x native_y <<<"$native_point"
