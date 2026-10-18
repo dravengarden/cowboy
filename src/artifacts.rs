@@ -275,12 +275,24 @@ fn externalize_object(
         return resolve_echo_reference(store, object, mime);
     };
     let url = if force {
-        anyhow::ensure!(
-            data.len() <= crate::managed_calls::media::MAX_IMAGE_BYTES.div_ceil(3) * 4,
-            "generated image exceeds the artifact limit"
-        );
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-        Some(store.put_bytes(&bytes, mime)?)
+        match store_generated_image(store, data, mime) {
+            Ok(url) => Some(url),
+            Err(code) => {
+                // One rejected image must never poison the shared event batch.
+                // Keep a valid, bounded ACP text block and a closed failure code.
+                object.clear();
+                object.insert("type".into(), serde_json::json!("text"));
+                object.insert(
+                    "text".into(),
+                    serde_json::json!(format!("Generated image rejected: {code}")),
+                );
+                object.insert(
+                    crate::managed_calls::media::ARTIFACT_REJECTION_MARKER.into(),
+                    serde_json::json!(code),
+                );
+                return Ok(());
+            }
+        }
     } else {
         store.put(data, mime)?
     };
@@ -289,6 +301,26 @@ fn externalize_object(
         object.insert("url".to_owned(), serde_json::Value::String(url));
     }
     Ok(())
+}
+
+fn store_generated_image(
+    store: &ArtifactStore,
+    data: &str,
+    mime: &str,
+) -> std::result::Result<String, &'static str> {
+    use crate::managed_calls::media::MAX_IMAGE_BYTES;
+    if data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+        return Err("artifact_too_large");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| "artifact_invalid")?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err("artifact_too_large");
+    }
+    store
+        .put_bytes(&bytes, mime)
+        .map_err(|_| "artifact_storage_failed")
 }
 
 fn resolve_echo_reference(

@@ -11,6 +11,8 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
 pub const ARTIFACT_MARKER: &str = "cowboyGeneratedImage";
+const ARTIFACT_FAILURE: &str = "cowboyImageFailure";
+pub const ARTIFACT_REJECTION_MARKER: &str = "cowboyArtifactRejected";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,12 +72,28 @@ pub fn generated_update(update: &Value) -> bool {
         update["sessionUpdate"].as_str(),
         Some("tool_call" | "tool_call_update")
     ) && matches!(update["status"].as_str(), Some("completed" | "failed"))
-        && update["rawOutput"][ARTIFACT_MARKER] == true
+        && (update["rawOutput"][ARTIFACT_MARKER] == true || update[ARTIFACT_MARKER] == true)
+}
+
+/// Keep the small native provenance and quota receipt when transcript
+/// compaction discards rawOutput. This projection is idempotent on recovery.
+pub fn compact_metadata(update: &mut Value) {
+    if !generated_update(update) {
+        return;
+    }
+    let failure = quota_failure(update);
+    let object = update.as_object_mut().expect("generated tool update");
+    object.insert(ARTIFACT_MARKER.into(), Value::Bool(true));
+    if let Some(failure) = failure {
+        object.insert(ARTIFACT_FAILURE.into(), failure);
+    }
 }
 
 /// Preserve only the native quota fields needed to decide when to retry.
 pub fn quota_failure(update: &Value) -> Option<Value> {
-    let failure = &update["rawOutput"]["failure"];
+    let failure = update
+        .get(ARTIFACT_FAILURE)
+        .unwrap_or(&update["rawOutput"]["failure"]);
     if !generated_update(update) || failure["type"] != "usageLimitExceeded" {
         return None;
     }
@@ -99,7 +117,17 @@ pub fn collect(
     let mut artifacts = Vec::new();
     for block in update["content"].as_array().into_iter().flatten() {
         let image = &block["content"];
-        if block["type"] != "content" || image["type"] != "image" {
+        if block["type"] != "content" {
+            continue;
+        }
+        if let Some(code) = image[ARTIFACT_REJECTION_MARKER].as_str() {
+            return Err(match code {
+                "artifact_too_large" => "artifact_too_large",
+                "artifact_storage_failed" => "artifact_storage_failed",
+                _ => "artifact_invalid",
+            });
+        }
+        if image["type"] != "image" {
             continue;
         }
         if image["mimeType"] != "image/png" {
@@ -145,6 +173,37 @@ pub fn collect(
     Ok(artifacts)
 }
 
+/// Classify the complete native turn before starting any file delivery.
+#[cfg(feature = "full")]
+pub fn collect_turn(
+    updates: &[Value],
+    store: &crate::artifacts::ArtifactStore,
+) -> Result<Vec<ImageArtifact>, &'static str> {
+    let mut images = Vec::new();
+    for update in updates {
+        for image in collect(update, store)? {
+            if !images.contains(&image) {
+                images.push(image);
+            }
+        }
+        if images.len() > MAX_IMAGES {
+            return Err("artifact_too_many");
+        }
+    }
+    if images.is_empty() {
+        return Err(
+            if updates.iter().any(|update| quota_failure(update).is_some()) {
+                "image_quota_exceeded"
+            } else if updates.iter().any(|update| update["status"] == "failed") {
+                "native_image_failed"
+            } else {
+                "image_output_missing"
+            },
+        );
+    }
+    Ok(images)
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Delivery {
@@ -162,7 +221,7 @@ impl std::fmt::Debug for Delivery {
 }
 
 #[cfg(all(test, feature = "full"))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     pub fn png() -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -197,6 +256,10 @@ mod tests {
         );
         let artifacts = collect(&update, &store).unwrap();
         assert_eq!(collect(&envelope["update"], &store).unwrap(), artifacts);
+        assert_eq!(
+            collect_turn(&[update.clone(), envelope["update"].clone()], &store).unwrap(),
+            artifacts
+        );
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].width, 1);
         assert!(store.path(&artifacts[0].id).is_some());
@@ -213,6 +276,22 @@ mod tests {
         assert_eq!(collect(&update, &store).unwrap_err(), "artifact_invalid");
         update["status"] = serde_json::json!("failed");
         assert!(collect(&update, &store).unwrap().is_empty());
+        assert_eq!(
+            collect_turn(&[update.clone()], &store).unwrap_err(),
+            "native_image_failed"
+        );
+        update["rawOutput"]["failure"] = serde_json::json!({
+            "type":"usageLimitExceeded","limitId":"image_generation","resetsAt":1234});
+        crate::persistence::compact_tool_update(&mut update);
+        assert!(update.get("rawOutput").is_none());
+        assert_eq!(
+            collect_turn(&[update], &store).unwrap_err(),
+            "image_quota_exceeded"
+        );
+        assert_eq!(
+            collect_turn(&[], &store).unwrap_err(),
+            "image_output_missing"
+        );
         assert!(inspect(b"not an image").is_err());
         assert!(inspect(&bytes[..bytes.len() / 2]).is_err());
         let mut corrupt = bytes;

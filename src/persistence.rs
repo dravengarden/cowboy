@@ -67,7 +67,10 @@ impl EventReducer {
     /// stripped at ingest). Durable history and the Hub hot tail use this
     /// canonical form. A returned envelope may reuse an earlier seq, causing an
     /// UPSERT or in-memory replacement.
-    pub(crate) fn reduce(&mut self, env: Envelope) -> Option<Envelope> {
+    pub(crate) fn reduce(&mut self, mut env: Envelope) -> Option<Envelope> {
+        if let Event::Update { update } = &mut env.event {
+            crate::managed_calls::media::compact_metadata(update);
+        }
         let sid = env.session_id.clone();
         let Event::Update { update } = &env.event else {
             self.text.remove(&sid);
@@ -262,6 +265,7 @@ pub(crate) fn compact_canonical_tool_output(envelope: &mut Envelope) {
 }
 
 pub(crate) fn compact_tool_update(update: &mut serde_json::Value) {
+    crate::managed_calls::media::compact_metadata(update);
     let Some(update) = update.as_object_mut() else {
         return;
     };

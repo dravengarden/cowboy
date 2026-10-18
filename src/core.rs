@@ -9281,6 +9281,75 @@ mod core_tests {
     }
 
     #[test]
+    fn managed_images_survive_live_compaction_and_tool_update_merge() {
+        use crate::managed_calls::media;
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::artifacts::ArtifactStore::new(root.path().to_owned()).unwrap();
+        let png = media::tests::png();
+        let hub = hub_with_session("generated-image");
+        hub.set_artifacts(store.clone());
+        let mut success = serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"image",
+            "status":"completed","rawOutput":{"cowboyGeneratedImage":true,"result":"duplicate"},
+            "content":[{"type":"content","content":{"type":"image","mimeType":"image/png",
+            "data":base64::engine::general_purpose::STANDARD.encode(&png)}}]});
+        for rejected in [false, true] {
+            let cursor = hub.last_event_seq("generated-image").unwrap();
+            hub.push(
+                "generated-image",
+                Event::Update {
+                    update: serde_json::json!({
+                "sessionUpdate":"user_message_chunk","content":{"type":"text","text":"image"}}),
+                },
+            );
+            hub.push(
+                "generated-image",
+                Event::Update {
+                    update: serde_json::json!({
+                "sessionUpdate":"tool_call","toolCallId":"image","status":"in_progress"}),
+                },
+            );
+            if rejected {
+                success["content"][0]["content"]["data"] = serde_json::json!("invalid base64!");
+            }
+            hub.push(
+                "generated-image",
+                Event::Update {
+                    update: success.clone(),
+                },
+            );
+            let turn = hub.managed_turn("generated-image", cursor).unwrap();
+            assert_eq!(turn.generated_images.len(), 1);
+            let update = &turn.generated_images[0];
+            assert!(update.get("rawOutput").is_none());
+            assert!(update["content"][0]["content"].get("data").is_none());
+            let result = media::collect(update, &store);
+            if rejected {
+                assert_eq!(result.unwrap_err(), "artifact_invalid");
+            } else {
+                assert_eq!(result.unwrap(), [media::inspect(&png).unwrap()]);
+            }
+        }
+        let cursor = hub.last_event_seq("generated-image").unwrap();
+        hub.push(
+            "generated-image",
+            Event::Update {
+                update: serde_json::json!({
+            "sessionUpdate":"tool_call_update","toolCallId":"quota","status":"failed",
+            "rawOutput":{"cowboyGeneratedImage":true,"failure":{"type":"usageLimitExceeded",
+                "limitId":"image_generation","resetsAt":1234,"unused":"discard"}}}),
+            },
+        );
+        let turn = hub.managed_turn("generated-image", cursor).unwrap();
+        assert_eq!(turn.generated_images.len(), 1);
+        assert_eq!(
+            media::quota_failure(&turn.generated_images[0]),
+            Some(serde_json::json!({
+            "type":"usageLimitExceeded","limitId":"image_generation","resetsAt":1234}))
+        );
+        assert!(turn.generated_images[0].get("rawOutput").is_none());
+    }
+
+    #[test]
     fn idle_hot_tail_is_tighter_than_a_busy_turn() {
         let health = Arc::new(PersistenceHealth::default());
         let (sink, _rx) = StoreSink::channel(32, health);

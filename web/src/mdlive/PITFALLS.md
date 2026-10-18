@@ -3185,3 +3185,45 @@ proportional title/body movement, a stationary format bar, rich-editor keyboard
 reveal against the common viewport, and 50–150% title/body font ratios. Native
 Pinyin/WeType, the painted iPhone caret, long-press menu, image Return and real
 keyboard animation remain device acceptance boundaries; #69 is still open.
+
+### 2026-10-18 Native keyboard focus reveal can pan the locked root
+
+The top Draft navigation sometimes moved above the screen while the keyboard
+opened. It is outside the document scrollport, so document scrolling is not
+the cause. An isolated iOS 26.5 Simulator WKWebView reproduced the extra root
+focus reveal: `scrollY` and `visualViewport.offsetTop` became 335 while the
+WebView shrank from 874 to 539; the header moved from y=70 to y=-265. After the
+inner document revealed the caret, the root returned to zero. This depends on
+the focused selection and opening path: direct DOM focus reproduced it, while
+`focus({preventScroll:true})` did not in the same trial. A physical tap still
+needs normal UIKit cursor placement, so intercepting touch focus is not a fix.
+
+The existing JavaScript pin deferred correction to rAF. In an 81-frame trial
+it captured two shifted frames. Synchronous JS correction removed those frames
+but could leave the format bar unpainted after repeated keyboard cycles, so it
+was rejected. Pre-focusing on touch with preventScroll removed the root pan
+but a real physical tap in Simulator left the caret at the old position; also
+rejected. `overflow:clip` on html/body still allowed the 335px native reveal.
+Do not retry these as fixes or claim the geometry-only samples prove paint or
+caret placement. No fixed body, transforms, selection writes or prevented taps.
+
+The native owner now clamps only the main WKWebView scroll view's contentOffset
+setters to its adjusted-inset rest position. Child scroll views remain ordinary
+UIScrollViews, and zoomed root views are excluded. The existing JavaScript pin
+remains a fallback for older installed shells. This corrects root motion before
+it reaches the compositor instead of interfering with text focus or selection.
+The native conformance app checks both root offset setters and child scrolling.
+The final 2026-10-18 iOS 26.5 run passed all 16 checks with the real system
+keyboard: viewport 852→517, all 15 JavaScript frame samples at zero root/visual
+offset, 38 native root samples at zero drift, and the logical selection kept.
+It waits for the actual viewport shrink, then samples its settling period;
+an initial 1.2s deadline missed first-use keyboard loading under host load.
+This is native bridge/keyboard geometry acceptance, not a physical IME test.
+
+The native integrated Draft fixture must mount `useKeyboardInset`, which the
+real app mounts in main.tsx, and match the root's locked flow and safe-area
+clearance. Without that hook it cannot validate the production root guard.
+The retained Debug shell proves the diagnosis and rejected Web-only trials;
+it is not evidence of the new native fix shipping or physical IME acceptance.
+The browser/PWA inset calculation and its cover-sheet viewport ownership are
+unchanged. Physical third-party keyboard and image Return (#69) remain separate.

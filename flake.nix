@@ -891,7 +891,7 @@
         tauriCliSrc = pkgs.runCommand "tauri-cli-${nativeToolchain.tauriCli}-source" {
           crate = pkgs.fetchurl {
             url = "https://static.crates.io/crates/tauri-cli/tauri-cli-${nativeToolchain.tauriCli}.crate";
-            hash = "sha256-LaQKekLq4/dOtHg+eDeODYzoSsgljhwSNEN1VgnNMnc=";
+            hash = "sha256-egi/UZV6rXtGJ2ukJCsu3rgLavritCuVR/m5rkhdtGU=";
           };
         } ''
           mkdir "$out"
@@ -905,7 +905,7 @@
             pname = "tauri-cli";
             version = nativeToolchain.tauriCli;
             src = tauriCliSrc;
-            hash = "sha256-3ZKnrr6fKS1xmBoNlkh4WhXQHoV8DmxCRRZirN0hUrg=";
+            hash = "sha256-W2I0ow2XpgzUW02IHGZwK0l7RedS2UYXpeG4+jPSxVw=";
             preBuild = staticCratesVendorPatch;
           };
           nativeBuildInputs = [ pkgs.pkg-config ];

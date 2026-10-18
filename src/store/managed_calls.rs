@@ -291,10 +291,84 @@ mod tests {
             selection: None,
         };
         let (overlapping, overlapping_record) = assert_admission(&store, &first, &request).await;
+        assert_rejected_images_do_not_poison_event_batches(&store).await;
         assert_image_retention(&store, &first, &request).await;
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    async fn assert_rejected_images_do_not_poison_event_batches(store: &Store) {
+        use crate::core::{Envelope, Event};
+        use crate::managed_calls::media;
+        let image = |seq, data| Envelope {
+            session_id: "parent-1".into(),
+            seq,
+            cmid: None,
+            event: Event::Update {
+                update: serde_json::json!({"sessionUpdate":"tool_call_update","status":"completed",
+                    "rawOutput":{"cowboyGeneratedImage":true},"content":[{"type":"content","content":{
+                        "type":"image","mimeType":"image/png","data":data}}]}),
+            },
+        };
+        let healthy = Envelope {
+            session_id: "parent-2".into(),
+            seq: 0,
+            cmid: None,
+            event: Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+            },
+        };
+        let png = media::tests::png();
+        let expected = media::inspect(&png).unwrap();
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png);
+        store
+            .upsert_event_batch(
+                &[
+                    image(0, "A".repeat(media::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 1)),
+                    healthy.clone(),
+                    image(1, "invalid base64!".into()),
+                    image(2, encoded),
+                ],
+                &std::collections::HashMap::from([("parent-1".into(), 3), ("parent-2".into(), 1)]),
+            )
+            .await
+            .unwrap();
+        let sessions = store.load_all().await.unwrap();
+        let other = sessions.iter().find(|s| s.meta.id == "parent-2").unwrap();
+        assert_eq!(other.next_seq, 1);
+        assert_eq!(
+            serde_json::to_value(&other.events).unwrap(),
+            serde_json::json!([healthy])
+        );
+        let rejected = sessions.iter().find(|s| s.meta.id == "parent-1").unwrap();
+        assert_eq!(rejected.next_seq, 3);
+        assert_eq!(rejected.events.len(), 3);
+        for (event, code) in rejected
+            .events
+            .iter()
+            .zip(["artifact_too_large", "artifact_invalid"])
+        {
+            let Event::Update { update } = &event.event else {
+                panic!("expected rejected image event");
+            };
+            assert!(serde_json::to_vec(update).unwrap().len() < 512);
+            assert_eq!(
+                media::collect(update, &store.artifacts()).unwrap_err(),
+                code
+            );
+            let mut replay = update.clone();
+            store.artifacts().externalize_images(&mut replay).unwrap();
+            assert_eq!(&replay, update);
+        }
+        let Event::Update { update } = &rejected.events[2].event else {
+            panic!("expected restored generated image");
+        };
+        assert!(update["content"][0]["content"].get("data").is_none());
+        assert_eq!(
+            media::collect(update, &store.artifacts()).unwrap(),
+            [expected]
+        );
     }
 
     async fn assert_image_retention(store: &Store, template: &Record, input: &Request) {

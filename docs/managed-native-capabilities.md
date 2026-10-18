@@ -79,6 +79,11 @@ There are at most four outputs, each at most 8 MiB and 16 megapixels. The
 adapter keeps the typed ACP image and omits the duplicate base64 in `rawOutput`;
 native Codex history is unchanged.
 
+Canonical history retains only the small provenance marker and native quota
+receipt alongside artifact references. Rejected image payloads become bounded
+failure markers, so a bad image cannot abort persistence for other sessions in
+the same batch. Live observation and restored history use the same contract.
+
 The Controller stores content-addressed bytes, then asks the execution Machine
 to deliver them under the exact parent/child/current-round identity. The Machine
 independently validates bytes and digest and writes only its private child

@@ -460,6 +460,55 @@ static void cowboyLoadProviderImages(
 // gone.
 static __weak WKWebView *gCowboyWebView = nil;
 
+// The document is a locked application canvas. Only its nested WebKit child
+// scrollers may reveal a caret. UIKit can otherwise move this root by an entire
+// keyboard height while resizing the WebView, even with html overflow:hidden.
+// Clamp at the native setter, before a shifted frame reaches the compositor;
+// a JavaScript scroll handler runs after the unwanted offset is already applied.
+static CGPoint cowboyDocumentContentOffset(UIScrollView *view, CGPoint offset) {
+    if (view != gCowboyWebView.scrollView || fabs(view.zoomScale - 1) > 0.001) {
+        return offset;
+    }
+    UIEdgeInsets inset = view.adjustedContentInset;
+    return CGPointMake(-inset.left, -inset.top);
+}
+
+static void cowboyPinDocumentContentOffset(UIScrollView *scrollView) {
+    // WKScrollView overrides these selectors. Hook its concrete class instead
+    // of a superclass implementation that WebKit need not call.
+    Class cls = object_getClass(scrollView);
+    static NSMutableSet *installed;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ installed = [NSMutableSet set]; });
+    if ([installed containsObject:cls]) return;
+    [installed addObject:cls];
+    Method setter = class_getInstanceMethod(cls, @selector(setContentOffset:));
+    IMP original = method_getImplementation(setter);
+    IMP replacement = imp_implementationWithBlock(
+        ^(UIScrollView *view, CGPoint offset) {
+            ((void (*)(id, SEL, CGPoint))original)(
+                view, @selector(setContentOffset:), cowboyDocumentContentOffset(view, offset));
+        });
+    if (!class_addMethod(cls, @selector(setContentOffset:), replacement,
+                        method_getTypeEncoding(setter))) {
+        method_setImplementation(class_getInstanceMethod(cls, @selector(setContentOffset:)), replacement);
+    }
+    Method animatedSetter = class_getInstanceMethod(
+        cls, @selector(setContentOffset:animated:));
+    IMP originalAnimated = method_getImplementation(animatedSetter);
+    IMP animatedReplacement = imp_implementationWithBlock(
+        ^(UIScrollView *view, CGPoint offset, BOOL animated) {
+            ((void (*)(id, SEL, CGPoint, BOOL))originalAnimated)(view,
+                @selector(setContentOffset:animated:),
+                cowboyDocumentContentOffset(view, offset), animated);
+        });
+    if (!class_addMethod(cls, @selector(setContentOffset:animated:), animatedReplacement,
+                        method_getTypeEncoding(animatedSetter))) {
+        method_setImplementation(class_getInstanceMethod(cls, @selector(setContentOffset:animated:)),
+                                 animatedReplacement);
+    }
+}
+
 static void cowboyInstallKeyboardLayoutGuide(void);
 
 // WKWebView wraps the document in a UIScrollView. Safari/PWA delivers touches
@@ -473,6 +522,7 @@ static void cowboyInstallKeyboardLayoutGuide(void);
 static void cowboyConfigureDocumentScrollView(WKWebView *webView) {
     if (webView == nil) return;
     UIScrollView *scrollView = webView.scrollView;
+    cowboyPinDocumentContentOffset(scrollView);
     scrollView.delaysContentTouches = NO;
     scrollView.canCancelContentTouches = NO;
     scrollView.alwaysBounceVertical = NO;

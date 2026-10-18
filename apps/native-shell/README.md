@@ -38,12 +38,15 @@ Cargo, `cargo-tauri` and (for iOS) XcodeGen on PATH. Provision the versions in
 `toolchain.json` explicitly; the builder never installs missing tools:
 
 ```sh
-rustup toolchain install 1.97.1 --profile minimal
-rustup target add --toolchain 1.97.1 aarch64-apple-ios aarch64-apple-ios-sim
-rustup component add llvm-tools --toolchain 1.97.1-aarch64-apple-darwin
-cargo +1.97.1 install tauri-cli --version '=2.11.2' --locked
+rustup toolchain install 1.98.1 --profile minimal
+rustup target add --toolchain 1.98.1 aarch64-apple-ios aarch64-apple-ios-sim
+rustup component add llvm-tools --toolchain 1.98.1-aarch64-apple-darwin
+cargo +1.98.1 install tauri-cli --version '=2.12.2' --locked
 # Install XcodeGen 2.46.0 through your managed Mac toolchain.
 ```
+
+The CLI must understand the 2.12 App-Bound Domains configuration used by this
+shell. The older 2.11.2 CLI rejects that window option before compiling the app.
 
 swift-rs calls the `llvm-tools` component's `llvm-objcopy`; Apple ships no
 equivalent. `build-native-shell.sh` checks for it before every device build
@@ -218,9 +221,11 @@ fallback for older page bundles.
 ## Acceptance
 
 `just native-plugin-conformance` on a Mac compiles both production Objective-C
-bridges into an isolated WKWebView fixture and runs ten ABI/coexistence checks on
+bridges into an isolated WKWebView fixture and runs sixteen checks on
 a new disposable Simulator. This does not replace a full Tauri build or device
-acceptance. See [Apple capability policy](apple/README.md) and
+acceptance. The keyboard check opens a real system keyboard and samples the
+native root offset while an editable child owns focus. See
+[Apple capability policy](apple/README.md) and
 [Simulator controls](../../docs/ios-simulator.md).
 
 `just native-shell-smoke <ios-sim build receipt.json>` additionally verifies the

@@ -2,6 +2,8 @@
 # Run on an arm64 Mac with Xcode. Use an exclusively-created Simulator, never
 # the developer's existing app, simulator, keychain, or authenticated browser.
 set -euo pipefail
+native_requested_runtime="${1:-auto}"
+test "$#" -le 1 || { echo "usage: $0 [installed-runtime-id|auto]" >&2; exit 2; }
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
 test -z "$(git status --porcelain)"
@@ -32,18 +34,24 @@ xcrun --sdk iphonesimulator clang++ -fobjc-arc -fblocks \
 /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 9.8.7' "$native_app/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 987' "$native_app/Info.plist"
 codesign --sign - "$native_app"
-native_runtime="$(xcrun simctl list runtimes --json | python3 -c 'import json,sys; values=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]; values.sort(key=lambda r: tuple(map(int,r["version"].split(".")))); print(values[-1]["identifier"])')"
+native_runtime="$(xcrun simctl list runtimes --json | python3 -c 'import json,sys; values=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]; values.sort(key=lambda r: tuple(map(int,r["version"].split(".")))); requested=sys.argv[1]; print(values[-1]["identifier"] if requested=="auto" else next(r["identifier"] for r in values if r["identifier"]==requested))' "$native_requested_runtime")"
 native_simulator="$(xcrun simctl create "Cowboy Plugin Conformance ${native_revision:0:8}" \
   com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$native_runtime")"
 xcrun simctl boot "$native_simulator"
 xcrun simctl bootstatus "$native_simulator" -b
+# Fresh Simulators show a modal QuickPath tutorial over the keyboard. Configure
+# only this disposable guest, as Chromium's iOS test setup does, not host prefs.
+for native_tutorial in DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial DidShowGestureKeyboardIntroduction UIKeyboardDidShowInternationalInfoIntroduction; do
+  xcrun simctl spawn "$native_simulator" defaults write com.apple.keyboard.preferences "$native_tutorial" -bool YES
+done
 xcrun simctl install "$native_simulator" "$native_app"
 xcrun simctl launch "$native_simulator" dev.cowboy.plugin-conformance
 native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plugin-conformance data)"
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance
-    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==14 else 1)' \
+    xcrun simctl io "$native_simulator" screenshot dist/native-plugin-conformance/keyboard.png >/dev/null
+    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==16 else 1)' \
       "$native_data/Documents/conformance.json" "$native_revision" "$native_runtime"
     exit 0
   fi

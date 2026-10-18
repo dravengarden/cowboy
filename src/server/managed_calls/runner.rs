@@ -696,29 +696,7 @@ async fn deliver_images(
     use crate::managed_calls::media::{self, Delivery};
     use base64::Engine as _;
     let artifacts = store.artifacts();
-    let mut images = Vec::new();
-    for update in updates {
-        for image in media::collect(update, &artifacts)? {
-            if !images.contains(&image) {
-                images.push(image);
-            }
-        }
-        if images.len() > media::MAX_IMAGES {
-            return Err("artifact_too_many");
-        }
-    }
-    if images.is_empty() {
-        if updates
-            .iter()
-            .any(|update| update["rawOutput"]["failure"]["type"] == "usageLimitExceeded")
-        {
-            return Err("image_quota_exceeded");
-        }
-        if updates.iter().any(|update| update["status"] == "failed") {
-            return Err("native_image_failed");
-        }
-        return Err("image_output_missing");
-    }
+    let images = media::collect_turn(updates, &artifacts)?;
     let mut delivered = Vec::new();
     for image in images {
         let path = artifacts.path(&image.id).ok_or("artifact_missing")?;
