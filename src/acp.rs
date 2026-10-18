@@ -1994,6 +1994,12 @@ async fn set_startup_config_option(
 /// A command from a client, routed by the supervisor to an agent thread.
 #[derive(Debug)]
 pub enum AgentCommand {
+    /// Native steering never creates a detached turn or cancels current work.
+    /// Completion is reported separately from transport admission.
+    Steer {
+        blocks: Vec<ContentBlock>,
+        cmid: String,
+    },
     /// Send a user turn. The full ACP content array is forwarded to the
     /// upstream agent verbatim — image / audio / resource blocks make it
     /// through (subject to the upstream's own capabilities), not just text.
@@ -2028,6 +2034,21 @@ pub enum AgentCommand {
 struct ClaudeSdkMessageNotification {
     session_id: String,
     message: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
+#[request(method = "_session/steering", response = SteeringResponse)]
+#[serde(rename_all = "camelCase")]
+struct SteeringRequest {
+    session_id: SessionId,
+    prompt: Vec<ContentBlock>,
+    #[serde(rename = "_meta")]
+    meta: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcResponse)]
+struct SteeringResponse {
+    outcome: String,
 }
 
 /// A prompt response and native execution are independent lifetimes. Claude
@@ -2083,6 +2104,8 @@ struct ClientState {
     /// Serialize `session/prompt` RPCs while leaving the outer command loop
     /// responsive to Cancel, permission answers, and config changes.
     prompt_lock: tokio::sync::Mutex<()>,
+    /// Prevent a new native prompt from overtaking an admitted steering RPC.
+    steering_gate: tokio::sync::Mutex<()>,
     /// Notification handlers attach progress only to the prompt that currently
     /// owns `prompt_lock`. Queued prompts cannot reset or consume its state.
     active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
@@ -2422,6 +2445,7 @@ async fn agent_main(
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
+        steering_gate: tokio::sync::Mutex::new(()),
         activity: Mutex::new(SessionActivity::default()),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
@@ -3151,6 +3175,23 @@ async fn run_session(
             projected_auth_error(provider_id, service_auth_projected, resume.is_none(), error)
         })?;
     let initialize_meta = init.meta.clone();
+    let supports_current_turn = initialize_meta
+        .as_ref()
+        .and_then(|meta| meta.get("steering"))
+        .is_some_and(|steering| {
+            steering
+                .get("supported")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+                && steering
+                    .get("idleBehavior")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("promptRequired")
+        });
+    state.sink.push(&session_id, Event::Update { update: serde_json::json!({
+        "sessionUpdate": crate::runtime_wire::CURRENT_TURN_CAPABILITIES_UPDATE,
+        "currentTurn": supports_current_turn && !state.sink.session_is_managed_read_only(&session_id),
+    }) });
     let agent_can_load = init.agent_capabilities.load_session;
     let agent_can_resume = init
         .agent_capabilities
@@ -3511,6 +3552,49 @@ async fn run_session(
                 (None, None)
             };
         match cmd {
+            AgentCommand::Steer { blocks, cmid } => {
+                let expected_prompt = state.current_prompt();
+                let connection = cx.clone();
+                let state = Arc::clone(state);
+                let acp_id = acp_id.clone();
+                let session_id = session_id.clone();
+                cx.clone().spawn(async move {
+                    let _gate = state.steering_gate.lock().await;
+                    let same_prompt = expected_prompt.as_ref().zip(state.current_prompt().as_ref())
+                        .is_some_and(|(expected, active)| Arc::ptr_eq(expected, active));
+                    let outcome = if !supports_current_turn || state.sink.session_is_managed_read_only(&session_id) {
+                        "unsupported"
+                    } else if !same_prompt {
+                        "not_delivered"
+                    } else {
+                        state.last_echoed_user_contents.lock().extend(blocks.iter().map(|block| serde_json::to_value(block).unwrap_or_default()));
+                        match tokio::time::timeout(Duration::from_secs(25), connection.send_request(SteeringRequest {
+                            session_id: acp_id,
+                            prompt: blocks.clone(),
+                            meta: serde_json::json!({"steering":{"idleBehavior":"promptRequired"}}),
+                        }).block_task()).await {
+                            Ok(Ok(response)) if response.outcome == "injected" => "injected",
+                            Ok(Ok(response)) if response.outcome == "promptRequired" => "not_delivered",
+                            // Includes a lost native reply. Never reinterpret an
+                            // error or unfamiliar result as permission to replay.
+                            _ => "unknown",
+                        }
+                    };
+                    if outcome == "injected" {
+                        for (index, block) in blocks.iter().enumerate() {
+                            state.sink.push_tagged(&session_id, Event::Update { update: serde_json::json!({
+                                "sessionUpdate":"user_message_chunk", "content":block,
+                                "_meta":{"cowboyDelivery":"current_turn"},
+                            }) }, (index == 0).then(|| cmid.clone()));
+                        }
+                    }
+                    state.sink.push(&session_id, Event::Update { update: serde_json::json!({
+                        "sessionUpdate":crate::runtime_wire::STEERING_RESULT_UPDATE,
+                        "cmid":cmid, "outcome":outcome,
+                    }) });
+                    Ok(())
+                })?;
+            }
             AgentCommand::Prompt(blocks, cmid, completion) => {
                 state.set_status(Status::Busy, None);
                 // Echo each user content block into the timeline so every
@@ -3597,6 +3681,7 @@ async fn run_session(
                     }
                     // A queued prompt may acquire the lock just after the prior
                     // turn reported Running. Reassert Busy before its RPC.
+                    let mut steering_gate = Some(state.steering_gate.lock().await);
                     state.set_status(Status::Busy, None);
                     let prompt = Arc::new(ActivePrompt::new(capture_completion));
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
@@ -3612,11 +3697,16 @@ async fn run_session(
                     state.backoff.lock().take();
                     sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
+                        let gate = match steering_gate.take() {
+                            Some(gate) => gate,
+                            None => state.steering_gate.lock().await,
+                        };
                         let mut prompt_request = PromptRequest::new(acp.clone(), blocks.clone());
                         if let Ok(Some(meta)) = &managed_meta {
                             prompt_request = prompt_request.meta(meta.clone());
                         }
                         let request = cx.send_request(prompt_request);
+                        drop(gate);
                         // `send_request` synchronously queues the JSON-RPC
                         // request. Recheck immediately afterwards: if Stop won
                         // the tiny check/send race, queue both cancellations

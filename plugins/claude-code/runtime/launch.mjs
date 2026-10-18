@@ -72,6 +72,19 @@ export const TOOL_STREAMING = "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING";
 export function toolStreamingEnvironment(environment) {
   return { [TOOL_STREAMING]: environment[TOOL_STREAMING] ?? "1" };
 }
+
+// ACP 0.93 implements promptRequired but only advertises generic steering.
+// Advertise the pinned adapter's explicit no-new-turn contract to Cowboy.
+export function advertiseCurrentTurn(Agent) {
+  const initialize = Agent.prototype.initialize;
+  Agent.prototype.initialize = async function (...args) {
+    const result = await initialize.apply(this, args);
+    if (result._meta?.steering?.supported === true) {
+      result._meta.steering.idleBehavior = "promptRequired";
+    }
+    return result;
+  };
+}
 const launched = performance.now();
 let trace;
 export function startupPhase(name) {
@@ -1441,6 +1454,10 @@ export async function main(args) {
     ),
   );
   process.argv = [process.execPath, upstream, ...args];
+  const { ClaudeAcpAgent } = await import(
+    new URL("./acp-agent.js", pathToFileURL(upstream))
+  );
+  advertiseCurrentTurn(ClaudeAcpAgent);
   await import(upstream);
 }
 

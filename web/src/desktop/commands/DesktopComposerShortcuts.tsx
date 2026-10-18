@@ -18,6 +18,8 @@ export function DesktopComposerCommandBindings({
   canAttach,
   canJumpFront,
   canForce,
+  canCurrentTurn = false,
+  onCurrentTurn,
   canMore,
   onSlash,
   onReference,
@@ -34,6 +36,8 @@ export function DesktopComposerCommandBindings({
   canAttach: boolean;
   canJumpFront: boolean;
   canForce: boolean;
+  canCurrentTurn?: boolean;
+  onCurrentTurn?: () => void;
   canMore: boolean;
   onSlash: () => void;
   onReference: () => void;
@@ -51,6 +55,8 @@ export function DesktopComposerCommandBindings({
     canAttach,
     canJumpFront,
     canForce,
+    canCurrentTurn,
+    onCurrentTurn,
     canMore,
     onSlash,
     onReference,
@@ -68,6 +74,8 @@ export function DesktopComposerCommandBindings({
     canAttach,
     canJumpFront,
     canForce,
+    canCurrentTurn,
+    onCurrentTurn,
     canMore,
     onSlash,
     onReference,
@@ -157,7 +165,7 @@ export function DesktopComposerCommandBindings({
     },
     {
       id: "composer.forcePush",
-      title: "Force push prompt",
+      title: "Interrupt and send prompt",
       description: "Interrupt the current turn and run this prompt now",
       group: "Prompt actions",
       shortcut: "Alt+Enter",
@@ -168,6 +176,19 @@ export function DesktopComposerCommandBindings({
       when: () => state.current.sendable && state.current.canForce,
       disabledReason: "Force push is only available during an active turn",
       run: () => state.current.onForce(),
+    },
+    {
+      id: "composer.currentTurn",
+      title: "Add prompt to current turn",
+      description:
+        "Native delivery into the active turn; never starts another turn",
+      group: "Prompt actions",
+      allowInEditor: true,
+      contexts: ["prompt"],
+      regions: ["prompt.composer"],
+      when: () => state.current.sendable && state.current.canCurrentTurn,
+      disabledReason: "The running worker must support current-turn delivery",
+      run: () => state.current.onCurrentTurn?.(),
     },
     {
       id: "composer.more",

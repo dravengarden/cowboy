@@ -417,6 +417,20 @@ impl Supervisor {
         self.send_traced(session_id, command, None)
     }
 
+    pub(crate) fn start_steer(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+    ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+        if self.hub.is_managed_child(session_id) {
+            return Err("managed child conversations do not accept steering".into());
+        }
+        // Do not prepare, wake or replace a worker for this operation.
+        self.runtime_for_session(session_id)?
+            .start_steer(session_id, content, cmid)
+    }
+
     pub(crate) fn send_traced(
         &self,
         session_id: &str,
@@ -424,6 +438,9 @@ impl Supervisor {
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        if matches!(command, AgentCommand::Steer { .. }) {
+            return Err("current-turn delivery requires durable asynchronous admission".into());
+        }
         if matches!(command, AgentCommand::Cancel) {
             // Stopping a retained turn must never require starting or repairing
             // a worker, including after host policy has denied its placement.
@@ -511,6 +528,7 @@ impl Supervisor {
                 }
                 runtime.prompt_traced(session_id, content, cmid, trace);
             }
+            AgentCommand::Steer { .. } => unreachable!("steering has separate admission"),
             AgentCommand::Cancel => runtime.cancel(session_id),
             AgentCommand::Permission {
                 request_id,
@@ -1198,6 +1216,7 @@ mod tests {
             agent_session_id: Some("codex-thread-1".to_owned()),
             native_thread_materialized: None,
             current_turn_id: None,
+            supports_current_turn: false,
             last_runtime_seq: 1,
             pending_permissions: Vec::new(),
             config_options: None,

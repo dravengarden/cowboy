@@ -14,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Oldest runtime protocol this build accepts during a mixed-generation roll.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 /// Upper bound for a single IPC frame. Large binary artifacts are referenced by
@@ -66,6 +66,10 @@ pub struct WorkerSnapshot {
     pub native_thread_materialized: Option<bool>,
     #[serde(default)]
     pub current_turn_id: Option<String>,
+    /// Observed from this worker's live ACP handshake, never from an installed
+    /// Plugin version. Older workers cannot receive current-turn delivery.
+    #[serde(default)]
+    pub supports_current_turn: bool,
     #[serde(default)]
     pub last_runtime_seq: u64,
     #[serde(default)]
@@ -108,6 +112,16 @@ pub struct WorkerSnapshot {
 /// it still decode the frame. The Controller projects it onto session
 /// metadata and never stores it in the transcript.
 pub const BACKGROUND_TASKS_UPDATE: &str = "cowboy_background_tasks";
+
+pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
+pub const STEERING_RESULT_UPDATE: &str = "cowboy_steering_result";
+
+#[must_use]
+pub fn current_turn_support(update: &serde_json::Value) -> Option<bool> {
+    (update.get("sessionUpdate")?.as_str()? == CURRENT_TURN_CAPABILITIES_UPDATE)
+        .then(|| update.get("currentTurn")?.as_bool())
+        .flatten()
+}
 
 #[must_use]
 pub fn background_tasks_update(count: u32) -> serde_json::Value {
@@ -273,6 +287,14 @@ pub struct SessionExtensions {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum CoreCommand {
+    Steer {
+        session_id: String,
+        command_id: String,
+        worker_epoch: String,
+        turn_id: String,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+    },
     /// Protocol-27 host-authorized replacement of a remote execution binding.
     /// Ordinary `EnsureSession` must never perform this transition.
     RecoverExecutionSession {
@@ -355,7 +377,8 @@ impl CoreCommand {
         match self {
             Self::EnsureSession { session } => Some(&session.session_id),
             Self::RecoverExecutionSession { session, .. } => Some(&session.session_id),
-            Self::Prompt { session_id, .. }
+            Self::Steer { session_id, .. }
+            | Self::Prompt { session_id, .. }
             | Self::Cancel { session_id, .. }
             | Self::Permission { session_id, .. }
             | Self::SetConfigOption { session_id, .. }
@@ -370,6 +393,13 @@ impl CoreCommand {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WorkerCommand {
+    Steer {
+        command_id: String,
+        worker_epoch: String,
+        turn_id: String,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+    },
     Prompt {
         command_id: String,
         turn_id: String,
@@ -714,6 +744,7 @@ mod tests {
             agent_session_id: resume.map(str::to_owned),
             native_thread_materialized: materialized,
             current_turn_id: None,
+            supports_current_turn: false,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,

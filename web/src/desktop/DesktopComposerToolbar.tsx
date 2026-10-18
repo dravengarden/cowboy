@@ -23,6 +23,7 @@ import {
   Bolt,
   EditNoteOutlined,
   MoreHoriz,
+  PostAdd,
   RawOn,
   Schedule,
   Send,
@@ -64,6 +65,8 @@ export interface DesktopComposerToolbarProps {
   sendable: boolean;
   canJumpFront: boolean;
   canForce: boolean;
+  canCurrentTurn?: boolean;
+  onCurrentTurn?: () => void;
   pending: boolean;
   progress: boolean;
   sendLabel: "Send" | "Queue";
@@ -223,6 +226,8 @@ export function DesktopComposerToolbar(
         canInsert={props.canInsert}
         canAttach={props.canInsert}
         canJumpFront={props.canJumpFront}
+        canCurrentTurn={props.canCurrentTurn ?? false}
+        onCurrentTurn={props.onCurrentTurn ?? (() => {})}
         canForce={props.canForce}
         canMore
         onSlash={() => props.editorRef.current?.insertTrigger("/")}
@@ -311,7 +316,9 @@ export function DesktopComposerToolbar(
         })}
         <HintTooltip
           title="More formatting"
-          shortcut={desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.composerMore)}
+          shortcut={desktopWorkspaceSequence(
+            DESKTOP_WORKSPACE_KEYS.composerMore,
+          )}
         >
           <Button
             ref={moreRef}
@@ -413,14 +420,25 @@ export function DesktopComposerToolbar(
           {action({
             id: "force",
             icon: <Bolt />,
-            label: "Force push…",
-            title: "Force push",
+            label: "Interrupt…",
+            title: "Interrupt current work and send",
             shortcut: "Alt+Enter",
             disabled: !ready || !props.canForce,
             reason: !ready
               ? deliveryReason
               : "Available during an active turn or a paused queue",
             onClick: props.onForce,
+          })}
+          {action({
+            id: "current-turn",
+            icon: <PostAdd />,
+            label: "Add to turn",
+            title: "Add to the current turn",
+            disabled: !ready || !props.canCurrentTurn,
+            reason: !ready
+              ? deliveryReason
+              : "Requires a connected, active turn with native delivery support",
+            onClick: props.onCurrentTurn ?? (() => {}),
           })}
         </Box>
         <Tooltip title={ready ? props.sendDescription : deliveryReason}>

@@ -145,6 +145,8 @@ export interface ProviderUpdateAvailable {
 }
 
 export interface SessionMeta {
+  /** Advertised by this running worker, never inferred from installed packages. */
+  supports_current_turn?: boolean;
   id: string;
   provider: string;
   /** Exact immutable Provider generation selected for this session. */

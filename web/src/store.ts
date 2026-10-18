@@ -204,6 +204,8 @@ export const conn = createConnectionStore({ versionUrl: "/version" });
 /// daemon; `attachments` are reconstructed from the wire content blocks for
 /// display / re-edit.
 export interface QueuedMessage {
+  /** Local-only native delivery intent; restored outboxes only read its receipt. */
+  currentTurn?: boolean;
   id: string;
   text: string;
   /** Staged image / file attachments (reconstructed from the message's ACP
@@ -3837,7 +3839,10 @@ async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<
   if (recoveringFailedSends.has(key)) return false;
   const pending = qClients.get(sessionId)?.pending().find((mutation) => mutation.id === id);
   const row = (pending?.args as { row?: QueuedMessage } | undefined)?.row;
-  if (pending === undefined || row === undefined || qStatus.get(id) !== "failed") return false;
+  if (
+    pending === undefined || row === undefined || qStatus.get(id) !== "failed"
+  ) return false;
+  if (row.currentTurn) return false;
   recoveringFailedSends.add(key);
   try {
     // Save first, then retire the old retry obligation. This never submits the
@@ -3860,6 +3865,7 @@ async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<
 function parkUnconfirmedSend(sessionId: string, id: string, phase: DeliveryStatus): void {
   const mutation = qClients.get(sessionId)?.pending().find((m) => m.id === id);
   if (mutation === undefined) return;
+  if ((mutation.args as { row?: QueuedMessage }).row?.currentTurn) return;
   const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
   const refused = qFailure.has(id) || (echoCmid !== undefined && qFailure.has(echoCmid));
   if (unconfirmedSendDisposition({ mutation: mutation.name, phase, refused }) !== "draft") return;
@@ -4036,7 +4042,15 @@ function dispatchQueueMutation(sessionId: string, m: { name: string; id: string;
     }).finally(() => draftDispatches.delete(m.id));
 }
 
-function transmitQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): void {
+function transmitQueueMutation(
+  sessionId: string,
+  m: { name: string; id: string; args: unknown },
+): void {
+  const currentRow = (m.args as { row?: QueuedMessage }).row;
+  if (currentRow?.currentTurn) {
+    void transmitCurrentTurn(sessionId, m.id, currentRow);
+    return;
+  }
   const command = commandForQueueMutation(sessionId, m);
   const sent = command !== null && send(command);
   const mutationRow = (m.args as { row?: QueuedMessage }).row;
@@ -4532,6 +4546,7 @@ async function qAdd(
     schedule?: DraftSchedule;
     cmid?: string;
     sourceCmid?: string;
+    currentTurn?: boolean;
   } = {},
 ): Promise<void> {
   const mode = opts.mode ?? "back";
@@ -4553,6 +4568,7 @@ async function qAdd(
     attachments,
     cmid,
     origin,
+    ...(opts.currentTurn ? { currentTurn: true } : {}),
     ...(opts.schedule !== undefined ? { schedule: opts.schedule } : {}),
   };
   // Set status BEFORE mutating: the local apply fires `onChange` → commitQueue,
@@ -4996,6 +5012,10 @@ function reconcileReadyOptimistic(
 export function retryMessage(sessionId: string, cmid: string): void {
   const row = state.optimisticMessages.get(sessionId)?.find((m) => m.cmid === cmid);
   if (!row) return;
+  if (row.currentTurn) {
+    void transmitCurrentTurn(sessionId, cmid, row);
+    return;
+  }
   const pending = qClients.get(sessionId)?.pending().find((mutation) => {
     const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
     return mutation.id === cmid || echoCmid === cmid;
@@ -5086,6 +5106,104 @@ export function markSessionHydrated(id: string): void {
 // The single entry point the composer calls to send a user prompt. The daemon
 // dispatches it immediately when idle, else queues it. A prompt with at least
 // one attachment is valid even with empty text; otherwise empty text is ignored.
+const freshCurrentTurns = new Set<string>();
+const currentTurnRequests = new Set<string>();
+const currentTurnCompletions = new Map<string, (outcome: string) => void>();
+
+async function transmitCurrentTurn(
+  sessionId: string,
+  id: string,
+  row: QueuedMessage,
+): Promise<void> {
+  if (currentTurnRequests.has(id)) return;
+  currentTurnRequests.add(id);
+  const fresh = freshCurrentTurns.delete(id);
+  qStatus.set(id, "sending");
+  commitQueue(sessionId);
+  try {
+    const { deliverCurrentTurn } = await import("./currentTurnDelivery");
+    const outcome = await deliverCurrentTurn(
+      sessionId,
+      id,
+      fresh && isConnected()
+        ? { text: row.text, content: contentOf(row.text, row.attachments) }
+        : null,
+    );
+    currentTurnCompletions.get(id)?.(outcome);
+    if (
+      !qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)
+    ) return;
+    if (outcome === "injected") {
+      qClients.get(sessionId)?.confirm([id]);
+      qStatus.delete(id);
+      forgetDeliveryFailure(id);
+      patchMessage(sessionId, id, (message) => {
+        const { status: _status, failure: _failure, ...delivered } = message;
+        return delivered;
+      });
+      void hydrateSession(sessionId);
+    } else {
+      qFailure.set(
+        id,
+        outcome === "not_delivered"
+          ? "Not delivered to the current turn. Your message is retained."
+          : "Delivery unknown. Retry checks the receipt without resending.",
+      );
+      failDelivery(sessionId, [id]);
+    }
+  } catch {
+    qFailure.set(
+      id,
+      "Delivery unknown. Retry checks the receipt without resending.",
+    );
+    failDelivery(sessionId, [id]);
+  } finally {
+    currentTurnCompletions.get(id)?.("unknown");
+    currentTurnCompletions.delete(id);
+    currentTurnRequests.delete(id);
+    commitQueue(sessionId);
+  }
+}
+
+export async function currentTurnPrompt(
+  sessionId: string,
+  text: string,
+  attachments: Attachment[] = [],
+): Promise<void> {
+  const session = state.sessions.find((entry) => entry.id === sessionId);
+  if (
+    !isConnected() || session?.status !== "busy" ||
+    !session.supports_current_turn
+  ) {
+    throw new Error(
+      "The current turn is unavailable. Queue this message instead.",
+    );
+  }
+  const cmid = newCmid();
+  freshCurrentTurns.add(cmid);
+  const completed = new Promise<string>((resolve) =>
+    currentTurnCompletions.set(cmid, resolve)
+  );
+  try {
+    await qAdd("transcript", sessionId, text.trimEnd(), attachments, {
+      cmid,
+      currentTurn: true,
+    });
+    const outcome = await completed;
+    if (outcome !== "injected") {
+      throw new Error(
+        outcome === "not_delivered"
+          ? "Not delivered to the current turn. The draft is retained."
+          : "Delivery is unknown. Check the original message receipt before sending again.",
+      );
+    }
+  } catch (error) {
+    freshCurrentTurns.delete(cmid);
+    currentTurnCompletions.delete(cmid);
+    throw error;
+  }
+}
+
 export function submitPrompt(
   sessionId: string,
   text: string,

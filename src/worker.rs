@@ -175,6 +175,12 @@ impl Shared {
                 snapshot.context_size = Some(*size);
             }
             RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::current_turn_support(update).is_some() =>
+            {
+                snapshot.supports_current_turn =
+                    crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+            }
+            RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::background_tasks_count(update).is_some() =>
             {
                 snapshot.background_tasks = crate::runtime_wire::background_tasks_count(update);
@@ -599,6 +605,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             // until its first prompt.
             native_thread_materialized: Some(args.resume.is_some()),
             current_turn_id: None,
+            supports_current_turn: false,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -903,6 +910,54 @@ fn handle_command(
 ) -> Frame {
     let (command_id, agent_command, turn): (String, Option<AgentCommand>, Option<String>) =
         match command {
+            WorkerCommand::Steer {
+                command_id,
+                worker_epoch,
+                turn_id,
+                content,
+                cmid,
+            } => {
+                // This command must never wait for a future worker or turn.
+                let snapshot = shared.snapshot();
+                if !snapshot.supports_current_turn
+                    || !shared.workspace_is_current()
+                    || shared.managed_read_only()
+                    || snapshot.worker_epoch != worker_epoch
+                    || snapshot.current_turn_id.as_deref() != Some(&turn_id)
+                    || snapshot.drain_requested
+                {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("current turn is unavailable".into()),
+                    );
+                }
+                let Ok(blocks) = content
+                    .into_iter()
+                    .map(serde_json::from_value)
+                    .collect::<Result<Vec<ContentBlock>, _>>()
+                else {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("invalid steering content".into()),
+                    );
+                };
+                if blocks.is_empty() {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("empty steering content".into()),
+                    );
+                }
+                if !shared.mark_command(&command_id) {
+                    return command_ack(shared, command_id, true, Some("duplicate".into()));
+                }
+                (command_id, Some(AgentCommand::Steer { blocks, cmid }), None)
+            }
             WorkerCommand::Prompt {
                 command_id,
                 turn_id,
@@ -1392,6 +1447,7 @@ mod tests {
                     agent_session_id: None,
                     native_thread_materialized: None,
                     current_turn_id: None,
+                    supports_current_turn: false,
                     last_runtime_seq: 0,
                     pending_permissions: vec![],
                     config_options: None,

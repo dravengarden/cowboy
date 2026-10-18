@@ -16,6 +16,7 @@ mod dormant_pins;
 mod folder_defaults;
 mod memory_reclaim;
 mod secure_transport;
+mod send_delivery;
 mod session_configuration;
 mod session_create_replay;
 mod session_maintenance;
@@ -10569,6 +10570,7 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
+        .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
         .route(
@@ -14952,7 +14954,8 @@ async fn handle_machine_ws(
         // Install before the broker handshake finishes. Snapshot replay of
         // restored workers can take seconds; without a runtime in the router
         // every send/open in that window fails with "hawk is not connected".
-        let runtime = RemoteRuntime::connecting(hub, label.clone(), generation, provider_auth);
+        let runtime =
+            RemoteRuntime::connecting(hub, label.clone(), generation, provider_auth, protocol);
         runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
         router.install(machine_id.clone(), Arc::clone(&runtime));
         tokio::spawn(async move {
@@ -15890,6 +15893,14 @@ struct SessionPromptRequest {
     text: String,
     #[serde(default)]
     content: Vec<serde_json::Value>,
+    #[serde(default)]
+    delivery: Option<crate::send_delivery::SendDelivery>,
+    #[serde(default)]
+    front: bool,
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    operation: Option<String>,
 }
 
 /// Inject a prompt into a session FROM THE BACKEND (machine-driven). The
@@ -15900,6 +15911,14 @@ async fn api_session_prompt(
     Path(session_id): Path<String>,
     Json(req): Json<SessionPromptRequest>,
 ) -> Response {
+    use crate::send_delivery::SendDelivery;
+    let delivery = match SendDelivery::resolve(req.delivery, req.force, req.front) {
+        Ok(delivery) => delivery,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    if delivery == SendDelivery::CurrentTurn {
+        return send_delivery::submit(state, session_id, req).await;
+    }
     // Keep the read guard through dispatch. Provider uninstall acquires the
     // write guard before it snapshots active turns, so a prompt can never slip
     // between the fence check and the explicit active-turn confirmation.
@@ -15932,12 +15951,37 @@ async fn api_session_prompt(
     }
     // API and UI prompts share one durable queue and cold-admission boundary.
     // Resource pressure must not turn an accepted backend wake into a 404.
-    state.hub.submit(
-        &session_id,
-        req.text,
-        req.content,
-        Some(format!("api:{}", uuid::Uuid::new_v4())),
+    let cmid = Some(
+        req.operation
+            .unwrap_or_else(|| format!("api:{}", uuid::Uuid::new_v4())),
     );
+    if delivery == SendDelivery::Interrupt {
+        let Some(queued) =
+            state
+                .hub
+                .force_submit_once(&session_id, req.text, req.content, cmid, true)
+        else {
+            return (StatusCode::ACCEPTED, "already accepted").into_response();
+        };
+        if queued
+            && matches!(
+                state.hub.status(&session_id),
+                Some(Status::Busy | Status::Starting)
+            )
+        {
+            if let Err(error) = force_cancel_with_watchdog(&state, &session_id) {
+                return (StatusCode::CONFLICT, error).into_response();
+            }
+        } else {
+            state.hub.drain_now(&session_id);
+        }
+    } else if req.front {
+        let _ = state
+            .hub
+            .force_submit(&session_id, req.text, req.content, cmid, false);
+    } else {
+        state.hub.submit(&session_id, req.text, req.content, cmid);
+    }
     (StatusCode::ACCEPTED, "queued").into_response()
 }
 
@@ -20808,8 +20852,9 @@ fn handle_command(
                 // idle dispatch); only then, and only on a live turn, do we Cancel.
                 let queued = state
                     .hub
-                    .force_submit(&session_id, text, content, cmid, true);
-                if queued
+                    .force_submit_once(&session_id, text, content, cmid, true);
+                if queued.is_none() { return true; }
+                if queued == Some(true)
                     && matches!(
                         state.hub.status(&session_id),
                         Some(Status::Busy | Status::Starting)

@@ -546,3 +546,48 @@ dispatcher.
 
 The CLI remains supported. Agents use it when live MCP capabilities are absent
 or an operation belongs to an explicit host/native/identity boundary.
+
+## Send delivery
+
+`queue.submit` uses `delivery: "next_turn"` by default: idle sessions dispatch,
+busy sessions queue, and a manually paused queue remains held. `front: true`
+changes queue position without interrupting. `delivery: "interrupt"` explicitly
+cancels current work and places this message first. Legacy `force: true`
+remains supported; contradictory choices are rejected.
+
+`delivery: "current_turn"` supplements an active native turn only when the
+running worker reports `supports_current_turn` through a Machine connection
+negotiated at protocol 34 or later. The connection's immutable protocol gate
+also refuses a capable worker behind an older host. Native Codex uses `turn/steer`;
+Claude uses its ACP steering extension with `idleBehavior: "promptRequired"`.
+Neither path falls back to a detached new prompt. Gemini, Grok, isolated
+variants and retained workers without that contract keep queue/interrupt
+available. Claude may preempt generation through native priority `now`, so this
+is not a cross-provider promise to wait for the next tool call.
+
+MCP uses its existing stable operation and control receipt. `injected` confirms
+native receipt, not completion of the requested work. `not_delivered` permits
+an explicit new choice; `pending` or `unknown` requires observing the original
+receipt, never a new operation or an automatic queue/interrupt fallback.
+Self-steering through MCP is refused because it can preempt the caller's tool.
+
+The CLI exposes `cowboy session prompt SESSION TEXT --delivery current_turn
+--operation ID` (also `next_turn` and `interrupt`, plus independent `--front`).
+It prints the operation before submission and reports the actual response.
+`cowboy session delivery SESSION ID` reads that original receipt.
+HTTP accepts the same fields at `POST /api/sessions/{id}/prompt`; current-turn
+delivery requires an operation ID. Its receipt is available at
+`GET /api/sessions/{id}/delivery/{operation}` or MCP `queue.delivery_receipt`.
+Reusing a current-turn operation with different content is rejected.
+
+Web retains its durable outbox and the original message identity. Add to turn
+is a separate, non-sticky action; the main Send/Queue remains predictable.
+The editor clears and fullscreen closes only after native acceptance. Rejected
+or unknown delivery retains the draft and its receipt. Reload, reconnect and
+Retry only observe that receipt: an old current-turn message cannot be injected
+into a future turn. The command palette exposes the same Desktop action.
+
+This extension owns cross-session authorization, queue intent, worker/turn
+fencing and durable receipts. Native runtimes continue to own turn execution.
+The Codex ACP compatibility patch can be removed when upstream exposes the
+same opt-in no-new-turn outcome; Claude follows through its native extension.

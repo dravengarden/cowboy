@@ -69,8 +69,9 @@ operations! {
     "sessions.retry", true, "{session_id:string}; explicitly repeats the last failed prompt";
     "sessions.reset", true, "{session_id:string}; destructive: clears conversation context";
     "sessions.delete", true, "{session_id:string}; accepted means close/delete requested; observe session absence before assuming deletion";
-    "queue.submit", true, "{session_id:string,text:string,content?:unknown[],front?:boolean,force?:boolean}; force interrupts current work";
+    "queue.submit", true, "{session_id:string,text:string,content?:unknown[],delivery?:'next_turn'|'current_turn'|'interrupt',front?:boolean,force?:boolean}; default next_turn queues while busy; front prioritizes without interrupting; current_turn requires running worker support and never starts a new turn; interrupt cancels current work. force is the legacy interrupt alias. Observe pending/unknown receipts; never retry with a new operation";
     "queue.edit", true, "{session_id:string,id:string,text:string,content:unknown[]}; explicit complete replacement; preserve existing attachment blocks";
+    "queue.delivery_receipt", false, "{session_id:string,operation:string}; observe an HTTP/CLI current-turn delivery without resending; MCP control.apply uses its existing control receipt";
     "queue.remove", true, "{session_id:string,id:string}";
     "queue.clear", true, "{session_id:string}";
     "queue.send", true, "{session_id:string,id:string}";

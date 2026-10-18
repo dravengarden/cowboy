@@ -1,5 +1,6 @@
 {
   "http": {
+    "send_delivery::receipt": "queue.delivery_receipt",
     "agent_tools::configure_agent": "tools.defaults_set",
     "agent_tools::configure_session": "tools.session_set",
     "agent_tools::list": "tools.defaults",

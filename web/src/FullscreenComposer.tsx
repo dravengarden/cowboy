@@ -16,6 +16,7 @@ import {
   Edit,
   EditNoteOutlined,
   KeyboardHide,
+  PostAdd,
   Schedule,
   Send,
 } from "@mui/icons-material";
@@ -85,6 +86,8 @@ export function FullscreenComposer({
   onSchedule,
   onForcePush,
   forcePushEnabled = false,
+  currentTurnEnabled = false,
+  onCurrentTurn,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -136,6 +139,8 @@ export function FullscreenComposer({
   onSchedule?: (() => void) | undefined;
   onForcePush?: ((anchor: HTMLElement) => void) | undefined;
   forcePushEnabled?: boolean;
+  currentTurnEnabled?: boolean;
+  onCurrentTurn?: () => void;
 }): React.JSX.Element {
   const desktop = useSurfaceProfile().kind === "desktop";
   const composing = useRef(false);
@@ -378,6 +383,15 @@ export function FullscreenComposer({
                 onClick={act(onSchedule)}
               >
                 <Schedule />
+              </MobileComposerAccessoryButton>
+            )}
+            {showCollapse && onCurrentTurn && (
+              <MobileComposerAccessoryButton
+                title="Add to current turn"
+                disabled={!sendable || !currentTurnEnabled}
+                onClick={act(onCurrentTurn)}
+              >
+                <PostAdd />
               </MobileComposerAccessoryButton>
             )}
             {showCollapse && onForcePush && (

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  advertiseCurrentTurn,
   allowedControl,
   hookPrefixScript,
   initializeRequest,
@@ -19,6 +20,26 @@ import {
   toolStreamingEnvironment,
 } from "./launch.mjs";
 import { NATIVE_TOOLS } from "./tools.mjs";
+
+test("current-turn advertisement preserves native initialize and refuses unsupported adapters", async () => {
+  class Agent {
+    async initialize(supported) {
+      assert.equal(this instanceof Agent, true);
+      return {
+        agentCapabilities: { loadSession: true },
+        _meta: { steering: { supported } },
+      };
+    }
+  }
+  advertiseCurrentTurn(Agent);
+  const supported = await new Agent().initialize(true);
+  assert.equal(supported._meta.steering.idleBehavior, "promptRequired");
+  assert.equal(supported.agentCapabilities.loadSession, true);
+  assert.equal(
+    (await new Agent().initialize(false))._meta.steering.idleBehavior,
+    undefined,
+  );
+});
 
 test("bound launch preserves model and resume while replacing local execution surfaces", () => {
   const args = nativeArguments([

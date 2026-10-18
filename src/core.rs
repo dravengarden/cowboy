@@ -524,6 +524,10 @@ pub struct SessionMeta {
     /// Transient live state restored from the worker snapshot on reconnect.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub background_tasks: u32,
+    /// Live worker observation. Storage restores this as false until the
+    /// owning runtime reports its capabilities again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_current_turn: bool,
     /// Provider release switch in progress while `status` is `Starting`.
     /// Lets clients present an unattended idle update as background
     /// maintenance instead of a cold start. Cleared on the next status change.
@@ -3228,6 +3232,7 @@ impl Hub {
             context_size: 0,
             usage: None,
             background_tasks: 0,
+            supports_current_turn: false,
             provider_update: None,
             provider_update_available: None,
             resource_wait: None,
@@ -3510,6 +3515,23 @@ impl Hub {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
                     s.meta.usage = Some(usage);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
+    /// Record support from the exact live worker, without adding transcript rows.
+    pub fn set_current_turn_support(&self, session_id: &str, supported: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.supports_current_turn != supported => {
+                    s.meta.supports_current_turn = supported;
                     true
                 }
                 _ => false,
@@ -5771,8 +5793,21 @@ impl Hub {
         // ("jump to front" / `submit { front: true }`).
         interrupt_on_busy: bool,
     ) -> bool {
+        self.force_submit_once(session_id, text, content, cmid, interrupt_on_busy)
+            .unwrap_or(false)
+    }
+
+    /// `None` means no new admission: callers must not cancel or drain on replay.
+    pub fn force_submit_once(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        interrupt_on_busy: bool,
+    ) -> Option<bool> {
         if self.is_managed_child(session_id) {
-            return false;
+            return None;
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
@@ -5780,9 +5815,7 @@ impl Hub {
         let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return false;
-            };
+            let s = sessions.get_mut(session_id)?;
             duplicate = cmid
                 .as_deref()
                 .filter(|c| Self::prompt_already_accepted(s, c))
@@ -5820,13 +5853,13 @@ impl Hub {
         }
         if let Some(cmid) = duplicate {
             self.confirm_delivered(session_id, &cmid);
-            return false;
+            return None;
         }
         match dispatch {
             Some(req) => self.send_dispatch(req),
             None => self.emit_pending(session_id),
         }
-        interrupt
+        Some(interrupt)
     }
 
     /// Whether `cmid` names a prompt a browser client minted. Hub-synthesized
@@ -7539,6 +7572,7 @@ mod runtime_reconciliation_tests {
                 context_size: 0,
                 usage: None,
                 background_tasks: 0,
+                supports_current_turn: false,
                 provider_update: None,
                 provider_update_available: None,
                 resource_wait: None,
@@ -7571,6 +7605,7 @@ mod runtime_reconciliation_tests {
             agent_session_id: Some("agent-1".to_owned()),
             native_thread_materialized: None,
             current_turn_id: Some("turn-1".to_owned()),
+            supports_current_turn: false,
             last_runtime_seq: 7,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -10674,6 +10709,33 @@ mod core_tests {
 
         assert_eq!(rx.recv().await.expect("turn-end dispatch").text, "second");
         assert!(queue_texts(&hub, "queue-after-turn").is_empty());
+    }
+
+    #[tokio::test]
+    async fn repeated_interrupt_admission_cannot_cancel_or_drain_again() {
+        let hub = hub_with_session("force-replay");
+        hub.set_status("force-replay", Status::Busy, None);
+        assert_eq!(
+            hub.force_submit_once(
+                "force-replay",
+                "correction".into(),
+                vec![],
+                Some("same-send".into()),
+                true
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            hub.force_submit_once(
+                "force-replay",
+                "correction".into(),
+                vec![],
+                Some("same-send".into()),
+                true
+            ),
+            None
+        );
+        assert_eq!(queue_texts(&hub, "force-replay"), vec!["correction"]);
     }
 
     #[tokio::test]

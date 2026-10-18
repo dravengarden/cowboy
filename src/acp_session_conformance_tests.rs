@@ -112,6 +112,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         service_auth_projected: true,
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
+        steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         activity: Mutex::new(SessionActivity::default()),
         prompt_cancellation,
@@ -1095,6 +1096,120 @@ async fn native_background_resume_restores_busy_after_prompt_response_over_acp()
     })
     .await
     .expect("bounded native activity fixture");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise the complete concurrent native wire lifecycle.
+async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
+    let (state, sink) = activity_fixture("claude-code");
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let main_state = state.clone();
+    let client = Client.builder().connect_with(
+        ByteStreams::new(client_write.compat_write(), client_read.compat()),
+        async move |cx: ConnectionTo<Agent>| {
+            run_session(
+                &main_state,
+                cx,
+                None,
+                PathBuf::from(CWD),
+                &mut command_rx,
+                "claude-code",
+                &startup,
+            )
+            .await
+        },
+    );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        let initialize: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(&mut writer, json!({"jsonrpc":"2.0","id":initialize["id"],"result":{
+            "protocolVersion":1,"agentCapabilities":{},"_meta":{"steering":{"supported":true,"idleBehavior":"promptRequired"}}
+        }})).await;
+        let new: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":new["id"],"result":{"sessionId":NATIVE}}),
+        )
+        .await;
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        let blocks = || {
+            vec![ContentBlock::Text(
+                agent_client_protocol::schema::v1::TextContent::new("correction"),
+            )]
+        };
+        command_tx
+            .send(AgentCommand::Prompt(blocks(), Some("first".into()), None))
+            .unwrap();
+        let prompt: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(prompt["method"], "session/prompt");
+        command_tx
+            .send(AgentCommand::Steer {
+                blocks: blocks(),
+                cmid: "steered".into(),
+            })
+            .unwrap();
+        let steer: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(steer["method"], "_session/steering");
+        assert_eq!(
+            steer["params"]["_meta"]["steering"]["idleBehavior"],
+            "promptRequired"
+        );
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":steer["id"],"result":{"outcome":"injected"}}),
+        )
+        .await;
+        loop {
+            let events = sink.hub.snapshot(SESSION).unwrap().0;
+            if events.iter().any(|entry| matches!(&entry.event, Event::Update { update } if update["cmid"] == "steered" && update["outcome"] == "injected")) { break; }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(sink.prompt_starts.lock().len(), 1);
+        assert!(sink.prompt_completions.lock().is_empty());
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}}),
+        )
+        .await;
+        while sink.prompt_completions.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        command_tx
+            .send(AgentCommand::Steer {
+                blocks: blocks(),
+                cmid: "idle".into(),
+            })
+            .unwrap();
+        loop {
+            let events = sink.hub.snapshot(SESSION).unwrap().0;
+            if events.iter().any(|entry| matches!(&entry.event, Event::Update { update } if update["cmid"] == "idle" && update["outcome"] == "not_delivered")) { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), lines.next_line())
+                .await
+                .is_err()
+        );
+        assert_eq!(sink.prompt_starts.lock().len(), 1);
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded steering fixture");
 }
 
 #[tokio::test]

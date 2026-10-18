@@ -70,6 +70,7 @@ import {
   KeyboardHide,
   MoreVert,
   OpenInFull,
+  PostAdd,
   Refresh,
   Schedule,
   Send,
@@ -1142,6 +1143,7 @@ export function ComposerWorkspace({
     submit,
     submitTracked,
     forceTracked,
+    currentTurnTracked,
     jumpToFrontTracked: jumpCurrentPromptToFrontTracked,
     saveAsDraftTracked,
     scheduleNew,
@@ -1245,6 +1247,26 @@ export function ComposerWorkspace({
     (snapshot) => composerSessionSlice(snapshot.sessions, sessionId),
     sameComposerSessionSlice,
   );
+  const supportsCurrentTurn = useStoreSelector((snapshot) =>
+    snapshot.sessions.find((session) => session.id === sessionId)
+      ?.supports_current_turn === true
+  );
+  const addToCurrentTurn = (): void => {
+    let submitted = false;
+    void submitFeedback.run(() => {
+      const confirmation = currentTurnTracked();
+      if (confirmation === null) return Promise.resolve();
+      submitted = true;
+      return confirmation;
+    })
+      .then((succeeded) => {
+        if (submitted && succeeded) {
+          dismissAfterMobileDelivery();
+          setComposeFs(false);
+          onSubmitted?.();
+        }
+      });
+  };
   const timelineState = useStoreSelector(
     (snapshot) => composerTimelineSlice(snapshot.timelines.get(sessionId)),
     sameComposerTimelineSlice,
@@ -1457,6 +1479,8 @@ export function ComposerWorkspace({
   // Without a live server a send is queued until Cowboy is reachable, so the
   // button names that outcome instead of promising an immediate send.
   const serverConnected = useConnected();
+  const currentTurnAvailable = serverConnected && status === "busy" &&
+    supportsCurrentTurn;
   // A compaction is running right now: the turn is busy AND the live tail is
   // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
   // the agent's own auto-compaction). Drives the Compact button's disabled +
@@ -2661,6 +2685,8 @@ export function ComposerWorkspace({
                 sendable={sendable}
                 canJumpFront={queue.length > 0}
                 canForce={forceable}
+                canCurrentTurn={currentTurnAvailable}
+                onCurrentTurn={addToCurrentTurn}
                 pending={submitFeedback.pending}
                 progress={submitFeedback.progress}
                 sendLabel={busy || starting || paused || !serverConnected
@@ -3021,6 +3047,16 @@ export function ComposerWorkspace({
             These stay MOUNTED while the session starts — a booting agent greys
             out the controls it owns, it never removes the row's slots. */
                   }
+                  <MobileComposerAccessoryButton
+                    title={currentTurnAvailable
+                      ? "Add to current turn"
+                      : "Add to current turn — requires a supported active worker"}
+                    disabled={!sendable || !currentTurnAvailable ||
+                      submitFeedback.pending}
+                    onClick={addToCurrentTurn}
+                  >
+                    <PostAdd />
+                  </MobileComposerAccessoryButton>
                   <Tooltip title="Save as draft">
                     <span>
                       <IconButton
@@ -3394,6 +3430,8 @@ export function ComposerWorkspace({
             setScheduleTarget({ id: undefined, initial: null })}
           onForcePush={(anchor): void => setForceAnchor(anchor)}
           forcePushEnabled={forceable}
+          currentTurnEnabled={currentTurnAvailable && !submitFeedback.pending}
+          onCurrentTurn={addToCurrentTurn}
           onCollapse={(): void => {
             // Carry fullscreen edits back to the inline editor. The inline editor
             // REMOUNTS on close (it only renders while !composeFs) and seeds from

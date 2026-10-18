@@ -20,6 +20,7 @@
     "src/bin/cowboy-acp-worker.rs",
     "src/worker.rs",
     "src/acp_bridge.rs",
+    "src/acp.rs",
     "src/bin/cowboy-execution-host.rs",
     "src/bin/cowboy-machine.rs",
     "src/bin/cowboy-machine-install.rs",
@@ -230,6 +231,7 @@
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
+        "src/acp.rs",
         "src/bin/cowboy-execution-host.rs",
         "src/bin/cowboy-machine.rs",
         "src/bin/cowboy-machine-install.rs"
@@ -271,6 +273,7 @@
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
+        "src/acp.rs",
         "src/bin/cowboy-execution-host.rs",
         "components/memory-client/"
       ],
@@ -459,6 +462,7 @@
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
+        "src/acp.rs",
         "src/bin/cowboy-execution-host.rs",
         "components/memory-client/"
       ],
@@ -506,6 +510,7 @@
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
+        "src/acp.rs",
         "src/bin/cowboy-execution-host.rs",
         "src/bin/cowboy-machine.rs",
         "src/bin/cowboy-machine-install.rs"
