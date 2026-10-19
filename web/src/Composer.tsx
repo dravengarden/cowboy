@@ -1,5 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
+import { SendDeliveryIcon } from "./SendDeliveryIcon";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
 import { InterruptDeliveryConfirm } from "./InterruptDeliveryConfirm";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
@@ -445,15 +446,7 @@ const MOBILE_SEND_BTN = {
   minHeight: 40,
   position: "relative",
   p: 0,
-  "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-  "& [data-delivery-chevron]": {
-    position: "absolute",
-    right: 0,
-    top: "50%",
-    transform: "translateY(-50%)",
-    fontSize: "0.625rem",
-    pointerEvents: "none",
-  },
+  "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
 } as const;
 // Why an agent-backed toolbar action is greyed out while the session boots. The
 // button keeps its slot (no reflow on the ready edge); this explains the state
@@ -3041,10 +3034,7 @@ export function ComposerWorkspace({
                         >
                           {submitFeedback.progress
                             ? <CircularProgress size="1.125rem" color="inherit" />
-                            : <>
-                              <Send fontSize="inherit" />
-                              {busy && <ExpandMore data-delivery-chevron fontSize="inherit" />}
-                            </>}
+                            : <SendDeliveryIcon menu={busy} />}
                         </IconButton>
                         {holding && (
                           <Box
@@ -3105,7 +3095,7 @@ export function ComposerWorkspace({
                           >
                             {submitFeedback.progress
                               ? <CircularProgress size="1.125rem" color="inherit" />
-                              : <Send fontSize="inherit" />}
+                              : <SendDeliveryIcon />}
                           </IconButton>
                         </span>
                       </Tooltip>

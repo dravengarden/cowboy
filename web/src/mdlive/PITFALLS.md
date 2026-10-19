@@ -3281,9 +3281,11 @@ scaling: use rem for the button, spacing, glyphs and spinner, with
 a 40px minimum touch target. Button-scoped SvgIcon selectors must override the
 global IconButton descendant rule. Width and height
 remain equal, with the same minimum touch size and no state-dependent resizing.
-The delivery chevron is positioned independently at the button's right edge;
-it must not participate in flex layout or shift the centered paper plane.
-Its smaller rem size fits beside the centered glyph within the existing target.
+The final custom `SendDeliveryIcon` uses a single 24×24 SVG with rounded plane
+contours and a fold. Its menu variant adds a small chevron within the same
+viewBox's lower-right negative space; no second icon or additional layout slot
+may shift the plane or adjacent controls. Both variants inherit currentColor
+and the same rem size. Retain the unfilled button and minimum touch target.
 This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or
