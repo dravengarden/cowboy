@@ -1137,10 +1137,10 @@ logout success, bind an identity, or delete a home whose logout result remains
 unknown. A live owner, including another in-flight retry, is left untouched.
 Private-home cleanup requires both trees stopped and confirmed native logout
 success, including when a legacy leader-only receipt says the command succeeded.
-These additions to private profile metadata require the matching native-profile
-reader in the worker bundle. A host release retaining an older reader must keep
-named admission closed; accepting the aligned worker bundle is a separate
-maintenance gate, not a consequence of Controller/Web deployment.
+These additions to private profile metadata require the matching Machine reader,
+including the explicit recovery release. The worker bundle must independently
+support the account arguments and startup gate; accepting that aligned bundle is
+a separate maintenance gate, not a consequence of Controller/Web deployment.
 Native logout evidence does not establish exit for other commands or active
 sessions; the internal completion transaction still checks the whole plan.
 A persisted `CleanupRequired` refusal with no dispatch enrollment/revision,

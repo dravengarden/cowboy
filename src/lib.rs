@@ -161,6 +161,7 @@ mod project_placement;
 mod prompt_origin;
 #[cfg(feature = "full")]
 mod provider;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod provider_behavior;
