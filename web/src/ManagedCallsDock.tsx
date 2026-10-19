@@ -659,19 +659,17 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
             textOverflow: "ellipsis",
             minWidth: 0,
             flexShrink: 1,
-            maxWidth: configuration ? "40%" : "100%",
           }}
         >
           {displayTitle(call)}
         </Box>
-        {configuration && (
-          <Typography data-call-header-configuration variant="caption" noWrap
-            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
-            sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
-            · {configuration}
-          </Typography>
-        )}
       </Box>
+      {configuration && (
+        <Typography data-call-header-configuration variant="caption"
+          sx={{ minWidth: 0, overflowWrap: "anywhere", fontSize: "0.75rem" }}>
+          {parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
+        </Typography>
+      )}
       <Box
         data-call-header-metadata
         sx={{
@@ -975,10 +973,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
   const now = useCallClock();
   const overview = callsOverview(calls);
   const titles = callPreviewTitles(calls);
-  const ordered = [...calls].sort((a, b) => {
-    const rank = (call: ManagedCallSummary): number => callActive(call.state) ? 0 : callTone(call.state) === "error" ? 1 : 2;
-    return rank(a) - rank(b) || b.created_at_ms - a.created_at_ms;
-  });
+  const ordered = [...calls].sort((a, b) => b.created_at_ms - a.created_at_ms);
   return (
     <Stack direction="row" alignItems="stretch" sx={{ minWidth: 0, gap: 0.5, py: 0.5 }}>
       <ButtonBase {...tap} aria-label="Open calls" sx={{ flexShrink: 0, px: 1, minHeight: 44 }}>

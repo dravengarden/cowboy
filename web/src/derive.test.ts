@@ -1,4 +1,5 @@
 import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   derive,
   isCompactionCompletionTail,
@@ -584,6 +585,16 @@ test("a second human prompt still becomes its own bubble", () => {
   if (users.length !== 2) {
     throw new Error(`expected two human bubbles, got ${users.length}`);
   }
+});
+
+test("conversation clear retires the old plan and permits a fresh plan", () => {
+  const plan = (seq: number, content: string): Envelope => ({
+    session_id: "s1", seq, kind: "update",
+    update: { sessionUpdate: "plan", entries: [{ content, priority: "medium", status: "in_progress" }] },
+  });
+  const boundary: Envelope = { session_id: "s1", seq: 2, kind: "update", update: { sessionUpdate: "context_cleared", at: 123 } };
+  assertEquals(latestPlan([plan(1, "old task"), boundary]), null);
+  assertEquals(latestPlan([plan(1, "old task"), boundary, plan(3, "fresh task")])?.entries[0]?.content, "fresh task");
 });
 
 test("runtime prompt echoes do not retire the current plan", () => {
