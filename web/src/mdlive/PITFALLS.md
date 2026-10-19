@@ -3274,9 +3274,12 @@ No editor extension, native input, selection, IME or caret logic changes. The
 physical image-adjacent caret issue #69 remains open; browser coverage is not
 physical iOS acceptance.
 
-The 2026-10-19 mobile Send polish replaces the overlapping plane/chevron with
-an inline upward arrow and chevron inside one tinted, rounded 48 × 40 button.
-Idle and busy retain the same footprint. This is toolbar presentation only:
+The 2026-10-19 mobile Send polish separates the paper plane and chevron inside
+one tinted, rounded button. User feedback retains the plane and requires global
+font scaling: use rem for the button, spacing, radius, glyphs and spinner, with
+a 40px minimum touch target. Button-scoped SvgIcon selectors must override the
+global IconButton descendant rule. Idle and busy retain the same footprint.
+This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or
 caret behavior and does not resolve physical iPhone issue #69.

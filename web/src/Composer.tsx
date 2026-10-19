@@ -55,7 +55,6 @@ import {
 } from "@mui/material";
 import {
   AlternateEmail,
-  ArrowUpward,
   AttachFile,
   Bolt,
   Check,
@@ -440,13 +439,15 @@ const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
 // A single hit target with a stable footprint in either delivery state.
 const MOBILE_SEND_BTN = {
   ...TOOLBAR_ICON_BTN,
-  width: 48,
-  height: 40,
+  width: "3rem",
+  height: "2.5rem",
+  minWidth: 40,
+  minHeight: 40,
   p: 0,
-  gap: "2px",
-  borderRadius: "12px",
-  "& .MuiSvgIcon-root": { fontSize: 20 },
-  "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: 14 },
+  gap: "0.125rem",
+  borderRadius: "0.75rem",
+  "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+  "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: "0.875rem" },
   bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.12),
   "&:hover": {
     bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.2),
@@ -3040,10 +3041,10 @@ export function ComposerWorkspace({
                           onPointerCancel={clearLongPress}
                         >
                           {submitFeedback.progress
-                            ? <CircularProgress size={desktopSize(18)} color="inherit" />
+                            ? <CircularProgress size="1.125rem" color="inherit" />
                             : <>
-                              <ArrowUpward sx={{ fontSize: 20 }} />
-                              {busy && <ExpandMore sx={{ fontSize: 14 }} />}
+                              <Send fontSize="inherit" />
+                              {busy && <ExpandMore fontSize="inherit" />}
                             </>}
                         </IconButton>
                         {holding && (
@@ -3104,8 +3105,8 @@ export function ComposerWorkspace({
                             onClick={sendTap.onClick}
                           >
                             {submitFeedback.progress
-                              ? <CircularProgress size={desktopSize(18)} color="inherit" />
-                              : <ArrowUpward sx={{ fontSize: 20 }} />}
+                              ? <CircularProgress size="1.125rem" color="inherit" />
+                              : <Send fontSize="inherit" />}
                           </IconButton>
                         </span>
                       </Tooltip>
