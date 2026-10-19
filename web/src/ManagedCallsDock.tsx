@@ -664,12 +664,6 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           {displayTitle(call)}
         </Box>
       </Box>
-      {configuration && (
-        <Typography data-call-header-configuration variant="caption"
-          sx={{ minWidth: 0, overflowWrap: "anywhere", fontSize: "0.75rem" }}>
-          {parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
-        </Typography>
-      )}
       <Box
         data-call-header-metadata
         sx={{
@@ -679,6 +673,9 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           columnGap: 0.75,
           rowGap: 0.5,
           minWidth: 0,
+          overflowX: "auto",
+          scrollbarWidth: "none",
+          "& > *": { flexShrink: 0 },
         }}
       >
         {/* A finished review's findings already say it completed. */}
@@ -698,6 +695,13 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         )}
         {outcome && (
           <Badge label={outcome} color={attention ? "warning" : "success"} />
+        )}
+        {configuration && (
+          <Typography data-call-header-configuration variant="caption" noWrap
+            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
+            sx={{ fontSize: "0.75rem" }}>
+            {configuration}
+          </Typography>
         )}
         <Box component="span" sx={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={placementLabel(call)}>
           {placementLabel(call)}
