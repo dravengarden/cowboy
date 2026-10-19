@@ -18,6 +18,7 @@ test("lifecycle signals use one authority without waiting for worker updates", a
   const window = new EventTarget();
   const document = Object.assign(new EventTarget(), { visibilityState: "visible" });
   const signals: string[] = [];
+  let probeSucceeded = true;
   let forcedReloads = 0;
   let now = 10_000;
   let interval!: () => void;
@@ -31,7 +32,7 @@ test("lifecycle signals use one authority without waiting for worker updates", a
     "createServiceWorkerUpdateCheck", "lowPriorityInterval", lifecycle,
   )(
     global, window, { serviceWorker: worker }, {
-      checkForUpdate: async (trigger: string) => { signals.push(trigger); },
+      checkForUpdate: async (trigger: string) => { signals.push(trigger); return probeSucceeded; },
     },
     (update: () => Promise<unknown>) => createServiceWorkerUpdateCheck(update, () => now),
     (check: () => void) => { interval = check; },
@@ -59,4 +60,16 @@ test("lifecycle signals use one authority without waiting for worker updates", a
   await settle();
   assertEquals(signals.length, 8);
   assertEquals(forcedReloads, 0);
+  document.visibilityState = "visible";
+  probeSucceeded = false;
+  window.dispatchEvent(new Event("focus"));
+  await settle();
+  // Restoring connectivity immediately after a failed probe must bypass the
+  // five-second successful-probe dedupe window.
+  probeSucceeded = true;
+  now++;
+  window.dispatchEvent(new Event("online"));
+  await settle();
+  assertEquals(signals.slice(-2), ["focus", "online"]);
+  assertEquals(signals.length, 10);
 });

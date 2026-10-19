@@ -446,6 +446,11 @@ stand in for the bundle a cached page actually loaded. Concurrent probes are
 coalesced, identical update hints preserve one download, and a newer target
 invalidates an older in-flight download before it may trigger navigation.
 Reload telemetry is written at the actual navigation, rather than detection.
+An explicit worker refresh that arrives during an older background refresh
+waits for it and performs a fresh lookup before acknowledging readiness;
+joining a pre-deploy download cannot authorize a same-build reload. Offline
+probe failures also release the lifecycle dedupe window so recovery can
+check again immediately.
 A tab records its last attempted source/target pair in `sessionStorage`: if
 the next document still runs that source and sees that target, automatic
 application stops at the existing retry control. A user retry or a different

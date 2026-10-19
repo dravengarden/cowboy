@@ -41,7 +41,7 @@ test("all update signals verify the loaded bundle, and a failed navigation canno
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   try {
     const store = createClientConnection();
-    await store.checkForUpdate();
+    assertEquals(await store.checkForUpdate(), true);
     const clean = store.watchForegroundVersion();
     store.connectionReady();
     store.connectionLost();
@@ -79,10 +79,10 @@ test("all update signals verify the loaded bundle, and a failed navigation canno
     const updated = createClientConnection();
     await updated.checkForUpdate();
     offline = true;
-    await updated.checkForUpdate();
+    assertEquals(await updated.checkForUpdate(), false);
     offline = false;
     invalid = true;
-    await updated.checkForUpdate();
+    assertEquals(await updated.checkForUpdate(), false);
     invalid = false;
     assertEquals(await updated.downloadUpdate(() => {}), "failed");
     assertEquals(navigations.length, 1);

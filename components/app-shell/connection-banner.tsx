@@ -89,7 +89,8 @@ export interface ConnectionStore {
   /** An update hint. A configured updateProbe verifies it before surfacing the
    *  same visible countdown used by the other lifecycle checks. */
   updateAvailable(): void;
-  checkForUpdate(trigger?: string): Promise<void>;
+  /** False means the probe was inconclusive and may retry on network recovery. */
+  checkForUpdate(trigger?: string): Promise<boolean>;
   /** Have the service worker cache the deployed shell and its boot assets,
    *  reporting each landed batch. The running build is untouched, so this may
    *  start the moment a deploy is detected. */
@@ -236,7 +237,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   // A custom probe supplies the loaded build identity. Legacy consumers sample
   // their version endpoint at startup and compare subsequent responses to it.
   let knownVersion: string | undefined = undefined;
-  let versionProbe: Promise<void> | undefined;
+  let versionProbe: Promise<boolean> | undefined;
 
   function emit(): void {
     for (const l of listeners) {
@@ -250,39 +251,41 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
     emit();
   }
 
-  async function readVersion(trigger: string): Promise<void> {
+  async function readVersion(trigger: string): Promise<boolean> {
     if (opts.updateProbe) {
       try {
         const result = await opts.updateProbe(trigger);
         knownVersion = result.current;
         if (result.available) setBanner({ kind: "update", version: result.available });
         else if (banner?.kind === "update") setBanner(undefined);
+        return true;
       } catch {
         // A failed/offline probe says nothing about the running build.
+        return false;
       }
-      return;
     }
     let probed: string | undefined = undefined;
     try {
       const res = await globalThis.fetch(versionUrl, { cache: "no-store" });
       if (!res.ok) {
-        return;
+        return false;
       }
       ({ version: probed } = (await res.json()) as { version: string });
-      if (typeof probed !== "string" || !probed) return;
+      if (typeof probed !== "string" || !probed) return false;
     } catch {
-      return; // network hiccup mid-probe; try again on the next trigger
+      return false; // network hiccup mid-probe; try again on the next trigger
     }
     if (knownVersion === undefined) {
       knownVersion = probed;
-      return;
+      return true;
     }
     if (probed !== knownVersion) {
       setBanner({ kind: "update", version: probed });
     }
+    return true;
   }
 
-  function probeVersion(trigger = "explicit"): Promise<void> {
+  function probeVersion(trigger = "explicit"): Promise<boolean> {
     return versionProbe ??= readVersion(trigger).finally(() => { versionProbe = undefined; });
   }
 

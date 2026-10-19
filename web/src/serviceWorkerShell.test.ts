@@ -231,6 +231,39 @@ test("the update action learns whether the deployed shell was downloaded", async
   assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
 });
 
+test("an update request cannot acknowledge a refresh started before the deploy", async () => {
+  const worker = startWorker();
+  const previous = shellHtml("/assets/previous.js", []);
+  const next = shellHtml("/assets/next.js", []);
+  let deployed = previous;
+  let started!: () => void;
+  let finish!: (response: Response) => void;
+  const assetStarted = new Promise<void>((resolve) => { started = resolve; });
+  const oldAsset = new Promise<Response>((resolve) => { finish = resolve; });
+  await (await worker.caches.open(SHELL)).put("/", basic(previous));
+  worker.network = (url) => {
+    if (url === "/") return Promise.resolve(basic(deployed));
+    if (url === "/assets/previous.js") { started(); return oldAsset; }
+    return Promise.resolve(basic("new asset"));
+  };
+  const navigation = worker.navigate("/");
+  assertEquals(await (await navigation.response).text(), previous);
+  await assetStarted;
+  // The old background fetch already selected its HTML. A newer deployment
+  // must still be fetched before acknowledging the page's update request.
+  deployed = next;
+  const update = worker.message({ type: "cowboy.refresh-shell" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  finish(basic("old asset"));
+  assertEquals(await update, [{ ok: true }]);
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), next);
+  assertEquals(await cachedText(worker.caches, ASSETS, "/assets/next.js"), "new asset");
+  worker.network = () => Promise.reject(new TypeError("offline"));
+  const offline = worker.navigate("/");
+  assertEquals(await (await offline.response).text(), next);
+  await offline.settled();
+});
+
 test("an unflagged refresh still gets exactly one reply", async () => {
   // The client on the other end of this port is the PREVIOUS build, the one
   // asking to be replaced, and it resolves on the first message it receives:

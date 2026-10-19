@@ -26,7 +26,11 @@ export function createServiceWorkerUpdateCheck(
     if (inFlight || at - lastAttempt < UPDATE_DEDUPE_MS) return;
     inFlight = true;
     lastAttempt = at;
-    void update().catch(() => {
+    void update().then((succeeded) => {
+      // Connection probes preserve the running page on an offline response,
+      // but that inconclusive result must not suppress the next online signal.
+      if (succeeded === false) lastAttempt = Number.NEGATIVE_INFINITY;
+    }, () => {
       // Network recovery should be able to retry immediately.
       lastAttempt = Number.NEGATIVE_INFINITY;
     }).finally(() => {

@@ -265,7 +265,10 @@ self.addEventListener("message", (event) => {
         shellProgressPorts.add(port);
         if (shellProgress) port.postMessage(shellProgress);
       }
-      const ok = await refreshShell();
+      // A background refresh can have fetched its HTML before this deploy.
+      // Wait for it, then start a fresh lookup for requests that arrived while
+      // it was in flight; its success alone cannot acknowledge this update.
+      const ok = await (shellRefresh ? shellRefresh.then(() => refreshShell()) : refreshShell());
       if (!port) return;
       if (watching) shellProgressPorts.delete(port);
       port.postMessage({ ok });
