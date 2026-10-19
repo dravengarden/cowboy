@@ -375,12 +375,18 @@ impl AgentSink for RemoteSink {
         self.emit_event(event, cmid);
     }
 
-    fn set_config_options(&self, _session_id: &str, options: serde_json::Value) {
-        let options = if self.shared.managed_read_only() {
-            serde_json::json!([])
-        } else {
-            options
-        };
+    fn set_config_options(&self, _session_id: &str, mut options: serde_json::Value) {
+        if self.shared.managed_read_only() {
+            if let Some(options) = options.as_array_mut() {
+                options.retain(|option| {
+                    option["id"]
+                        .as_str()
+                        .is_some_and(|id| self.shared.preset_options.contains(id))
+                });
+            } else {
+                options = serde_json::json!([]);
+            }
+        }
         self.shared.emit(RuntimeEvent::ConfigOptions { options });
     }
 
@@ -1277,6 +1283,22 @@ mod tests {
                 }
             }))
             .unwrap(),
+        );
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        sink.set_config_options(
+            "sess-1",
+            serde_json::json!([
+                {"id":"model","currentValue":"chosen"},
+                {"id":"approval_policy","currentValue":"full-access"}
+            ]),
+        );
+        assert_eq!(
+            shared.snapshot().config_options,
+            Some(serde_json::json!([
+                {"id":"model","currentValue":"chosen"}
+            ]))
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut tx = Some(tx);

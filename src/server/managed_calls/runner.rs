@@ -18,6 +18,8 @@ use crate::managed_calls::protocol::ChildRound;
 use crate::managed_calls::{Conversation, OutputFormat, Request};
 use crate::store::Store;
 
+mod configuration;
+
 const POLL: Duration = Duration::from_millis(500);
 /// A launch whose target never answers fails instead of waiting forever.
 const LAUNCH_DEADLINE_MS: i64 = 10 * 60 * 1000;
@@ -93,8 +95,8 @@ async fn advance(
     if previous.state == State::Starting && next.state == State::Running {
         next.started_at_ms = Some(next.updated_at_ms);
         next.configuration = state
-            .hub
-            .config_options(&next.child_session_id)
+            .supervisor
+            .observed_configuration(&next.child_session_id)
             .map(|options| {
                 ["model", "reasoning_effort", "effort"]
                     .into_iter()
@@ -393,6 +395,16 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("identity_mismatch", None)).await;
         return Step::Again;
     }
+    if let Err(code) = configuration::ready(state, store, record).await {
+        if code == RETRY {
+            return Step::Wait(POLL);
+        }
+        // No prompt was admitted. Stop even a still-starting child so a late
+        // ready event cannot leave an orphan worker after the failed call.
+        state.supervisor.delete_session(child);
+        advance(state, store, record, fail(code, None)).await;
+        return Step::Again;
+    }
     let Some(cursor) = state.hub.last_event_seq(child) else {
         return Step::Wait(Duration::from_secs(1));
     };
@@ -656,11 +668,7 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         )
         .map_err(|_| "authentication_required")?
         .map_err(|_| "provider_unavailable")?;
-    apply_preset(state, record, version, digest)?;
-    state
-        .supervisor
-        .start_registered_session(&record.child_session_id)
-        .map_err(|_| "provider_unavailable")
+    Ok(())
 }
 
 fn stop_code(stop_reason: &str) -> &'static str {
@@ -879,6 +887,16 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
     {
         // The cursor was recorded but no trace of the prompt exists: the
         // previous Controller stopped between the two. Same message id.
+        // A replacement worker must confirm the original preset again before
+        // this recovery path may send anything to the native model.
+        if let Err(code) = configuration::ready(state, store, record).await {
+            if code == RETRY {
+                return Step::Wait(POLL);
+            }
+            state.supervisor.delete_session(child);
+            advance(state, store, record, fail(code, None)).await;
+            return Step::Again;
+        }
         state
             .hub
             .submit_managed_prompt(child, &record.call_id, request.prompt());

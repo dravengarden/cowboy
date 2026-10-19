@@ -872,6 +872,12 @@ impl Supervisor {
             .is_ok_and(|runtime| runtime.has_worker(session_id))
     }
 
+    pub(crate) fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
+        self.runtime_for_session(session_id)
+            .ok()?
+            .observed_configuration(session_id)
+    }
+
     /// Release an idle session's worker to free its Machine memory and slot.
     /// The session, transcript, worktree and native id remain; opening or
     /// prompting it later resumes through the ordinary revive path. The Machine

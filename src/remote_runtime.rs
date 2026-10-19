@@ -516,6 +516,24 @@ impl RemoteRuntime {
             })
     }
 
+    /// The connected worker's actual options, never the Hub's optimistic UI
+    /// projection. A selected preset is not evidence that the native runtime
+    /// applied it, and retained snapshots cannot admit a new managed prompt.
+    pub(crate) fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
+        if !self.connected() || self.shared.config_startups.lock().contains(session_id) {
+            return None;
+        }
+        let workers = self.shared.workers.lock();
+        let worker = workers.get(session_id)?;
+        if self.shared.resetting.lock().contains(session_id)
+            || !worker.has_connected_owner()
+            || !matches!(worker.state, WorkerState::Running | WorkerState::Busy)
+        {
+            return None;
+        }
+        worker.config_options.clone()
+    }
+
     pub(crate) fn execution_owner_matches(
         &self,
         request: &crate::execution_protocol::RuntimeRequest,
@@ -2224,10 +2242,10 @@ fn queue_persisted_config(
     options: Option<&serde_json::Value>,
     force_replay: bool,
 ) {
-    // A managed child takes only the preset its worker applies at launch; its
-    // worker refuses every other option, so replaying a legacy interactive
-    // preference would only record a session error on each reconnect.
-    if shared.hub.is_managed_child(session_id) {
+    // Managed workers advertise only the signed preset options. Wait for that
+    // allowlist before replaying: older workers hide every option, and legacy
+    // interactive permission preferences must never reach a managed child.
+    if shared.hub.is_managed_child(session_id) && options.is_none() {
         return;
     }
     let Some(preferences) = shared.hub.config_preferences(session_id) else {
@@ -4150,6 +4168,32 @@ mod tests {
         assert!(config_commands.is_empty());
     }
 
+    #[tokio::test]
+    async fn managed_configuration_observation_never_uses_optimistic_or_disconnected_state() {
+        let hub = hub_with_stale_spark_preferences();
+        let mut worker = snapshot("s");
+        worker.config_options =
+            Some(serde_json::json!([{"id":"model","currentValue":"native-base"}]));
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        runtime.connect_for_test();
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["model"],
+            "gpt-5.3-codex-spark"
+        );
+        assert_eq!(
+            runtime.observed_configuration("s").unwrap()[0]["currentValue"],
+            "native-base"
+        );
+        runtime.shared.config_startups.lock().insert("s".into());
+        assert!(runtime.observed_configuration("s").is_none());
+        runtime.shared.config_startups.lock().remove("s");
+        runtime.shared.resetting.lock().insert("s".into());
+        assert!(runtime.observed_configuration("s").is_none());
+        runtime.shared.resetting.lock().remove("s");
+        runtime.shared.connected.store(false, Ordering::Release);
+        assert!(runtime.observed_configuration("s").is_none());
+    }
+
     async fn pending_wire_commands(runtime: &RemoteRuntime) -> Vec<CoreCommand> {
         let mut bytes = Vec::new();
         send_pending(&runtime.shared, &mut bytes).await.unwrap();
@@ -4803,7 +4847,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_managed_child_never_replays_persisted_preferences() {
+    async fn a_managed_child_replays_only_observed_preset_options() {
         let hub = Hub::new();
         let binding = crate::execution_environment::ManagedChildV1 {
             schema: 1,
@@ -4837,8 +4881,8 @@ mod tests {
             owner_user_id: None,
             owner_username: None,
         });
-        // A child registered before managed children stopped receiving
-        // interactive defaults still carries them durably.
+        // Both an explicit preset and a legacy interactive preference may be
+        // durable, but only options advertised by the managed worker replay.
         hub.set_config_preference(
             "child",
             "model".to_owned(),
@@ -4851,6 +4895,12 @@ mod tests {
             serde_json::json!("medium"),
         )
         .expect("reasoning preference");
+        hub.set_config_preference(
+            "child",
+            "approval_policy".into(),
+            serde_json::json!("full-access"),
+        )
+        .unwrap();
         let runtime = RemoteRuntime::for_test(hub, Vec::new());
 
         queue_persisted_config_for_session(&runtime.shared, "child", true);
@@ -4860,7 +4910,35 @@ mod tests {
                 .pending_for_test()
                 .iter()
                 .all(|command| !matches!(command, CoreCommand::SetConfigOption { .. })),
-            "the worker applies the parent preset itself; a replay is only refused"
+            "no preference may replay before the worker's allowlist is known"
+        );
+        let options = serde_json::json!([{
+            "id":"model", "currentValue":"base", "options":[{"value":"gpt-6.1-sol"}]
+        }, {
+            "id":"reasoning_effort", "currentValue":"low", "options":[{"value":"medium"}]
+        }]);
+        queue_persisted_config(&runtime.shared, "child", Some(&options), false);
+        let mut values: Vec<_> = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter_map(|command| {
+                if let CoreCommand::SetConfigOption {
+                    config_id, value, ..
+                } = command
+                {
+                    Some((config_id, value))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        values.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            values,
+            vec![
+                ("model".into(), serde_json::json!("gpt-6.1-sol")),
+                ("reasoning_effort".into(), serde_json::json!("medium"))
+            ]
         );
     }
 
