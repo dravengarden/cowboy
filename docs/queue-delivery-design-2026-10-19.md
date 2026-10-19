@@ -551,8 +551,16 @@ panel. Loading, unsupported or expired Steer is disabled without selected
 styling and states its reason. A disposable full-Composer touch test verifies
 one Steer activation closes the popup and emits exactly one `current_turn`
 request; this is browser evidence, not physical iPhone acceptance.
+This compact menu activated Web source
+`aab9a871ae1505b4e43a67a70f03a61d65f6114c` with `cowboy-v2021`, without a
+Controller or Machine restart. Its receipts are
+`delivery-popup-postflight.json`, `delivery-popup-browser-gate.log`, and
+`delivery-popup-live-fixture/receipt.json` under
+`/srv/storage/fast0/agent/tmp/`; the last records a single native POST and no
+browser errors. The 2,303 frontend tests and full desktop browser/keyboard gate
+passed.
 
-This refinement activated Controller and Web source
+The preceding Queue-first/Steer-default refinement activated Controller and Web source
 `76a6e44babcb31770b8c59145878d8a042cb19a4`, with service worker
 `cowboy-v2020`. The live MCP read of an unconfigured session changed from
 `next_turn, revision: 0` to `steer, revision: 0`. Both component transactions
