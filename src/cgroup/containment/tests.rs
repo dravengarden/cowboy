@@ -70,6 +70,75 @@ async fn removed_group_fences_delayed_spawn_and_replacement_identity() {
 
 #[tokio::test]
 #[ignore = "requires delegated writable cgroup v2"]
+async fn changed_view_or_missing_ancestor_is_not_exit_evidence() {
+    let (guard, mut child) = detached().await;
+    let mut changed = guard.identity.clone();
+    let name = changed.directory.file_name().unwrap().to_owned();
+    changed.directory = changed
+        .directory
+        .parent()
+        .unwrap()
+        .join(format!("missing-{}", uuid::Uuid::new_v4()))
+        .join(name);
+    assert!(changed.terminate().await.is_err());
+    changed = guard.identity.clone();
+    changed.root_inode = Some(changed.root_inode.unwrap() + 1);
+    assert!(changed.terminate().await.is_err());
+    changed.root_inode = None; // An old journal cannot prove an absent view.
+    assert!(changed.terminate().await.is_err());
+    assert!(child.try_wait().unwrap().is_none());
+    guard.finish().await.unwrap();
+    child.wait().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires delegated writable cgroup v2 and private user/mount/cgroup namespaces"]
+async fn containment_works_at_a_private_cgroup_namespace_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let identity_file = temp.path().join("parent-view.json");
+    let mut command = Command::new("unshare");
+    command.args(["--user", "--map-current-user", "--keep-caps", "--mount", "--cgroup", "--pid", "--fork", "--mount-proc",
+        "sh", "-ec", "mount --make-rprivate /; mount -t cgroup2 none /sys/fs/cgroup; exec \"$1\" --exact cgroup::containment::tests::namespace_root_fixture --ignored --nocapture", "root-fixture"])
+        .arg(std::env::current_exe().unwrap())
+        .env("COWBOY_CONTAINMENT_ROOT_FIXTURE", &identity_file)
+        .kill_on_drop(true);
+    let guard = Containment::prepare(&mut command).unwrap();
+    std::fs::write(
+        &identity_file,
+        serde_json::to_vec(guard.identity()).unwrap(),
+    )
+    .unwrap();
+    let status = command.status().await.unwrap();
+    guard.finish().await.unwrap();
+    assert!(status.success());
+}
+
+#[tokio::test]
+#[ignore = "subprocess fixture for containment_works_at_a_private_cgroup_namespace_root"]
+async fn namespace_root_fixture() {
+    let Ok(identity_file) = std::env::var("COWBOY_CONTAINMENT_ROOT_FIXTURE") else {
+        return;
+    };
+    assert_eq!(
+        crate::cgroup::own_cgroup().as_deref(),
+        Some(std::path::Path::new(crate::cgroup::CGROUP_ROOT))
+    );
+    // The parent-owned tree is still populated (we are in it), but its old
+    // absolute path is invisible through this real, remounted cgroup view.
+    let parent: ContainmentIdentity =
+        serde_json::from_slice(&std::fs::read(identity_file).unwrap()).unwrap();
+    assert!(parent.owner.exited().is_err());
+    assert!(parent.terminate().await.is_err());
+    let (guard, mut child) = detached().await;
+    let identity = guard.identity.clone();
+    guard.finish().await.unwrap();
+    child.wait().await.unwrap();
+    identity.terminate().await.unwrap();
+    assert!(!identity.directory.exists());
+}
+
+#[tokio::test]
+#[ignore = "requires delegated writable cgroup v2"]
 async fn crashed_owner_recovers_only_its_journaled_worker() {
     let temp = tempfile::tempdir().unwrap();
     let ready = temp.path().join("ready");
@@ -199,6 +268,7 @@ async fn invalid_identity_cannot_authorize_a_kill_or_absence() {
             .join(format!("agent-contained-{}", uuid::Uuid::new_v4())),
         device: 1,
         inode: 1,
+        root_inode: None,
     };
     assert!(identity.terminate().await.is_err());
     identity.directory = PathBuf::from(
@@ -213,6 +283,11 @@ async fn invalid_identity_cannot_authorize_a_kill_or_absence() {
 fn process_owner_checks_start_time_and_boot_not_only_pid() {
     let owner = ProcessOwner::current().unwrap();
     assert!(!owner.exited().unwrap());
+    let mut foreign = owner.clone();
+    foreign.pid_namespace = None;
+    assert!(foreign.exited().is_err());
+    foreign.pid_namespace = Some(owner.pid_namespace.unwrap() + 1);
+    assert!(foreign.exited().is_err());
     let mut reused = owner.clone();
     reused.start += 1;
     assert!(reused.exited().unwrap());

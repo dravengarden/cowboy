@@ -14,6 +14,8 @@ pub(crate) struct ProcessOwner {
     boot: uuid::Uuid,
     pid: u32,
     start: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pid_namespace: Option<u64>,
 }
 
 impl ProcessOwner {
@@ -47,6 +49,10 @@ pub(crate) struct ContainmentIdentity {
     directory: PathBuf,
     device: u64,
     inode: u64,
+    /// Bind absence observations to the original cgroupfs view. Legacy
+    /// identities without it cannot establish same-boot path disappearance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_inode: Option<u64>,
 }
 
 impl ContainmentIdentity {

@@ -131,7 +131,8 @@ pub struct NativeLogoutObservation {
     /// Durable generation tombstone and confirmed removal of its private home.
     #[serde(default)]
     pub profile_cleaned: bool,
-    /// Both native login and logout were contained before exec and observed empty.
+    /// Both native trees exited and the native logout outcome is known. Local
+    /// crash recovery alone must not manufacture this completion evidence.
     #[serde(default)]
     pub process_trees_exited: bool,
 }

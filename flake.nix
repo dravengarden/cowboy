@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=3d05d10e1c5eab4af199f28f826da7f18dc0735d";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=ae4fac7424441e1784158cd4596078c563f87c49";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -231,7 +231,7 @@
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
-        ./src/cgroup
+        # src/cgroup/containment is gated by machine-host and is not worker code.
         ./src/claude_shell.rs
         ./src/first_party_sources.rs
         ./src/plugin_runtime_args.rs

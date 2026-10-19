@@ -2303,11 +2303,19 @@ impl Broker {
         let scope_matches = !account_id.is_default()
             && match &session {
                 Some(session) => session.provider_account_id == account_id,
-                None => self
-                    .args
-                    .provider_store
-                    .account_stop_matches(&session_id, &account_id)
-                    .unwrap_or(false),
+                None => {
+                    self.args
+                        .provider_store
+                        .account_stop_matches(&session_id, &account_id)
+                        .unwrap_or(false)
+                        || self
+                            .args
+                            .provider_store
+                            .account_worker_exit(&session_id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|receipt| receipt.account == account_id)
+                }
             };
         if !scope_matches {
             self.command_rejected(
@@ -2317,9 +2325,12 @@ impl Broker {
             );
             return;
         }
-        // A restarted direct-spawn broker has no process ownership proof.
-        // An empty PID map is not evidence that a previously owned worker died.
-        if session.is_none() && self.args.spawn_mode == SpawnMode::Direct {
+        // PID-map loss alone proves nothing. New journals retain the exact
+        // contained launch; legacy unknown ownership still refuses recovery.
+        if session.is_none()
+            && self.args.spawn_mode == SpawnMode::Direct
+            && !self.direct_account_stop_recoverable(&session_id, &account_id)
+        {
             self.command_rejected(
                 &session_id,
                 command_id,
@@ -2726,16 +2737,6 @@ impl Broker {
                 command_id: format!("failed-start-stop-{session_id}"),
             },
         );
-        if let Err(error) = self
-            .args
-            .provider_store
-            .terminate_account_worker_tree(session_id)
-            .await
-        {
-            tracing::error!(session = session_id, %error, "durable worker containment stop unconfirmed");
-            self.cancelled_sessions.lock().insert(session_id.to_owned());
-            return false;
-        }
         if self.args.spawn_mode == SpawnMode::SystemdUser {
             let unit = format!(
                 "{}.service",
@@ -2798,6 +2799,19 @@ impl Broker {
                 return false;
             }
         }
+        // A live Direct worker first gets its existing graceful/TERM/KILL
+        // ladder. Durable containment then finishes descendants or recovers an
+        // orphan after a Machine crash, when the PID map is no longer present.
+        if let Err(error) = self
+            .args
+            .provider_store
+            .terminate_account_worker_tree(session_id)
+            .await
+        {
+            tracing::error!(session = session_id, %error, "durable worker containment stop unconfirmed");
+            self.cancelled_sessions.lock().insert(session_id.to_owned());
+            return false;
+        }
         if self.direct_worker_trees.lock().contains(session_id) {
             tracing::error!(
                 session = session_id,
@@ -2825,6 +2839,27 @@ impl Broker {
         // An existing lifecycle fence belongs to the caller, not this helper.
         self.workers.lock().remove(session_id);
         true
+    }
+
+    fn direct_account_stop_recoverable(
+        &self,
+        session: &str,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> bool {
+        self.args
+            .provider_store
+            .reconcile_account_worker_boot(session)
+            .is_ok()
+            && self
+                .args
+                .provider_store
+                .account_worker_exit(session)
+                .ok()
+                .flatten()
+                .is_some_and(|receipt| {
+                    receipt.account == *account
+                        && (receipt.tree_exited || receipt.containment.is_some())
+                })
     }
 
     fn set_desired_generation(&self, generation: String, worker_command: Option<String>) {
@@ -4080,13 +4115,6 @@ async fn recover_account_stops_with<F, Fut>(
     if stops.is_empty() {
         return;
     }
-    if broker.args.spawn_mode != SpawnMode::SystemdUser {
-        tracing::error!(
-            pending = stops.len(),
-            "durable account stops require direct process ownership reconciliation"
-        );
-        return;
-    }
     let mut pending: VecDeque<_> = stops.into();
     while let Some((session, account)) = pending.pop_front() {
         let gate = broker.session_lifecycle_gate(&session);
@@ -4108,6 +4136,15 @@ async fn recover_account_stops_with<F, Fut>(
             .account_quiesced_sessions
             .lock()
             .insert(session.clone());
+        if broker.args.spawn_mode == SpawnMode::Direct
+            && !broker.direct_account_stop_recoverable(&session, &account)
+        {
+            tracing::error!(
+                session,
+                "durable account stop lacks recoverable Direct ownership"
+            );
+            continue;
+        }
         let stopped = stop(session.clone()).await;
         if stopped {
             broker.pending_commands.lock().remove(&session);
@@ -5174,6 +5211,8 @@ mod launch_admission_tests {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    mod account_recovery;
     mod deletion_process;
     mod incarnation_process;
 
