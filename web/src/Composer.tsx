@@ -1144,6 +1144,9 @@ export function ComposerWorkspace({
     mobileKeyboardDismissed,
   );
   const preparing = status === "starting";
+  const queue = useStoreSelector((snapshot) =>
+    snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
+  );
   const editorRef = useRef<ComposerEditorHandle>(null);
   const {
     text,
@@ -1228,14 +1231,14 @@ export function ComposerWorkspace({
   // the agent reports Running. Blocking it here made the "you can start typing
   // while this session prepares…" placeholder a lie — ⌘↵ silently did nothing.
   const submitAndNotify = useCallback((): boolean => {
-    if (status === "busy") return openDeliveryPicker();
+    if (status === "busy" || queue.length > 0) return openDeliveryPicker();
     const submitted = submit();
     if (submitted) {
       if (!desktop) dismissMobileSoftwareKeyboard();
       onSubmitted?.();
     }
     return submitted;
-  }, [desktop, onSubmitted, openDeliveryPicker, status, submit]);
+  }, [desktop, onSubmitted, openDeliveryPicker, queue.length, status, submit]);
   const submitFeedback = useNetworkActionState();
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
@@ -1301,9 +1304,6 @@ export function ComposerWorkspace({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
-  );
-  const queue = useStoreSelector((snapshot) =>
-    snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
   );
   const sessionState = useStoreSelector(
     (snapshot) => composerSessionSlice(snapshot.sessions, sessionId),
@@ -1529,7 +1529,7 @@ export function ComposerWorkspace({
 
   const busy = status === "busy";
   function requestDelivery(onSucceeded?: () => void): void {
-    if (status === "busy") openDeliveryPicker();
+    if (status === "busy" || queue.length > 0) openDeliveryPicker();
     else submitWithFeedback(onSucceeded);
   }
   const starting = status === "starting";
@@ -1898,7 +1898,10 @@ export function ComposerWorkspace({
   function jumpToFront(): void {
     const confirmation = jumpCurrentPromptToFrontTracked(queue.length);
     if (confirmation === null) return;
-    void confirmation.then(dismissAfterMobileDelivery).catch(() => undefined);
+    void confirmation.then(() => {
+      dismissAfterMobileDelivery();
+      setComposeFs(false);
+    }).catch(() => undefined);
   }
   // InterruptDeliveryConfirm owns fresh Mod+Enter; bare/repeated Enter is inert.
   useEffect(() => (): void => {
@@ -2746,15 +2749,15 @@ export function ComposerWorkspace({
                 onCurrentTurn={openDeliveryPicker}
                 pending={submitFeedback.pending}
                 progress={submitFeedback.progress}
-                sendLabel={busy
+                sendLabel={busy || queue.length > 0
                   ? "Send…"
                   : starting || paused || !serverConnected
                   ? "Enqueue"
                   : "Send"}
                 sendDescription={!serverConnected
                   ? "Queue until Cowboy is reachable"
-                  : busy
-                  ? "Choose delivery into the active turn or the queue"
+                  : busy || queue.length > 0
+                  ? "Choose delivery timing and queue position"
                   : paused
                   ? "Queue until the paused queue is resumed"
                   : starting
@@ -3013,11 +3016,11 @@ export function ComposerWorkspace({
                         <IconButton
                           ref={queueBtnRef}
                           color="primary"
-                          aria-label={busy
+                          aria-label={busy || queue.length > 0
                             ? "Choose delivery"
                             : "Enqueue message"}
-                          aria-haspopup={busy ? "menu" : undefined}
-                          aria-expanded={busy ? deliveryAnchor !== null : undefined}
+                          aria-haspopup={busy || queue.length > 0 ? "menu" : undefined}
+                          aria-expanded={busy || queue.length > 0 ? deliveryAnchor !== null : undefined}
                           disabled={!sendable || submitFeedback.pending}
                           aria-busy={submitFeedback.pending || undefined}
                           sx={{
@@ -3034,7 +3037,7 @@ export function ComposerWorkspace({
                         >
                           {submitFeedback.progress
                             ? <CircularProgress size="1.125rem" color="inherit" />
-                            : <SendDeliveryIcon menu={busy} />}
+                            : <SendDeliveryIcon />}
                         </IconButton>
                         {holding && (
                           <Box
@@ -3073,11 +3076,14 @@ export function ComposerWorkspace({
                       </Box>
                     )
                     : (
-                      <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
+                      <Tooltip title={`${queue.length > 0 ? "Choose delivery" : "Send"} (${MOD_LABEL}${ENTER_LABEL})`}>
                         <span>
                           <IconButton
+                            ref={queueBtnRef}
                             color="primary"
                             aria-label="send"
+                            aria-haspopup={queue.length > 0 ? "menu" : undefined}
+                            aria-expanded={queue.length > 0 ? deliveryAnchor !== null : undefined}
                             disabled={!sendable || submitFeedback.pending}
                             aria-busy={submitFeedback.pending || undefined}
                             sx={MOBILE_SEND_BTN}
@@ -3101,8 +3107,8 @@ export function ComposerWorkspace({
                       </Tooltip>
                     )}
                   {
-                    /* Secondary actions, always inline now: Save-draft (always), Jump-to-front
-            (with a queue), Force-push (while busy or paused). The narrow-phone ⋮ fold
+                    /* Secondary actions: Draft, Schedule and Clear. Delivery
+            timing, queue position and interruption share the send picker. The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
             out to the navbar freed the room that fold used to reclaim.
             These stay MOUNTED while the session starts — a booting agent greys
@@ -3117,24 +3123,6 @@ export function ComposerWorkspace({
                         onClick={saveDraft}
                       >
                         <EditNoteOutlined fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  {
-                    /* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
-        as the queue fills/drains or a turn starts/ends; each is just disabled
-        (greyed) when it doesn't apply — Jump-front with no queue to jump, Force-push
-        with no running turn to interrupt. */
-                  }
-                  <Tooltip title="Jump to front of queue">
-                    <span>
-                      <IconButton
-                        aria-label="jump to front of queue"
-                        disabled={!sendable || queue.length === 0}
-                        sx={TOOLBAR_ICON_BTN}
-                        onClick={jumpToFront}
-                      >
-                        <VerticalAlignTop fontSize="small" />
                       </IconButton>
                     </span>
                   </Tooltip>
@@ -3283,6 +3271,14 @@ export function ComposerWorkspace({
           }
           setDeliveryAnchor(null);
           submitWithFeedback(() => setComposeFs(false));
+        }}
+        onQueueFront={(): void => {
+          if (!deliverySourceCurrent()) {
+            closeDeliveryPicker();
+            return;
+          }
+          setDeliveryAnchor(null);
+          jumpToFront();
         }}
         onSteer={(target, nextCheckpoint): void => {
           if (!deliverySourceCurrent()) {
@@ -3435,7 +3431,7 @@ export function ComposerWorkspace({
           }}
           onSchedule={(): void =>
             setScheduleTarget({ id: undefined, initial: null })}
-          submitLabel={busy ? "Send…" : starting || paused ? "Enqueue" : "Send"}
+          submitLabel={busy || queue.length > 0 ? "Send…" : starting || paused ? "Enqueue" : "Send"}
           onCollapse={(): void => {
             // Carry fullscreen edits back to the inline editor. The inline editor
             // REMOUNTS on close (it only renders while !composeFs) and seeds from

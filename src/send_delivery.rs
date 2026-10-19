@@ -9,9 +9,9 @@ pub use crate::runtime_wire::DeliveryTarget;
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum DeliveryMode {
+    #[default]
     Steer,
     ToolBoundary,
-    #[default]
     NextTurn,
 }
 
@@ -59,6 +59,17 @@ mod tests {
 
     #[test]
     fn omission_and_front_never_interrupt() {
+        // Session preference defaults to Steer; legacy omitted API delivery
+        // remains next-turn, and a persisted explicit preference still wins.
+        assert_eq!(DeliveryPolicy::default().mode, DeliveryMode::Steer);
+        assert_eq!(
+            serde_json::from_value::<DeliveryPolicy>(serde_json::json!({
+                "mode": "next_turn", "revision": 1
+            }))
+            .unwrap()
+            .mode,
+            DeliveryMode::NextTurn
+        );
         assert_eq!(SendDelivery::resolve(None, false, false), Ok(NextTurn));
         assert_eq!(SendDelivery::resolve(None, false, true), Ok(NextTurn));
         assert_eq!(SendDelivery::resolve(None, true, false), Ok(Interrupt));

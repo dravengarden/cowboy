@@ -584,7 +584,8 @@ Web's busy Send opens a scoped delivery picker; idle, unpaused, empty Queue send
 directly. Queue and Session Settings share `queue.policy_set` with a required
 revision (compare-and-swap); `queue.options` reads that preference, Pause, hold,
 exact target and live capabilities without waking a worker. The preference
-preselects a mode and never skips the busy picker. Existing queued messages keep
+preselects a mode and never skips the busy picker. Unconfigured sessions default
+to Steer; an explicitly saved preference is retained. Existing queued messages keep
 their Next turn scheduling. MCP may explicitly request `session_default`;
 resolution precedes the prohibition on steering the caller itself.
 

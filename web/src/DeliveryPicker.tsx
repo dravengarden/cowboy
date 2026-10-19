@@ -28,6 +28,7 @@ export interface DeliveryPickerProps {
   queueCount: number;
   onClose: () => void;
   onNextTurn: () => void;
+  onQueueFront: () => void;
   onSteer: (target: DeliveryTarget, nextCheckpoint?: boolean) => void;
   onInterrupt: (target: DeliveryTarget) => void;
   onStop: () => void;
@@ -79,9 +80,10 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
   const target = props.busy ? options?.target : null;
   const steer = target && options?.steer;
   const checkpoint = target && options?.controls.next_checkpoint;
-  const preferred = options?.policy.mode === "tool_boundary"
+  const mode = options?.policy.mode ?? "steer";
+  const preferred = mode === "tool_boundary"
     ? "checkpoint"
-    : options?.policy.mode === "steer"
+    : mode === "steer"
     ? "steer"
     : "next";
   useEffect(() => {
@@ -99,6 +101,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     if (id === "steer" && steer) props.onSteer(target);
     else if (id === "checkpoint" && checkpoint) props.onSteer(target, true);
     else if (id === "next") props.onNextTurn();
+    else if (id === "front" && props.queueCount > 0) props.onQueueFront();
     else if (id === "pause") props.onPause();
     else if (id === "interrupt" && target && options?.controls.version) {
       props.onInterrupt(target);
@@ -167,7 +170,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             ? "Checking active turn…"
             : !target
             ? "Active turn unavailable"
-            : (preferred === "checkpoint" && !checkpoint) || (preferred === "steer" && !steer)
+            : (preferred === "checkpoint" && !checkpoint) ||
+                (preferred === "steer" && !steer)
             ? "Default mode unavailable · choose another mode"
             : "Choose delivery timing")}
         </Typography>
@@ -192,7 +196,23 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           primary="Next turn"
           secondary={props.paused
             ? "Enqueue · queue remains paused"
+            : props.queueCount > 0
+            ? "Append after queued messages"
             : "Run after the active turn"}
+        />
+      </MenuItem>
+      <MenuItem
+        data-delivery-command="front"
+        disabled={props.queueCount === 0}
+        onClick={() => choose("front")}
+      >
+        <ListItemText
+          primary="Queue first"
+          secondary={props.queueCount === 0
+            ? "No queued messages to move ahead of"
+            : props.paused
+            ? "Ahead of queued messages · queue remains paused"
+            : "Ahead of queued messages · current turn continues"}
         />
       </MenuItem>
       {(options?.controls.next_checkpoint ||

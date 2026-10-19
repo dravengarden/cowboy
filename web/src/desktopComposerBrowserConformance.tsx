@@ -251,7 +251,6 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             "attach",
             "draft",
             "schedule",
-            "next",
             "send",
             "source",
             "more",
@@ -391,7 +390,11 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "Space leader arms only on Cowboy-owned focus (not text, IME or repeat), swallows its keyup, lights ␣ slots, runs ␣A and closes on Esc/pointer",
       );
     }
-    for (const id of ["attach", "draft", "schedule", "next", "send"]) {
+    check(
+      !container.querySelector('[data-composer-action="next"]'),
+      "Queue first belongs to the delivery picker, not a standalone control",
+    );
+    for (const id of ["attach", "draft", "schedule", "send"]) {
       click(id);
       check(calls.at(-1) === id, `${id} click shares action`);
     }
@@ -460,7 +463,6 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "attach",
         "draft",
         "schedule",
-        "next",
         "send",
       ]
     ) check(button(id).disabled, `${id} disabled truthfully`);

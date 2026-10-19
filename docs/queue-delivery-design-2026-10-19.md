@@ -43,7 +43,7 @@ Sources:
 - [Existing delivery contract](agent-api.md)
 - [Accepted runtime release](releases/agent-runtimes-send-2026-10-18.md)
 
-Candidate policies: Steer, Next tool boundary, Next turn (default).
+Candidate policies: Steer (default), Next tool boundary, Next turn.
 Tool-boundary support is an implementation research gate, not preemptively
 rejected or claimed shipped. Probe native extension surfaces first. If a
 Provider's Steer and tool-boundary behavior are identical, display one choice
@@ -530,6 +530,18 @@ capability while selecting the new worker protocol. These are pre-activation
 receipts; production activation is recorded separately below.
 
 ### Production activation, 2026-10-19
+
+Subsequent UI refinement consolidates **Queue first** into the delivery picker
+on Mobile and Desktop. It submits the current composer content ahead of other
+queued messages without interruption or resuming Pause, using the existing
+durable front-submission path and captured-editor check. The row is unavailable
+when the queue is empty. A nonempty queue also opens the picker while idle;
+idle with an empty queue still sends directly. Desktop's explicit Queue-first
+shortcut remains supported. The mobile icon uses a refined MUI-style filled
+plane without a dropdown decoration or persistent background in either state.
+Unconfigured sessions default to Steer. Saved explicit delivery preferences
+remain authoritative; this does not change the legacy API's omitted-delivery
+next-turn behavior or silently bypass the running-session picker.
 
 Controller and Hawk/Falcon/OVH Machine hosts activated clean source
 `58eb2128fa37ea05667643d3cfab631bf90acc4f`. Linux hosts select the accepted

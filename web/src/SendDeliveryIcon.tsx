@@ -1,31 +1,10 @@
 import { SvgIcon, type SvgIconProps } from "@mui/material";
 
-/** One optical footprint for Send and its delivery-menu variant. */
-export function SendDeliveryIcon({
-  menu = false,
-  ...props
-}: SvgIconProps & { readonly menu?: boolean }): React.JSX.Element {
+/** Material Send's filled silhouette, with softened wing tips and a clean fold. */
+export function SendDeliveryIcon(props: SvgIconProps): React.JSX.Element {
   return (
     <SvgIcon {...props} viewBox="0 0 24 24">
-      <path
-        d="M3.5 9.75 20.5 3.5 14.25 20.5 10.5 13.25 3.5 9.75ZM10.5 13.25 20.5 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {menu && (
-        <path
-          data-delivery-chevron
-          d="m17.5 17.5 2.25 2.25L22 17.5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
+      <path d="M3.15 3.62a.65.65 0 0 0-.9.61v5.4c0 .3.22.56.52.61L16.5 12 2.77 13.76c-.3.04-.52.3-.52.61v5.4c0 .47.48.78.9.6l18.76-7.76a.66.66 0 0 0 0-1.22L3.15 3.62Z" />
     </SvgIcon>
   );
 }

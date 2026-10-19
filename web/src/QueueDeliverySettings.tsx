@@ -50,7 +50,7 @@ export function QueueDeliverySettings(
         fullWidth
         size="small"
         label="Default delivery mode"
-        value={options?.policy.mode ?? "next_turn"}
+        value={options?.policy.mode ?? "steer"}
         disabled={!options || saving}
         onChange={(event): void => {
           if (!options || saving) return;

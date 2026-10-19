@@ -3274,18 +3274,24 @@ No editor extension, native input, selection, IME or caret logic changes. The
 physical image-adjacent caret issue #69 remains open; browser coverage is not
 physical iOS acceptance.
 
-The 2026-10-19 mobile Send polish separates the paper plane and chevron inside
-one unfilled icon button. Latest user feedback removes the persistent circular
-background, including its disabled fill. Retain the plane and global font
+The 2026-10-19 mobile Send polish uses one unfilled icon button. Latest user
+feedback removes both the persistent circular background and all dropdown
+decorations. Retain the plane and global font
 scaling: use rem for the button, spacing, glyphs and spinner, with
 a 40px minimum touch target. Button-scoped SvgIcon selectors must override the
 global IconButton descendant rule. Width and height
 remain equal, with the same minimum touch size and no state-dependent resizing.
-The final custom `SendDeliveryIcon` uses a single 24×24 SVG with rounded plane
-contours and a fold. Its menu variant adds a small chevron within the same
-viewBox's lower-right negative space; no second icon or additional layout slot
-may shift the plane or adjacent controls. Both variants inherit currentColor
-and the same rem size. Retain the unfilled button and minimum touch target.
+The final `SendDeliveryIcon` refines MUI Send's filled 24×24 silhouette with
+softened wing tips and a clean negative-space fold. Idle and busy use the exact
+same glyph, inheriting currentColor and the same rem size. Busy still opens the
+delivery picker through its existing action and accessible menu semantics;
+no extra glyph or layout slot may shift the plane or adjacent controls.
+Retain the unfilled button and minimum touch target.
+Queue first also lives in the delivery picker, rather than a permanent toolbar
+slot. A nonempty queue opens this picker even while idle, so reordering remains
+reachable without disturbing direct Send for an idle, empty queue. It uses the
+existing durable front submission, retains Pause and checks captured editor
+ownership before submission. Desktop retains its explicit Queue-first shortcut.
 This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or

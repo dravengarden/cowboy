@@ -874,8 +874,9 @@ focus indication. Its bottom editing and delivery groups stay outside the
 editor scrollport. Container queries use the Prompt's actual width and the root
 font size to disclose quick formatting and labels; the formatting menu retains
 all commands. Send stays labelled at the right edge and becomes Send… while
-busy, opening the unified picker. Steer and Interrupt are picker choices;
-Draft, Schedule and Run next remain direct controls and may wrap when
+busy or when the queue has pending messages, opening the unified picker.
+Steer, Queue first and Interrupt are picker choices; the existing Queue-first
+keyboard command remains available. Draft and Schedule remain direct controls and may wrap when
 space is limited. Empty, preparing, busy, paused, disconnected, pending-submit
 and resumed states change labels/availability without replacing the editor.
 Quota exhaustion is an inline notice across the Desktop pane; Mobile keeps its

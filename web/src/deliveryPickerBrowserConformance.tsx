@@ -15,6 +15,8 @@ export async function checkDeliveryPicker(): Promise<string> {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   let setBusy!: (busy: boolean) => void;
+  let setQueued!: (count: number) => void;
+  let setPaused!: (paused: boolean) => void;
   globalThis.fetch = async () =>
     Response.json({
       target: { worker_epoch: "worker-1", turn_id: "turn-1" },
@@ -29,7 +31,11 @@ export async function checkDeliveryPicker(): Promise<string> {
     const [anchor, setAnchor] = useState<HTMLElement | null>(null);
     const [busy, updateBusy] = useState(true);
     const [confirm, setConfirm] = useState(false);
+    const [queueCount, updateQueueCount] = useState(0);
+    const [paused, updatePaused] = useState(false);
     setBusy = updateBusy;
+    setQueued = updateQueueCount;
+    setPaused = updatePaused;
     return (
       <BrowserProductTheme>
         <button onClick={(event) => setAnchor(event.currentTarget)}>
@@ -39,13 +45,14 @@ export async function checkDeliveryPicker(): Promise<string> {
           sessionId="fixture"
           anchor={anchor}
           busy={busy}
-          paused={false}
-          queueCount={0}
+          paused={paused}
+          queueCount={queueCount}
           onClose={() => {
             calls.push("close");
             setAnchor(null);
           }}
           onNextTurn={() => calls.push("next")}
+          onQueueFront={() => calls.push("front")}
           onSteer={(target, checkpoint) =>
             calls.push(
               `${checkpoint ? "checkpoint" : "steer"}:${target.turn_id}`,
@@ -133,6 +140,34 @@ export async function checkDeliveryPicker(): Promise<string> {
     check(
       calls.at(-1) === "next",
       "User can explicitly choose next turn after expiration",
+    );
+    const front = document.querySelector<HTMLElement>(
+      '[data-delivery-command="front"]',
+    )!;
+    check(
+      front.getAttribute("aria-disabled") === "true",
+      "Empty queue cannot be jumped",
+    );
+    flushSync(() => {
+      setQueued(2);
+      setPaused(true);
+    });
+    front.focus();
+    key("Enter");
+    check(
+      calls.at(-1) === "front",
+      "Keyboard chooses queue first without an active turn",
+    );
+    check(
+      front.textContent?.includes("queue remains paused"),
+      "Queue first preserves Pause",
+    );
+    flushSync(() => setQueued(0));
+    const beforeEmptyFront = calls.length;
+    key("Enter");
+    check(
+      calls.length === beforeEmptyFront,
+      "A drained queue invalidates focused queue first",
     );
     key("Escape");
     check(calls.at(-1) === "close", "Escape closes only picker");

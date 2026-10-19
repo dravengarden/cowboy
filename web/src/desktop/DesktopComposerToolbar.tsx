@@ -25,7 +25,6 @@ import {
   RawOn,
   Schedule,
   Send,
-  VerticalAlignTop,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
 import {
@@ -403,18 +402,6 @@ export function DesktopComposerToolbar(
             reason: deliveryReason,
             onClick: props.onSchedule,
           })}
-          {action({
-            id: "next",
-            icon: <VerticalAlignTop />,
-            label: "Run next",
-            title: "Jump to front of queue",
-            key: DESKTOP_WORKSPACE_KEYS.composerJumpFront,
-            disabled: !ready || !props.canJumpFront,
-            reason: !ready
-              ? deliveryReason
-              : "There are no queued messages to move ahead of",
-            onClick: props.onJumpFront,
-          })}
         </Box>
         <Tooltip title={ready ? props.sendDescription : deliveryReason}>
           <span>
@@ -427,6 +414,7 @@ export function DesktopComposerToolbar(
               aria-label={props.sendLabel === "Queue"
                 ? "queue message"
                 : "send"}
+              aria-haspopup={props.sendLabel === "Send…" ? "menu" : undefined}
               disabled={!ready}
               aria-busy={props.pending || undefined}
               onPointerDown={(event) => {
