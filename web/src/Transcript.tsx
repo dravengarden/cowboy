@@ -55,6 +55,7 @@ import {
   ErrorOutline,
   ExpandLess,
   ExpandMore,
+  ExtensionOutlined,
   Folder,
   KeyboardArrowDown,
   MyLocation,
@@ -93,6 +94,8 @@ import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import {
   toolCopyText,
+  mcpHeading,
+  mcpIdentity,
   toolHeading,
   toolUsesRawOnly,
   toolVariantLabel,
@@ -660,6 +663,7 @@ function ConversationEmptyState({
   preparing,
   sleeping = false,
   context,
+  desktop,
 }: {
   sessionId: string;
   kind: ConversationEmptyKind;
@@ -670,6 +674,7 @@ function ConversationEmptyState({
   preparing: boolean;
   sleeping?: boolean;
   context: ConversationEmptyContext;
+  desktop: boolean;
 }): React.JSX.Element {
   const agent = providerPresentation(
     context.provider,
@@ -746,14 +751,17 @@ function ConversationEmptyState({
         focusPrimaryComposer();
       }}
       sx={{
-        flex: "1 1 0 !important",
-        minHeight: 220,
+        // The reversed transcript anchors an intrinsic touch card above the
+        // composer. Filling and centering it leaves a large gap when the
+        // keyboard closes, and creates a second scroll owner on short screens.
+        flex: desktop ? "1 1 0 !important" : "0 0 auto !important",
+        minHeight: desktop ? 220 : 0,
         width: "100%",
         px: { xs: 2.5, sm: 3 },
         py: { xs: 2, sm: 3 },
         alignItems: "center",
         justifyContent: "safe center",
-        overflowY: "auto",
+        overflowY: desktop ? "auto" : "visible",
         overscrollBehavior: "contain",
         "& > *": { flexShrink: 0 },
         textAlign: "center",
@@ -1098,6 +1106,12 @@ function CompactingWidget({
   );
 }
 
+function toolStatusLabel(status: string): string {
+  if (status === "completed") return "Done";
+  if (status === "in_progress") return "Doing";
+  return status;
+}
+
 function toolColor(
   status: string,
 ): "default" | "success" | "error" | "warning" {
@@ -1122,6 +1136,8 @@ function toolIcon(kind: string): React.ReactElement {
       return <Terminal {...props} />;
     case "search":
       return <Search {...props} />;
+    case "mcp":
+      return <ExtensionOutlined {...props} />;
     default:
       return <Construction {...props} />;
   }
@@ -1606,7 +1622,8 @@ function ToolCard({
   selected: boolean;
   onOpen: (key: string) => void;
 }): React.JSX.Element {
-  const hasDetail = item.rawInput !== undefined || item.content !== undefined;
+  const mcp = mcpIdentity(item.toolName, item.rawInput, item.title);
+  const hasDetail = item.rawInput !== undefined || item.content !== undefined || mcp !== null;
   const openDetail = (): void => {
     if (hasDetail) onOpen(item.key);
   };
@@ -1614,7 +1631,7 @@ function ToolCard({
   const running = item.status === "in_progress" || item.status === "pending";
   // The header shows only the first line of the title — a Bash title IS the whole
   // (possibly multi-line) command, which would otherwise blow up the row.
-  const fallbackTitle = (item.title || "").split("\n")[0] || item.title;
+  const fallbackTitle = mcp ? mcpHeading(mcp) : (item.title || "").split("\n")[0] || item.title;
   const [headerTitle, setHeaderTitle] = useState(fallbackTitle);
   useEffect(() => {
     setHeaderTitle(fallbackTitle);
@@ -1713,7 +1730,8 @@ function ToolCard({
           }),
         }}
       >
-        {toolIcon(item.toolKind)}
+        {toolIcon(mcp ? "mcp" : item.toolKind)}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography
           variant="body2"
           sx={{
@@ -1737,17 +1755,23 @@ function ToolCard({
             //    grow when the reading size was bumped — same family but reading as
             //    two different fonts.
             fontSize: "inherit",
-            fontFamily: item.toolKind === "execute"
+            fontFamily: !mcp && item.toolKind === "execute"
               ? "ui-monospace, SFMono-Regular, Menlo, monospace"
               : "var(--cowboy-reading-font, inherit)",
           }}
         >
           {headerTitle}
         </Typography>
+        {mcp && (
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+            {mcp.server} · {toolCopyText({ title: mcp.tool, toolName: item.toolName, rawInput: item.rawInput }).split("\n")[0]}
+          </Typography>
+        )}
+        </Box>
         <Chip
           size="small"
           color={toolColor(item.status)}
-          label={item.status}
+          label={toolStatusLabel(item.status)}
           variant="outlined"
         />
         {hasDetail && (
@@ -2007,6 +2031,7 @@ export function ToolDetailsBrowser({
       kind: item.toolKind,
       toolName: item.toolName,
       title: item.title,
+      rawInput: item.rawInput,
     })
     : false;
 
@@ -2183,6 +2208,7 @@ export function ToolDetailsBrowser({
       : {},
     content: item.content,
     running,
+    status: item.status,
   };
   const heading = toolHeading({
     provider,
@@ -2364,7 +2390,7 @@ export function ToolDetailsBrowser({
                           : "text.disabled",
                       }}
                     >
-                      {tool.status === "in_progress" ? "running" : tool.status}
+                      {toolStatusLabel(tool.status)}
                     </Typography>
                   </ButtonBase>
                 );
@@ -2374,14 +2400,14 @@ export function ToolDetailsBrowser({
         )}
         <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
           <Box sx={{ pt: 0.25, color: "text.secondary" }}>
-            {toolIcon(item.toolKind)}
+            {toolIcon(run?.server ? "mcp" : item.toolKind)}
           </Box>
           <Typography
             sx={{
               flex: 1,
               minWidth: 0,
               overflowWrap: "anywhere",
-              fontFamily: item.toolKind === "execute"
+              fontFamily: !run?.server && item.toolKind === "execute"
                 ? "ui-monospace, SFMono-Regular, Menlo, monospace"
                 : "var(--cowboy-reading-font, inherit)",
             }}
@@ -2391,7 +2417,7 @@ export function ToolDetailsBrowser({
           <Chip
             size="small"
             color={toolColor(item.status)}
-            label={item.status}
+            label={toolStatusLabel(item.status)}
             variant="outlined"
             sx={{ flexShrink: 0 }}
           />
@@ -2402,7 +2428,7 @@ export function ToolDetailsBrowser({
               direction="row"
               alignItems="center"
               justifyContent="space-between"
-              sx={{ mb: 0.75 }}
+              sx={{ mb: 0.75, flexWrap: "wrap", gap: 0.75 }}
             >
               <Typography variant="caption" color="text.disabled">
                 {toolVariantLabel({
@@ -2437,6 +2463,7 @@ export function ToolDetailsBrowser({
                         }))}
                       sx={{
                         minHeight: 32,
+                        "@media (pointer: coarse)": { minHeight: 44 },
                         px: 1,
                         borderRadius: 1,
                         fontSize: "0.6875rem",
@@ -2488,11 +2515,16 @@ export function ToolDetailsBrowser({
                     />
                   </Labeled>
                 )}
+                {item.content === undefined && (
+                  <Typography variant="body2" color="text.secondary" role="status">
+                    {running ? "Waiting for tool result…" : "No result was recorded for this call."}
+                  </Typography>
+                )}
               </Stack>
             )
             : (
               <Box>
-                <ToolBody ctx={ctx} />
+                <ToolBody key={item.key} ctx={ctx} />
               </Box>
             )}
         </Box>
@@ -5596,6 +5628,7 @@ export function Transcript({
               kind="preparing"
               preparing
               context={conversationContext}
+              desktop={desktopNavigation}
             />
           )
           : blockingTranscriptRestore
@@ -5616,6 +5649,7 @@ export function Transcript({
               preparing={emptyPresentation.preparing}
               sleeping={status === "exited"}
               context={conversationContext}
+              desktop={desktopNavigation}
             />
           )
           : (

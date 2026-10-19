@@ -1644,6 +1644,7 @@ pub enum StoreWrite {
     },
     ClearEvents {
         session_id: String,
+        calls_before_ms: i64,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -4881,6 +4882,7 @@ impl Hub {
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearEvents {
                 session_id: session_id.to_owned(),
+                calls_before_ms: chrono::Utc::now().timestamp_millis(),
             });
         }
     }

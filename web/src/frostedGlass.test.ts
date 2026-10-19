@@ -90,7 +90,7 @@ test("a context reset becomes a full conversation start until new content", () =
   // also carries whether the agent is still booting — a cleared session restarts
   // its agent, so its copy must not claim readiness while status is "starting".
   assertEquals(
-    /<ConversationEmptyState\s+sessionId=\{sessionId\}\s+kind=\{emptyPresentation\.kind\}\s+preparing=\{emptyPresentation\.preparing\}\s+sleeping=\{status === "exited"\}\s+context=\{conversationContext\}\s*\/>/u
+    /<ConversationEmptyState\s+sessionId=\{sessionId\}\s+kind=\{emptyPresentation\.kind\}\s+preparing=\{emptyPresentation\.preparing\}\s+sleeping=\{status === "exited"\}\s+context=\{conversationContext\}\s+desktop=\{desktopNavigation\}\s*\/>/u
       .test(transcriptSource),
     true,
   );

@@ -1,4 +1,5 @@
 import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   derive,
   isCompactionCompletionTail,
@@ -243,6 +244,26 @@ test("derive exposes Codex read locations and formatted raw output", () => {
   const content = tool.content as { type?: string; text?: string }[];
   if (content[0]?.type !== "raw_output" || content[0].text !== "example contents") {
     throw new Error("formatted raw output should remain expandable");
+  }
+});
+
+test("MCP completion preserves opaque results, input identity and truthful failure state", () => {
+  const rawOutput = { result: { content: [{ type: "text", text: "permission denied" }], isError: true }, error: null };
+  for (const completion of [{ rawOutput }, { content: [{ type: "tool_result", value: rawOutput }] }]) {
+    const items = derive([
+      { session_id: "s1", seq: 1, kind: "update", update: {
+        sessionUpdate: "tool_call", toolCallId: "mcp", name: "mcp__cowboy__cowboy_read", status: "in_progress",
+        rawInput: { help: "calls" },
+      } },
+      { session_id: "s1", seq: 2, kind: "update", update: {
+        sessionUpdate: "tool_call_update", toolCallId: "mcp", status: "completed", ...completion,
+      } },
+    ]);
+    const item = items[0];
+    if (items.length !== 1 || item?.kind !== "tool") throw new Error("expected one tool");
+    if (item.status !== "failed" || item.toolName !== "mcp__cowboy__cowboy_read") throw new Error("lost MCP error/identity");
+    if (JSON.stringify(item.content) !== JSON.stringify([{ type: "tool_result", value: rawOutput }])) throw new Error("lost result");
+    if (JSON.stringify(item.rawInput) !== '{"help":"calls"}') throw new Error("lost arguments");
   }
 });
 
@@ -584,6 +605,16 @@ test("a second human prompt still becomes its own bubble", () => {
   if (users.length !== 2) {
     throw new Error(`expected two human bubbles, got ${users.length}`);
   }
+});
+
+test("conversation clear retires the old plan and permits a fresh plan", () => {
+  const plan = (seq: number, content: string): Envelope => ({
+    session_id: "s1", seq, kind: "update",
+    update: { sessionUpdate: "plan", entries: [{ content, priority: "medium", status: "in_progress" }] },
+  });
+  const boundary: Envelope = { session_id: "s1", seq: 2, kind: "update", update: { sessionUpdate: "context_cleared", at: 123 } };
+  assertEquals(latestPlan([plan(1, "old task"), boundary]), null);
+  assertEquals(latestPlan([plan(1, "old task"), boundary, plan(3, "fresh task")])?.entries[0]?.content, "fresh task");
 });
 
 test("runtime prompt echoes do not retire the current plan", () => {

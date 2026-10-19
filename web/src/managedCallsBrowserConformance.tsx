@@ -6,11 +6,13 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { ManagedCallsDock, ManagedChildNotice } from "./ManagedCallsDock";
+import { CallTranscript } from "./CallTranscript";
 import { getActiveSessionId, setActiveSessionId } from "./controlPlane";
 import { composerStackExpandedStore } from "./composerStackAccordion";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
-import type { ManagedCallSummary } from "./managedCalls";
+import { type ManagedCallSummary, useManagedCalls } from "./managedCalls";
+import { peekSession, retrySessionHydration } from "./store";
 import { AgentToolsSettings, SessionToolsSection } from "./AgentToolsPanel";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";
 import {
@@ -212,6 +214,12 @@ const findingsResult = {
 export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const originalFetch = globalThis.fetch;
   const tests: string[] = [];
+  let recoveryText = "Checking current keyboard and queue behavior.";
+  let recoveryReads = 0;
+  let delayedRecovery: (() => void) | undefined;
+  let delayRecovery = false;
+  let clearSnapshot = false;
+  const clearAt = Date.now();
   let calls: ManagedCallSummary[] = [];
   const dismissed = new Set<string>();
   const cancels: string[] = [];
@@ -234,6 +242,46 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/sessions/parent-clear/bootstrap") {
+      return Promise.resolve(Response.json({ messages: [{
+        type: "snapshot", session_id: "parent-clear", reached_start: true,
+        events: clearSnapshot ? [{ session_id: "parent-clear", seq: 10, kind: "update",
+          update: { sessionUpdate: "context_cleared", at: clearAt } }] : [],
+      }] }));
+    }
+    if (url === "/api/sessions/parent-clear/calls") {
+      // Deliberately retain pre-clear rows, as a poll racing durable archival can.
+      return Promise.resolve(Response.json({ calls: [
+        summary("old-running", "running", "old", { created_at_ms: clearAt - 2 }),
+        summary("old-ended", "completed", "old", { created_at_ms: clearAt - 1 }),
+        ...(clearSnapshot ? [summary("fresh", "running", "fresh", { created_at_ms: clearAt + 1 })] : []),
+      ] }));
+    }
+    if (url === "/api/sessions/child-recovery/bootstrap") {
+      recoveryReads += 1;
+      const response = Response.json({ messages: [{
+        type: "snapshot",
+        session_id: "child-recovery",
+        reached_start: true,
+        events: [{
+          session_id: "child-recovery",
+          seq: 78,
+          kind: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "review-answer",
+            content: { type: "text", text: recoveryText },
+          },
+        }],
+      }] });
+      if (delayRecovery) {
+        delayRecovery = false;
+        return new Promise<Response>((resolve) => {
+          delayedRecovery = () => resolve(response);
+        });
+      }
+      return Promise.resolve(response);
+    }
     const bootstrap = childBootstrap(url);
     if (bootstrap) return Promise.resolve(bootstrap);
     if (url === "/api/plugins") {
@@ -343,6 +391,46 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       node.textContent?.trim() === label
     );
   try {
+    function ClearCallsProbe(): React.JSX.Element {
+      const observed = useManagedCalls("parent-clear");
+      return <div data-clear-calls>{observed.calls.map((call) => call.call_id).join(",")}</div>;
+    }
+    const releaseClear = peekSession("parent-clear");
+    try {
+      render(<ClearCallsProbe />);
+      await until(() => container.textContent === "old-running,old-ended", "old calls fixture");
+      clearSnapshot = true;
+      await retrySessionHydration("parent-clear");
+      await until(() => container.textContent === "fresh", "Clear must hide old running and ended calls while showing new calls");
+      render(<></>);
+    } finally {
+      releaseClear();
+    }
+    tests.push("clear-hides-old-calls-even-when-a-poll-races-archival");
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" />);
+    await until(() => text().includes(recoveryText), "initial review progress");
+    render(<></>);
+    // Reopening must refresh even an already-hydrated conversation. Keep this
+    // old response in flight while completion arrives through call metadata.
+    delayRecovery = true;
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" />);
+    await until(() => delayedRecovery, "cached review was not refreshed on reopen");
+    recoveryText = "Final review: not ready to implement; nine blocking issues.";
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled />);
+    await until(() => text().includes(recoveryText), "completion did not recover final review");
+    delayedRecovery!();
+    await wait(100);
+    check(text().includes(recoveryText), "stale in-flight tail replaced the final review");
+    check(recoveryReads === 3, "recovery should fetch on open, reopen and completion only");
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled desktop />);
+    await wait(100);
+    check(recoveryReads === 3, "ordinary rerenders must not refetch the transcript");
+    render(<></>);
+    recoveryText = "Reopened review includes the complete final conclusion.";
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled />);
+    await until(() => text().includes(recoveryText), "settled review remained stale on reopen");
+    render(<></>);
+    tests.push("review-recovers-final-output-on-completion-and-reopen-without-stale-overwrite");
     composerStackExpandedStore().set(null);
     render(<ManagedCallsDock sessionId="parent" desktop />);
     await wait(150);
@@ -352,10 +440,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     root.unmount();
     root = createRoot(container);
     calls = [
-      summary("call-security", "running", "security"),
+      summary("call-security", "running", "security", { created_at_ms: Date.now() - 300_000 }),
       summary("call-correctness", "completed", "correctness", {
         configuration: { model: "gpt-6-astra", reasoning_effort: "max" },
         preset: "astra-max",
+        created_at_ms: Date.now() - 100_000,
         started_at_ms: Date.now() - 90_000,
         finished_at_ms: Date.now() - 1_000,
         labels: { group: "PR 7961 review", round: "1", aspect: "correctness", selection_reason: "Ample quota; strongest available reviewer" },
@@ -363,6 +452,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         finding_count: 2,
       }),
       summary("call-tests", "failed", "test-coverage", {
+        created_at_ms: Date.now() - 200_000,
         input_revision: null,
         error: { code: "unsupported_input", detail: "symlink_unsupported" },
       }),
@@ -532,6 +622,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(previewRail && getComputedStyle(previewRail).overflowX === "auto", "mobile previews provide a horizontal scroller");
     check(!previewRail.closest("button"), "preview buttons must not nest inside the overview button");
     const preview = previewRail.querySelector<HTMLButtonElement>("[data-call-preview]")!;
+    check([...previewRail.querySelectorAll("[data-call-preview]")].map((card) => card.getAttribute("data-call-preview")).join(",") === "call-correctness,call-tests,call-security",
+      "mobile previews sort newest first regardless of running, failed or completed state");
     check(preview.querySelector("time[datetime]") !== null,
       "call previews expose when execution was requested or started");
     const age = preview.querySelector<HTMLElement>("time[datetime]")!;
@@ -548,7 +640,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "call previews show recorded model and reasoning on a dedicated configuration row");
     check(configuredPreview.querySelector("[data-call-preview-configuration]") === configuredPreview.firstElementChild!.children[1],
       "configuration must occupy the middle row between title and status");
-    check(preview.querySelector("[data-call-preview-configuration]")?.textContent?.includes("Model not recorded"),
+    check(previewRail.querySelector('[data-call-preview="call-security"] [data-call-preview-configuration]')?.textContent?.includes("Model not recorded"),
       "legacy calls explicitly explain missing model history");
     check(configuredPreview.textContent?.includes("Done") && !configuredPreview.textContent.includes("Completed"),
       "completed calls use the compact Done label");
@@ -634,15 +726,25 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(executionHeader?.textContent?.includes("gpt-6-astra · max") &&
       !callHeader.textContent?.includes("Not recorded") &&
       !executionHeader.textContent.includes("astra-max"),
-      "mobile transcript header shows recorded parameters inline without missing-value or redundant preset labels");
-    check(callHeader.children.length === 2 && executionHeader!.parentElement === callHeader.firstElementChild,
-      "mobile transcript header must contain only title/configuration and metadata rows");
+      "mobile transcript header shows recorded parameters without missing-value or redundant preset labels");
+    check(callHeader.children.length === 2 && executionHeader!.parentElement === callHeader.querySelector("[data-call-header-metadata]"),
+      "mobile transcript header has a title row and a separate row containing execution parameters and status metadata");
     const headerAge = callHeader.querySelector<HTMLElement>("[data-call-header-age]")!;
     check(headerAge.textContent?.endsWith("ago") || headerAge.textContent?.endsWith("now"),
       "mobile transcript header uses the same relative time format as previews");
     callHeader.style.width = "320px";
     check(callHeader.scrollWidth <= callHeader.clientWidth,
       "two-line call header must fit a narrow phone without horizontal overflow");
+    const metadataRow = callHeader.querySelector<HTMLElement>("[data-call-header-metadata]")!;
+    for (const selector of ["[data-call-header-configuration]", "[data-call-header-placement]"]) {
+      const badge = callHeader.querySelector<HTMLElement>(`${selector} > span`);
+      check(badge && getComputedStyle(badge).backgroundColor !== "rgba(0, 0, 0, 0)" &&
+        parseFloat(getComputedStyle(badge).borderRadius) > 0 && !badge.closest("button"),
+        "recorded parameters and placement use filled, noninteractive badges");
+    }
+    check(getComputedStyle(metadataRow).overflowX === "auto" &&
+      getComputedStyle(executionHeader!).whiteSpace === "nowrap",
+      "long execution metadata scrolls within the second row without wrapping or widening the header");
     callHeader.style.width = "";
     const backButton = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(

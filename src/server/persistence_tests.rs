@@ -147,7 +147,8 @@ async fn queued_clear_and_later_events_keep_fifo_through_shutdown() {
     let (sink, rx) = StoreSink::channel(3, health.clone());
     assert!(sink.send(text(0, 128)));
     assert!(sink.send(StoreWrite::ClearEvents {
-        session_id: "fixture".into()
+        session_id: "fixture".into(),
+        calls_before_ms: 1,
     }));
     assert!(sink.send(text(1, 12)));
     // Reserved control writes cannot overtake the earlier clear/new event pair.

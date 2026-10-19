@@ -302,6 +302,82 @@ function CodeBlock({
     const pre = rootRef.current?.querySelector("pre");
     if (pre) pre.scrollLeft = 0;
   }, [highlightedCode, syntaxLanguage, wrapOnTouch]);
+  const copyControl = (
+    <IconButton
+      className="cowboy-copy-btn"
+      onClick={onCopy}
+      disabled={pending && !copied}
+      aria-label={copied ? "Copied" : pending ? "Copy available when output finishes" : "Copy code"}
+      size="small"
+      sx={{
+        position: lightweight ? "static" : "absolute",
+        top: centerCompactCopy ? "50%" : 6,
+        right: 6,
+        transform: !lightweight && centerCompactCopy ? "translateY(-50%)" : "none",
+        height: desktopSize(32),
+        minWidth: desktopSize(32),
+        // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
+        // without it the button is locked at 44px and the morphed "Copied" label
+        // overflows / gets clipped at the code block's right edge. Resting: a
+        // 32px square; copied: `auto` so it grows to fit "✓ Copied".
+        width: copied ? "auto" : desktopSize(32),
+        // Resting: a compact translucent square (opt out of the global 44px icon
+        // button). On success it MORPHS into a labelled green pill — an
+        // icon-only swap is too easy to miss; "Copied" is unmistakable. The
+        // padding/gap animate the morph; right-anchored so it grows leftward
+        // over the code for the ~1.5s it's shown, never shifting layout.
+        px: copied ? 0.9 : 0,
+        gap: copied ? 0.5 : 0,
+        borderRadius: 1.5,
+        fontSize: "0.72rem",
+        fontWeight: 600,
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+        "& .MuiSvgIcon-root": { fontSize: "1rem" },
+        color: copied
+          ? "success.main"
+          : dark
+            ? "rgba(255,255,255,0.82)"
+            : "rgba(0,0,0,0.55)",
+        bgcolor: copied
+          ? dark
+            ? "rgba(63,185,80,0.18)"
+            : "rgba(46,160,67,0.12)"
+          : dark
+            ? "rgba(40,44,52,0.7)"
+            : "rgba(255,255,255,0.82)",
+        // Do not give every code block its own backdrop-filter layer. Long
+        // generated answers can contain hundreds of copy controls; WebKit
+        // otherwise re-samples every off-screen blur while the transcript
+        // scrolls. The existing opaque tint keeps the same readable affordance.
+        border: 1,
+        borderColor: copied ? "success.main" : "divider",
+        // Mouse: faint until the block is hovered (the wrapper's &:hover rule
+        // raises it). Touch (no hover): clearly visible. Copied: full opacity.
+        opacity: copied ? 1 : 0.5,
+        "@media (hover: none), (pointer: coarse)": {
+          opacity: copied ? 1 : 0.9,
+          ...(lightweight && { height: 44, minWidth: 44, width: copied ? "auto" : 44 }),
+        },
+        transition:
+          "opacity .15s, background-color .18s, color .18s, border-color .18s, padding .18s, gap .18s",
+        ...(!copied && {
+          "&:hover": {
+            bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.98)",
+          },
+        }),
+        // Streaming: a muted, inert control in the same place, so the button
+        // does not appear to jump in when the fence closes.
+        "&.Mui-disabled": {
+          opacity: 0.3,
+          color: dark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.55)",
+        },
+      }}
+    >
+      {copied ? <Check sx={{ fontSize: desktopSize(16) }} /> : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
+      {copied && <Box component="span">Copied</Box>}
+    </IconButton>
+  );
   return (
     <Box
       ref={rootRef}
@@ -389,6 +465,7 @@ function CodeBlock({
           <Collapsible
             maxHeight={280}
             forceOverflow
+            toolbar={copyControl}
             collapsedChildren={
               <Box component="pre" data-code-renderer="lightweight-preview" sx={lightweightSx}>
                 {lightweightPreview}
@@ -462,77 +539,7 @@ function CodeBlock({
             {highlightedCode}
           </SyntaxHighlighter>
         )}
-      <IconButton
-        className="cowboy-copy-btn"
-        onClick={onCopy}
-        disabled={pending && !copied}
-        aria-label={copied ? "Copied" : pending ? "Copy available when output finishes" : "Copy code"}
-        size="small"
-        sx={{
-          position: "absolute",
-          top: centerCompactCopy ? "50%" : 6,
-          right: 6,
-          transform: centerCompactCopy ? "translateY(-50%)" : "none",
-          height: desktopSize(32),
-          minWidth: desktopSize(32),
-          // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
-          // without it the button is locked at 44px and the morphed "Copied" label
-          // overflows / gets clipped at the code block's right edge. Resting: a
-          // 32px square; copied: `auto` so it grows to fit "✓ Copied".
-          width: copied ? "auto" : desktopSize(32),
-          // Resting: a compact translucent square (opt out of the global 44px icon
-          // button). On success it MORPHS into a labelled green pill — an
-          // icon-only swap is too easy to miss; "Copied" is unmistakable. The
-          // padding/gap animate the morph; right-anchored so it grows leftward
-          // over the code for the ~1.5s it's shown, never shifting layout.
-          px: copied ? 0.9 : 0,
-          gap: copied ? 0.5 : 0,
-          borderRadius: 1.5,
-          fontSize: "0.72rem",
-          fontWeight: 600,
-          lineHeight: 1,
-          whiteSpace: "nowrap",
-          "& .MuiSvgIcon-root": { fontSize: "1rem" },
-          color: copied
-            ? "success.main"
-            : dark
-              ? "rgba(255,255,255,0.82)"
-              : "rgba(0,0,0,0.55)",
-          bgcolor: copied
-            ? dark
-              ? "rgba(63,185,80,0.18)"
-              : "rgba(46,160,67,0.12)"
-            : dark
-              ? "rgba(40,44,52,0.7)"
-              : "rgba(255,255,255,0.82)",
-          // Do not give every code block its own backdrop-filter layer. Long
-          // generated answers can contain hundreds of copy controls; WebKit
-          // otherwise re-samples every off-screen blur while the transcript
-          // scrolls. The existing opaque tint keeps the same readable affordance.
-          border: 1,
-          borderColor: copied ? "success.main" : "divider",
-          // Mouse: faint until the block is hovered (the wrapper's &:hover rule
-          // raises it). Touch (no hover): clearly visible. Copied: full opacity.
-          opacity: copied ? 1 : 0.5,
-          "@media (hover: none)": { opacity: copied ? 1 : 0.9 },
-          transition:
-            "opacity .15s, background-color .18s, color .18s, border-color .18s, padding .18s, gap .18s",
-          ...(!copied && {
-            "&:hover": {
-              bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.98)",
-            },
-          }),
-          // Streaming: a muted, inert control in the same place, so the button
-          // does not appear to jump in when the fence closes.
-          "&.Mui-disabled": {
-            opacity: 0.3,
-            color: dark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.55)",
-          },
-        }}
-      >
-        {copied ? <Check sx={{ fontSize: desktopSize(16) }} /> : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
-        {copied && <Box component="span">Copied</Box>}
-      </IconButton>
+      {!lightweight && copyControl}
     </Box>
   );
 }

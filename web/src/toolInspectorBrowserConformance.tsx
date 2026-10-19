@@ -1,10 +1,14 @@
 /** Actual Desktop tool inspector layout and image output in a real browser. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { ToolDetailsBrowser } from "./Transcript";
-import type { RenderItem } from "./derive";
+import { derive, type RenderItem } from "./derive";
 import { toolRuns } from "./tools/runs";
+import { ToolBody } from "./tools/registry";
+import { CodeView } from "./tools/blocks";
+import { Markdown } from "./Markdown";
 
 // 1x1 opaque PNG.
 const PNG =
@@ -35,7 +39,9 @@ function readImage(key: string, image: Record<string, string>): RenderItem {
   };
 }
 
-export async function runToolInspectorBrowserConformance(): Promise<string[]> {
+export async function runToolInspectorBrowserConformance(
+  keepFixture = false,
+): Promise<string[]> {
   const items: RenderItem[] = [];
   for (let index = 0; index < 40; index++) {
     items.push({
@@ -64,19 +70,122 @@ export async function runToolInspectorBrowserConformance(): Promise<string[]> {
   }
   items.push(readImage("inline", { data: PNG }));
   items.push(readImage("missing", { url: "/api/artifacts/missing.png" }));
+  const mcp = (
+    key: string,
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    rawOutput?: unknown,
+  ): RenderItem => {
+    const item = derive([{
+      session_id: "fixture",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: key,
+        title: `mcp.${server}.${tool}`,
+        kind: "search",
+        status: "completed",
+        rawInput: { server, tool, arguments: args },
+        ...(rawOutput === undefined ? {} : { rawOutput }),
+      },
+    }])[0]!;
+    return { ...item, key };
+  };
+  items.push(mcp("help", "cowboy", "cowboy_read", { help: "calls" }, {
+    result: {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          api: "cowboy-ts-v1",
+          types: "interface Calls { list(): Promise<Call[]>; }",
+        }),
+      }],
+    },
+    error: null,
+  }));
+  items.push(
+    mcp("program", "cowboy", "cowboy_read", {
+      code: "return await cowboy.session.info();",
+      language: "ts",
+    }, { status: "busy", queued: 0 }),
+  );
+  items.push(
+    mcp("action", "cowboy", "cowboy_execute", {
+      action: "review.start",
+      arguments: { title: "Review tool UX" },
+      operation: "review-1",
+    }, { receipt: { status: "accepted", operation: "review-1" } }),
+  );
+  items.push(
+    mcp("memory", "matrix", "memory_search", { query: "tool UX" }, {
+      content: [],
+      structuredContent: {
+        hits: [{
+          title: "Tool result UX",
+          snippet: "Preserve structured results",
+          ref: { id: "memory-1", revision: 3 },
+        }],
+        truncated: false,
+      },
+    }),
+  );
+  items.push(mcp("absent", "matrix", "memory_get", { id: "historical" }));
+  items.push(mcp("record", "matrix", "memory_get", { id: "memory-1" }, {
+    structuredContent: {
+      id: "memory-1",
+      revision: 3,
+      title: "Tool result UX",
+      body: "Readable **memory body**",
+      sources: [{ quote: "Supporting evidence" }],
+    },
+  }));
+  items.push(
+    mcp("error", "other-server", "lookup", { query: "test" }, {
+      result: null,
+      error: { message: "Service unavailable" },
+    }),
+  );
+  items.push(mcp("empty", "cowboy", "cowboy_status", {}, { content: [] }));
+  items.push(mcp("external-hits", "other-server", "search", { query: "file" }, {
+    structuredContent: { hits: [{ title: "File search hit", snippet: "A file" }] },
+  }));
+  items.push(mcp("external-record", "other-server", "get", { id: "document" }, {
+    structuredContent: {
+      title: "External document", body: "Document body", id: "document", revision: 3,
+    },
+  }));
+  items.push(mcp("long-result", "cowboy", "cowboy_read", {
+    code: "return await cowboy.session.history({kinds:['tool'],limit:20});",
+  }, {
+    structuredContent: {
+      status: "completed",
+      saved: {
+        matches: Array.from({ length: 40 }, (_, seq) => ({
+          seq,
+          path: "/update/content/0/value/result/content/0/text",
+          text: `Recorded tool result ${seq}`,
+        })),
+        scanned: 64,
+        source: "durable",
+      },
+    },
+  }));
   const runs = toolRuns(items);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const show = async (selectedKey: string): Promise<void> => {
+  const show = async (selectedKey: string, desktop = true): Promise<void> => {
     flushSync(() =>
       root.render(
         <BrowserProductTheme>
+          <CssBaseline />
           <ToolDetailsBrowser
             items={items}
             runs={runs}
             selectedKey={selectedKey}
-            desktop
+            desktop={desktop}
             provider="claude"
             onSelect={() => {}}
             onClose={() => {}}
@@ -125,13 +234,255 @@ export async function runToolInspectorBrowserConformance(): Promise<string[]> {
       document.body.textContent?.includes("No output"),
       "an unloadable image lost the text fallback",
     );
+    await show("help");
+    check(
+      document.body.textContent?.includes("API reference"),
+      "MCP help lost its typed reference",
+    );
+    check(
+      document.body.textContent?.includes("Calls"),
+      "MCP opaque help result disappeared",
+    );
+    check(
+      document.querySelector("[aria-label='Tool detail view']"),
+      "MCP search kind incorrectly forced Raw",
+    );
+    const raw = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Raw");
+    check(raw, "missing raw escape hatch");
+    raw.click();
+    await wait(150);
+    check(
+      document.body.textContent?.includes("tool_result"),
+      "Raw omitted original opaque envelope",
+    );
+    const formatted = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Formatted");
+    formatted?.click();
+    await wait(150);
+    check(
+      document.body.textContent?.includes("API reference"),
+      "Formatted result did not return",
+    );
+
+    await show("program");
+    check(
+      document.body.textContent?.includes("Program") &&
+        document.body.textContent.includes("cowboy.session.info"),
+      "CodeAct program not exposed",
+    );
+    await show("action");
+    check(
+      document.body.textContent?.includes("review.start") &&
+        document.body.textContent.includes("accepted"),
+      "operation/receipt missing",
+    );
+    await show("memory");
+    check(
+      document.querySelector("[data-memory-results]")?.textContent?.includes(
+        "Preserve structured results",
+      ),
+      "structured-only memory results missing",
+    );
+    await show("record");
+    check(
+      document.querySelector("[data-memory-record] strong")?.textContent ===
+        "memory body",
+      "memory body lost Markdown rendering",
+    );
+    const evidence = document.querySelector<HTMLDetailsElement>(
+      "[data-memory-record] details",
+    );
+    check(
+      evidence && !evidence.open &&
+        evidence.textContent?.includes("Supporting evidence"),
+      "memory evidence not inspectable",
+    );
+    await show("absent");
+    check(
+      document.body.textContent?.includes(
+        "No result was recorded for this call.",
+      ),
+      "missing history result conflated with empty return",
+    );
+    await show("empty");
+    check(
+      document.body.textContent?.includes("Tool returned an empty result."),
+      "explicit empty result not explained",
+    );
+    await show("error");
+    check(
+      document.body.textContent?.includes("Service unavailable") &&
+        document.body.textContent.includes("Tool reported an error"),
+      "transport error hidden",
+    );
+    for (const [key, text] of [
+      ["external-hits", "File search hit"],
+      ["external-record", "External document"],
+    ]) {
+      await show(key!);
+      check(
+        document.body.textContent?.includes(text!) &&
+          !document.querySelector("[data-memory-results], [data-memory-record]"),
+        "another MCP server's data was mislabeled as memory",
+      );
+    }
+
+    // Exercise the shared result/argument frame at phone, tablet and desktop
+    // pane widths, including long operation IDs and structured values. The
+    // actual product theme owns typography, touch targets and code wrapping.
+    for (const width of [320, 390, 768, 1100]) {
+      const fixture = document.createElement("div");
+      fixture.style.width = `${width}px`;
+      container.append(fixture);
+      const fixtureRoot = createRoot(fixture);
+      flushSync(() =>
+        fixtureRoot.render(
+          <BrowserProductTheme>
+            <ToolBody
+              ctx={{
+                provider: "future-provider",
+                toolName: "mcp__cowboy__cowboy_execute",
+                kind: "execute",
+                title: "MCP",
+                rawInput: {
+                  action: "preferences.update",
+                  operation: "x".repeat(200),
+                  arguments: { description: "long field ".repeat(30) },
+                },
+                content: {
+                  structuredContent: { value: "multilingual 中文 ".repeat(40) },
+                },
+                running: false,
+                status: "completed",
+              }}
+            />
+          </BrowserProductTheme>,
+        )
+      );
+      await wait(200);
+      const overflow = [...fixture.querySelectorAll<HTMLElement>("*")].filter((
+        node,
+      ) =>
+        node.getBoundingClientRect().right >
+          fixture.getBoundingClientRect().right + 1
+      ).slice(0, 4).map((node) =>
+        `${node.tagName}.${node.className}:${node.getBoundingClientRect().width}`
+      ).join("; ");
+      check(
+        fixture.scrollWidth <= width + 1,
+        `MCP frame overflows ${width}px: ${fixture.scrollWidth}; ${overflow}`,
+      );
+      flushSync(() => fixtureRoot.unmount());
+      fixture.remove();
+    }
+    flushSync(() => root.render(null));
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => { copied = text; } },
+    });
+    try {
+      for (const width of [320, 390, 768, 1100].filter((value) => value <= window.innerWidth)) {
+        for (const renderer of ["highlighted", "lightweight", "markdown"] as const) {
+          const lines = renderer === "highlighted" ? 80 : 1300;
+          const code = Array.from({ length: lines }, (_, index) =>
+            `const value${index} = "exact source ${index}";`
+          ).join("\n");
+          const fixture = document.createElement("div");
+          Object.assign(fixture.style, {
+            position: "fixed", top: "0", left: "0", zIndex: "2000",
+            width: `${width}px`, height: "360px", overflow: "auto",
+          });
+          container.append(fixture);
+          const fixtureRoot = createRoot(fixture);
+          try {
+            flushSync(() => fixtureRoot.render(
+              <BrowserProductTheme>
+                <CssBaseline />
+                {renderer === "markdown"
+                  ? <Markdown text={"```typescript\n" + code + "\n```"} />
+                  : <CodeView code={code} lang="typescript" maxHeight={120} />}
+              </BrowserProductTheme>,
+            ));
+            await wait(250);
+            const expand = fixture.querySelector<HTMLButtonElement>("button[aria-expanded='false']");
+            check(expand, "long code has no expand action");
+            expand.focus();
+            expand.click();
+            await wait(100);
+            const toolbar = fixture.querySelector<HTMLElement>("[data-fold-toolbar]")!;
+            const copy = toolbar.querySelector<HTMLButtonElement>("[aria-label='Copy code']")!;
+            const collapse = toolbar.querySelector<HTMLButtonElement>("[aria-label='Collapse content']")!;
+            check(copy && collapse, "expanded code lost copy or collapse");
+            check(document.activeElement === collapse, "expansion lost keyboard focus");
+            const separated = (): void => {
+              const a = copy.getBoundingClientRect();
+              const b = collapse.getBoundingClientRect();
+              check(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top,
+                "copy and collapse hit targets overlap");
+              for (const button of [copy, collapse]) {
+                const box = button.getBoundingClientRect();
+                if (matchMedia("(pointer: coarse)").matches) {
+                  check(box.width >= 44 && box.height >= 44, "code toolbar has an undersized touch target");
+                }
+                check(button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)),
+                  "code toolbar action is covered by another element");
+              }
+              check(fixture.scrollWidth <= width + 1, "code toolbar widens the pane");
+            };
+            separated();
+            check(toolbar.getBoundingClientRect().bottom <= fixture.querySelector("pre")!.getBoundingClientRect().top + 1,
+              "code toolbar covers the first line");
+            fixture.scrollTop = 200;
+            await wait(100);
+            separated();
+            check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top) < 2,
+              "expanded code toolbar did not stay reachable while scrolling");
+            copy.click();
+            await wait(50);
+            check(copied === code, "copy lost exact highlighted or lightweight source");
+            separated();
+            check(collapse.isConnected, "copy accidentally collapsed the code");
+            collapse.focus();
+            collapse.click();
+            await wait(100);
+            check(!fixture.querySelector("[aria-label='Collapse content']") &&
+              fixture.querySelector("button[aria-expanded='false']"),
+              "collapse did not restore the compact preview");
+            check(document.activeElement === fixture.querySelector("button[aria-expanded='false']"),
+              "collapse lost keyboard focus");
+          } finally {
+            flushSync(() => fixtureRoot.unmount());
+            fixture.remove();
+          }
+        }
+      }
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+    if (keepFixture) await show("long-result", window.innerWidth >= 1000);
     return [
       "long history descriptions ellipsize without panning the rail",
       "an image Read shows its image",
       "an unloadable image Read falls back to the text presentation",
+      "MCP help and typed results retain Formatted and Raw views",
+      "CodeAct programs and action receipts are readable",
+      "structured-only memory hits render as cards",
+      "memory bodies and evidence retain readable and inspectable views",
+      "historical missing and explicit empty results are distinct",
+      "transport errors remain visible",
+      "other MCP servers retain their own search and document semantics",
+      "phone, tablet and desktop MCP frames stay within their pane",
+      "highlighted and large code controls stay separate, sticky and independently operable",
     ];
   } finally {
-    flushSync(() => root.unmount());
-    container.remove();
+    if (!keepFixture) {
+      flushSync(() => root.unmount());
+      container.remove();
+    }
   }
 }

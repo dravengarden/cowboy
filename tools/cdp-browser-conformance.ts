@@ -22,15 +22,15 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "desktop-composer": ["runDesktopComposerBrowserConformance", 13],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],
-  "managed-calls": ["runManagedCallsBrowserConformance", 14],
+  "managed-calls": ["runManagedCallsBrowserConformance", 16],
   "session-fold": ["runSessionFoldBrowserConformance", 7],
   "session-move": ["runSessionMoveBrowserConformance", 4],
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 4],
-  "tool-inspector": ["runToolInspectorBrowserConformance", 3],
+  "tool-inspector": ["runToolInspectorBrowserConformance", 12],
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 11],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
-  "dormant-session": ["runDormantSessionBrowserConformance", 18],
+  "dormant-session": ["runDormantSessionBrowserConformance", 21],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

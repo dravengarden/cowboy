@@ -2217,7 +2217,7 @@ async fn apply_store_batch(
                     events.insert((reduced.session_id.clone(), reduced.seq), reduced);
                 }
             }
-            StoreWrite::ClearEvents { ref session_id } => {
+            StoreWrite::ClearEvents { ref session_id, .. } => {
                 ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
                 reducer.clear_session(session_id);
                 ok &= retry_store_write(store, &write).await;
@@ -2781,7 +2781,10 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 .update_config_preferences(session_id, preferences)
                 .await
         }
-        StoreWrite::ClearEvents { session_id } => store.clear_events(session_id).await,
+        StoreWrite::ClearEvents {
+            session_id,
+            calls_before_ms,
+        } => store.clear_events(session_id, *calls_before_ms).await,
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         StoreWrite::UpdatePending {
             session_id,

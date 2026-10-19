@@ -634,6 +634,67 @@ mod tests {
                 .call_id,
             overlapping_record.call_id
         );
+        assert_clear_and_retention(store, first, overlapping_record).await;
+    }
+
+    async fn assert_clear_and_retention(
+        store: &Store,
+        first: &Record,
+        overlapping_record: &Record,
+    ) {
+        let counts = store.managed_call_counts("parent-1").await.unwrap();
+        let other_parent = store.managed_calls("parent-2", None).await.unwrap().len();
+        store.clear_events("parent-1", 100).await.unwrap();
+        assert!(
+            store
+                .managed_calls("parent-1", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.managed_call_counts("parent-1").await.unwrap(), counts);
+        assert_eq!(
+            store.managed_calls("parent-2", None).await.unwrap().len(),
+            other_parent
+        );
+        assert!(
+            store
+                .managed_call_request("parent-1", &first.request_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let fresh_request = Request::parse(br#"{"schema":1,"request_id":"after-clear","purpose":"review","instruction":"new conversation","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
+        let mut fresh = first.clone();
+        fresh.call_id = "call-after-clear".into();
+        fresh.child_session_id = "child-after-clear".into();
+        fresh.request_id.clone_from(&fresh_request.request_id);
+        fresh.request_digest = fresh_request.digest();
+        fresh.created_at_ms = 100;
+        fresh.updated_at_ms = 100;
+        store
+            .admit_managed_call(&fresh, &fresh_request)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.managed_calls("parent-1", None).await.unwrap()[0].call_id,
+            fresh.call_id
+        );
+        // A retried Clear keeps its original time boundary, including equality.
+        store.clear_events("parent-1", 100).await.unwrap();
+        assert_eq!(
+            store.managed_calls("parent-1", None).await.unwrap().len(),
+            1
+        );
+        let mut fresh_done = fresh.clone();
+        fresh_done.state = State::Failed;
+        fresh_done.revision += 1;
+        assert!(
+            store
+                .advance_managed_call(&fresh, &fresh_done)
+                .await
+                .unwrap()
+        );
         for parent in ["parent-1", "parent-2"] {
             store.delete_session(parent).await.unwrap();
         }
@@ -653,6 +714,14 @@ mod tests {
                 .advance_managed_call(overlapping_record, &cancelled)
                 .await
                 .unwrap()
+        );
+        assert!(
+            !store
+                .managed_calls("parent-1", None)
+                .await
+                .unwrap()
+                .iter()
+                .any(|call| call.call_id == overlapping_record.call_id)
         );
         assert_eq!(store.purge_deleted(0).await.unwrap(), 1);
         assert!(

@@ -659,18 +659,10 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
             textOverflow: "ellipsis",
             minWidth: 0,
             flexShrink: 1,
-            maxWidth: configuration ? "40%" : "100%",
           }}
         >
           {displayTitle(call)}
         </Box>
-        {configuration && (
-          <Typography data-call-header-configuration variant="caption" noWrap
-            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
-            sx={{ minWidth: 0, fontSize: "0.6875rem" }}>
-            · {configuration}
-          </Typography>
-        )}
       </Box>
       <Box
         data-call-header-metadata
@@ -681,6 +673,9 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           columnGap: 0.75,
           rowGap: 0.5,
           minWidth: 0,
+          overflowX: "auto",
+          scrollbarWidth: "none",
+          "& > *": { flexShrink: 0 },
         }}
       >
         {/* A finished review's findings already say it completed. */}
@@ -701,8 +696,15 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         {outcome && (
           <Badge label={outcome} color={attention ? "warning" : "success"} />
         )}
-        <Box component="span" sx={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={placementLabel(call)}>
-          {placementLabel(call)}
+        {configuration && (
+          <Box component="span" data-call-header-configuration
+            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
+            sx={{ display: "inline-flex", whiteSpace: "nowrap" }}>
+            <Badge label={configuration} color="default" />
+          </Box>
+        )}
+        <Box component="span" data-call-header-placement sx={{ display: "inline-flex", whiteSpace: "nowrap" }} title={placementLabel(call)}>
+          <Badge label={placementLabel(call)} color="default" />
         </Box>
         <Box
           component="time"
@@ -831,6 +833,7 @@ function CallConversation({
           <CallTranscript
             sessionId={call.child_session_id}
             provider={call.provider}
+            settled={!callActive(call.state)}
             bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
             desktop={desktop}
           />
@@ -974,10 +977,7 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
   const now = useCallClock();
   const overview = callsOverview(calls);
   const titles = callPreviewTitles(calls);
-  const ordered = [...calls].sort((a, b) => {
-    const rank = (call: ManagedCallSummary): number => callActive(call.state) ? 0 : callTone(call.state) === "error" ? 1 : 2;
-    return rank(a) - rank(b) || b.created_at_ms - a.created_at_ms;
-  });
+  const ordered = [...calls].sort((a, b) => b.created_at_ms - a.created_at_ms);
   return (
     <Stack direction="row" alignItems="stretch" sx={{ minWidth: 0, gap: 0.5, py: 0.5 }}>
       <ButtonBase {...tap} aria-label="Open calls" sx={{ flexShrink: 0, px: 1, minHeight: 44 }}>
