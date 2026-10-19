@@ -498,3 +498,15 @@ uses a short temporary root because the Nix shell's nested temporary directory
 exceeded the Unix socket pathname limit; that environment failure did not
 exercise product admission. All receipt paths here are below
 `/srv/storage/fast0/agent/tmp/`.
+
+The full immutable Machine bundle at commit
+`3d05d10e1c5eab4af199f28f826da7f18dc0735d` is accepted as
+`worker-13566979dce45f73d545`. Its actual release worker passed old/new Provider
+coexistence (`queue-send-release/coexistence-nix-02.json`); the immutable
+Controller/Machine/SDK pack passed the same 18 HTTP lifecycle checks
+(`queue-send-release/session-nix-01.json`). macOS arm64 runtime probing passed
+without credentials or inference (`queue-send-release/macos-01.json`), and its
+temporary artifacts were removed. The retained-worker pin advances to this
+accepted bundle so Hawk can retain its schema-one deletion/incarnation writer
+capability while selecting the new worker protocol. These are pre-activation
+receipts; production activation remains a separate transaction.
