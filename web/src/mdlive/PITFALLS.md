@@ -3278,7 +3278,9 @@ The 2026-10-19 mobile Send polish separates the paper plane and chevron inside
 one tinted, rounded button. User feedback retains the plane and requires global
 font scaling: use rem for the button, spacing, radius, glyphs and spinner, with
 a 40px minimum touch target. Button-scoped SvgIcon selectors must override the
-global IconButton descendant rule. Idle and busy retain the same footprint.
+global IconButton descendant rule. Follow-up feedback keeps the button circular
+in every state, including with the inline delivery chevron. Width and height
+remain equal, with the same minimum touch size and no state-dependent resizing.
 This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or

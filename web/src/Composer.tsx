@@ -436,16 +436,16 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
-// A single hit target with a stable footprint in either delivery state.
+// Keep Send circular, including when the inline delivery chevron is present.
 const MOBILE_SEND_BTN = {
   ...TOOLBAR_ICON_BTN,
-  width: "3rem",
+  width: "2.5rem",
   height: "2.5rem",
   minWidth: 40,
   minHeight: 40,
   p: 0,
   gap: "0.125rem",
-  borderRadius: "0.75rem",
+  borderRadius: "999rem",
   "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
   "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: "0.875rem" },
   bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.12),
