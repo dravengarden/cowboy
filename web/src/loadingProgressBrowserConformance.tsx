@@ -4,6 +4,7 @@ import { Box, CircularProgress, CssBaseline, Stack, Typography } from "@mui/mate
 import { BrowserProductTheme } from "./browserProductTheme";
 import { StatusDot } from "./SessionStatusDot";
 import { SessionMachineBadge } from "./SessionMachineBadge";
+import { SessionUpdateBadge } from "./SessionUpdateBadge";
 import { mobileCompositorFlattenSx } from "./mobilePresentationMotion";
 import { splashHtml } from "../../components/app-shell/splash";
 
@@ -29,6 +30,20 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
           {[true, false].map((compact) => <SessionMachineBadge key={String(compact)} compact={compact}
             session={{ id: "warning", title: "Warning", provider: "claude-code", machine_id: "ovh", cwd: "/runtime", status: "interrupted", execution_binding: {} }} />)}
         </Box>
+        <Stack direction="row" spacing={0.5} alignItems="center" data-session-badge-preview>
+          <Typography variant="caption">columbus</Typography>
+          <SessionMachineBadge compact session={{
+            id: "remote", title: "Remote", provider: "codex", machine_id: "ovh", cwd: "/runtime", status: "running",
+            execution_binding: {
+              schema: 1,
+              runtime: { machine_id: "ovh", cwd: "/runtime" },
+              environment: { machine_id: "hawk", protocol: 1 },
+              workspace: { cwd: "/target" },
+            },
+          }} />
+          <SessionMachineBadge compact session={{ id: "local", title: "Local", provider: "codex", machine_id: "hawk", cwd: "/target", status: "running" }} />
+          <SessionUpdateBadge session={{ id: "waiting", title: "Waiting", provider: "codex", cwd: "/target", status: "exited", resource_wait: "capacity" }} />
+        </Stack>
         {(["busy", "starting", "running", "exited"] as const).map((status) => (
           <Stack key={status} direction="row" spacing={1.5} alignItems="center">
             <StatusDot status={status} /><Typography>{status}</Typography>
