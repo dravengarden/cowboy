@@ -26,7 +26,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "session-fold": ["runSessionFoldBrowserConformance", 7],
   "session-move": ["runSessionMoveBrowserConformance", 4],
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 4],
-  "tool-inspector": ["runToolInspectorBrowserConformance", 10],
+  "tool-inspector": ["runToolInspectorBrowserConformance", 11],
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 11],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],

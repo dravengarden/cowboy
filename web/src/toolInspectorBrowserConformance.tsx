@@ -146,6 +146,14 @@ export async function runToolInspectorBrowserConformance(
     }),
   );
   items.push(mcp("empty", "cowboy", "cowboy_status", {}, { content: [] }));
+  items.push(mcp("external-hits", "other-server", "search", { query: "file" }, {
+    structuredContent: { hits: [{ title: "File search hit", snippet: "A file" }] },
+  }));
+  items.push(mcp("external-record", "other-server", "get", { id: "document" }, {
+    structuredContent: {
+      title: "External document", body: "Document body", id: "document", revision: 3,
+    },
+  }));
   const runs = toolRuns(items);
   const container = document.createElement("div");
   document.body.append(container);
@@ -291,6 +299,17 @@ export async function runToolInspectorBrowserConformance(
         document.body.textContent.includes("Tool reported an error"),
       "transport error hidden",
     );
+    for (const [key, text] of [
+      ["external-hits", "File search hit"],
+      ["external-record", "External document"],
+    ]) {
+      await show(key!);
+      check(
+        document.body.textContent?.includes(text!) &&
+          !document.querySelector("[data-memory-results], [data-memory-record]"),
+        "another MCP server's data was mislabeled as memory",
+      );
+    }
 
     // Exercise the shared result/argument frame at phone, tablet and desktop
     // pane widths, including long operation IDs and structured values. The
@@ -351,6 +370,7 @@ export async function runToolInspectorBrowserConformance(
       "memory bodies and evidence retain readable and inspectable views",
       "historical missing and explicit empty results are distinct",
       "transport errors remain visible",
+      "other MCP servers retain their own search and document semantics",
       "phone, tablet and desktop MCP frames stay within their pane",
     ];
   } finally {

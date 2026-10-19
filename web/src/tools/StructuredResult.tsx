@@ -7,7 +7,7 @@ import { record } from "./result";
 /** Small semantic views for MCP data. Unknown shapes remain complete,
  * selectable JSON, so a new server/provider needs no host release to work. */
 export function StructuredResult(
-  { value }: { value: unknown },
+  { value, memory = false }: { value: unknown; memory?: boolean },
 ): React.JSX.Element {
   const object = record(value);
   if (!object) {
@@ -22,7 +22,7 @@ export function StructuredResult(
   }
   const { types, hits, ...rest } = object;
   if (
-    typeof object.title === "string" && typeof object.body === "string" &&
+    memory && typeof object.title === "string" && typeof object.body === "string" &&
     typeof object.id === "string" && typeof object.revision === "number"
   ) {
     const { title, body, id, revision, ...metadata } = object;
@@ -60,7 +60,7 @@ export function StructuredResult(
     );
   }
   if (
-    Array.isArray(hits) &&
+    memory && Array.isArray(hits) &&
     hits.every((hit) => typeof record(hit)?.title === "string")
   ) {
     return (

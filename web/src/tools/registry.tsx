@@ -377,6 +377,7 @@ const mcpTool: Renderer = (ctx) => {
 
 function ResultBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
   const result = useMemo(() => toolResult(ctx.content), [ctx.content]);
+  const memory = mcpIdentity(ctx.toolName, ctx.rawInput, ctx.title)?.server === "matrix";
   const failed = result.error || ctx.status === "failed";
   const missing = ctx.running
     ? "Waiting for tool result…"
@@ -392,7 +393,7 @@ function ResultBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
       <Stack spacing={0.75} sx={{ minWidth: 0 }}>
         {failed && result.blocks.length > 0 && <Alert severity="error">Tool reported an error</Alert>}
         {result.blocks.length > 0
-          ? <OutputBlocks content={ctx.content} renderData={(value) => <StructuredResult value={value} />} />
+          ? <OutputBlocks content={ctx.content} renderData={(value) => <StructuredResult value={value} memory={memory} />} />
           : <Typography role="status" variant="body2" color={failed ? "error.main" : "text.secondary"}>{missing}</Typography>}
         {ctx.running && <RunningHint />}
       </Stack>
