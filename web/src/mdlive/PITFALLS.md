@@ -3292,9 +3292,12 @@ slot. A nonempty queue opens this picker even while idle, so reordering remains
 reachable without disturbing direct Send for an idle, empty queue. It uses the
 existing durable front submission, retains Pause and checks captured editor
 ownership before submission. Desktop retains its explicit Queue-first shortcut.
-The compact delivery menu has no title or dividers and omits Pause/Interrupt
-rows. Queue still owns Pause; Alt/Option+Enter retains interrupt confirmation.
-Only an available default receives the checkmark. Loading, unsupported or
+The compact delivery menu has icons, no title/dividers and no selected state
+or checkmark. Send & pause confirms the queue hold before enqueueing. Interrupt
+& send, its confirmation/shortcut and queued-row Force push are removed;
+independent Stop and historical receipt recovery remain. Popover retains the
+last visible anchor rectangle when keyboard dismissal or a busy/idle render
+replaces the button; it must not fall back to document.body. Loading, unsupported or
 expired Steer is disabled, unselected and names its reason; native capability
 admission must never be bypassed to make a row look interactive.
 This is toolbar presentation only:

@@ -9,7 +9,6 @@ import { createPortal } from "react-dom";
 import { Box, Button, IconButton, Tooltip, useTheme } from "@mui/material";
 import {
   AttachFile,
-  Bolt,
   Check,
   Close,
   CloseFullscreen,
@@ -84,11 +83,11 @@ export function FullscreenComposer({
   onVimMode,
   onDiscard,
   onSchedule,
-  onForcePush,
-  forcePushEnabled = false,
   currentTurnEnabled = false,
   onCurrentTurn,
+  sendButtonRef,
 }: {
+  sendButtonRef?: RefObject<HTMLButtonElement | null>;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -137,8 +136,6 @@ export function FullscreenComposer({
   onDiscard?: (() => void) | undefined;
   /** Main-composer delivery actions. Row edits intentionally omit them. */
   onSchedule?: (() => void) | undefined;
-  onForcePush?: ((anchor: HTMLElement) => void) | undefined;
-  forcePushEnabled?: boolean;
   currentTurnEnabled?: boolean;
   onCurrentTurn?: () => void;
 }): React.JSX.Element {
@@ -394,21 +391,9 @@ export function FullscreenComposer({
                 <PostAdd />
               </MobileComposerAccessoryButton>
             )}
-            {showCollapse && onForcePush && (
-              <MobileComposerAccessoryButton
-                title="Force push"
-                color="warning"
-                disabled={!sendable || !forcePushEnabled}
-                onClick={(event): void => {
-                  haptic();
-                  onForcePush(event.currentTarget);
-                }}
-              >
-                <Bolt />
-              </MobileComposerAccessoryButton>
-            )}
             {showCollapse && (
               <MobileComposerAccessoryButton
+                buttonRef={sendButtonRef}
                 title={submitLabel}
                 color="primary"
                 disabled={!sendable}

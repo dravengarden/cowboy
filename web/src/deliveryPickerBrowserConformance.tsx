@@ -3,7 +3,6 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { DeliveryPicker } from "./DeliveryPicker";
-import { InterruptDeliveryConfirm } from "./InterruptDeliveryConfirm";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
@@ -36,7 +35,6 @@ export async function checkDeliveryPicker(): Promise<string> {
   function Harness() {
     const [anchor, setAnchor] = useState<HTMLElement | null>(null);
     const [busy, updateBusy] = useState(true);
-    const [confirm, setConfirm] = useState(false);
     const [queueCount, updateQueueCount] = useState(0);
     const [paused, updatePaused] = useState(false);
     setBusy = updateBusy;
@@ -44,7 +42,10 @@ export async function checkDeliveryPicker(): Promise<string> {
     setPaused = updatePaused;
     return (
       <BrowserProductTheme>
-        <button onClick={(event) => setAnchor(event.currentTarget)}>
+        <button
+          style={{ position: "fixed", bottom: 20, right: 20 }}
+          onClick={(event) => setAnchor(event.currentTarget)}
+        >
           Send…
         </button>
         <DeliveryPicker
@@ -63,21 +64,8 @@ export async function checkDeliveryPicker(): Promise<string> {
             calls.push(
               `${checkpoint ? "checkpoint" : "steer"}:${target.turn_id}`,
             )}
-          onInterrupt={(target) => {
-            calls.push(`interrupt:${target.turn_id}`);
-            setAnchor(null);
-            setConfirm(true);
-          }}
+          onSendAndPause={() => calls.push("pause")}
           onStop={() => calls.push("stop")}
-        />
-        <InterruptDeliveryConfirm
-          open={confirm}
-          preview="Replacement input"
-          onClose={() => setConfirm(false)}
-          onConfirm={async () => {
-            calls.push("confirmed");
-            setConfirm(false);
-          }}
         />
       </BrowserProductTheme>
     );
@@ -141,9 +129,9 @@ export async function checkDeliveryPicker(): Promise<string> {
     );
     check(
       !document.querySelector(
-        '[data-delivery-command="pause"], [data-delivery-command="interrupt"]',
+        '[data-delivery-command="interrupt"]',
       ),
-      "Delivery menu omits queue-management and interrupt rows",
+      "Delivery menu omits interrupt",
     );
     finishFirstRead();
     for (let attempt = 0; attempt < 50 && !ready(); attempt++) {
@@ -152,6 +140,15 @@ export async function checkDeliveryPicker(): Promise<string> {
     check(
       document.activeElement?.getAttribute("data-delivery-command") === "steer",
       "Default delivery receives focus",
+    );
+    check(
+      !document.querySelector("[data-delivery-picker] .Mui-selected"),
+      "Actions have no selected state",
+    );
+    check(
+      document.querySelectorAll("[data-delivery-picker] .MuiListItemIcon-root")
+        .length === 5,
+      "Every action has an icon",
     );
     key("Enter", { repeat: true });
     key("Enter", { isComposing: true });
@@ -217,34 +214,29 @@ export async function checkDeliveryPicker(): Promise<string> {
     }
     key("Enter", { altKey: true });
     check(
-      calls.at(-1) === "interrupt:turn-1",
-      "Alt Enter opens confirmation for the captured turn",
+      !calls.some((call) => call.startsWith("interrupt")),
+      "Alt Enter cannot interrupt",
     );
-    for (
-      let attempt = 0;
-      attempt < 50 && !document.querySelector('[role="dialog"]');
-      attempt++
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    const confirmButton = [
-      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
-    ]
-      .find((button) => button.textContent?.trim() === "Interrupt & send");
-    check(confirmButton, "Interrupt confirmation is a real dialog");
-    confirmButton!.focus();
+    const paper = document.querySelector<HTMLElement>("[data-delivery-picker]")!
+      .closest<HTMLElement>(".MuiPaper-root")!;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const beforeAnchorLoss = paper.getBoundingClientRect();
+    const send = host.querySelector<HTMLButtonElement>("button")!;
+    send.style.display = "none";
+    window.visualViewport?.dispatchEvent(new Event("resize"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const afterAnchorLoss = paper.getBoundingClientRect();
+    check(
+      Math.abs(beforeAnchorLoss.top - afterAnchorLoss.top) < 2 &&
+        Math.abs(beforeAnchorLoss.left - afterAnchorLoss.left) < 2,
+      "Hiding the send anchor does not move the popup to the screen corner",
+    );
+    const pause = document.querySelector<HTMLElement>(
+      '[data-delivery-command="pause"]',
+    )!;
+    pause.focus();
     key("Enter");
-    key("Enter", { ctrlKey: true, repeat: true });
-    key("Enter", { ctrlKey: true, isComposing: true });
-    check(
-      !calls.includes("confirmed"),
-      "Confirmation rejects bare, held and IME Enter",
-    );
-    key("Enter", { ctrlKey: true });
-    check(
-      calls.filter((value) => value === "confirmed").length === 1,
-      "Fresh Mod Enter confirms exactly once",
-    );
+    check(calls.at(-1) === "pause", "Send & pause is keyboard reachable");
     return "Delivery picker preserves exact target, IME/repeat exclusion, disabled focus and explicit next-turn selection";
   } finally {
     flushSync(() => root.unmount());

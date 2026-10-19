@@ -60,7 +60,7 @@ const cases = bundles.flatMap((bundle) =>
     : slowMobile
     ? ["slow-mobile", "lost-send"]
     : failedRecovery
-    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation", "failed-recovery-concurrent", "failed-recovery-queue", "failed-recovery-force"]
+    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation", "failed-recovery-concurrent", "failed-recovery-queue"]
     : updateSettings
     ? ["update-settings"]
     : continuity

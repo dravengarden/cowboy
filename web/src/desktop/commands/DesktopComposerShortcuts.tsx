@@ -166,7 +166,8 @@ export function DesktopComposerCommandBindings({
     {
       id: "composer.forcePush",
       title: "Choose delivery mode",
-      description: "Open Steer, Next turn and Interrupt & send choices",
+      description:
+        "Open Steer, Next turn, Queue first and Send & pause choices",
       group: "Prompt actions",
       shortcut: "Alt+Enter",
       consumeWhenDisabled: true,
@@ -180,8 +181,7 @@ export function DesktopComposerCommandBindings({
     {
       id: "composer.currentTurn",
       title: "Choose current-turn delivery",
-      description:
-        "Open the delivery picker for the captured active turn",
+      description: "Open the delivery picker for the captured active turn",
       group: "Prompt actions",
       allowInEditor: true,
       contexts: ["prompt"],

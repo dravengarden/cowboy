@@ -48,7 +48,7 @@ test("no durable write runs before its outbox baseline is adopted", async () => 
       queueGate.indexOf("await durableQueue(sessionId)"),
   );
   assert(
-    [...source.matchAll(/await mutateQueueDurably\(sessionId,/g)].length >= 8,
+    [...source.matchAll(/await mutateQueueDurably\(sessionId,/g)].length >= 7,
   );
 
   // Discarding a row is durable too: it removes an outbox mutation.

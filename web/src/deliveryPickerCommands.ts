@@ -6,7 +6,6 @@ export const DELIVERY_PICKER_COMMANDS = [
   { id: "delivery.activate", keys: ["Enter", "Mod+Enter"] },
   { id: "delivery.next", keys: ["ArrowDown", "j"] },
   { id: "delivery.previous", keys: ["ArrowUp", "k"] },
-  { id: "delivery.interrupt", keys: ["Alt+Enter"] },
   { id: "delivery.stop", keys: ["Mod+."] },
   { id: "delivery.close", keys: ["Escape"] },
 ] as const;
@@ -46,7 +45,6 @@ export function handleDeliveryPickerKey(event: KeyboardEvent): boolean {
   event.stopPropagation();
   if (command === "close") commands.close();
   else if (command === "stop") commands.stop();
-  else if (command === "interrupt") commands.activate("interrupt");
   else if (command === "activate") {
     commands.activate(focused?.dataset.deliveryCommand);
   } else if (command === "next" || command === "previous") {
@@ -66,7 +64,6 @@ export function deliveryPickerKey(
   | "activate"
   | "next"
   | "previous"
-  | "interrupt"
   | "stop"
   | "close"
   | "consume"
@@ -77,7 +74,6 @@ export function deliveryPickerKey(
   if (mod && event.key === ".") return event.repeat ? "consume" : "stop";
   if (event.key === "Enter") {
     if (event.repeat || event.shiftKey) return "consume";
-    if (event.altKey && !mod) return "interrupt";
     if (!event.altKey) return "activate";
     return "consume";
   }

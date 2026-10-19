@@ -354,10 +354,9 @@ through the workspace prefix preserves Insert/Visual mode, selection, and caret.
 
 The send delivery picker owns a scoped command registry shared with mobile
 hardware keyboards. Mod+Enter opens it while busy; arrows or J/K navigate,
-Enter or fresh Mod+Enter activates, Alt+Enter opens Interrupt confirmation,
-Mod+. opens Stop, and Escape restores the captured editor selection. A disabled
-focused mode cannot fall through to another action. Interrupt confirmation
-requires fresh Mod+Enter or a pointer action; bare/repeated Enter is consumed.
+Enter or fresh Mod+Enter activates, Mod+. opens Stop, and Escape restores the
+captured editor selection. A disabled focused mode cannot fall through to
+another action. Alt+Enter inside the picker is consumed without submitting.
 On non-editable picker rows, composition Enter is intercepted at capture solely
 to prevent MUI MenuItem's implicit click. This does not prevent native editor
 composition or change the editable-field IME contract below.
@@ -570,7 +569,7 @@ it); macOS Chrome binds none of them.
 - `␣␣` then a label switches session; `␣⇥` returns to the previous one and `␣O` lists Recent.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
   turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.
-- `Alt/Option+Enter` force-pushes a prompt. On macOS, no other product action
+- `Alt/Option+Enter` opens delivery choices. On macOS, no other product action
   reserves an Option letter; on Windows/Linux, `Alt+K` is additionally the
   workspace prefix. Slash, references, attachments, scheduling, queue priority,
   expand, and More remain visible in the UI and searchable in Command Palette.
@@ -582,7 +581,7 @@ it); macOS Chrome binds none of them.
   Every toolbar button carries its `␣` slot, which lights while the leader is
   armed; tooltips and the Command Palette show the same keycap. A claimed direct chord stops
   propagation to editor fallbacks. In particular, `Alt+Enter` must never also
-  save a draft, even when Force push is unavailable.
+  save a draft, even when delivery choices are unavailable.
 - In Resize mode, `H/L` moves the selected split.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
@@ -875,9 +874,10 @@ editor scrollport. Container queries use the Prompt's actual width and the root
 font size to disclose quick formatting and labels; the formatting menu retains
 all commands. Send stays labelled at the right edge and becomes Send… while
 busy or when the queue has pending messages, opening the unified picker.
-Steer, Next turn and Queue first are picker choices. The popup has no title,
-dividers or queue-management/interrupt rows. Pause lives in Queue; the existing
-Interrupt shortcut still opens its explicit confirmation. The Queue-first
+Steer, Next turn, Queue first and Send & pause are icon-labelled actions without
+a selected state, title or dividers. Send & pause confirms queue Pause before
+enqueueing; the active turn continues. Interrupt & send and its confirmation
+and keyboard activation are removed. Independent Stop remains. The Queue-first
 keyboard command remains available. Draft and Schedule remain direct controls and may wrap when
 space is limited. Empty, preparing, busy, paused, disconnected, pending-submit
 and resumed states change labels/availability without replacing the editor.

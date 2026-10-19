@@ -811,9 +811,7 @@ test("fullscreen delivery uses the shared picker and closes after durable owners
     true,
   );
   assertEquals(
-    composerSource.includes(
-      "await confirmation;\n      setForceAnchor(null);",
-    ),
+    /await confirmation;\s*dismissAfterMobileDelivery\(\);\s*setComposeFs\(false\)/.test(composerSource),
     true,
   );
   assertEquals(
@@ -1043,7 +1041,7 @@ test("mobile pending editing keeps expansion and context delivery actions in the
       .test(pending),
     true,
   );
-  assertEquals(pending.includes('title="Force push"'), true);
+  assertEquals(pending.includes('title="Force push"'), false);
   assertEquals(pending.includes('title="Expand editor"'), true);
   assertEquals(accessoryDockSource.includes('flex: "0 0 auto"'), true);
   assertEquals(
@@ -1056,36 +1054,8 @@ test("mobile pending editing keeps expansion and context delivery actions in the
   );
 });
 
-test("pending Force push confirmation keeps the native editor and anchor mounted", () => {
-  const confirmationStart = composerSource.indexOf(
-    'const forcePushConfirmation = kind === "queued"',
-  );
-  const confirmationEnd = composerSource.indexOf(
-    "// Mobile Queue/Draft edits own the writing surface",
-    confirmationStart,
-  );
-  const confirmation = composerSource.slice(confirmationStart, confirmationEnd);
-
-  assertEquals(
-    confirmationStart >= 0 && confirmationEnd > confirmationStart,
-    true,
-  );
-  assertEquals(confirmation.includes("<Popper"), true);
-  assertEquals(confirmation.includes("<Popover"), false);
-  assertEquals(confirmation.includes("<ClickAwayListener"), true);
-  assertEquals(confirmation.includes('aria-modal="false"'), true);
-  assertEquals(confirmation.includes('borderRadius: "12px"'), true);
-  assertEquals(
-    confirmation.match(
-      /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
-    )
-      ?.length,
-    2,
-  );
-});
-
 test("delivery picker dismisses mobile keyboard and restores the captured selection on cancel", () => {
-  assertEquals(composerSource.includes("<InterruptDeliveryConfirm"), true);
+  assertEquals(composerSource.includes("<InterruptDeliveryConfirm"), false);
   assertEquals(composerSource.includes("if (!desktop) dismissMobileSoftwareKeyboard();"), true);
   assertEquals(composerSource.includes("selection: editorRef.current?.getSelection()"), true);
   const close = composerSource.slice(
@@ -1136,11 +1106,7 @@ test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => 
   assertEquals(actionRow.includes("WebkitMaskImage:"), true);
   assertEquals(actionRow.includes('columnGap: "clamp(2px, 1vw, 5px)"'), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
-  assertEquals(
-    actionRow.indexOf('<Tooltip title="Force push">') <
-      actionRow.indexOf('<Tooltip title="定时发送">'),
-    true,
-  );
+  assertEquals(actionRow.includes('<Tooltip title="Force push">'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="定时发送">') <
       actionRow.indexOf("data-mobile-composer-clear"),

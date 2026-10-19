@@ -2,7 +2,6 @@ import { desktopSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
-import { InterruptDeliveryConfirm } from "./InterruptDeliveryConfirm";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
 import type { DeliveryTarget } from "./currentTurnDelivery";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
@@ -57,7 +56,6 @@ import {
 import {
   AlternateEmail,
   AttachFile,
-  Bolt,
   Check,
   ChevronRight,
   CleaningServices,
@@ -268,7 +266,6 @@ import {
   returnFailedQueued,
   editDraft,
   editQueued,
-  forcePushQueued,
   moveDraft,
   openSession,
   type QueuedMessage,
@@ -286,6 +283,7 @@ import {
   send,
   setSessionConfigOptions,
   setPaused,
+  pauseQueueConfirmed,
   setQueueEditing,
   loadUsageSnapshot,
   requestUsageRefresh,
@@ -741,7 +739,6 @@ function ComposeBar(
     onSaveDraft,
     onCollapse,
     onExpand,
-    onForcePush,
     onJumpFront,
     submitLabel = "Send",
     submitShortcut = "send",
@@ -764,8 +761,6 @@ function ComposeBar(
     readonly onCollapse?: (() => void) | undefined;
     /** Expand the inline editor to the fullscreen sheet (↗) — mirror of onCollapse. */
     readonly onExpand?: (() => void) | undefined;
-    /** Receives the ⋮ button so the caller can anchor its force-push confirm. */
-    readonly onForcePush?: ((anchor: HTMLElement) => void) | undefined;
     /** "Jump to front of queue" (no interrupt) — provided only when there's a
      *  queue to jump ahead of. */
     readonly onJumpFront?: (() => void) | undefined;
@@ -780,7 +775,7 @@ function ComposeBar(
   // The ⚙ opens the config POPUP (the labeled Mode/Model/Effort dropdowns live in
   // that sheet — see ComposerSheet — not inline on the bar).
   const hasConfig = showSkeleton || options.length > 0;
-  // Secondary actions (Save-draft / Jump-to-front / Force-push) sit inline on a
+  // Secondary actions (Save-draft / Jump-to-front) sit inline on a
   // roomy (≥ sm) bar, but fold into a ⋮ overflow on the narrow phone tier — so the
   // PRIMARY buttons keep their full, app-consistent tap target instead of shrinking
   // to cram the whole set onto one row (and Exit-fullscreen never orphans below).
@@ -788,7 +783,7 @@ function ComposeBar(
   const roomy = useMediaQuery(theme.breakpoints.up("sm"));
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
-  const hasSecondary = Boolean(onSaveDraft || onJumpFront || onForcePush);
+  const hasSecondary = Boolean(onSaveDraft || onJumpFront);
   const desktopShortcut = (
     child: ReactNode,
     badge: string,
@@ -963,21 +958,6 @@ function ComposeBar(
                     </span>
                   </Tooltip>
                 )}
-                {onForcePush && (
-                  <Tooltip title="Force push">
-                    <span>
-                      <IconButton
-                        color="warning"
-                        aria-label="force push"
-                        disabled={!sendable}
-                        sx={TOOLBAR_ICON_BTN}
-                        onClick={(e): void => onForcePush(e.currentTarget)}
-                      >
-                        <Bolt />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
                 {onSaveDraft && (
                   <Tooltip title="Save as draft">
                     <span>
@@ -1096,18 +1076,7 @@ function ComposeBar(
             Jump to front of queue
           </MenuItem>
         )}
-        {onForcePush && (
-          <MenuItem
-            disabled={!sendable}
-            onClick={(): void => {
-              setMoreMenu(null);
-              if (moreRef.current) onForcePush(moreRef.current);
-            }}
-          >
-            <Bolt fontSize="small" color="warning" sx={{ mr: 1 }} />
-            Force push
-          </MenuItem>
-        )}
+
       </Menu>
     </Stack>
   );
@@ -1208,7 +1177,6 @@ export function ComposerWorkspace({
     const source = deliverySource.current;
     flushSync(() => {
       setDeliveryAnchor(null);
-      setForceAnchor(null);
     });
     if (source?.session !== sessionId) return;
     resumeMobileKeyboardSurface();
@@ -1473,12 +1441,8 @@ export function ComposerWorkspace({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
-  // Long-press and ordinary busy Send share the same picker. Interrupt is a
-  // separate explicit confirmation after capturing the exact active turn.
+  // Long-press and ordinary busy Send share the same picker.
   const [holding, setHolding] = useState(false);
-  const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
-  const interruptTarget = useRef<DeliveryTarget | null>(null);
-  const interruptSubmitting = useRef(false);
   const [clearComposerAnchor, setClearComposerAnchor] = useState<
     HTMLElement | null
   >(null);
@@ -1494,8 +1458,7 @@ export function ComposerWorkspace({
     return (): void =>
       globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [clearComposerAnchor]);
-  // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
-  // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
+  // Send owns the picker anchor for pointer and keyboard activation alike.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
   const [mobileActionEdges, setMobileActionEdges] = useState({
@@ -1561,9 +1524,8 @@ export function ComposerWorkspace({
   // prompt path, which wakes it, and Clear resets a hibernated session without
   // starting a worker, so neither needs a throwaway message first.
   const agentActionsDisabled = preparing;
-  // Force-push interrupts an in-flight turn or jumps a held queue. While the
-  // session is still starting there is no turn to interrupt and the queue drains
-  // on its own the moment the agent reports Running, so ⚡ is meaningless.
+  // Delivery choices require an active turn or a held queue. Startup queues
+  // normally until the agent reports Running.
   const forceable = !preparing && (busy || starting || paused);
   // "Working" is EXACTLY the ACP turn being in flight (`busy` = a session/prompt
   // request that hasn't returned a stop_reason) — the same predicate Zed uses
@@ -1830,7 +1792,7 @@ export function ComposerWorkspace({
     text,
   );
 
-  // --- Long-press → force-push ------------------------------------------------
+  // --- Long-press → delivery picker -------------------------------------------
   const LP_MS = 450;
   function clearLongPress(): void {
     if (lpTimer.current !== undefined) {
@@ -1846,9 +1808,7 @@ export function ComposerWorkspace({
     // swallow the trailing click after the Composer reflows.
     e.preventDefault();
     if (!sendable) return;
-    // The Queue button also owns the primary action while the session starts.
-    // Force-push is off in that state (nothing to interrupt), so its long-press
-    // must not open the confirm either — the hold falls through to a plain queue.
+    // Startup has no active turn; its hold falls through to ordinary enqueue.
     if (!forceable) return;
     lpFired.current = false;
     lpStart.current = { x: e.clientX, y: e.clientY };
@@ -1877,21 +1837,6 @@ export function ComposerWorkspace({
     }
     requestDelivery();
   }
-  async function confirmForce(): Promise<void> {
-    if (interruptSubmitting.current || !interruptTarget.current || !deliverySourceCurrent()) return;
-    interruptSubmitting.current = true;
-    try {
-      const confirmation = currentTurnTracked(interruptTarget.current, false, true);
-      if (confirmation === null) return;
-      await confirmation;
-      setForceAnchor(null);
-      interruptTarget.current = null;
-      dismissAfterMobileDelivery();
-      setComposeFs(false);
-    } finally {
-      interruptSubmitting.current = false;
-    }
-  }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
   // of the queue. Only meaningful when there's already a queue to jump ahead of.
@@ -1903,7 +1848,6 @@ export function ComposerWorkspace({
       setComposeFs(false);
     }).catch(() => undefined);
   }
-  // InterruptDeliveryConfirm owns fresh Mod+Enter; bare/repeated Enter is inert.
   useEffect(() => (): void => {
     if (lpTimer.current !== undefined) globalThis.clearTimeout(lpTimer.current);
   }, []);
@@ -2645,8 +2589,7 @@ export function ComposerWorkspace({
               // Reserve a top-right gutter so no line runs under the ↗/↙ expand
               // toggle the card overlays at its top-right corner.
               endInset={desktop && column ? 0 : 36}
-              // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
-              // long-press opens, anchored to that button.
+              // Keyboard and pointer activation share the same delivery picker.
               holdToForce={false}
               onForceHold={(): void => {
                 if (!sendable || queueBtnRef.current === null) return;
@@ -2768,7 +2711,7 @@ export function ComposerWorkspace({
                   )
                   ? "Wait for attachments to finish preparing"
                   : "Write a message or attach a file first"}
-                overlayOpen={deliveryAnchor !== null || forceAnchor !== null ||
+                overlayOpen={deliveryAnchor !== null ||
                   scheduleTarget !== null}
                 onAttach={(): void => fileInputRef.current?.click()}
                 onSaveDraft={saveDraft}
@@ -3108,7 +3051,7 @@ export function ComposerWorkspace({
                     )}
                   {
                     /* Secondary actions: Draft, Schedule and Clear. Delivery
-            timing, queue position and interruption share the send picker. The narrow-phone ⋮ fold
+            timing and queue position share the send picker. The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
             out to the navbar freed the room that fold used to reclaim.
             These stay MOUNTED while the session starts — a booting agent greys
@@ -3253,9 +3196,7 @@ export function ComposerWorkspace({
         </ClickAwayListener>
       </Popper>
       {
-        /* Force-push confirm — opened by a completed long-press on Queue. Anchored
-          to the button, rising above it. Confirm interrupts the running turn and
-          runs this prompt next (skipping the queue). */
+        /* One-shot delivery actions share the same picker. */
       }
       <DeliveryPicker
         sessionId={sessionId}
@@ -3288,29 +3229,28 @@ export function ComposerWorkspace({
           setDeliveryAnchor(null);
           addToCurrentTurn(target, nextCheckpoint);
         }}
-        onInterrupt={(target): void => {
+        onSendAndPause={(): void => {
           if (!deliverySourceCurrent()) {
             closeDeliveryPicker();
             return;
           }
-          interruptTarget.current = target;
-          setForceAnchor(deliveryAnchor);
           setDeliveryAnchor(null);
+          void submitFeedback.run(async () => {
+            await pauseQueueConfirmed(sessionId);
+            // The editor may change while the pause is acknowledged.
+            if (!deliverySourceCurrent()) return;
+            const confirmation = submitTracked();
+            if (confirmation === null) return;
+            await confirmation;
+            dismissAfterMobileDelivery();
+            setComposeFs(false);
+            onSubmitted?.();
+          });
         }}
         onStop={(): void => {
           setDeliveryAnchor(null);
           setCancelOpen(true);
         }}
-      />
-      <InterruptDeliveryConfirm
-        open={forceAnchor !== null}
-        preview={deliverySource.current?.text ?? ""}
-        onClose={(): void => {
-          setForceAnchor(null);
-          interruptTarget.current = null;
-          closeDeliveryPicker();
-        }}
-        onConfirm={confirmForce}
       />
       {
         /* Inline-image actions are deliberately non-modal. MUI Popover is built on
@@ -3424,6 +3364,7 @@ export function ComposerWorkspace({
           value={text}
           onChange={setText}
           onSubmit={(): void => requestDelivery(() => setComposeFs(false))}
+          sendButtonRef={queueBtnRef}
           onSaveDraft={(): void => {
             saveDraft();
             setComposeFs(false);
@@ -4962,9 +4903,7 @@ export function PendingPanel({
 // Edit / Delete. Desktop edit mode is transactional: Mod+S saves and Esc
 // asks before discarding. The primary action depends on whether the session can take a turn
 // right now: dispatchable → a plain "Send now" (sends immediately, revives a
-// dead session); busy → a warning-coloured "Force push" that interrupts the
-// running turn and runs this prompt next — gated behind a confirm popover
-// because cancelling discards the in-flight turn's progress.
+// dead session); busy messages remain queued until the active turn ends.
 
 // Container-query breakpoint for a row's secondary actions (see PendingPanel's
 // containerName). Above this panel width the row shows every action inline; below
@@ -5118,9 +5057,6 @@ function PendingRow({
   };
   const editorRef = useRef<ComposerEditorHandle>(null);
   const rowRef = useRef<HTMLDivElement>(null);
-  const connected = useConnected();
-  // Confirm popover for force push (anchored to the Bolt button). Null = closed.
-  const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
   // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -5321,81 +5257,6 @@ function PendingRow({
     onEditDone();
     onSchedule();
   };
-  const confirmForcePush = async (): Promise<void> => {
-    // `starting` has no interruptible turn yet, and a disconnected client would
-    // drop this non-durable command. Keep the event path guarded as well as the
-    // button so keyboard/confirm callbacks cannot bypass the disabled state.
-    if (status !== "busy") return;
-    if (editing) {
-      await completePendingDelivery(() =>
-        forcePushQueued(sessionId, message.id)
-      );
-    } else {
-      await forcePushQueued(sessionId, message.id);
-    }
-    setConfirmAnchor(null);
-  };
-  useConfirmEnter(confirmAnchor !== null, () => {
-    void confirmForcePush();
-  });
-  const forcePushConfirmation = kind === "queued"
-    ? (
-      <Popper
-        open={confirmAnchor !== null}
-        anchorEl={confirmAnchor}
-        placement="bottom-end"
-        modifiers={[
-          { name: "offset", options: { offset: [0, 8] } },
-          {
-            name: "flip",
-            options: { fallbackPlacements: ["top-end", "left"] },
-          },
-          { name: "preventOverflow", options: { padding: 8 } },
-        ]}
-        sx={{ zIndex: (theme) => theme.zIndex.modal }}
-      >
-        <ClickAwayListener onClickAway={(): void => setConfirmAnchor(null)}>
-          <Paper
-            role="dialog"
-            aria-modal="false"
-            aria-label="Force push confirmation"
-            sx={{ maxWidth: 240, borderRadius: "12px", boxShadow: 8 }}
-          >
-            <Box sx={{ p: 1.5 }}>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                Stop the current turn and send this message now? The agent's
-                in-progress work is discarded.
-              </Typography>
-              <Stack direction="row" spacing={1} justifyContent="flex-end">
-                <Button
-                  size="small"
-                  color="inherit"
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onClick={(): void => setConfirmAnchor(null)}
-                  sx={{ textTransform: "none" }}
-                >
-                  Cancel
-                  <Kbd keys="Esc" />
-                </Button>
-                <NetworkButton
-                  size="small"
-                  variant="contained"
-                  color="warning"
-                  startIcon={<Bolt />}
-                  onPointerDown={(event): void => event.preventDefault()}
-                  networkAction={confirmForcePush}
-                  sx={{ textTransform: "none" }}
-                >
-                  Force push
-                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                </NetworkButton>
-              </Stack>
-            </Box>
-          </Paper>
-        </ClickAwayListener>
-      </Popper>
-    )
-    : null;
   // Mobile Queue/Draft edits own the writing surface while the keyboard is
   // up. Dismissing it must persist the live buffer, then return to the
   // compact card — never leave the two-track dock over an empty canvas.
@@ -5855,19 +5716,6 @@ function PendingRow({
                         <Schedule />
                       </MobileComposerAccessoryButton>
                     )}
-                    {kind === "queued" && (
-                      <MobileComposerAccessoryButton
-                        title="Force push"
-                        color="warning"
-                        disabled={!editSendable || status !== "busy"}
-                        onClick={(event): void => {
-                          haptic();
-                          setConfirmAnchor(event.currentTarget);
-                        }}
-                      >
-                        <Bolt />
-                      </MobileComposerAccessoryButton>
-                    )}
                     {kind === "draft" && (
                       <MobileComposerAccessoryButton
                         title="Expand editor"
@@ -5895,7 +5743,6 @@ function PendingRow({
               />
             ))}
         </Paper>
-        {forcePushConfirmation}
         {
           /* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
@@ -6071,11 +5918,10 @@ function PendingRow({
   };
 
   // Primary action — always inline. Drafts always Send (send-or-queue); a queued
-  // row Sends now when the session's free, else Force-pushes (confirm popover).
+  // row sends now only when the session is free.
   // Built as a statement to avoid a nested ternary in the JSX.
   let primary: React.JSX.Element;
-  const primaryEnabled = kind === "draft" || dispatchable ||
-    status === "busy";
+  const primaryEnabled = kind === "draft" || dispatchable;
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
@@ -6107,35 +5953,17 @@ function PendingRow({
       </Tooltip>
     );
   } else {
-    const canForcePush = status === "busy";
-    const forcePushTitle = status === "starting"
-      ? "Agent is starting — available when ready"
-      : !connected
-      ? "Force push when back online"
-      : "Force push (interrupt & send)";
     primary = (
-      <Tooltip title={forcePushTitle}>
-        {
-          /* MUI disabled buttons do not emit pointer events; the span keeps the
-            reason discoverable while the action itself remains inert. */
-        }
+      <Tooltip title="Wait for the active turn; reorder messages in Queue">
         <span>
-          <IconButton
-            data-desktop-item-action="default"
-            size="small"
-            color="warning"
-            aria-label="force push"
-            disabled={!canForcePush}
-            onClick={(e): void => {
-              if (canForcePush) setConfirmAnchor(e.currentTarget);
-            }}
-          >
-            <Bolt fontSize="small" />
+          <IconButton size="small" aria-label="send now" disabled>
+            <Send fontSize="small" />
           </IconButton>
         </span>
       </Tooltip>
     );
   }
+
   if (desktop) {
     const primaryControl = primary;
     primary = (
@@ -6233,8 +6061,6 @@ function PendingRow({
         sx={{ flexShrink: 0 }}
       >
         {primary}
-        {/* Force-push confirm — only the queued row has the force path. */}
-        {forcePushConfirmation}
         {/* Secondary actions — inline on a roomy (iPad/desktop) panel … */}
         <Stack
           direction="row"

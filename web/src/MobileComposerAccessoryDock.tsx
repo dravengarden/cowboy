@@ -1,4 +1,4 @@
-import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
+import type { MouseEventHandler, PointerEventHandler, ReactNode, Ref } from "react";
 import { Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 import {
@@ -239,6 +239,7 @@ export function MobileComposerFixedActionSlot({
 
 /** A stable 44pt accessory action whose glyph follows the global font scale. */
 export function MobileComposerAccessoryButton({
+  buttonRef,
   title,
   onClick,
   onPointerDown,
@@ -251,6 +252,7 @@ export function MobileComposerAccessoryButton({
   color = "default",
   preserveEditorFocus = true,
 }: {
+  buttonRef?: Ref<HTMLButtonElement> | undefined;
   title: string;
   onClick?: MouseEventHandler<HTMLButtonElement>;
   onPointerDown?: PointerEventHandler<HTMLButtonElement>;
@@ -281,6 +283,7 @@ export function MobileComposerAccessoryButton({
         {networkAction
           ? (
             <NetworkIconButton
+              ref={buttonRef}
               aria-label={title}
               color={color}
               disabled={disabled}
@@ -302,6 +305,7 @@ export function MobileComposerAccessoryButton({
           )
           : (
             <IconButton
+              ref={buttonRef}
               aria-label={title}
               color={color}
               disabled={disabled}

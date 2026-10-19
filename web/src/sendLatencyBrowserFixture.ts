@@ -7,7 +7,7 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase, type ProductSyncScope } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
 import { Transcript } from "./Transcript.tsx";
-import { activateDraft, addDraft, forcePushQueued, openSession, requestSendQueued, submitPrompt, useStore } from "./store.ts";
+import { activateDraft, addDraft, openSession, requestSendQueued, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
@@ -182,14 +182,14 @@ export async function run() {
         await until(() => snapshot.drafts.get(session)?.some((row) => row.text === "new working prompt" && row.status === undefined) === true, "new draft acknowledged");
         nextDraft = snapshot.drafts.get(session)!.find((row) => row.text === "new working prompt")!.id;
       }
-      const queued = scenario === "failed-recovery-queue" || scenario === "failed-recovery-force";
+      const queued = scenario === "failed-recovery-queue";
       if (queued) {
         await fetch("/fixture/seed-queue", { method: "POST" });
         await until(() => snapshot.queues.get(session)?.some((row) => row.id === "queued-new") === true, "queue source acknowledged");
       }
       let cancelled = false;
       const nextSend = (queued
-        ? scenario === "failed-recovery-force" ? forcePushQueued(session, "queued-new") : requestSendQueued(session, "queued-new")
+        ? requestSendQueued(session, "queued-new")
         : nextDraft ? activateDraft(session, nextDraft) : submitPrompt(session, "new working prompt")).catch((error) => {
         if (error.name !== "AbortError") throw error;
         cancelled = true;

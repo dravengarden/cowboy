@@ -8,6 +8,23 @@ revised after the requested Claude Fable Max review; see section 11. Sections
 and the exact native evidence. This is an external Cowboy product design, not a
 Columbus execution-kernel addition.
 
+## Current UI contract (2026-10-19 follow-up)
+
+This supersedes the earlier Interrupt UI proposal below. Delivery is an action
+menu: icons, no selected state, header or separators. It contains Steer, Next
+turn, Queue first, capability-gated Next checkpoint, and Send & pause. The last
+action confirms queue Pause before enqueueing and leaves the active turn alone;
+a failed pause cannot send or clear the draft. Cancel preserves editor selection.
+Interrupt & send, its confirmation and keyboard activation, and queued-row Force
+push are removed from Web. Independent Stop and historical server receipt
+readers remain for compatibility and reconciliation.
+
+The popup retains a valid button rectangle across keyboard animation and anchor
+replacement, so it cannot jump to the document origin. Focus still starts at the
+session default for efficient keyboard activation without rendering it selected.
+Claude's installed adapter supports native Steer (`now`) and Next checkpoint
+(`next`); Pause is Cowboy queue scheduling, independent of provider delivery.
+
 ## 1. User constraints and decisions
 
 The user wants technical terminology and complete mobile/desktop support. Idle +

@@ -5124,7 +5124,6 @@ const currentTurnTargets = new Map<
   import("./currentTurnDelivery").DeliveryTarget
 >();
 const checkpointDeliveries = new Set<string>();
-const interruptDeliveries = new Set<string>();
 const currentTurnRequests = new Set<string>();
 const currentTurnChains = new Map<string, Promise<void>>();
 
@@ -5164,7 +5163,6 @@ async function performCurrentTurn(
           content: contentOf(row.text, row.attachments),
           target,
           nextCheckpoint: checkpointDeliveries.has(id),
-          interrupt: interruptDeliveries.has(id),
         }
         : null,
     );
@@ -5199,7 +5197,6 @@ async function performCurrentTurn(
     currentTurnRequests.delete(id);
     currentTurnTargets.delete(id);
     checkpointDeliveries.delete(id);
-    interruptDeliveries.delete(id);
     commitQueue(sessionId);
   }
 }
@@ -5210,12 +5207,11 @@ export async function currentTurnPrompt(
   attachments: Attachment[] = [],
   target?: import("./currentTurnDelivery").DeliveryTarget,
   nextCheckpoint = false,
-  interrupt = false,
 ): Promise<void> {
   const session = state.sessions.find((entry) => entry.id === sessionId);
   if (
     !isConnected() || session?.status !== "busy" ||
-    (!interrupt && !session.supports_current_turn)
+    !session.supports_current_turn
   ) {
     throw new Error(
       "The current turn is unavailable. Queue this message instead.",
@@ -5226,7 +5222,6 @@ export async function currentTurnPrompt(
   const cmid = newCmid();
   currentTurnTargets.set(cmid, captured);
   if (nextCheckpoint) checkpointDeliveries.add(cmid);
-  if (interrupt) interruptDeliveries.add(cmid);
   freshCurrentTurns.add(cmid);
   try {
     // qAdd acknowledges the durable local outbox. Its retained row owns receipt
@@ -5234,13 +5229,12 @@ export async function currentTurnPrompt(
     await qAdd("queue", sessionId, text.trimEnd(), attachments, {
       cmid,
       currentTurn: true,
-      nativeDelivery: interrupt ? "interrupt" : nextCheckpoint ? "next_checkpoint" : "current_turn",
+      nativeDelivery: nextCheckpoint ? "next_checkpoint" : "current_turn",
     });
   } catch (error) {
     freshCurrentTurns.delete(cmid);
     currentTurnTargets.delete(cmid);
     checkpointDeliveries.delete(cmid);
-    interruptDeliveries.delete(cmid);
     throw error;
   }
 }
@@ -5270,26 +5264,6 @@ export function submitPrompt(
   } else {
     // → queue: an optimistic row in the queue sync state.
     return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer" });
-  }
-}
-
-/** Force-push send (the long-press affordance): when a turn is in flight, jump
- *  this prompt to the FRONT of the queue and interrupt the running turn so it
- *  runs next. On an idle session there's nothing to jump ahead of, so it's just
- *  a normal send (a chat bubble). Mirrors submitPrompt's optimistic placement. */
-export function forcePrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
-  const trimmed = text.trimEnd();
-  if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
-  const sess = state.sessions.find((s) => s.id === sessionId);
-  const dispatchable = sess !== undefined
-    && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
-  const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
-    // Idle → nothing to force ahead of; a normal optimistic chat send.
-    return optimisticMessage(sessionId, trimmed, attachments, "composer");
-  } else {
-    // Busy → optimistic FRONT row + `submit { force: true }` (interrupt + run next).
-    return qAdd("queue", sessionId, trimmed, attachments, { mode: "force", origin: "composer" });
   }
 }
 
@@ -5425,50 +5399,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   );
 }
 
-// "Force push" a queued row: interrupt the running turn and run this prompt
-// next. The daemon promotes it and cancels the in-flight turn (or just sends it
-// if the session is already idle).
-export async function forcePushQueued(sessionId: string, id: string): Promise<void> {
-  await prepareAuthoredSend(sessionId, findQueued(sessionId, id)?.cmid);
-  const row = findQueued(sessionId, id);
-  if (row === undefined) return Promise.resolve();
-  const target = queuedSendTarget(serverQueue(sessionId), row);
-  if (target.kind === "local") {
-    await qAdd("queue", sessionId, row.text, row.attachments, { mode: "force", origin: "queue", ...(row.cmid !== undefined ? { sourceCmid: row.cmid } : {}) });
-    await discardQueued(sessionId, target.cmid);
-    return;
-  }
-  const opId = newCmid();
-  const echoCmid = row.cmid ?? opId;
-  const presented: QueuedMessage = {
-    id: `opt-${opId}`,
-    text: row.text,
-    attachments: row.attachments,
-    cmid: echoCmid,
-    origin: "queue",
-  };
-  qStatus.set(opId, "committing");
-  qStatus.set(echoCmid, "committing");
-  try {
-    await mutateQueueDurably(sessionId,
-      "forceQueued",
-      { id, row: presented },
-      opId,
-    );
-  } catch (error) {
-    qStatus.delete(opId);
-    qStatus.delete(echoCmid);
-    commitQueue(sessionId);
-    throw error;
-  }
-  await waitForState(
-    (snapshot) =>
-      !(snapshot.queues.get(sessionId) ?? []).some((message) =>
-        message.id === id
-      ),
-    "Force push queued message",
-  );
-}
+
 
 // Edit a queued prompt in place — text AND attachments. Clearing both removes it
 // (handled server-side).
@@ -5538,6 +5469,16 @@ export function resetSession(sessionId: string): Promise<void> {
 // setPaused).
 export function setPaused(sessionId: string, paused: boolean): void {
   send({ type: "set_paused", session_id: sessionId, paused });
+}
+
+/** Never enqueue Send & pause until the service confirms the drain is held. */
+export async function pauseQueueConfirmed(sessionId: string): Promise<void> {
+  if (!isConnected()) throw new Error("Reconnect before sending and pausing.");
+  setPaused(sessionId, true);
+  await waitForState(
+    (snapshot) => snapshot.sessions.some((session) => session.id === sessionId && session.paused),
+    "Pause queue",
+  );
 }
 
 /** Overlay "Retry": re-run the last prompt of an errored/crashed turn. */

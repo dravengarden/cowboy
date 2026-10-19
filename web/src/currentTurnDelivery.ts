@@ -37,7 +37,6 @@ export async function deliverCurrentTurn(
     content: unknown[];
     target?: DeliveryTarget;
     nextCheckpoint?: boolean;
-    interrupt?: boolean;
   } | null,
   request: typeof fetch = fetch,
 ): Promise<CurrentTurnOutcome> {
@@ -55,9 +54,7 @@ export async function deliverCurrentTurn(
           text: payload.text,
           content: payload.content,
           target: payload.target,
-          delivery: payload.interrupt
-            ? "interrupt"
-            : payload.nextCheckpoint
+          delivery: payload.nextCheckpoint
             ? "next_checkpoint"
             : "current_turn",
           operation,

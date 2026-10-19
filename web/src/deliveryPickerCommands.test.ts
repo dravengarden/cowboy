@@ -28,7 +28,7 @@ test("picker keyboard activation excludes IME, repeats and shifted Return", () =
   assertEquals(deliveryPickerKey(key("Enter")), "activate");
   assertEquals(deliveryPickerKey(key("Enter", { metaKey: true })), "activate");
   assertEquals(deliveryPickerKey(key("Enter", { ctrlKey: true })), "activate");
-  assertEquals(deliveryPickerKey(key("Enter", { altKey: true })), "interrupt");
+  assertEquals(deliveryPickerKey(key("Enter", { altKey: true })), "consume");
 });
 
 test("scoped navigation works without the desktop leader", () => {

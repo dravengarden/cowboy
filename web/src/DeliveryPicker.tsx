@@ -5,12 +5,19 @@ import {
   useState,
 } from "react";
 import {
+  ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
   type PopoverActions,
 } from "@mui/material";
-import { Check } from "@mui/icons-material";
+import {
+  AltRoute,
+  FirstPage,
+  PauseCircleOutline,
+  Schedule,
+  SkipNext,
+} from "@mui/icons-material";
 import type { DeliveryTarget } from "./currentTurnDelivery";
 import { type DeliveryOptions, readDeliveryOptions } from "./deliveryPolicy";
 import {
@@ -28,7 +35,7 @@ export interface DeliveryPickerProps {
   onNextTurn: () => void;
   onQueueFront: () => void;
   onSteer: (target: DeliveryTarget, nextCheckpoint?: boolean) => void;
-  onInterrupt: (target: DeliveryTarget) => void;
+  onSendAndPause: () => void;
   onStop: () => void;
 }
 
@@ -40,13 +47,30 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
   const interacted = useRef(false);
   const initializedFocus = useRef(false);
   const open = props.anchor !== null;
+  const anchorRect = useRef<DOMRect | null>(null);
+  // Keyboard dismissal and busy/idle transitions can replace the real button.
+  // Retain the last visible rect instead of letting Popover fall back to body.
+  if (props.anchor?.isConnected) {
+    const rect = props.anchor.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) anchorRect.current = rect;
+  }
+  const virtualAnchor = useRef({
+    nodeType: 1 as const,
+    getBoundingClientRect: (): DOMRect => anchorRect.current ?? new DOMRect(),
+  });
   useEffect(() => {
     if (!open || !window.visualViewport) return;
     const viewport = window.visualViewport;
     let frame = 0;
     const reposition = (): void => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => position.current?.updatePosition());
+      frame = requestAnimationFrame(() => {
+        if (props.anchor?.isConnected) {
+          const rect = props.anchor.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) anchorRect.current = rect;
+        }
+        position.current?.updatePosition();
+      });
     };
     // iOS can animate the visual viewport without a window resize while the
     // software keyboard closes. Follow the send anchor without moving focus.
@@ -57,7 +81,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
       viewport.removeEventListener("resize", reposition);
       viewport.removeEventListener("scroll", reposition);
     };
-  }, [open]);
+  }, [open, props.anchor]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -108,9 +132,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     else if (id === "checkpoint" && checkpoint) props.onSteer(target, true);
     else if (id === "next") props.onNextTurn();
     else if (id === "front" && props.queueCount > 0) props.onQueueFront();
-    else if (id === "interrupt" && target && options?.controls.version) {
-      props.onInterrupt(target);
-    }
+    else if (id === "pause") props.onSendAndPause();
   };
   const commands = useRef({
     interact: (): void => {
@@ -132,7 +154,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     <Menu
       open={open}
       action={position}
-      anchorEl={props.anchor}
+      anchorEl={virtualAnchor.current}
       onClose={props.onClose}
       disableRestoreFocus
       autoFocus={false}
@@ -146,13 +168,14 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             minWidth: "max(200px, 14rem)",
             maxWidth: "calc(100vw - 24px)",
             mb: 1,
+            borderRadius: "0.875rem",
             "& .MuiMenuItem-root": {
               minHeight: 40,
               px: 1.25,
               py: 0.75,
               gap: 1,
               fontSize: "0.875rem",
-              "&.Mui-selected": { bgcolor: "transparent" },
+              borderRadius: "0.5rem",
               "&.Mui-disabled": {
                 color: "text.disabled",
                 bgcolor: "transparent",
@@ -160,6 +183,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
               },
             },
             "& .MuiListItemText-root": { my: 0 },
+            "& .MuiListItemIcon-root": { minWidth: "1.5rem", color: "inherit" },
+            "& .MuiSvgIcon-root": { fontSize: "1.125rem" },
             "& .MuiListItemText-primary": { fontSize: "inherit" },
             "& .MuiListItemText-secondary": {
               color: "inherit",
@@ -200,10 +225,12 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     >
       <MenuItem
         data-delivery-command="steer"
-        selected={preferred === "steer" && Boolean(steer)}
         disabled={!steer}
         onClick={() => choose("steer")}
       >
+        <ListItemIcon>
+          <AltRoute />
+        </ListItemIcon>
         <ListItemText
           primary={props.paused ? "Steer once" : "Steer"}
           secondary={!steer
@@ -212,28 +239,27 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             ? "Queue stays paused"
             : undefined}
         />
-        {preferred === "steer" && steer && (
-          <Check color="primary" sx={{ fontSize: "1rem" }} />
-        )}
       </MenuItem>
       <MenuItem
         data-delivery-command="next"
-        selected={preferred === "next"}
         onClick={() => choose("next")}
       >
+        <ListItemIcon>
+          <Schedule />
+        </ListItemIcon>
         <ListItemText
           primary="Next turn"
           secondary={props.paused ? "Queue stays paused" : undefined}
         />
-        {preferred === "next" && (
-          <Check color="primary" sx={{ fontSize: "1rem" }} />
-        )}
       </MenuItem>
       <MenuItem
         data-delivery-command="front"
         disabled={props.queueCount === 0}
         onClick={() => choose("front")}
       >
+        <ListItemIcon>
+          <FirstPage sx={{ transform: "rotate(90deg)" }} />
+        </ListItemIcon>
         <ListItemText
           primary="Queue first"
           secondary={props.queueCount === 0
@@ -247,10 +273,12 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
         options?.policy.mode === "tool_boundary") && (
         <MenuItem
           data-delivery-command="checkpoint"
-          selected={preferred === "checkpoint" && Boolean(checkpoint)}
           disabled={!checkpoint}
           onClick={() => choose("checkpoint")}
         >
+          <ListItemIcon>
+            <SkipNext />
+          </ListItemIcon>
           <ListItemText
             primary={props.paused
               ? "Next checkpoint · once"
@@ -261,11 +289,17 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
               ? "Queue stays paused"
               : undefined}
           />
-          {preferred === "checkpoint" && checkpoint && (
-            <Check color="primary" sx={{ fontSize: "1rem" }} />
-          )}
         </MenuItem>
       )}
+      <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
+        <ListItemIcon>
+          <PauseCircleOutline />
+        </ListItemIcon>
+        <ListItemText
+          primary="Send & pause"
+          secondary="Enqueue · current turn continues"
+        />
+      </MenuItem>
     </Menu>
   );
 }
