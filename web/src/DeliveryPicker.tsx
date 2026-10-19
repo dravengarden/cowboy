@@ -5,14 +5,12 @@ import {
   useState,
 } from "react";
 import {
-  Box,
-  Divider,
   ListItemText,
   Menu,
   MenuItem,
   type PopoverActions,
-  Typography,
 } from "@mui/material";
+import { Check } from "@mui/icons-material";
 import type { DeliveryTarget } from "./currentTurnDelivery";
 import { type DeliveryOptions, readDeliveryOptions } from "./deliveryPolicy";
 import {
@@ -32,7 +30,6 @@ export interface DeliveryPickerProps {
   onSteer: (target: DeliveryTarget, nextCheckpoint?: boolean) => void;
   onInterrupt: (target: DeliveryTarget) => void;
   onStop: () => void;
-  onPause: () => void;
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
@@ -80,6 +77,15 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
   const target = props.busy ? options?.target : null;
   const steer = target && options?.steer;
   const checkpoint = target && options?.controls.next_checkpoint;
+  const unavailable = error
+    ? "Runtime unavailable"
+    : !options
+    ? "Checking runtime…"
+    : !props.busy
+    ? "No active turn"
+    : !options.steer
+    ? "Not supported by this worker"
+    : "Active turn unavailable";
   const mode = options?.policy.mode ?? "steer";
   const preferred = mode === "tool_boundary"
     ? "checkpoint"
@@ -102,7 +108,6 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     else if (id === "checkpoint" && checkpoint) props.onSteer(target, true);
     else if (id === "next") props.onNextTurn();
     else if (id === "front" && props.queueCount > 0) props.onQueueFront();
-    else if (id === "pause") props.onPause();
     else if (id === "interrupt" && target && options?.controls.version) {
       props.onInterrupt(target);
     }
@@ -135,8 +140,37 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
       anchorOrigin={{ vertical: "top", horizontal: "right" }}
       transformOrigin={{ vertical: "bottom", horizontal: "right" }}
       slotProps={{
-        paper: { sx: { width: 320, maxWidth: "calc(100vw - 24px)", mb: 1 } },
+        paper: {
+          sx: {
+            width: "max-content",
+            minWidth: "max(200px, 14rem)",
+            maxWidth: "calc(100vw - 24px)",
+            mb: 1,
+            "& .MuiMenuItem-root": {
+              minHeight: 40,
+              px: 1.25,
+              py: 0.75,
+              gap: 1,
+              fontSize: "0.875rem",
+              "&.Mui-selected": { bgcolor: "transparent" },
+              "&.Mui-disabled": {
+                color: "text.disabled",
+                bgcolor: "transparent",
+                opacity: 1,
+              },
+            },
+            "& .MuiListItemText-root": { my: 0 },
+            "& .MuiListItemText-primary": { fontSize: "inherit" },
+            "& .MuiListItemText-secondary": {
+              color: "inherit",
+              fontSize: "0.75rem",
+              lineHeight: 1.4,
+              whiteSpace: "normal",
+            },
+          },
+        },
         list: {
+          sx: { p: 0.5 },
           ref: (element: HTMLUListElement | null): void => {
             list.current = element;
             if (element) {
@@ -149,6 +183,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           },
           tabIndex: -1,
           "aria-label": "Choose delivery",
+          "aria-busy": !options && !error,
           disabledItemsFocusable: true,
           onKeyDownCapture: (
             event: ReactKeyboardEvent<HTMLUListElement>,
@@ -163,29 +198,23 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
         },
       }}
     >
-      <Box sx={{ px: 2, py: 0.75 }}>
-        <Typography variant="subtitle2">Send this message</Typography>
-        <Typography variant="caption" color="text.secondary" aria-live="polite">
-          {error ?? (!options
-            ? "Checking active turn…"
-            : !target
-            ? "Active turn unavailable"
-            : (preferred === "checkpoint" && !checkpoint) ||
-                (preferred === "steer" && !steer)
-            ? "Default mode unavailable · choose another mode"
-            : "Choose delivery timing")}
-        </Typography>
-      </Box>
       <MenuItem
         data-delivery-command="steer"
-        selected={preferred === "steer"}
+        selected={preferred === "steer" && Boolean(steer)}
         disabled={!steer}
         onClick={() => choose("steer")}
       >
         <ListItemText
           primary={props.paused ? "Steer once" : "Steer"}
-          secondary="Native delivery into the captured active turn"
+          secondary={!steer
+            ? unavailable
+            : props.paused
+            ? "Queue stays paused"
+            : undefined}
         />
+        {preferred === "steer" && steer && (
+          <Check color="primary" sx={{ fontSize: "1rem" }} />
+        )}
       </MenuItem>
       <MenuItem
         data-delivery-command="next"
@@ -194,12 +223,11 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
       >
         <ListItemText
           primary="Next turn"
-          secondary={props.paused
-            ? "Enqueue · queue remains paused"
-            : props.queueCount > 0
-            ? "Append after queued messages"
-            : "Run after the active turn"}
+          secondary={props.paused ? "Queue stays paused" : undefined}
         />
+        {preferred === "next" && (
+          <Check color="primary" sx={{ fontSize: "1rem" }} />
+        )}
       </MenuItem>
       <MenuItem
         data-delivery-command="front"
@@ -209,17 +237,17 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
         <ListItemText
           primary="Queue first"
           secondary={props.queueCount === 0
-            ? "No queued messages to move ahead of"
+            ? "No queued messages"
             : props.paused
-            ? "Ahead of queued messages · queue remains paused"
-            : "Ahead of queued messages · current turn continues"}
+            ? "Queue stays paused"
+            : undefined}
         />
       </MenuItem>
       {(options?.controls.next_checkpoint ||
         options?.policy.mode === "tool_boundary") && (
         <MenuItem
           data-delivery-command="checkpoint"
-          selected={preferred === "checkpoint"}
+          selected={preferred === "checkpoint" && Boolean(checkpoint)}
           disabled={!checkpoint}
           onClick={() => choose("checkpoint")}
         >
@@ -227,29 +255,17 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             primary={props.paused
               ? "Next checkpoint · once"
               : "Next checkpoint"}
-            secondary="After foreground tools finish; otherwise after generation"
+            secondary={!checkpoint
+              ? "Not available on this worker"
+              : props.paused
+              ? "Queue stays paused"
+              : undefined}
           />
+          {preferred === "checkpoint" && checkpoint && (
+            <Check color="primary" sx={{ fontSize: "1rem" }} />
+          )}
         </MenuItem>
       )}
-      <Divider />
-      <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
-        <ListItemText
-          primary={props.paused ? "Resume queue" : "Pause queue"}
-          secondary={`${props.queueCount} queued · current turn continues`}
-        />
-      </MenuItem>
-      <Divider />
-      <MenuItem
-        data-delivery-command="interrupt"
-        disabled={!target || !options?.controls.version}
-        onClick={() => choose("interrupt")}
-        sx={{ color: "warning.main" }}
-      >
-        <ListItemText
-          primary="Interrupt & send…"
-          secondary="Replace the active turn; retain other queued messages"
-        />
-      </MenuItem>
     </Menu>
   );
 }

@@ -543,6 +543,15 @@ Unconfigured sessions default to Steer. Saved explicit delivery preferences
 remain authoritative; this does not change the legacy API's omitted-delivery
 next-turn behavior or silently bypass the running-session picker.
 
+The compact popup follow-up removes its title, dividers and the visible
+Pause/Interrupt rows. It shows only delivery choices and Queue first; Queue
+still owns Pause, and the existing Alt/Option+Enter interrupt confirmation is
+retained. Available defaults use a checkmark rather than a large selected
+panel. Loading, unsupported or expired Steer is disabled without selected
+styling and states its reason. A disposable full-Composer touch test verifies
+one Steer activation closes the popup and emits exactly one `current_turn`
+request; this is browser evidence, not physical iPhone acceptance.
+
 This refinement activated Controller and Web source
 `76a6e44babcb31770b8c59145878d8a042cb19a4`, with service worker
 `cowboy-v2020`. The live MCP read of an unconfigured session changed from

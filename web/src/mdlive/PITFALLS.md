@@ -3292,6 +3292,11 @@ slot. A nonempty queue opens this picker even while idle, so reordering remains
 reachable without disturbing direct Send for an idle, empty queue. It uses the
 existing durable front submission, retains Pause and checks captured editor
 ownership before submission. Desktop retains its explicit Queue-first shortcut.
+The compact delivery menu has no title or dividers and omits Pause/Interrupt
+rows. Queue still owns Pause; Alt/Option+Enter retains interrupt confirmation.
+Only an available default receives the checkmark. Loading, unsupported or
+expired Steer is disabled, unselected and names its reason; native capability
+admission must never be bypassed to make a row look interactive.
 This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or

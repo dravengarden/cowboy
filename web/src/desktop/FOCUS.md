@@ -875,7 +875,9 @@ editor scrollport. Container queries use the Prompt's actual width and the root
 font size to disclose quick formatting and labels; the formatting menu retains
 all commands. Send stays labelled at the right edge and becomes Send… while
 busy or when the queue has pending messages, opening the unified picker.
-Steer, Queue first and Interrupt are picker choices; the existing Queue-first
+Steer, Next turn and Queue first are picker choices. The popup has no title,
+dividers or queue-management/interrupt rows. Pause lives in Queue; the existing
+Interrupt shortcut still opens its explicit confirmation. The Queue-first
 keyboard command remains available. Draft and Schedule remain direct controls and may wrap when
 space is limited. Empty, preparing, busy, paused, disconnected, pending-submit
 and resumed states change labels/availability without replacing the editor.

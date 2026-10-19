@@ -17,8 +17,13 @@ export async function checkDeliveryPicker(): Promise<string> {
   let setBusy!: (busy: boolean) => void;
   let setQueued!: (count: number) => void;
   let setPaused!: (paused: boolean) => void;
-  globalThis.fetch = async () =>
-    Response.json({
+  let finishFirstRead!: () => void;
+  let reads = 0;
+  globalThis.fetch = async () => {
+    if (reads++ === 0) {
+      await new Promise<void>((resolve) => finishFirstRead = resolve);
+    }
+    return Response.json({
       target: { worker_epoch: "worker-1", turn_id: "turn-1" },
       steer: true,
       controls: { version: 1, next_checkpoint: true },
@@ -27,6 +32,7 @@ export async function checkDeliveryPicker(): Promise<string> {
       hold: null,
       policy: { mode: "steer", revision: 0 },
     });
+  };
   function Harness() {
     const [anchor, setAnchor] = useState<HTMLElement | null>(null);
     const [busy, updateBusy] = useState(true);
@@ -62,7 +68,6 @@ export async function checkDeliveryPicker(): Promise<string> {
             setAnchor(null);
             setConfirm(true);
           }}
-          onPause={() => calls.push("pause")}
           onStop={() => calls.push("stop")}
         />
         <InterruptDeliveryConfirm
@@ -95,11 +100,9 @@ export async function checkDeliveryPicker(): Promise<string> {
   const ready = (): boolean =>
     document.activeElement?.getAttribute("data-delivery-command") === "steer" &&
     document.activeElement.getAttribute("aria-disabled") !== "true" &&
-    Boolean(
-      document.activeElement.closest('[role="menu"]')?.textContent?.includes(
-        "Choose delivery timing",
-      ),
-    );
+    document.activeElement.closest('[role="menu"]')?.getAttribute(
+        "aria-busy",
+      ) === "false";
   try {
     flushSync(() =>
       root.render(
@@ -113,6 +116,36 @@ export async function checkDeliveryPicker(): Promise<string> {
       )
     );
     flushSync(() => host.querySelector("button")!.click());
+    const initialSteer = document.querySelector<HTMLElement>(
+      '[data-delivery-command="steer"]',
+    )!;
+    check(
+      initialSteer.getAttribute("aria-disabled") === "true",
+      "Steer is disabled during capability discovery",
+    );
+    check(
+      !initialSteer.classList.contains("Mui-selected"),
+      "An unavailable default never looks selected",
+    );
+    check(
+      getComputedStyle(initialSteer).color !== getComputedStyle(
+        document.querySelector<HTMLElement>('[data-delivery-command="next"]')!,
+      ).color,
+      "Unavailable Steer is visually distinct from actionable rows",
+    );
+    initialSteer.click();
+    check(calls.length === 0, "Loading Steer cannot submit a message");
+    check(
+      initialSteer.textContent?.includes("Checking runtime"),
+      "A disabled Steer explains why",
+    );
+    check(
+      !document.querySelector(
+        '[data-delivery-command="pause"], [data-delivery-command="interrupt"]',
+      ),
+      "Delivery menu omits queue-management and interrupt rows",
+    );
+    finishFirstRead();
     for (let attempt = 0; attempt < 50 && !ready(); attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -130,6 +163,10 @@ export async function checkDeliveryPicker(): Promise<string> {
     );
     const before = calls.length;
     flushSync(() => setBusy(false));
+    check(
+      !initialSteer.classList.contains("Mui-selected"),
+      "An expired Steer loses its selected appearance",
+    );
     key("Enter");
     check(
       calls.length === before,
@@ -159,7 +196,7 @@ export async function checkDeliveryPicker(): Promise<string> {
       "Keyboard chooses queue first without an active turn",
     );
     check(
-      front.textContent?.includes("queue remains paused"),
+      front.textContent?.includes("Queue stays paused"),
       "Queue first preserves Pause",
     );
     flushSync(() => setQueued(0));

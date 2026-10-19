@@ -3297,7 +3297,6 @@ export function ComposerWorkspace({
           setForceAnchor(deliveryAnchor);
           setDeliveryAnchor(null);
         }}
-        onPause={(): void => setPaused(sessionId, !paused)}
         onStop={(): void => {
           setDeliveryAnchor(null);
           setCancelOpen(true);
