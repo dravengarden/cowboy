@@ -7,6 +7,8 @@ import { ToolDetailsBrowser } from "./Transcript";
 import { derive, type RenderItem } from "./derive";
 import { toolRuns } from "./tools/runs";
 import { ToolBody } from "./tools/registry";
+import { CodeView } from "./tools/blocks";
+import { Markdown } from "./Markdown";
 
 // 1x1 opaque PNG.
 const PNG =
@@ -152,6 +154,22 @@ export async function runToolInspectorBrowserConformance(
   items.push(mcp("external-record", "other-server", "get", { id: "document" }, {
     structuredContent: {
       title: "External document", body: "Document body", id: "document", revision: 3,
+    },
+  }));
+  items.push(mcp("long-result", "cowboy", "cowboy_read", {
+    code: "return await cowboy.session.history({kinds:['tool'],limit:20});",
+  }, {
+    structuredContent: {
+      status: "completed",
+      saved: {
+        matches: Array.from({ length: 40 }, (_, seq) => ({
+          seq,
+          path: "/update/content/0/value/result/content/0/text",
+          text: `Recorded tool result ${seq}`,
+        })),
+        scanned: 64,
+        source: "durable",
+      },
     },
   }));
   const runs = toolRuns(items);
@@ -359,7 +377,94 @@ export async function runToolInspectorBrowserConformance(
       flushSync(() => fixtureRoot.unmount());
       fixture.remove();
     }
-    if (keepFixture) await show("memory", window.innerWidth >= 1000);
+    flushSync(() => root.render(null));
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => { copied = text; } },
+    });
+    try {
+      for (const width of [320, 390, 768, 1100].filter((value) => value <= window.innerWidth)) {
+        for (const renderer of ["highlighted", "lightweight", "markdown"] as const) {
+          const lines = renderer === "highlighted" ? 80 : 1300;
+          const code = Array.from({ length: lines }, (_, index) =>
+            `const value${index} = "exact source ${index}";`
+          ).join("\n");
+          const fixture = document.createElement("div");
+          Object.assign(fixture.style, {
+            position: "fixed", top: "0", left: "0", zIndex: "2000",
+            width: `${width}px`, height: "360px", overflow: "auto",
+          });
+          container.append(fixture);
+          const fixtureRoot = createRoot(fixture);
+          try {
+            flushSync(() => fixtureRoot.render(
+              <BrowserProductTheme>
+                <CssBaseline />
+                {renderer === "markdown"
+                  ? <Markdown text={"```typescript\n" + code + "\n```"} />
+                  : <CodeView code={code} lang="typescript" maxHeight={120} />}
+              </BrowserProductTheme>,
+            ));
+            await wait(250);
+            const expand = fixture.querySelector<HTMLButtonElement>("button[aria-expanded='false']");
+            check(expand, "long code has no expand action");
+            expand.focus();
+            expand.click();
+            await wait(100);
+            const toolbar = fixture.querySelector<HTMLElement>("[data-fold-toolbar]")!;
+            const copy = toolbar.querySelector<HTMLButtonElement>("[aria-label='Copy code']")!;
+            const collapse = toolbar.querySelector<HTMLButtonElement>("[aria-label='Collapse content']")!;
+            check(copy && collapse, "expanded code lost copy or collapse");
+            check(document.activeElement === collapse, "expansion lost keyboard focus");
+            const separated = (): void => {
+              const a = copy.getBoundingClientRect();
+              const b = collapse.getBoundingClientRect();
+              check(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top,
+                "copy and collapse hit targets overlap");
+              for (const button of [copy, collapse]) {
+                const box = button.getBoundingClientRect();
+                if (matchMedia("(pointer: coarse)").matches) {
+                  check(box.width >= 44 && box.height >= 44, "code toolbar has an undersized touch target");
+                }
+                check(button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)),
+                  "code toolbar action is covered by another element");
+              }
+              check(fixture.scrollWidth <= width + 1, "code toolbar widens the pane");
+            };
+            separated();
+            check(toolbar.getBoundingClientRect().bottom <= fixture.querySelector("pre")!.getBoundingClientRect().top + 1,
+              "code toolbar covers the first line");
+            fixture.scrollTop = 200;
+            await wait(100);
+            separated();
+            check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top) < 2,
+              "expanded code toolbar did not stay reachable while scrolling");
+            copy.click();
+            await wait(50);
+            check(copied === code, "copy lost exact highlighted or lightweight source");
+            separated();
+            check(collapse.isConnected, "copy accidentally collapsed the code");
+            collapse.focus();
+            collapse.click();
+            await wait(100);
+            check(!fixture.querySelector("[aria-label='Collapse content']") &&
+              fixture.querySelector("button[aria-expanded='false']"),
+              "collapse did not restore the compact preview");
+            check(document.activeElement === fixture.querySelector("button[aria-expanded='false']"),
+              "collapse lost keyboard focus");
+          } finally {
+            flushSync(() => fixtureRoot.unmount());
+            fixture.remove();
+          }
+        }
+      }
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+    if (keepFixture) await show("long-result", window.innerWidth >= 1000);
     return [
       "long history descriptions ellipsize without panning the rail",
       "an image Read shows its image",
@@ -372,6 +477,7 @@ export async function runToolInspectorBrowserConformance(
       "transport errors remain visible",
       "other MCP servers retain their own search and document semantics",
       "phone, tablet and desktop MCP frames stay within their pane",
+      "highlighted and large code controls stay separate, sticky and independently operable",
     ];
   } finally {
     if (!keepFixture) {

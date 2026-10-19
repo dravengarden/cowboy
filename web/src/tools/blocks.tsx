@@ -142,7 +142,6 @@ export function CodeView({
   code,
   lang,
   maxHeight,
-  centerCopy = false,
   tokenSafeWrap = false,
   wrapControl = true,
   hideCopy = false,
@@ -151,7 +150,6 @@ export function CodeView({
   code: string;
   lang?: string;
   maxHeight?: number;
-  centerCopy?: boolean;
   touchWrap?: boolean;
   tokenSafeWrap?: boolean;
   wrapControl?: boolean;
@@ -204,54 +202,48 @@ export function CodeView({
             },
           }),
         }),
-        ...(hideCopy && { "& .cowboy-copy-btn": { display: "none" } }),
+        // CodeView owns one copy action in its toolbar. Suppress the Markdown
+        // fence's floating copy action so no independent overlay competes with
+        // the fold control or obscures code.
+        "& .cowboy-copy-btn": { display: "none" },
       }}
     >
-      {wrapControl && (
-        <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
-          <LineLayoutControl wrapped={wrapped} onChange={setLocalWrapped} label="Code line layout" />
-        </Stack>
-      )}
-      {lightweight
-        ? (
-          <Box sx={{ position: "relative", "&:hover .cowboy-copy-btn": { opacity: 1 } }}>
-            <Collapsible
-              maxHeight={maxHeight ?? 280}
-              forceOverflow
-              collapsedChildren={
-                <Box component="pre" data-code-renderer="lightweight-preview" sx={lightweightSx}>
-                  {previewCodeForRendering(code)}
-                </Box>
-              }
-            >
-              <Box component="pre" data-code-renderer="lightweight" sx={lightweightSx}>
-                {chunkCodeForRendering(code).map((chunk, index) => (
-                  <Box
-                    component="span"
-                    key={index}
-                    sx={{ display: "block", contentVisibility: "auto", containIntrinsicSize: "auto 1920px" }}
-                  >
-                    {chunk}
-                  </Box>
-                ))}
-              </Box>
-            </Collapsible>
-            {!hideCopy && (
-              <Box className="cowboy-copy-btn" sx={{ position: "absolute", top: 2, right: 4 }}>
-                <CopyTextButton text={code} label="Code" />
-              </Box>
-            )}
+      <Collapsible
+        maxHeight={maxHeight ?? 280}
+        forceOverflow={lightweight}
+        toolbar={wrapControl || !hideCopy
+          ? <>
+            {wrapControl && <LineLayoutControl wrapped={wrapped} onChange={setLocalWrapped} label="Code line layout" />}
+            {!hideCopy && <CopyTextButton text={code} label="Code" />}
+          </>
+          : undefined}
+        collapsedChildren={lightweight
+          ? <Box component="pre" data-code-renderer="lightweight-preview" sx={lightweightSx}>
+            {previewCodeForRendering(code)}
           </Box>
-        )
-        : (
-          <Collapsible maxHeight={maxHeight ?? 280}>
+          : undefined}
+      >
+        {lightweight
+          ? (
+            <Box component="pre" data-code-renderer="lightweight" sx={lightweightSx}>
+              {chunkCodeForRendering(code).map((chunk, index) => (
+                <Box
+                  component="span"
+                  key={index}
+                  sx={{ display: "block", contentVisibility: "auto", containIntrinsicSize: "auto 1920px" }}
+                >
+                  {chunk}
+                </Box>
+              ))}
+            </Box>
+          )
+          : (
             <Markdown
               text={"```" + (lang ?? "") + "\n" + code + "\n```"}
-              centerCopy={centerCopy}
               touchWrap={false}
             />
-          </Collapsible>
-        )}
+          )}
+      </Collapsible>
     </Box>
   );
 }

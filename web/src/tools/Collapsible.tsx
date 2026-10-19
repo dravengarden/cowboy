@@ -6,7 +6,9 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 // A reusable fold for any potentially-long tool content (command output, a read
 // file, a diff, raw JSON). It clips to `maxHeight` when collapsed, with a bottom
 // fade into the card surface so it reads as "there's more below", and a single
-// edge toggle. The toggle + fade only appear when the content actually overflows
+// edge toggle. Expanded controls share a sticky row above the content, so they
+// never compete with copy controls or cover the first line. The toggle + fade
+// only appear when the content actually overflows
 // (measured) — short output stays plain with no chrome. This is the "不拥挤"
 // mechanism: every block defaults compact, the user opens only what they want.
 
@@ -15,6 +17,7 @@ export function Collapsible({
   collapsedChildren,
   forceOverflow = false,
   maxHeight = 280,
+  toolbar,
   // The surface the fade blends into — the tool body is `background.paper`, so
   // the gradient ends opaque on exactly that colour (no visible seam).
   startOpen = false,
@@ -23,6 +26,7 @@ export function Collapsible({
   collapsedChildren?: ReactNode;
   forceOverflow?: boolean;
   maxHeight?: number;
+  toolbar?: ReactNode;
   startOpen?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
@@ -30,6 +34,7 @@ export function Collapsible({
   const [overflows, setOverflows] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
 
   // Measure whether the content exceeds the clamp, so the toggle/fade only show
   // when there's genuinely hidden content. Re-measure on resize (highlighter
@@ -48,20 +53,20 @@ export function Collapsible({
   const paper = theme.palette.background.paper;
 
   const toggle = (): void => {
-    if (!open) {
-      setOpen(true);
-      return;
-    }
-
-    setOpen(false);
+    const keepFocus = document.activeElement === toggleRef.current;
+    setOpen(!open);
     // A sticky collapse control can be activated halfway through a very long
     // block. Once the block contracts, return its beginning to the viewport so
     // the user keeps their place instead of landing below the collapsed card.
-    requestAnimationFrame(() => rootRef.current?.scrollIntoView({ block: "nearest" }));
+    requestAnimationFrame(() => {
+      if (keepFocus) toggleRef.current?.focus({ preventScroll: true });
+      if (open) rootRef.current?.scrollIntoView({ block: "nearest" });
+    });
   };
 
   const expandButton = (): React.JSX.Element => (
     <ButtonBase
+      ref={toggleRef}
       aria-expanded={false}
       onClick={toggle}
       sx={{
@@ -82,47 +87,43 @@ export function Collapsible({
   );
 
   return (
-    <Box ref={rootRef} sx={{ position: "relative" }}>
-      {overflows && open && (
-        // Keep collapse reachable without laying a large labelled pill over the
-        // code. The target stays 44px; only quiet circular chrome is visible.
+    <Box ref={rootRef} sx={{ position: "relative", isolation: "isolate" }}>
+      {(toolbar || (overflows && open)) && (
         <Box
+          data-fold-toolbar
           sx={{
-            position: "sticky",
-            top: 6,
+            position: overflows && open ? "sticky" : "relative",
+            top: 0,
             zIndex: 3,
-            height: 0,
             display: "flex",
+            alignItems: "center",
             justifyContent: "flex-end",
-            pointerEvents: "none",
-            pr: 0.5,
+            flexWrap: "wrap",
+            gap: 0.5,
+            py: 0.25,
+            minWidth: 0,
+            borderRadius: 1,
+            backgroundColor: paper,
           }}
         >
-          <IconButton
-            aria-label="Collapse content"
-            aria-expanded={true}
-            onClick={toggle}
-            sx={{
-              pointerEvents: "auto",
-              width: 44,
-              height: 44,
-              color: "text.secondary",
-              backgroundColor: "transparent",
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                inset: 6,
-                borderRadius: "50%",
-                backgroundColor: alpha(paper, 0.88),
-                backdropFilter: "blur(10px)",
-                border: `1px solid ${alpha(theme.palette.text.secondary, 0.14)}`,
-                boxShadow: `0 1px 4px ${alpha(theme.palette.common.black, 0.09)}`,
-              },
-              "&:hover": { backgroundColor: "transparent", color: "primary.main" },
-            }}
-          >
-            <ExpandLessRounded sx={{ position: "relative", fontSize: "1.125rem" }} />
-          </IconButton>
+          {toolbar}
+          {overflows && open && (
+            <IconButton
+              ref={toggleRef}
+              aria-label="Collapse content"
+              aria-expanded={true}
+              onClick={toggle}
+              sx={{
+                flexShrink: 0,
+                width: 44,
+                height: 44,
+                color: "text.secondary",
+                "&:hover": { color: "primary.main" },
+              }}
+            >
+              <ExpandLessRounded sx={{ fontSize: "1.125rem" }} />
+            </IconButton>
+          )}
         </Box>
       )}
       <Box
