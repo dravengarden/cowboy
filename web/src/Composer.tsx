@@ -443,10 +443,17 @@ const MOBILE_SEND_BTN = {
   height: "2.5rem",
   minWidth: 40,
   minHeight: 40,
+  position: "relative",
   p: 0,
-  gap: "0.125rem",
   "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-  "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: "0.875rem" },
+  "& [data-delivery-chevron]": {
+    position: "absolute",
+    right: 0,
+    top: "50%",
+    transform: "translateY(-50%)",
+    fontSize: "0.625rem",
+    pointerEvents: "none",
+  },
 } as const;
 // Why an agent-backed toolbar action is greyed out while the session boots. The
 // button keeps its slot (no reflow on the ready edge); this explains the state
@@ -3036,7 +3043,7 @@ export function ComposerWorkspace({
                             ? <CircularProgress size="1.125rem" color="inherit" />
                             : <>
                               <Send fontSize="inherit" />
-                              {busy && <ExpandMore fontSize="inherit" />}
+                              {busy && <ExpandMore data-delivery-chevron fontSize="inherit" />}
                             </>}
                         </IconButton>
                         {holding && (
