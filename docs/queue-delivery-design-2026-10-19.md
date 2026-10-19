@@ -543,6 +543,20 @@ Unconfigured sessions default to Steer. Saved explicit delivery preferences
 remain authoritative; this does not change the legacy API's omitted-delivery
 next-turn behavior or silently bypass the running-session picker.
 
+This refinement activated Controller and Web source
+`76a6e44babcb31770b8c59145878d8a042cb19a4`, with service worker
+`cowboy-v2020`. The live MCP read of an unconfigured session changed from
+`next_turn, revision: 0` to `steer, revision: 0`. Both component transactions
+committed; public health and all four connected Machines were healthy.
+Acceptance includes 2,303 frontend tests, the three send-intent Rust tests,
+Firefox/Chromium in both themes and trusted Chrome keyboard/shortcut checks.
+The picker regression covers Queue first on an idle paused queue and refusal
+after that queue drains. Evidence is retained under
+`/srv/storage/fast0/agent/tmp/`: `queue-first-postflight.json`,
+`queue-first-browser-gate2.log`, `queue-first-desktop-acceptance2/`,
+`queue-first-release-gate.log`, and `queue-first-steer-gate.log` (the Rust result
+passed; its earlier frontend failure is superseded by the final release gate).
+
 Controller and Hawk/Falcon/OVH Machine hosts activated clean source
 `58eb2128fa37ea05667643d3cfab631bf90acc4f`. Linux hosts select the accepted
 `worker-13566979dce45f73d545`; Hawk preserves its schema-one deletion writer
