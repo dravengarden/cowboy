@@ -831,6 +831,7 @@ function CallConversation({
           <CallTranscript
             sessionId={call.child_session_id}
             provider={call.provider}
+            settled={!callActive(call.state)}
             bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
             desktop={desktop}
           />

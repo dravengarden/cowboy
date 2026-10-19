@@ -16,15 +16,19 @@ export function CallTranscript({
   provider,
   bottomInset,
   desktop = false,
+  settled = false,
 }: {
   sessionId: string;
   provider: string;
+  /** Completion can arrive through call polling after transcript events were missed. */
+  settled?: boolean;
   /** Desktop reads like a document: short content starts at the top. */
   desktop?: boolean;
   /** Clearance for a floating footer the newest message passes under. */
   bottomInset?: string;
 }): React.JSX.Element {
-  useEffect(() => peekSession(sessionId), [sessionId]);
+  // Reconcile again on completion, including an in-flight pre-completion tail.
+  useEffect(() => peekSession(sessionId), [sessionId, settled]);
   const timeline = useStoreSelector((snapshot) =>
     snapshot.timelines.get(sessionId)
   );

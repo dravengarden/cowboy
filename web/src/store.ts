@@ -441,20 +441,22 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
 // never revive the agent or change which session is opened.
 const peekedSessions = new Map<string, number>();
 
-function ensurePeeked(sessionId: string): void {
+function ensurePeeked(sessionId: string, refresh = false): void {
   if (productSessionAbandoned || sessionId === openedSessionId) return;
   prefetch.cancel(sessionId);
   touchTranscriptSession(sessionId);
-  if (!state.hydrated.has(sessionId) && !sessionHydrations.has(sessionId)) {
-    void restoreReplicaTail(sessionId);
-    void hydrateSession(sessionId);
+  if (refresh || (!state.hydrated.has(sessionId) && !sessionHydrations.has(sessionId))) {
+    if (!state.hydrated.has(sessionId)) void restoreReplicaTail(sessionId);
+    void hydrateSession(sessionId, refresh);
   }
 }
 
 /** Keep one session's transcript loaded and live until the returned release. */
 export function peekSession(sessionId: string): () => void {
   peekedSessions.set(sessionId, (peekedSessions.get(sessionId) ?? 0) + 1);
-  ensurePeeked(sessionId);
+  // A cached conversation may have missed output while the socket was away.
+  // Keep painting it, but reconcile every new view with the canonical tail.
+  ensurePeeked(sessionId, true);
   let released = false;
   return (): void => {
     if (released) return;
@@ -2472,6 +2474,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
       send({ type: "open_session", session_id: openedSessionId });
       void hydrateSession(openedSessionId, true);
     }
+    for (const peeked of peekedSessions.keys()) ensurePeeked(peeked, true);
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
     // Behind the replay, not instead of it: a row the replay could not carry
