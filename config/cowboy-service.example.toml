@@ -3,6 +3,22 @@
 # Validate edits with `cowboy config check --scope service`; see docs/configuration.md.
 schema = 1
 
+[accounts]
+# Allow new named Claude sessions with an admitted native login.
+# Does not start logins or bypass Machine, release, identity or runtime checks.
+# Disabling refuses new creation; existing sessions keep their lifecycle checks.
+# boolean (true or false); applies live.
+# native_claude_sessions = false
+# Allow explicit named Claude native logins on account-aware Machines.
+# Does not enable named session creation, copy credentials, or start a login.
+# Disabling refuses new logins; existing receipt recovery and cleanup remain available.
+# boolean (true or false); applies live.
+# native_claude_login = false
+# Delay between bounded recovery pages of existing account revocation intents.
+# Does not start login, probe Providers, or declare upstream logout complete.
+# duration string such as "6h", from 30s to 1d; applies live.
+# revocation_retry_interval = "1m"
+
 [plugins]
 # How often the Controller asks every connected Device to retire Plugin
 # generations that no open, hibernated or unpurged session pins.

@@ -115,6 +115,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
         provider: "codex".to_owned(),
         provider_version: String::new(),
         provider_generation_digest: String::new(),
+        provider_account_id: crate::provider_account::ProviderAccountId::default(),
         provider_auth_generation: None,
         provider_behavior: None,
         machine_id: "local".to_owned(),

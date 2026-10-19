@@ -155,6 +155,7 @@ fn fixture(hub: &crate::core::Hub, id: &str, owner: Option<&str>, system: bool) 
     hub.create_session(crate::core::SessionRegistration {
         id: id.into(),
         provider: "codex".into(),
+        provider_account_id: Default::default(),
         provider_version: "1".into(),
         provider_generation_digest: "generation".into(),
         provider_auth_generation: None,

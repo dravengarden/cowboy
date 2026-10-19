@@ -31,6 +31,8 @@ pub(crate) mod host_resources;
 mod installation;
 mod liveness;
 mod login_process;
+mod native_login;
+mod native_logout;
 mod projects;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
@@ -42,10 +44,42 @@ mod preflight_tests;
 
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
-    input: tokio::sync::mpsc::UnboundedSender<String>,
+    input: tokio::sync::mpsc::Sender<String>,
+    candidate: Option<crate::machine_plugins::AuthCandidateCleanup>,
 }
 
 type LoginSessions = Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
+
+/// Accept cancellation intent, never report process exit. Keep an active
+/// task's reservation until its own cleanup so the request cannot be reused
+/// while that task can still remove or mutate its registry entry.
+fn request_login_cancel(sessions: &LoginSessions, request: &str) -> bool {
+    let mut entries = sessions.lock();
+    let Some(session) = entries.get_mut(request) else {
+        return false;
+    };
+    if let Some(candidate) = session.candidate.as_mut() {
+        session.cancel.send_replace(true);
+        // Candidate ownership transfers only after the login process exits.
+        // Drop is best-effort only. Preserve the entry if explicit cleanup
+        // fails so cancellation can retry rather than acknowledge a lost task.
+        if let Err(error) = candidate.discard() {
+            tracing::warn!(%error, "login candidate cancellation cleanup is unconfirmed");
+            return false;
+        }
+        entries.remove(request);
+        return true;
+    }
+    session.cancel.send(true).is_ok()
+}
+
+fn submit_login_code(sessions: &LoginSessions, request: &str, code: &str) -> bool {
+    crate::provider_account::login_code(code).is_ok_and(|code| {
+        sessions.lock().get(request).is_some_and(|session| {
+            !*session.cancel.borrow() && session.input.try_send(code.to_owned()).is_ok()
+        })
+    })
+}
 
 struct LoginConnection(LoginSessions);
 
@@ -59,8 +93,26 @@ impl Drop for LoginConnection {
 
 struct LoginIo {
     cancel: tokio::sync::watch::Receiver<bool>,
-    input: tokio::sync::mpsc::UnboundedReceiver<String>,
+    input: tokio::sync::mpsc::Receiver<String>,
     sessions: LoginSessions,
+}
+
+impl LoginIo {
+    fn spawn(
+        &self,
+        request: &str,
+        deadline: tokio::time::Instant,
+        command: &mut tokio::process::Command,
+    ) -> Result<tokio::process::Child, String> {
+        let sessions = self.sessions.lock();
+        if !sessions.contains_key(request) {
+            return Err(login_process::Failure::Cancelled.detail().into());
+        }
+        login_process::check(&self.cancel, deadline).map_err(|error| error.detail().to_owned())?;
+        // Cancellation signals under this registry lock; disconnect drains it.
+        // Keep the guard until spawn returns, so a revoked task cannot launch.
+        command.spawn().map_err(|error| error.to_string())
+    }
 }
 
 struct ControllerConfig {
@@ -1313,7 +1365,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .flatten()
         .map(|calls| calls.attach(event_tx.clone()));
     let _provider_auth_watcher = if protocol >= 6 {
-        Some(auth_watch::start(Arc::clone(&config.providers), event_tx.clone()).await?)
+        Some(auth_watch::start(Arc::clone(&config.providers), event_tx.clone(), protocol).await?)
     } else {
         None
     };
@@ -1511,6 +1563,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         continue;
                                     }
                                     handle_machine_command(command, MachineCommandContext {
+                                        protocol,
                                         execution_manager: Arc::clone(&config.execution),
                                         service_id: config.service_id.clone(),
                                         machine_id: config.machine_id.clone(),
@@ -1778,6 +1831,7 @@ async fn publish_provider_auth_observations(
     providers: &Arc<MachinePluginStore>,
     events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     force_inventory: bool,
+    protocol: u16,
 ) {
     let store = Arc::clone(providers);
     let Ok(mut observations) =
@@ -1794,22 +1848,35 @@ async fn publish_provider_auth_observations(
     let mut pending = BTreeMap::new();
     let mut refresh_events = Vec::new();
     for (index, candidate) in observations.candidates.into_iter().enumerate() {
-        if let Err(error) = providers.validate_auth_refresh_candidate(&candidate).await {
-            observations
-                .failed_provider_ids
-                .insert(candidate.provider_id.clone());
-            tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+        if !candidate.account_id.is_default()
+            && protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+        {
             continue;
         }
-        pending.insert(candidate.provider_id.clone(), candidate.expected_generation);
+        let native_identity = match providers.validate_auth_refresh_candidate(&candidate).await {
+            Ok(identity) => identity,
+            Err(error) => {
+                observations
+                    .failed_provider_ids
+                    .insert((candidate.account_id.clone(), candidate.provider_id.clone()));
+                tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+                continue;
+            }
+        };
+        pending.insert(
+            (candidate.account_id.clone(), candidate.provider_id.clone()),
+            candidate.expected_generation,
+        );
         let request_id = format!(
             "provider-auth-refresh-{}-{}-{index}",
             std::process::id(),
             unix_ms()
         );
         refresh_events.push(MachineEvent::ProviderAuthRefreshCandidate {
+            native_identity,
             request_id,
             provider_id: candidate.provider_id,
+            account_id: candidate.account_id,
             expected_generation: candidate.expected_generation,
             provider_version: candidate.provider_version,
             generation_digest: candidate.generation_digest,
@@ -1831,16 +1898,19 @@ async fn publish_provider_auth_observations(
         }
     };
     for plugin in &mut plugins {
-        if observations.failed_provider_ids.contains(&plugin.plugin_id)
-            && !pending.contains_key(&plugin.plugin_id)
-        {
+        // PluginInventory's legacy auth fields describe only the default account.
+        let scope = (
+            crate::provider_account::ProviderAccountId::default(),
+            plugin.plugin_id.clone(),
+        );
+        if observations.failed_provider_ids.contains(&scope) && !pending.contains_key(&scope) {
             plugin.materialization_state = ProviderMaterializationState::Failed;
             plugin.detail = Some(
                 "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
                     .to_owned(),
             );
         } else if pending
-            .get(&plugin.plugin_id)
+            .get(&scope)
             .copied()
             .is_some_and(|generation| plugin.auth_generation == Some(generation))
         {
@@ -1851,13 +1921,14 @@ async fn publish_provider_auth_observations(
             );
         }
     }
-    publish_auth_refresh_events(events, plugins, refresh_events);
+    publish_auth_refresh_events(events, plugins, refresh_events, protocol);
 }
 
 fn publish_auth_refresh_events(
     events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     plugins: Vec<crate::machine_protocol::PluginInventory>,
     refresh_events: Vec<MachineEvent>,
+    protocol: u16,
 ) {
     let _ = events.send(MachineEvent::PluginInventory {
         plugins,
@@ -1867,6 +1938,11 @@ fn publish_auth_refresh_events(
     // generation. Publish that generation first, and never overwrite a fast
     // reconciliation receipt with a later, stale Applying inventory.
     for event in refresh_events {
+        if matches!(&event, MachineEvent::ProviderAuthRefreshCandidate { account_id, .. }
+            if !account_id.is_default() && protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
+        {
+            continue;
+        }
         let _ = events.send(event);
     }
 }
@@ -2398,6 +2474,7 @@ fn probe_declared_auth(
 }
 
 struct MachineCommandContext {
+    protocol: u16,
     execution_manager: Arc<execution::Manager>,
     service_id: Option<String>,
     machine_id: String,
@@ -2412,6 +2489,25 @@ struct MachineCommandContext {
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
     durable_state: crate::machine_broker::DurableStateView,
+}
+
+fn login_account_store(
+    providers: &Arc<MachinePluginStore>,
+    account: &crate::provider_account::ProviderAccountId,
+    protocol: u16,
+) -> anyhow::Result<Arc<MachinePluginStore>> {
+    if account.is_default() {
+        anyhow::ensure!(
+            providers.account_id().is_default(),
+            "login account scope mismatch"
+        );
+        return Ok(Arc::clone(providers));
+    }
+    anyhow::ensure!(
+        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
+        "named account login requires an account-aware Controller"
+    );
+    Ok(Arc::new(providers.for_account(account)?))
 }
 
 fn provider_auth_roll_target(
@@ -2434,6 +2530,7 @@ fn handle_machine_command(
     execution: &PluginExecutionScope,
 ) {
     let MachineCommandContext {
+        protocol,
         execution_manager,
         service_id,
         machine_id,
@@ -2797,6 +2894,19 @@ fn handle_machine_command(
             request_id,
             envelope,
         } => {
+            // Storage can verify account-bound envelopes before the runtime
+            // supports account-scoped refresh, rolling and worker admission.
+            // Do not let an early sender reach the legacy Provider-wide path.
+            if !envelope.account_id.is_default() {
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted: false,
+                    detail: Some(
+                        "Named Provider account runtime admission is not available".into(),
+                    ),
+                });
+                return;
+            }
             tokio::spawn(async move {
                 match providers.apply_auth(&envelope).await {
                     Ok(receipt) => {
@@ -2804,6 +2914,7 @@ fn handle_machine_command(
                         let _ = events.send(MachineEvent::ProviderAuthReceipt {
                             request_id: request_id.clone(),
                             provider_id: receipt.provider_id,
+                            account_id: envelope.account_id.clone(),
                             auth_generation: receipt.auth_generation,
                             replica_state: receipt.replica_state,
                             materialization_state: receipt.materialization_state,
@@ -2814,12 +2925,14 @@ fn handle_machine_command(
                         // projection via an atomic directory rename. Publish
                         // observations directly instead of relying on a
                         // platform-specific filesystem event shape.
-                        publish_provider_auth_observations(&providers, &events, true).await;
+                        publish_provider_auth_observations(&providers, &events, true, protocol)
+                            .await;
                         if let Some(provider) = roll_provider {
                             let _ =
                                 runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
                                     command: crate::runtime_wire::CoreCommand::RollProvider {
                                         provider,
+                                        account_id: Some(envelope.account_id.clone()),
                                     },
                                 });
                         }
@@ -2833,6 +2946,7 @@ fn handle_machine_command(
                         let _ = events.send(MachineEvent::ProviderAuthReceipt {
                             request_id: request_id.clone(),
                             provider_id: envelope.provider_id.clone(),
+                            account_id: envelope.account_id.clone(),
                             auth_generation: envelope.auth_generation,
                             replica_state: crate::machine_protocol::ProviderReplicaState::Failed,
                             materialization_state:
@@ -2851,34 +2965,219 @@ fn handle_machine_command(
         MachineCommand::FinalizeProviderAuthCandidate {
             request_id,
             provider_id,
+            account_id,
             auth_method,
             candidate_request_id,
         } => {
-            let result = providers.finalize_auth_candidate(
-                &provider_id,
-                &auth_method,
-                &candidate_request_id,
-            );
+            let mut sessions = login_sessions.lock();
+            let result =
+                login_account_store(&providers, &account_id, protocol).and_then(|providers| {
+                    if let Some(session) = sessions.get(&candidate_request_id) {
+                        anyhow::ensure!(
+                            session.candidate.as_ref().is_some_and(
+                                |candidate| candidate.matches(&provider_id, &account_id)
+                            ),
+                            "candidate is still running or belongs to another authentication scope"
+                        );
+                    }
+                    providers.finalize_auth_candidate(
+                        &provider_id,
+                        &auth_method,
+                        &candidate_request_id,
+                    )?;
+                    if let Some(candidate) = sessions
+                        .get_mut(&candidate_request_id)
+                        .and_then(|session| session.candidate.as_mut())
+                    {
+                        candidate.discard()?;
+                    }
+                    Ok(())
+                });
+            if result.is_ok() {
+                sessions.remove(&candidate_request_id);
+            }
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted: result.is_ok(),
                 detail: result.err().map(|error| format!("{error:#}")),
             });
         }
+        MachineCommand::QueryNativeProfile {
+            request_id,
+            provider,
+            account_id,
+            generation,
+            login_request_id,
+        } => {
+            let profile = (protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
+                .then(|| {
+                    providers
+                        .observe_native_profile(
+                            &account_id,
+                            &provider,
+                            generation,
+                            &login_request_id,
+                        )
+                        .ok()
+                })
+                .flatten()
+                .map(Box::new);
+            let _ = events.send(MachineEvent::NativeProfileObserved {
+                request_id,
+                profile,
+            });
+        }
+        MachineCommand::QueryWorkerExit { request_id, worker } => {
+            let observation = (protocol
+                >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
+                .then(|| {
+                    providers
+                        .observe_account_worker_exit(&worker)
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
+            let _ = events.send(MachineEvent::WorkerExitObserved {
+                request_id,
+                observation,
+            });
+        }
+        MachineCommand::PrepareNativeBinding {
+            request_id,
+            binding,
+        } => {
+            let accepted = protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+                && providers.prepare_native_binding(&binding).is_ok();
+            let _ = events.send(MachineEvent::NativeBindingPrepared {
+                request_id,
+                binding: accepted.then_some(binding),
+            });
+        }
+        MachineCommand::QueryLoginStop { request_id, login } => {
+            let observation = login_account_store(&providers, &login.account_id, protocol)
+                .and_then(|store| {
+                    anyhow::ensure!(!login.account_id.is_default(), "named account required");
+                    store.observe_login_stop(&login)
+                })
+                .ok()
+                .flatten();
+            let _ = events.send(MachineEvent::LoginStopObserved {
+                request_id,
+                observation,
+            });
+        }
+        MachineCommand::NativeLogout { request_id, logout } => {
+            let scoped =
+                login_account_store(&providers, &logout.account_id, protocol).and_then(|store| {
+                    anyhow::ensure!(
+                        !logout.account_id.is_default()
+                            && !login_sessions.lock().contains_key(&logout.login_request_id),
+                        "native login must be stopped before logout"
+                    );
+                    Ok(store)
+                });
+            tokio::spawn(async move {
+                let observation = match scoped {
+                    Ok(store) => native_logout::run(
+                        &store,
+                        &logout.provider_id,
+                        logout.generation,
+                        &logout.login_request_id,
+                        &logout.operation_id,
+                    )
+                    .await
+                    .ok()
+                    .map(|succeeded| {
+                        crate::provider_account::NativeLogoutObservation {
+                            process_trees_exited: store
+                                .native_auth_trees_exited(
+                                    &logout.provider_id,
+                                    logout.generation,
+                                    &logout.login_request_id,
+                                    &logout.operation_id,
+                                )
+                                .unwrap_or(false),
+                            request: logout,
+                            succeeded,
+                            profile_cleaned: succeeded == Some(true),
+                        }
+                    }),
+                    Err(_) => None,
+                };
+                let _ = events.send(MachineEvent::NativeLogoutObserved {
+                    request_id,
+                    observation,
+                });
+            });
+        }
+        MachineCommand::BeginNativeLogin {
+            request_id,
+            provider,
+            account_id,
+            spec,
+        } => {
+            let scoped = login_account_store(&providers, &account_id, protocol).and_then(|store| {
+                anyhow::ensure!(
+                    !account_id.is_default() && provider == "claude-code",
+                    "native account required"
+                );
+                Ok(store)
+            });
+            match scoped {
+                Ok(providers) => native_login::start(
+                    request_id,
+                    provider,
+                    spec,
+                    providers,
+                    events,
+                    login_sessions,
+                ),
+                Err(error) => {
+                    let _ = events.send(MachineEvent::CommandResult {
+                        request_id,
+                        accepted: false,
+                        detail: Some(error.to_string()),
+                    });
+                }
+            }
+        }
         MachineCommand::BeginLogin {
             request_id,
             provider,
+            account_id,
             auth_method,
         } => {
+            let providers = match login_account_store(&providers, &account_id, protocol) {
+                Ok(providers) => providers,
+                Err(error) => {
+                    let _ = events.send(MachineEvent::CommandResult {
+                        request_id,
+                        accepted: false,
+                        detail: Some(error.to_string()),
+                    });
+                    return;
+                }
+            };
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
-            login_sessions.lock().insert(
-                request_id.clone(),
-                LoginSession {
+            let (input_tx, input_rx) = tokio::sync::mpsc::channel(1);
+            {
+                let mut sessions = login_sessions.lock();
+                let std::collections::hash_map::Entry::Vacant(entry) =
+                    sessions.entry(request_id.clone())
+                else {
+                    let _ = events.send(MachineEvent::CommandResult {
+                        request_id,
+                        accepted: false,
+                        detail: Some("authentication request is already active".into()),
+                    });
+                    return;
+                };
+                entry.insert(LoginSession {
                     cancel: cancel_tx,
                     input: input_tx,
-                },
-            );
+                    candidate: None,
+                });
+            }
             tokio::spawn(run_login(
                 request_id,
                 provider,
@@ -2987,23 +3286,30 @@ fn handle_machine_command(
             });
         }
         MachineCommand::CancelLogin { request_id } => {
-            let accepted = login_sessions
-                .lock()
-                .remove(&request_id)
-                .is_some_and(|session| session.cancel.send(true).is_ok());
+            let accepted = request_login_cancel(&login_sessions, &request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted,
-                detail: (!accepted).then_some("login request is not active".to_owned()),
+                detail: (!accepted).then_some(
+                    "login request is inactive or cleanup remains unconfirmed".to_owned(),
+                ),
+            });
+        }
+        MachineCommand::CancelLoginRequest {
+            request_id,
+            login_request_id,
+        } => {
+            let accepted = request_login_cancel(&login_sessions, &login_request_id);
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted,
+                detail: (!accepted).then_some(
+                    "login request is inactive or cleanup remains unconfirmed".to_owned(),
+                ),
             });
         }
         MachineCommand::SubmitLoginCode { request_id, code } => {
-            let code = code.trim();
-            let accepted = !code.is_empty()
-                && login_sessions
-                    .lock()
-                    .get(&request_id)
-                    .is_some_and(|session| session.input.send(code.to_owned()).is_ok());
+            let accepted = submit_login_code(&login_sessions, &request_id, &code);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted,
@@ -3031,6 +3337,7 @@ fn handle_machine_command(
                     let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
                         command: crate::runtime_wire::CoreCommand::RollProvider {
                             provider: provider.to_owned(),
+                            account_id: None,
                         },
                     });
                 }
@@ -3573,8 +3880,39 @@ fn authentication_process(
             process
         }
     };
-    process.env("HOME", home);
-    process.envs(environment);
+    // Native login must not discover the daemon's credentials, profile
+    // selectors, runtime injection flags, or project-local configuration.
+    process.env_clear();
+    for name in [
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NIX_SSL_CERT_FILE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            process.env(name, value);
+        }
+    }
+    process
+        .envs(environment)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env("XDG_STATE_HOME", home.join(".local/state"))
+        .env("TMPDIR", home)
+        .current_dir(home);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -3666,6 +4004,15 @@ async fn run_login(
 ) {
     let deadline = tokio::time::Instant::now() + login_process::TIMEOUT;
     let expires_at_ms = unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64);
+    if let Err(error) = login_process::check(&login.cancel, deadline) {
+        login.sessions.lock().remove(&request_id);
+        let _ = events.send(MachineEvent::CommandResult {
+            request_id,
+            accepted: false,
+            detail: Some(error.detail().into()),
+        });
+        return;
+    }
     let Some(method_id) = auth_method.filter(|value| !value.trim().is_empty()) else {
         login.sessions.lock().remove(&request_id);
         let _ = events.send(MachineEvent::CommandResult {
@@ -3712,7 +4059,7 @@ async fn run_login(
         arguments,
         terminal,
         challenge,
-        environment,
+        mut environment,
         preflight,
     } = method.executor
     else {
@@ -3732,8 +4079,12 @@ async fn run_login(
             return;
         }
     };
+    let mut candidate_cleanup = crate::machine_plugins::AuthCandidateCleanup::new(
+        Arc::clone(&providers),
+        &provider,
+        &request_id,
+    );
     if let Err(error) = apply_auth_preflight(&home, &preflight) {
-        let _ = providers.discard_auth_candidate(&provider, &request_id);
         login.sessions.lock().remove(&request_id);
         let _ = events.send(MachineEvent::CommandResult {
             request_id,
@@ -3747,7 +4098,6 @@ async fn run_login(
     let command = match providers.authentication_component_command(&provider, &component) {
         Ok(command) => command,
         Err(error) => {
-            let _ = providers.discard_auth_candidate(&provider, &request_id);
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
@@ -3757,26 +4107,51 @@ async fn run_login(
             return;
         }
     };
+    // Only configuration explicitly requested by the signed login contract may
+    // cross the environment boundary (for example a Cloud project selection).
+    for step in &preflight {
+        if let cowboy_provider_sdk::AuthPreflight::EnvFileKeyRequiredV1 { key, .. } = step
+            && let Ok(value) = std::env::var(key)
+        {
+            environment.entry(key.clone()).or_insert(value);
+        }
+    }
     let mut process = authentication_process(&command, &arguments, &environment, &terminal, &home);
-    let child = match process
+    process
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    let containment = if providers.account_id().is_default() {
+        None
+    } else {
+        match login_process::Containment::prepare(&mut process) {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                login.sessions.lock().remove(&request_id);
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted: false,
+                    detail: Some("named login process containment unavailable".into()),
+                });
+                return;
+            }
+        }
+    };
+    let contained = containment.is_some();
+    let child = match login.spawn(&request_id, deadline, &mut process) {
         Ok(child) => child,
         Err(error) => {
-            let _ = providers.discard_auth_candidate(&provider, &request_id);
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted: false,
-                detail: Some(error.to_string()),
+                detail: Some(error),
             });
             return;
         }
     };
+    candidate_cleanup.process_started();
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider: provider.clone(),
@@ -3787,7 +4162,7 @@ async fn run_login(
     let mut verification_url = None;
     let mut user_code = None;
     let mut challenge_sent = false;
-    let status = login_process::run(
+    let mut status = login_process::run_optional_containment(
         child,
         &mut login.cancel,
         &mut login.input,
@@ -3819,36 +4194,73 @@ async fn run_login(
                 challenge_sent = true;
             }
         },
+        containment,
     )
     .await;
-    login.sessions.lock().remove(&request_id);
+    if !matches!(status, Err(login_process::Failure::Cleanup)) {
+        if contained
+            && providers
+                .mark_auth_candidate_tree_exited(&provider, &request_id)
+                .is_err()
+        {
+            status = Err(login_process::Failure::Cleanup);
+        } else {
+            candidate_cleanup.process_exited();
+        }
+    }
+    let (status, candidate, service_ready) = {
+        let mut sessions = login.sessions.lock();
+        let status = login_process::reconcile(
+            status,
+            sessions.contains_key(&request_id),
+            &login.cancel,
+            deadline,
+        );
+        let signed_in = status.as_ref().is_ok_and(|status| status.success());
+        let candidate = signed_in
+            .then(|| {
+                providers.mark_auth_candidate_completed(&provider, &request_id)?;
+                providers.export_auth_candidate(&provider, &method_id, &request_id)
+            })
+            .transpose();
+        let mut service_ready = false;
+        if let Ok(Some(candidate)) = candidate.as_ref() {
+            service_ready = events
+                .send(MachineEvent::ServiceAuthCandidate {
+                    request_id: request_id.clone(),
+                    provider_id: provider.clone(),
+                    account_id: providers.account_id().clone(),
+                    native_identity: candidate.native_identity.clone(),
+                    auth_method: method_id.clone(),
+                    provider_version: candidate.provider_version.clone(),
+                    generation_digest: candidate.generation_digest.clone(),
+                    auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
+                    portable_schema: candidate.bundle.portable_schema.clone(),
+                    bundle: candidate.bundle.values.clone(),
+                    account_label: None,
+                })
+                .is_ok();
+            if service_ready && let Some(session) = sessions.get_mut(&request_id) {
+                session.candidate = Some(candidate_cleanup.transfer());
+            }
+        }
+        if !service_ready {
+            sessions.remove(&request_id);
+        }
+        (status, candidate, service_ready)
+    };
     let signed_in = status.as_ref().is_ok_and(|status| status.success());
-    let candidate = signed_in
-        .then(|| providers.export_auth_candidate(&provider, &method_id, &home))
-        .transpose();
-    let service_ready = signed_in && candidate.as_ref().is_ok_and(Option::is_some);
-    if !service_ready {
-        let _ = providers.discard_auth_candidate(&provider, &request_id);
-    }
-    if let Ok(Some(candidate)) = candidate.as_ref() {
-        let _ = events.send(MachineEvent::ServiceAuthCandidate {
-            request_id: request_id.clone(),
-            provider_id: provider.clone(),
-            auth_method: method_id.clone(),
-            provider_version: candidate.provider_version.clone(),
-            generation_digest: candidate.generation_digest.clone(),
-            auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
-            portable_schema: candidate.bundle.portable_schema.clone(),
-            bundle: candidate.bundle.values.clone(),
-            account_label: None,
-        });
-    }
+    let cleanup_error = if service_ready {
+        None
+    } else {
+        candidate_cleanup.discard().err()
+    };
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider: provider.clone(),
         state: if service_ready {
             AuthState::Pending
-        } else if matches!(status, Err(login_process::Failure::Cancelled)) {
+        } else if cleanup_error.is_none() && matches!(status, Err(login_process::Failure::Cancelled)) {
             AuthState::SignedOut
         } else {
             AuthState::Error
@@ -3856,12 +4268,14 @@ async fn run_login(
         account_label: None,
         detail: if service_ready {
             Some("login completed; promoting credentials to Cowboy Service".to_owned())
+        } else if let Some(error) = cleanup_error {
+            Some(format!("temporary credential cleanup failed: {error:#}"))
         } else if !signed_in {
             Some(status.err().map_or("provider login did not complete", |error| error.detail()).to_owned())
         } else {
-            candidate.err().map(|error| format!(
+            candidate.err().map_or_else(|| Some("credential candidate could not be queued for Service promotion".into()), |error| Some(format!(
                 "login completed but credentials could not be promoted to Cowboy Service scope: {error:#}"
-            ))
+            )))
         },
     });
     if service_ready {
@@ -3911,26 +4325,50 @@ async fn run_secret_input_login(
         secret_input: true,
         expires_at_ms,
     });
-    let candidate = match login_process::input(&mut login.cancel, &mut login.input, deadline).await
-    {
-        Ok(secret) => providers.auth_candidate_from_secret(&provider, &method_id, &secret),
-        Err(error) => Err(anyhow::anyhow!(error.detail())),
+    let mut candidate = providers
+        .with_secret_input(&provider, &request_id, || async {
+            match login_process::input(&mut login.cancel, &mut login.input, deadline).await {
+                Ok(secret) => providers.auth_candidate_from_secret(&provider, &method_id, &secret),
+                Err(error) => Err(anyhow::anyhow!(error.detail())),
+            }
+        })
+        .await;
+    // Cancellation and candidate publication share the registry lock. Input
+    // readiness alone is not admission: teardown may have won since the await.
+    let publication = {
+        let mut sessions = login.sessions.lock();
+        let result = login_process::publish(
+            sessions.contains_key(&request_id),
+            &login.cancel,
+            deadline,
+            || {
+                if let Ok(candidate) = candidate.as_ref() {
+                    events
+                        .send(MachineEvent::ServiceAuthCandidate {
+                            request_id: request_id.clone(),
+                            provider_id: provider.clone(),
+                            account_id: providers.account_id().clone(),
+                            native_identity: candidate.native_identity.clone(),
+                            auth_method: method_id,
+                            provider_version: candidate.provider_version.clone(),
+                            generation_digest: candidate.generation_digest.clone(),
+                            auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
+                            portable_schema: candidate.bundle.portable_schema.clone(),
+                            bundle: candidate.bundle.values.clone(),
+                            account_label: None,
+                        })
+                        .map_err(|_| ())?;
+                }
+                Ok(())
+            },
+        );
+        sessions.remove(&request_id);
+        result
     };
-    login.sessions.lock().remove(&request_id);
-    let service_ready = candidate.is_ok();
-    if let Ok(candidate) = candidate.as_ref() {
-        let _ = events.send(MachineEvent::ServiceAuthCandidate {
-            request_id: request_id.clone(),
-            provider_id: provider.clone(),
-            auth_method: method_id,
-            provider_version: candidate.provider_version.clone(),
-            generation_digest: candidate.generation_digest.clone(),
-            auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
-            portable_schema: candidate.bundle.portable_schema.clone(),
-            bundle: candidate.bundle.values.clone(),
-            account_label: None,
-        });
+    if let Err(error) = publication {
+        candidate = Err(anyhow::anyhow!(error.detail()));
     }
+    let service_ready = candidate.is_ok();
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider,
@@ -4232,7 +4670,99 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn login_account_selection_never_falls_back_to_default() {
+        let root = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                root.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let protocol = crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION;
+        assert!(super::login_account_store(&store, &account, protocol - 1).is_err());
+        assert!(!root.path().join("provider-auth/accounts").exists());
+        let scoped = super::login_account_store(&store, &account, protocol).unwrap();
+        assert_eq!(scoped.account_id(), &account);
+        assert!(super::login_account_store(&scoped, &Default::default(), protocol).is_err());
+        let other = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        assert!(super::login_account_store(&scoped, &other, protocol).is_err());
+        assert!(store.account_id().is_default());
+    }
     use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn native_login_cannot_inherit_host_credentials_or_configuration() {
+        const CHILD: &str = "COWBOY_LOGIN_ENV_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Seed a separate test process: mutating this process's environment
+            // would race the rest of the test suite and needs unsafe Rust.
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "machine_cli::tests::native_login_cannot_inherit_host_credentials_or_configuration", "--nocapture"])
+                .env(CHILD, "1").env("HTTP_PROXY", "http://127.0.0.1:1");
+            for name in [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_CONFIG_DIR",
+                "OPENAI_API_KEY",
+                "CODEX_HOME",
+                "DEEPSEEK_API_KEY",
+                "XAI_API_KEY",
+                "NODE_OPTIONS",
+                "BASH_ENV",
+            ] {
+                child.env(name, "synthetic-parent-value");
+            }
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                child.kill_on_drop(true).output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let script = r#"
+            test "$HOME" = "$PWD" &&
+            test "$XDG_CONFIG_HOME" = "$HOME/.config" &&
+            test "$XDG_DATA_HOME" = "$HOME/.local/share" &&
+            test "$XDG_CACHE_HOME" = "$HOME/.cache" &&
+            test "$XDG_STATE_HOME" = "$HOME/.local/state" &&
+            test "$TMPDIR" = "$HOME" &&
+            test "$HTTP_PROXY" = "http://127.0.0.1:1" &&
+            test "$FIXTURE_SETTING" = "declared" &&
+            test -z "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$CLAUDE_CODE_OAUTH_TOKEN$CLAUDE_CONFIG_DIR$OPENAI_API_KEY$CODEX_HOME$DEEPSEEK_API_KEY$XAI_API_KEY$NODE_OPTIONS$BASH_ENV$COWBOY_LOGIN_ENV_TEST_CHILD"
+        "#;
+        let declared = BTreeMap::from([
+            ("FIXTURE_SETTING".into(), "declared".into()),
+            ("HOME".into(), "/must-not-use".into()),
+        ]);
+        let output = super::authentication_process(
+            std::path::Path::new("sh"),
+            &["-c".into(), script.into()],
+            &declared,
+            &cowboy_provider_sdk::AuthTerminal::Pipes,
+            home.path(),
+        )
+        .output()
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated login environment check failed"
+        );
+    }
 
     #[test]
     fn durable_state_requests_are_empty_and_wait_for_a_broker() {
@@ -4860,6 +5390,7 @@ mod tests {
                     provider: "codex".to_owned(),
                     provider_version: String::new(),
                     provider_generation_digest: String::new(),
+                    provider_account_id: crate::provider_account::ProviderAccountId::default(),
                     provider_auth_generation: None,
                     provider_behavior: None,
                     cwd,

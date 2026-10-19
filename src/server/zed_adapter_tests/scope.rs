@@ -8,6 +8,7 @@ pub(super) fn create(hub: &Hub, machine: &str) {
         provider: "codex".into(),
         provider_version: String::new(),
         provider_generation_digest: String::new(),
+        provider_account_id: crate::provider_account::ProviderAccountId::default(),
         provider_auth_generation: None,
         provider_behavior: None,
         machine_id: machine.into(),

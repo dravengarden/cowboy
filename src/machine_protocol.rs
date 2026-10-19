@@ -22,7 +22,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 35;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 36;
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 pub const DELIVERY_CONTROLS_PROTOCOL_VERSION: u16 = 35;
 /// Native image profiles, minimal input snapshots and verified deliveries.
@@ -40,6 +40,9 @@ pub const MANAGED_ENVIRONMENT_PROTOCOL_VERSION: u16 = 29;
 pub const AGENT_API_PROTOCOL_VERSION: u16 = 30;
 /// Explicit scoped actions and operation receipts, without executing writable code.
 pub const AGENT_ACTION_PROTOCOL_VERSION: u16 = 31;
+/// Account-bound authentication, native login/logout receipts and migration.
+/// Product login/create rollout gates remain independent from wire support.
+pub const PROVIDER_ACCOUNT_PROTOCOL_VERSION: u16 = 36;
 /// Machines report host memory, swap, load and disk, and accept a
 /// non-destructive session hibernation that stops only the live worker.
 pub const HOST_RESOURCES_PROTOCOL_VERSION: u16 = 26;
@@ -787,6 +790,11 @@ pub struct PortableCredentialBundle {
 pub struct SealedProviderAuth {
     pub envelope_schema: u16,
     pub provider_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+    )]
+    pub account_id: crate::provider_account::ProviderAccountId,
     pub auth_generation: u64,
     pub auth_contract_fingerprint: String,
     pub projection_schema: String,
@@ -823,7 +831,42 @@ impl SealedProviderAuth {
             proof.extend_from_slice(field.as_bytes());
             proof.push(b'\n');
         }
+        // Preserve schema-one signatures byte-for-byte. Schema two binds the
+        // account even when it is the legacy default; relabelling a signed
+        // envelope can never move credentials into another account.
+        if self.envelope_schema >= 2 {
+            let account = self.account_id.as_str();
+            proof.extend_from_slice(account.len().to_string().as_bytes());
+            proof.push(b':');
+            proof.extend_from_slice(account.as_bytes());
+            proof.push(b'\n');
+        }
         proof
+    }
+
+    /// Shared encryption AAD, kept beside the signed envelope to prevent
+    /// Controller and Machine implementations from drifting.
+    #[must_use]
+    pub fn authentication_aad(&self) -> Vec<u8> {
+        let action = match self.action {
+            ProviderAuthAction::Apply => "apply",
+            ProviderAuthAction::Wipe => "wipe",
+        };
+        let mut aad = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n",
+            self.envelope_schema,
+            self.provider_id,
+            self.auth_generation,
+            self.auth_contract_fingerprint,
+            self.projection_schema,
+            action
+        )
+        .into_bytes();
+        if self.envelope_schema >= 2 {
+            aad.extend_from_slice(self.account_id.as_str().as_bytes());
+            aad.push(b'\n');
+        }
+        aad
     }
 }
 
@@ -909,14 +952,53 @@ pub enum MachineCommand {
         request_id: String,
         components: Vec<DesiredComponent>,
     },
+    BeginNativeLogin {
+        request_id: String,
+        provider: String,
+        account_id: crate::provider_account::ProviderAccountId,
+        spec: crate::provider_account::NativeLoginSpec,
+    },
+    QueryNativeProfile {
+        request_id: String,
+        provider: String,
+        account_id: crate::provider_account::ProviderAccountId,
+        generation: u64,
+        login_request_id: String,
+    },
+    NativeLogout {
+        request_id: String,
+        logout: crate::provider_account::NativeLogoutRequest,
+    },
+    QueryLoginStop {
+        request_id: String,
+        login: crate::provider_account::LoginStopRequest,
+    },
+    QueryWorkerExit {
+        request_id: String,
+        worker: crate::provider_account::WorkerExitRequest,
+    },
+    PrepareNativeBinding {
+        request_id: String,
+        binding: Box<crate::provider_account::PreparedBinding>,
+    },
     BeginLogin {
         request_id: String,
         provider: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+        )]
+        account_id: crate::provider_account::ProviderAccountId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auth_method: Option<String>,
     },
     CancelLogin {
         request_id: String,
+    },
+    /// Separately correlated acceptance, never process-exit evidence.
+    CancelLoginRequest {
+        request_id: String,
+        login_request_id: String,
     },
     SubmitLoginCode {
         request_id: String,
@@ -1007,6 +1089,11 @@ pub enum MachineCommand {
     FinalizeProviderAuthCandidate {
         request_id: String,
         provider_id: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+        )]
+        account_id: crate::provider_account::ProviderAccountId,
         auth_method: String,
         candidate_request_id: String,
     },
@@ -1067,8 +1154,27 @@ impl MachineCommand {
     /// sends a Service-auth or Provider-lifecycle message an older peer could
     /// deserialize incorrectly.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // One exhaustive table keeps mixed-generation admission auditable.
     pub fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::BeginNativeLogin { .. }
+            | Self::QueryNativeProfile { .. }
+            | Self::NativeLogout { .. }
+            | Self::QueryLoginStop { .. }
+            | Self::QueryWorkerExit { .. }
+            | Self::PrepareNativeBinding { .. }
+            | Self::CancelLoginRequest { .. } => PROVIDER_ACCOUNT_PROTOCOL_VERSION,
+            Self::ApplyProviderAuth { envelope, .. }
+                if envelope.envelope_schema >= 2 || !envelope.account_id.is_default() =>
+            {
+                PROVIDER_ACCOUNT_PROTOCOL_VERSION
+            }
+            Self::BeginLogin { account_id, .. }
+            | Self::FinalizeProviderAuthCandidate { account_id, .. }
+                if !account_id.is_default() =>
+            {
+                PROVIDER_ACCOUNT_PROTOCOL_VERSION
+            }
             Self::Execution { request, .. }
                 if matches!(
                     &request.action,
@@ -1335,17 +1441,55 @@ pub enum MachineEvent {
     ProviderAuthReceipt {
         request_id: String,
         provider_id: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+        )]
+        account_id: crate::provider_account::ProviderAccountId,
         auth_generation: u64,
         replica_state: ProviderReplicaState,
         materialization_state: ProviderMaterializationState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// Native-owned credentials remain on the Machine. This event carries
+    /// completion evidence only and never a portable credential bundle.
+    NativeProfileCompleted {
+        profile: crate::provider_account::NativeProfileReceipt,
+    },
+    /// Correlated metadata observation, never credentials or runtime authority.
+    NativeProfileObserved {
+        request_id: String,
+        profile: Option<Box<crate::provider_account::NativeProfileReceipt>>,
+    },
+    NativeLogoutObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::NativeLogoutObservation>,
+    },
+    LoginStopObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::LoginStopObservation>,
+    },
+    WorkerExitObserved {
+        request_id: String,
+        observation: Option<crate::provider_account::WorkerExitObservation>,
+    },
+    NativeBindingPrepared {
+        request_id: String,
+        binding: Option<Box<crate::provider_account::PreparedBinding>>,
+    },
     /// A temporary login executor returns a portable typed bundle to the
     /// Service. Values are base64 so JSON never guesses text/binary encoding.
     ServiceAuthCandidate {
         request_id: String,
         provider_id: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+        )]
+        account_id: crate::provider_account::ProviderAccountId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_identity: Option<crate::provider_account::NativeIdentity>,
         auth_method: String,
         provider_version: String,
         generation_digest: String,
@@ -1360,8 +1504,15 @@ pub enum MachineEvent {
     /// Service generation named here; credential values never enter event
     /// history, logs, or ordinary Cowboy storage.
     ProviderAuthRefreshCandidate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_identity: Option<crate::provider_account::NativeIdentity>,
         request_id: String,
         provider_id: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::provider_account::ProviderAccountId::is_default"
+        )]
+        account_id: crate::provider_account::ProviderAccountId,
         expected_generation: u64,
         provider_version: String,
         generation_digest: String,
@@ -1527,6 +1678,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn named_login_and_cleanup_require_account_aware_peers() {
+        for value in [
+            serde_json::json!({"command":"begin_login", "request_id":"r", "provider":"claude-code", "auth_method":"claude-account"}),
+            serde_json::json!({"command":"finalize_provider_auth_candidate", "request_id":"r", "provider_id":"claude-code", "auth_method":"claude-account", "candidate_request_id":"candidate"}),
+        ] {
+            let legacy: MachineCommand = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(legacy.minimum_protocol(), 3);
+            assert!(
+                serde_json::to_value(legacy)
+                    .unwrap()
+                    .get("account_id")
+                    .is_none()
+            );
+            let mut named = value;
+            named["account_id"] = serde_json::json!("11111111-1111-4111-8111-111111111111");
+            let command: MachineCommand = serde_json::from_value(named.clone()).unwrap();
+            assert_eq!(
+                command.minimum_protocol(),
+                PROVIDER_ACCOUNT_PROTOCOL_VERSION
+            );
+            let current = negotiate(1, MACHINE_PROTOCOL_VERSION, 1, MACHINE_PROTOCOL_VERSION)
+                .expect("current peers overlap");
+            let legacy = negotiate(1, MACHINE_PROTOCOL_VERSION, 1, 35)
+                .expect("legacy peers retain their default-account connection");
+            assert!(command.minimum_protocol() <= current);
+            assert!(command.minimum_protocol() > legacy);
+            assert_eq!(
+                serde_json::to_value(command).unwrap()["account_id"],
+                named["account_id"]
+            );
+        }
+    }
+
+    #[test]
     fn disk_watermark_is_optional_compatible_and_zero_disables_it() {
         let mut resources: HostResources = serde_json::from_value(serde_json::json!({
             "memory_total_bytes": 1, "memory_available_bytes": 1,
@@ -1613,8 +1798,10 @@ mod tests {
     fn provider_refresh_candidate_survives_the_protocol_eight_addition() {
         assert_eq!(negotiate(1, MACHINE_PROTOCOL_VERSION, 1, 8), Some(8));
         let event = MachineEvent::ProviderAuthRefreshCandidate {
+            native_identity: None,
             request_id: "refresh-1".to_owned(),
             provider_id: "grok".to_owned(),
+            account_id: crate::provider_account::ProviderAccountId::default(),
             expected_generation: 3,
             provider_version: "1.1.8".to_owned(),
             generation_digest: "sha256:release".to_owned(),
@@ -1628,6 +1815,11 @@ mod tests {
         };
         let encoded = serde_json::to_value(&event).unwrap();
         assert_eq!(encoded["event"], "provider_auth_refresh_candidate");
+        assert!(encoded.get("native_identity").is_none());
+        assert!(
+            encoded.get("account_id").is_none(),
+            "legacy wire shape stays unchanged"
+        );
         assert_eq!(
             serde_json::from_value::<MachineEvent>(encoded).unwrap(),
             event

@@ -17,6 +17,8 @@ use url::Url;
 use crate::client_auth_client::{ClientAuthentication, logged_in_origins, normalized_base_url};
 use crate::core::{Inbound, Outbound, SessionMeta};
 
+pub mod accounts;
+
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long `send` listens for a refusal of the command it sent.
 const REFUSAL_WINDOW: Duration = Duration::from_secs(2);
@@ -242,6 +244,10 @@ enum SessionCommand {
         machine: Option<String>,
         #[arg(long)]
         runtime_machine: Option<String>,
+        /// Explicit subscription ID, or "default" for legacy authentication.
+        /// Independent of workspace and runtime Machine placement.
+        #[arg(long, value_parser = accounts::parse_account)]
+        subscription: Option<crate::provider_account::ProviderAccountId>,
         #[arg(long)]
         dir: Option<String>,
         /// Provider-qualified preset, or an empty string for agent defaults.
@@ -730,6 +736,7 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
             cwd,
             machine,
             runtime_machine,
+            subscription,
             dir,
             preset,
         } => {
@@ -739,6 +746,9 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
             }
             if let Some(runtime) = runtime_machine {
                 body["runtime_machine_id"] = json!(runtime);
+            }
+            if let Some(account) = subscription {
+                body["provider_account_id"] = json!(account);
             }
             println!(
                 "{}",

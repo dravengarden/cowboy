@@ -16,6 +16,9 @@ mod code_navigation_conformance;
 mod code_sync_conformance;
 mod extensions;
 mod installation;
+mod native_identity;
+mod native_profile;
+pub(crate) use native_profile::LogoutPreparation;
 mod operations;
 mod remove_projection;
 mod session_extensions;
@@ -79,7 +82,6 @@ const MAX_PROVIDER_RUNTIME_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_CREDENTIAL_VALUE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CREDENTIAL_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
-const AUTH_CANDIDATE_MAX_AGE: Duration = Duration::from_mins(30);
 const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -166,6 +168,7 @@ fn decode_host_response(
 }
 
 pub(crate) struct ExportedAuthCandidate {
+    pub native_identity: Option<crate::provider_account::NativeIdentity>,
     pub provider_version: String,
     pub generation_digest: String,
     pub auth_contract_fingerprint: String,
@@ -175,6 +178,7 @@ pub(crate) struct ExportedAuthCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProviderAuthRefreshCandidate {
     pub provider_id: String,
+    pub account_id: crate::provider_account::ProviderAccountId,
     pub expected_generation: u64,
     pub provider_version: String,
     pub generation_digest: String,
@@ -185,7 +189,7 @@ pub(crate) struct ProviderAuthRefreshCandidate {
 #[derive(Debug, Default)]
 pub(crate) struct ProviderAuthRefreshObservations {
     pub candidates: Vec<ProviderAuthRefreshCandidate>,
-    pub failed_provider_ids: BTreeSet<String>,
+    pub failed_provider_ids: BTreeSet<(crate::provider_account::ProviderAccountId, String)>,
 }
 
 #[derive(Clone)]
@@ -257,27 +261,32 @@ impl MachineEncryptionIdentity {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct MachinePluginStore {
     root: PathBuf,
     auth_root: PathBuf,
+    auth_base: PathBuf,
+    account_id: crate::provider_account::ProviderAccountId,
     platform: Platform,
     architecture: String,
     encryption: MachineEncryptionIdentity,
-    lifecycle: tokio::sync::Mutex<()>,
-    telemetry_export: tokio::sync::Mutex<()>,
-    code_runtimes: CodeRuntimeHost,
-    operations: operations::Journal,
+    lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
+    auth_candidates: std::sync::Arc<parking_lot::Mutex<()>>,
+    telemetry_export: std::sync::Arc<tokio::sync::Mutex<()>>,
+    code_runtimes: std::sync::Arc<CodeRuntimeHost>,
+    operations: std::sync::Arc<operations::Journal>,
     /// Retained runtimes that passed a full digest and archive comparison,
     /// keyed by content root and signed artifact set. See [`RuntimeStamp`]
     /// for why an unchanged stamp proves the bytes are unchanged.
-    runtime_proofs: parking_lot::Mutex<std::collections::HashMap<String, Vec<RuntimeStamp>>>,
+    runtime_proofs:
+        std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, Vec<RuntimeStamp>>>>,
     /// The Device configuration, once the daemon has loaded it. Retention
     /// policy reads it live; without it the artifact cache is never pruned.
-    device_config: std::sync::OnceLock<crate::config::Handle>,
+    device_config: std::sync::Arc<std::sync::OnceLock<crate::config::Handle>>,
     #[cfg(test)]
-    runtime_verifications: AtomicU64,
+    runtime_verifications: std::sync::Arc<AtomicU64>,
     #[cfg(test)]
-    runtime_full_comparisons: AtomicU64,
+    runtime_full_comparisons: std::sync::Arc<AtomicU64>,
 }
 
 enum PreparedProviderAuth {
@@ -308,8 +317,12 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
     Ok(())
 }
 
+mod account_stop;
+pub(crate) use account_stop::SystemdWorker;
+mod auth_candidate;
 #[cfg(test)]
 mod startup_tests;
+pub(crate) use auth_candidate::AuthCandidateCleanup;
 
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {
@@ -335,23 +348,60 @@ impl MachinePluginStore {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let encryption = MachineEncryptionIdentity::load_or_create(&auth_root.join("identity"))?;
-        Ok(Self {
+        let store = Self {
             root,
+            auth_base: auth_root.clone(),
+            account_id: crate::provider_account::ProviderAccountId::default(),
             auth_root,
             platform,
             architecture,
             encryption,
-            lifecycle: tokio::sync::Mutex::new(()),
-            telemetry_export: tokio::sync::Mutex::new(()),
-            code_runtimes: CodeRuntimeHost::default(),
-            operations,
-            runtime_proofs: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            device_config: std::sync::OnceLock::new(),
+            lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            auth_candidates: std::sync::Arc::default(),
+            telemetry_export: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            code_runtimes: std::sync::Arc::new(CodeRuntimeHost::default()),
+            operations: std::sync::Arc::new(operations),
+            runtime_proofs: std::sync::Arc::default(),
+            device_config: std::sync::Arc::default(),
             #[cfg(test)]
-            runtime_verifications: AtomicU64::new(0),
+            runtime_verifications: std::sync::Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
-            runtime_full_comparisons: AtomicU64::new(0),
-        })
+            runtime_full_comparisons: std::sync::Arc::new(AtomicU64::new(0)),
+        };
+        // The journal owner is held and no login task has been admitted yet.
+        store.recover_completed_auth_candidates()?;
+        Ok(store)
+    }
+
+    /// Share immutable Plugin installations and lifecycle fences, never mutable
+    /// authentication state. No account selection changes a process-global link.
+    pub fn for_account(
+        &self,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> Result<Self> {
+        ensure!(
+            self.account_id.is_default() || self.account_id == *account,
+            "cannot change an existing Provider account scope"
+        );
+        let mut scoped = self.clone();
+        scoped.account_id = account.clone();
+        scoped.auth_root = if account.is_default() {
+            self.auth_base.clone()
+        } else {
+            self.auth_base.join("accounts").join(account.as_str())
+        };
+        for directory in [
+            self.auth_base.join("accounts"),
+            scoped.auth_root.clone(),
+            scoped.auth_root.join("providers"),
+        ] {
+            crate::provider_account::prepare_private_directory(&directory)?;
+        }
+        Ok(scoped)
+    }
+
+    pub(crate) fn account_id(&self) -> &crate::provider_account::ProviderAccountId {
+        &self.account_id
     }
 
     /// Attach the daemon's live Device configuration (first call wins).
@@ -814,6 +864,10 @@ impl MachinePluginStore {
             active.generation_digest == expected_digest,
             "active Plugin generation changed; refresh the uninstall plan"
         );
+        // Until account-aware lifecycle receipts are available, refuse before
+        // changing the active installation instead of leaving another account's
+        // plaintext credentials behind a successful uninstall receipt.
+        self.ensure_no_named_auth_materializations(provider_id)?;
         let plugin_root = self.plugin_root(provider_id);
         let active_link = plugin_root.join("active");
         let remove_active = active_link.exists() || active_link.symlink_metadata().is_ok();
@@ -841,6 +895,32 @@ impl MachinePluginStore {
                 runtime.display()
             )
         })?;
+        Ok(())
+    }
+
+    fn ensure_no_named_auth_materializations(&self, provider_id: &str) -> Result<()> {
+        let accounts = self.auth_base.join("accounts");
+        if !accounts.exists() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(accounts)? {
+            let entry = entry?;
+            ensure!(
+                entry.file_type()?.is_dir(),
+                "invalid Provider account directory"
+            );
+            let provider = entry.path().join("providers").join(provider_id);
+            ensure!(
+                !provider.join("materialized").try_exists()?
+                    && !provider.join("runtime").try_exists()?,
+                "Revoke named Provider account projections before uninstalling this Plugin"
+            );
+            native_profile::ensure_revoked(
+                &provider.join("native"),
+                &entry.file_name().to_string_lossy(),
+                provider_id,
+            )?;
+        }
         Ok(())
     }
 
@@ -874,6 +954,8 @@ impl MachinePluginStore {
             .collect();
         keep.extend(read_link_name(&root.join("active")));
         keep.extend(read_link_name(&root.join("rollback")));
+        let _profiles = self.auth_candidates.lock();
+        keep.extend(self.retained_native_generations(plugin_id)?);
         let generations = root.join("generations");
         let mut retention = crate::generation_retention::Outcome {
             plugin_id: plugin_id.to_owned(),
@@ -980,12 +1062,14 @@ impl MachinePluginStore {
             {
                 continue;
             }
-            let keep: BTreeSet<String> = referenced
+            let mut keep: BTreeSet<String> = referenced
                 .get(&plugin_id)
                 .into_iter()
                 .flatten()
                 .map(|digest| digest.trim_start_matches("sha256:").to_owned())
                 .collect();
+            let _profiles = self.auth_candidates.lock();
+            keep.extend(self.retained_native_generations(&plugin_id)?);
             let mut retention = crate::generation_retention::Outcome {
                 plugin_id: plugin_id.clone(),
                 ..crate::generation_retention::Outcome::default()
@@ -1340,7 +1424,12 @@ impl MachinePluginStore {
         // This request already verified the signed generation, all executable
         // artifacts and the Provider projection under the lifecycle lock. Reuse
         // only those request-local bytes; later requests verify from disk again.
-        let launch = self.launch_context_from_package(package, package_path, auth_generation)?;
+        let launch = self.launch_context_from_package(
+            package,
+            package_path,
+            auth_generation,
+            &release.artifact_digest,
+        )?;
         tracing::info!(%plugin_id, ?operation, verification_ms, inventory_ms,
             launch_ms = launch_started.elapsed().as_millis(), "Plugin host resolution completed");
         let host_root = content.join("host").to_string_lossy().into_owned();
@@ -1498,7 +1587,7 @@ impl MachinePluginStore {
         self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
-        self.launch_context_from_package(&package, package_path, auth_generation)
+        self.launch_context_from_package(&package, package_path, auth_generation, generation_digest)
     }
 
     fn launch_context_from_package(
@@ -1506,13 +1595,19 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         package_path: PathBuf,
         auth_generation: Option<u64>,
+        generation_digest: &str,
     ) -> Result<ProviderLaunchContext> {
         let provider_id = &package.manifest.id;
         let payload = matching_payload(package, &self.platform, &self.architecture)?;
         let auth = &package.manifest.authentication;
         let home = if auth.required {
             let generation = auth_generation.context("session has no Provider auth generation")?;
-            Some(self.prepare_launch_auth_home(provider_id, package, generation)?)
+            Some(self.prepare_launch_auth_home(
+                provider_id,
+                package,
+                generation,
+                generation_digest,
+            )?)
         } else {
             None
         };
@@ -1542,7 +1637,7 @@ impl MachinePluginStore {
         // One credential source is shared by every auth-generation runtime
         // home. Bind its directory so a Provider CLI locks and re-reads
         // rotations there instead of inside its private generation home.
-        let credential_directories = self.credential_directories(package)?;
+        let credential_directories = self.credential_directories(package, home.as_deref())?;
         if !credential_directories.is_empty() {
             environment.insert(
                 crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
@@ -1608,10 +1703,17 @@ impl MachinePluginStore {
     fn credential_directories(
         &self,
         package: &ProviderPackage,
+        native_home: Option<&Path>,
     ) -> Result<BTreeMap<String, String>> {
         let auth = &package.manifest.authentication;
         if !auth.required || auth.credential_files.is_empty() {
             return Ok(BTreeMap::new());
+        }
+        if !self.account_id.is_default() && package.manifest.id == "claude-code" {
+            return Self::native_credential_directories(
+                package,
+                native_home.context("native profile home required")?,
+            );
         }
         let Some(canonical) = self.canonical_runtime_projection(package)? else {
             return Ok(BTreeMap::new());
@@ -1639,7 +1741,12 @@ impl MachinePluginStore {
         provider_id: &str,
         package: &ProviderPackage,
         generation: u64,
+        generation_digest: &str,
     ) -> Result<PathBuf> {
+        if !self.account_id.is_default() && provider_id == "claude-code" {
+            self.ensure_native_release(package, generation, generation_digest)?;
+            return self.native_profile_home(package, generation);
+        }
         let auth = &package.manifest.authentication;
         let envelope = self
             .latest_auth_envelope(provider_id)?
@@ -1751,8 +1858,15 @@ impl MachinePluginStore {
         &self,
         provider_id: &str,
         method_id: &str,
-        home: &Path,
+        request_id: &str,
     ) -> Result<ExportedAuthCandidate> {
+        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+            .map_err(anyhow::Error::msg)?;
+        validate_auth_candidate_id(request_id)?;
+        let home = self
+            .auth_candidate_root(provider_id)
+            .join(request_id)
+            .join("home");
         let (package, generation_digest) = self
             .active_package(provider_id)?
             .context("Provider must be installed before Service authentication")?;
@@ -1770,16 +1884,27 @@ impl MachinePluginStore {
             .clone();
         let portable_schema = auth.portable_schema.clone();
         let candidate_root = self.auth_candidate_root(provider_id);
-        ensure_within(&candidate_root, home)?;
+        ensure_within(&candidate_root, &home)?;
+        ensure!(
+            self.account_id.is_default() || method.native_identity.is_some(),
+            "named native login requires a signed identity recipe"
+        );
+        let native_identity = method
+            .native_identity
+            .as_ref()
+            .map(|recipe| native_identity::read(&home, recipe))
+            .transpose()?;
         let mut values = BTreeMap::new();
         let mut total = 0_usize;
         for credential in &auth.credential_files {
             if !method.required_bundle_keys.contains(&credential.bundle_key) {
                 continue;
             }
-            let path = home.join(&credential.relative_path);
-            ensure_within(home, &path)?;
-            match fs::read(&path) {
+            match native_identity::read_login_file(
+                &home,
+                &credential.relative_path,
+                MAX_CREDENTIAL_VALUE_BYTES.min(MAX_CREDENTIAL_BUNDLE_BYTES.saturating_sub(total)),
+            ) {
                 Ok(bytes) => {
                     ensure!(
                         bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
@@ -1796,31 +1921,31 @@ impl MachinePluginStore {
                     );
                 }
                 Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound && !credential.required => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                        && !credential.required => {}
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                {
                     bail!(
                         "login completed without required credential {}",
                         credential.bundle_key
                     )
                 }
                 Err(error) => {
-                    return Err(error).with_context(|| format!("reading {}", path.display()));
+                    return Err(error).context("reading native login credentials");
                 }
             }
         }
-        for (name, bundle_key) in &auth.environment_projection {
-            if !method.required_bundle_keys.contains(bundle_key) {
-                continue;
-            }
-            if let Ok(value) = std::env::var(name) {
-                values.insert(
-                    bundle_key.clone(),
-                    base64::engine::general_purpose::STANDARD.encode(value.as_bytes()),
-                );
-            }
-        }
+        // Native login exports only its isolated output files. Environment
+        // credentials enter through the explicit SecretInput executor instead
+        // of being borrowed from the Machine process after a login succeeds.
         Ok(ExportedAuthCandidate {
             provider_version,
+            native_identity,
             generation_digest,
             auth_contract_fingerprint,
             bundle: PortableCredentialBundle {
@@ -1841,6 +1966,8 @@ impl MachinePluginStore {
         method_id: &str,
         secret: &str,
     ) -> Result<ExportedAuthCandidate> {
+        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+            .map_err(anyhow::Error::msg)?;
         let secret = secret.trim();
         ensure!(!secret.is_empty(), "authentication secret is empty");
         ensure!(
@@ -1872,6 +1999,7 @@ impl MachinePluginStore {
         validate_portable_bundle(&package.manifest.authentication, &bundle)?;
         Ok(ExportedAuthCandidate {
             provider_version: package.manifest.version.clone(),
+            native_identity: None,
             generation_digest,
             auth_contract_fingerprint: package
                 .manifest
@@ -1887,29 +2015,26 @@ impl MachinePluginStore {
         provider_id: &str,
         request_id: &str,
     ) -> Result<PathBuf> {
+        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+            .map_err(anyhow::Error::msg)?;
         self.active_package(provider_id)?
             .context("Provider must be installed before Service authentication")?;
-        validate_auth_candidate_id(request_id)?;
-        let root = self.auth_candidate_root(provider_id);
-        fs::create_dir_all(&root)?;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-        self.prune_auth_candidates(provider_id, AUTH_CANDIDATE_MAX_AGE)?;
-        let candidate = root.join(request_id);
-        ensure!(
-            !candidate.exists(),
-            "authentication candidate already exists"
-        );
-        let home = candidate.join("home");
-        fs::create_dir_all(&home)?;
-        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o700))?;
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700))?;
-        Ok(home)
+        self.create_auth_candidate_home(provider_id, request_id)
     }
 
     pub fn discard_auth_candidate(&self, provider_id: &str, request_id: &str) -> Result<()> {
+        let _guard = self.auth_candidates.lock();
+        validate_plugin_id(provider_id)?;
         validate_auth_candidate_id(request_id)?;
         let candidate = self.auth_candidate_root(provider_id).join(request_id);
         ensure_within(&self.auth_candidate_root(provider_id), &candidate)?;
+        match fs::symlink_metadata(self.auth_candidate_root(provider_id)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            result => ensure!(
+                result?.is_dir(),
+                "login candidate root is linked or invalid"
+            ),
+        }
         match fs::remove_dir_all(&candidate) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1941,18 +2066,41 @@ impl MachinePluginStore {
         ) {
             return Ok(());
         }
-        self.discard_auth_candidate(provider_id, request_id)
+        self.finalize_completed_auth_candidate(provider_id, request_id)
     }
 
     pub async fn apply_auth(
         &self,
         envelope: &SealedProviderAuth,
     ) -> Result<PluginInventoryReceipt> {
+        if self.account_id.is_default() && !envelope.account_id.is_default() {
+            let scoped = self.for_account(&envelope.account_id)?;
+            return scoped.apply_scoped_auth(envelope).await;
+        }
+        self.apply_scoped_auth(envelope).await
+    }
+
+    async fn apply_scoped_auth(
+        &self,
+        envelope: &SealedProviderAuth,
+    ) -> Result<PluginInventoryReceipt> {
+        if envelope.action == ProviderAuthAction::Apply {
+            crate::provider_account::portable_credentials_allowed(
+                &self.account_id,
+                &envelope.provider_id,
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
         let _lifecycle = self.lifecycle.lock().await;
         validate_plugin_id(&envelope.provider_id)?;
         ensure!(
-            envelope.envelope_schema == 1,
+            (envelope.envelope_schema == 1 && envelope.account_id.is_default())
+                || envelope.envelope_schema == 2,
             "unsupported auth envelope schema"
+        );
+        ensure!(
+            envelope.account_id == self.account_id,
+            "Provider auth account mismatch"
         );
         let signature_valid = crate::machine_auth::verify_namespaced(
             &envelope.service_public_key,
@@ -2081,6 +2229,7 @@ impl MachinePluginStore {
     ) -> Result<ProviderMaterializationState> {
         match prepared {
             PreparedProviderAuth::Wipe => {
+                self.revoke_native_profiles(&envelope.provider_id)?;
                 let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
                 for directory in ["materialized", "runtime"] {
                     let path = provider_auth_root.join(directory);
@@ -2925,7 +3074,12 @@ impl MachinePluginStore {
     }
 
     fn pin_service_key(&self, public_key: &str) -> Result<()> {
-        pin_key(&self.auth_root.join("service.pub"), public_key)
+        let pin = self.auth_base.join("service.pub");
+        ensure!(
+            self.account_id.is_default() || pin.is_file(),
+            "named account requires an established Service trust root"
+        );
+        pin_key(&pin, public_key)
     }
 
     fn latest_auth_envelope(&self, provider_id: &str) -> Result<Option<SealedProviderAuth>> {
@@ -2935,9 +3089,18 @@ impl MachinePluginStore {
         if !path.is_file() {
             return Ok(None);
         }
-        serde_json::from_slice(&fs::read(&path)?)
-            .context("decoding current Provider auth replica")
-            .map(Some)
+        let envelope: SealedProviderAuth = serde_json::from_slice(&fs::read(&path)?)
+            .context("decoding current Provider auth replica")?;
+        ensure!(
+            envelope.account_id == self.account_id && envelope.provider_id == provider_id,
+            "Provider replica account mismatch"
+        );
+        ensure!(
+            (envelope.envelope_schema == 1 && envelope.account_id.is_default())
+                || envelope.envelope_schema == 2,
+            "unsupported auth envelope schema"
+        );
+        Ok(Some(envelope))
     }
 
     fn plugin_root(&self, provider_id: &str) -> PathBuf {
@@ -2967,8 +3130,64 @@ impl MachinePluginStore {
     pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
         let _lifecycle = self.lifecycle.blocking_lock();
         let mut observations = ProviderAuthRefreshObservations::default();
+        for scope in self.existing_auth_scopes() {
+            scope.collect_auth_refresh_observations(&mut observations);
+        }
+        observations.candidates.sort_by(|left, right| {
+            left.account_id
+                .cmp(&right.account_id)
+                .then(left.provider_id.cmp(&right.provider_id))
+                .then(left.expected_generation.cmp(&right.expected_generation))
+                .then(left.bundle.values.cmp(&right.bundle.values))
+        });
+        observations
+    }
+
+    /// Enumerate only Cowboy-owned account roots; never discover identities by
+    /// walking native homes or following symlinks. Scoped callers stay scoped.
+    fn existing_auth_scopes(&self) -> Vec<Self> {
+        let mut scopes = vec![self.clone()];
+        if !self.account_id.is_default() {
+            return scopes;
+        }
+        let accounts = self.auth_base.join("accounts");
+        if !fs::symlink_metadata(&accounts).is_ok_and(|metadata| metadata.is_dir()) {
+            return scopes;
+        }
+        let Ok(entries) = fs::read_dir(accounts) else {
+            return scopes;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Ok(account_id) = crate::provider_account::ProviderAccountId::try_from(
+                entry.file_name().to_string_lossy().into_owned(),
+            ) else {
+                continue;
+            };
+            if account_id.is_default() {
+                continue;
+            }
+            if !fs::symlink_metadata(entry.path().join("providers"))
+                .is_ok_and(|metadata| metadata.is_dir())
+            {
+                continue;
+            }
+            let mut scope = self.clone();
+            scope.account_id = account_id;
+            scope.auth_root = entry.path();
+            scopes.push(scope);
+        }
+        scopes
+    }
+
+    fn collect_auth_refresh_observations(
+        &self,
+        observations: &mut ProviderAuthRefreshObservations,
+    ) {
         let Ok(entries) = fs::read_dir(self.auth_watch_root()) else {
-            return observations;
+            return;
         };
         for entry in entries.flatten() {
             let Ok(file_type) = entry.file_type() else {
@@ -2978,13 +3197,11 @@ impl MachinePluginStore {
                 continue;
             }
             let provider_id = entry.file_name().to_string_lossy().into_owned();
-            match self.auth_refresh_candidates_for_provider(
-                &provider_id,
-                &mut observations.failed_provider_ids,
-            ) {
+            let mut failed = BTreeSet::new();
+            match self.auth_refresh_candidates_for_provider(&provider_id, &mut failed) {
                 Ok(mut candidates) => observations.candidates.append(&mut candidates),
                 Err(error) => {
-                    observations.failed_provider_ids.insert(provider_id.clone());
+                    failed.insert(provider_id.clone());
                     tracing::warn!(
                         provider = %provider_id,
                         %error,
@@ -2992,14 +3209,12 @@ impl MachinePluginStore {
                     );
                 }
             }
+            observations.failed_provider_ids.extend(
+                failed
+                    .into_iter()
+                    .map(|provider| (self.account_id.clone(), provider)),
+            );
         }
-        observations.candidates.sort_by(|left, right| {
-            left.provider_id
-                .cmp(&right.provider_id)
-                .then(left.expected_generation.cmp(&right.expected_generation))
-                .then(left.bundle.values.cmp(&right.bundle.values))
-        });
-        observations
     }
 
     fn auth_refresh_candidates_for_provider(
@@ -3007,6 +3222,11 @@ impl MachinePluginStore {
         provider_id: &str,
         failed: &mut BTreeSet<String>,
     ) -> Result<Vec<ProviderAuthRefreshCandidate>> {
+        if crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+            .is_err()
+        {
+            return Ok(Vec::new());
+        }
         let Some((package, generation_digest)) = self.active_auth_package(provider_id)? else {
             return Ok(Vec::new());
         };
@@ -3037,6 +3257,7 @@ impl MachinePluginStore {
             .into_iter()
             .map(|bundle| ProviderAuthRefreshCandidate {
                 provider_id: provider_id.to_owned(),
+                account_id: self.account_id.clone(),
                 expected_generation: envelope.auth_generation,
                 provider_version: package.manifest.version.clone(),
                 generation_digest: generation_digest.clone(),
@@ -3092,27 +3313,6 @@ impl MachinePluginStore {
 
     fn auth_candidate_root(&self, provider_id: &str) -> PathBuf {
         self.auth_provider_root(provider_id).join("candidates")
-    }
-
-    fn prune_auth_candidates(&self, provider_id: &str, maximum_age: Duration) -> Result<()> {
-        let root = self.auth_candidate_root(provider_id);
-        let now = SystemTime::now();
-        for entry in fs::read_dir(&root)? {
-            let entry = entry?;
-            let metadata = fs::symlink_metadata(entry.path())?;
-            if !metadata.file_type().is_dir()
-                || now
-                    .duration_since(metadata.modified().unwrap_or(now))
-                    .unwrap_or_default()
-                    < maximum_age
-            {
-                continue;
-            }
-            fs::remove_dir_all(entry.path()).with_context(|| {
-                format!("removing expired auth candidate {}", entry.path().display())
-            })?;
-        }
-        Ok(())
     }
 }
 
@@ -3659,6 +3859,10 @@ fn validate_auth_replica_transition(
         return Ok(());
     };
     ensure!(
+        incoming.account_id == previous.account_id && incoming.provider_id == previous.provider_id,
+        "Provider replica identity changed"
+    );
+    ensure!(
         incoming.auth_generation >= previous.auth_generation,
         "stale Service auth generation"
     );
@@ -3765,20 +3969,7 @@ struct StagedRuntimeComponent {
 }
 
 pub(crate) fn provider_auth_aad(envelope: &SealedProviderAuth) -> Vec<u8> {
-    let action = match envelope.action {
-        ProviderAuthAction::Apply => "apply",
-        ProviderAuthAction::Wipe => "wipe",
-    };
-    format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n",
-        envelope.envelope_schema,
-        envelope.provider_id,
-        envelope.auth_generation,
-        envelope.auth_contract_fingerprint,
-        envelope.projection_schema,
-        action
-    )
-    .into_bytes()
+    envelope.authentication_aad()
 }
 
 pub(crate) fn derive_seal_key(shared: &[u8; 32]) -> [u8; 32] {
@@ -5761,7 +5952,8 @@ mod tests {
         let key = derive_seal_key(shared.as_bytes());
         let nonce = [9_u8; 24];
         let mut envelope = SealedProviderAuth {
-            envelope_schema: 1,
+            envelope_schema: if store.account_id.is_default() { 1 } else { 2 },
+            account_id: store.account_id.clone(),
             provider_id: package.manifest.id.clone(),
             auth_generation,
             auth_contract_fingerprint: package
@@ -5796,6 +5988,146 @@ mod tests {
             )
             .unwrap();
         envelope
+    }
+
+    #[test]
+    fn account_projection_rejects_directory_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let account = store.for_account(&id).unwrap();
+        let target = root.path().join("unrelated");
+        fs::create_dir(&target).unwrap();
+        fs::remove_dir(account.auth_root.join("providers")).unwrap();
+        symlink(&target, account.auth_root.join("providers")).unwrap();
+        assert!(store.for_account(&id).is_err());
+        assert_eq!(store.existing_auth_scopes().len(), 1);
+        fs::remove_file(account.auth_root.join("providers")).unwrap();
+        fs::remove_dir(&account.auth_root).unwrap();
+        symlink(&target, &account.auth_root).unwrap();
+        assert!(store.for_account(&id).is_err());
+        fs::remove_file(&account.auth_root).unwrap();
+        fs::remove_dir(store.auth_base.join("accounts")).unwrap();
+        symlink(&target, store.auth_base.join("accounts")).unwrap();
+        assert!(store.for_account(&id).is_err());
+        assert_eq!(store.existing_auth_scopes().len(), 1);
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn login_candidate_cleanup_stays_within_the_selected_account() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let first = store
+            .for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let second = store
+            .for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let candidate = |scope: &MachinePluginStore| {
+            scope
+                .auth_candidate_root("claude-code")
+                .join("same-request")
+        };
+        for scope in [&store, &first, &second] {
+            fs::create_dir_all(candidate(scope)).unwrap();
+            fs::write(
+                candidate(scope).join("credential"),
+                scope.account_id().as_str(),
+            )
+            .unwrap();
+        }
+        first
+            .discard_auth_candidate("claude-code", "same-request")
+            .unwrap();
+        assert!(!candidate(&first).exists());
+        for scope in [&store, &second] {
+            assert_eq!(
+                fs::read_to_string(candidate(scope).join("credential")).unwrap(),
+                scope.account_id().as_str()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn account_replicas_cannot_be_relabelled_or_overwrite_each_other() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let first_id = crate::provider_account::ProviderAccountId::try_from(
+            "11111111-1111-4111-8111-111111111111".to_owned(),
+        )
+        .unwrap();
+        let second_id = crate::provider_account::ProviderAccountId::try_from(
+            "22222222-2222-4222-8222-222222222222".to_owned(),
+        )
+        .unwrap();
+        let first = store.for_account(&first_id).unwrap();
+        let second = store.for_account(&second_id).unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/claude-deepseek/provider.json")).unwrap();
+        let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+        let signer =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))
+                .unwrap();
+        assert!(first.pin_service_key(signer.public_key()).is_err());
+        store.pin_service_key(signer.public_key()).unwrap();
+        let bundle = |value: &str| PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "api-key".into(),
+            values: BTreeMap::from([(
+                "api_key".into(),
+                base64::engine::general_purpose::STANDARD.encode(value),
+            )]),
+        };
+        let first_envelope =
+            seal_auth_for_test(&first, &package, &signer, 1, &bundle("first-secret"));
+        let attacker =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("attacker"))
+                .unwrap();
+        let forged = seal_auth_for_test(&first, &package, &attacker, 1, &bundle("attacker-secret"));
+        assert!(first.apply_auth(&forged).await.is_err());
+        assert!(
+            first
+                .latest_auth_envelope(&package.manifest.id)
+                .unwrap()
+                .is_none()
+        );
+        let second_envelope =
+            seal_auth_for_test(&second, &package, &signer, 1, &bundle("second-secret"));
+        first.apply_auth(&first_envelope).await.unwrap();
+        second.apply_auth(&second_envelope).await.unwrap();
+        store.apply_auth(&first_envelope).await.unwrap();
+        assert!(second.apply_auth(&first_envelope).await.is_err());
+        let mut relabelled = first_envelope.clone();
+        relabelled.account_id = second_id;
+        assert!(second.apply_auth(&relabelled).await.is_err());
+        assert!(second.encryption.open(&relabelled).is_err());
+        let next = seal_auth_for_test(&first, &package, &signer, 2, &bundle("first-rotated"));
+        first.apply_auth(&next).await.unwrap();
+        assert_eq!(
+            first
+                .latest_auth_envelope(&package.manifest.id)
+                .unwrap()
+                .unwrap()
+                .auth_generation,
+            2
+        );
+        assert_eq!(
+            second
+                .latest_auth_envelope(&package.manifest.id)
+                .unwrap()
+                .unwrap(),
+            second_envelope
+        );
+        assert!(
+            store
+                .latest_auth_envelope(&package.manifest.id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(std::sync::Arc::ptr_eq(&first.lifecycle, &second.lifecycle));
     }
 
     // This end-to-end test intentionally retains the complete signed install,
@@ -6248,6 +6580,26 @@ mod tests {
         fs::write(&descriptor, tampered_descriptor).unwrap();
         assert!(store.active_auth_package("gemini").is_err());
         fs::write(&descriptor, original_descriptor).unwrap();
+        let named_projection = store
+            .auth_base
+            .join("accounts/11111111-1111-4111-8111-111111111111/providers/gemini/runtime");
+        fs::create_dir_all(&named_projection).unwrap();
+        fs::write(
+            named_projection.join("synthetic-credential"),
+            b"fixture-only",
+        )
+        .unwrap();
+        assert!(
+            store
+                .uninstall("gemini", &release.artifact_digest)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Revoke named")
+        );
+        assert!(store.plugin_root("gemini").join("active").exists());
+        assert!(named_projection.join("synthetic-credential").is_file());
+        fs::remove_dir_all(named_projection).unwrap();
         store
             .uninstall("gemini", &release.artifact_digest)
             .await
@@ -7042,6 +7394,7 @@ mod tests {
     fn auth_replicas_never_move_backwards_or_change_meaning() {
         let envelope = |generation, action| SealedProviderAuth {
             envelope_schema: 1,
+            account_id: crate::provider_account::ProviderAccountId::default(),
             provider_id: "gemini".to_owned(),
             auth_generation: generation,
             auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
@@ -7406,6 +7759,7 @@ mod tests {
         );
         let non_contributory = SealedProviderAuth {
             envelope_schema: 1,
+            account_id: crate::provider_account::ProviderAccountId::default(),
             provider_id: "gemini".to_owned(),
             auth_generation: 1,
             auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
@@ -7482,6 +7836,66 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("package.cowboy-provider"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn retention_preserves_native_logout_executable_until_cleanup_finishes() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let scoped = store.for_account(&account).unwrap();
+        let profile_dir = scoped
+            .auth_provider_root("claude-code")
+            .join("native/generations/1");
+        fs::create_dir_all(profile_dir.join("home")).unwrap();
+        let file = profile_dir.join("profile.json");
+        let mut profile = serde_json::json!({
+            "schema":1,"account":account,"provider":"claude-code","generation":1,
+            "request":"login","contract":"fixture","version":"fixture","method":"native",
+            "digest":format!("sha256:{}", "d".repeat(64)),"identity":null,"revoked":false
+        });
+        fs::write(&file, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let executable = store
+            .plugin_root("claude-code")
+            .join("generations")
+            .join("d".repeat(64));
+        let pins = BTreeSet::new();
+        store
+            .retire_generations("claude-code", &pins)
+            .await
+            .unwrap();
+        assert!(
+            executable.exists(),
+            "unfinished login must retain its exact package"
+        );
+        fs::write(&file, b"corrupt").unwrap();
+        assert!(
+            store
+                .retire_generations("claude-code", &pins)
+                .await
+                .is_err()
+        );
+        assert!(executable.exists(), "unreadable metadata must fail closed");
+        profile["revoked"] = serde_json::json!(true);
+        fs::write(&file, serde_json::to_vec(&profile).unwrap()).unwrap();
+        store
+            .retire_generations("claude-code", &pins)
+            .await
+            .unwrap();
+        assert!(
+            executable.exists(),
+            "revocation intent is not completed cleanup"
+        );
+        fs::remove_dir(profile_dir.join("home")).unwrap();
+        store
+            .retire_generations("claude-code", &pins)
+            .await
+            .unwrap();
+        assert!(!executable.exists());
+        assert!(
+            file.exists(),
+            "retain the operation fence after package retirement"
+        );
     }
 
     #[tokio::test]

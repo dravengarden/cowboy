@@ -148,6 +148,11 @@ pub(crate) struct PluginHostBinding {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReplyKind {
+    NativeBinding,
+    NativeLogout,
+    LoginStop,
+    WorkerExit,
+    NativeProfile,
     Execution,
     Adapter,
     Command,
@@ -198,6 +203,11 @@ impl From<AdapterFailure> for String {
 }
 
 enum Reply {
+    NativeBinding(Option<Box<crate::provider_account::PreparedBinding>>),
+    NativeLogout(Option<crate::provider_account::NativeLogoutObservation>),
+    LoginStop(Option<crate::provider_account::LoginStopObservation>),
+    WorkerExit(Option<crate::provider_account::WorkerExitObservation>),
+    NativeProfile(Option<Box<crate::provider_account::NativeProfileReceipt>>),
     Execution(Box<crate::machine_protocol::execution::Response>),
     InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
     InstallationStep(Box<crate::machine_protocol::plugin_install::InstallObservation>),
@@ -224,6 +234,11 @@ enum Reply {
 impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
+            Self::NativeProfile(_) => ReplyKind::NativeProfile,
+            Self::NativeLogout(_) => ReplyKind::NativeLogout,
+            Self::LoginStop(_) => ReplyKind::LoginStop,
+            Self::WorkerExit(_) => ReplyKind::WorkerExit,
+            Self::NativeBinding(_) => ReplyKind::NativeBinding,
             Self::Execution(_) => ReplyKind::Execution,
             Self::InstallationTarget(_) => ReplyKind::InstallationTarget,
             Self::InstallationStep(_) => ReplyKind::InstallationStep,
@@ -251,7 +266,7 @@ struct PendingResponse {
 
 struct PendingRequestGuard<'a> {
     live: &'a RwLock<LiveState>,
-    request_id: &'a str,
+    request_id: String,
     ticket: Arc<()>,
 }
 
@@ -261,10 +276,10 @@ impl Drop for PendingRequestGuard<'_> {
         // A late finalizer cannot remove a newer waiter that reused the key.
         if live
             .pending
-            .get(self.request_id)
+            .get(&self.request_id)
             .is_some_and(|entry| Arc::ptr_eq(&entry.ticket, &self.ticket))
         {
-            live.pending.remove(self.request_id);
+            live.pending.remove(&self.request_id);
         }
     }
 }
@@ -649,6 +664,36 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::NativeBindingPrepared {
+                request_id,
+                binding,
+            } => {
+                live.complete(token, &request_id, Reply::NativeBinding(binding));
+            }
+            MachineEvent::WorkerExitObserved {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::WorkerExit(observation));
+            }
+            MachineEvent::LoginStopObserved {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::LoginStop(observation));
+            }
+            MachineEvent::NativeLogoutObserved {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::NativeLogout(observation));
+            }
+            MachineEvent::NativeProfileObserved {
+                request_id,
+                profile,
+            } => {
+                live.complete(token, &request_id, Reply::NativeProfile(profile));
+            }
             MachineEvent::ExecutionResponse {
                 request_id,
                 response,
@@ -714,6 +759,7 @@ impl MachineControl {
                 live.complete(token, &request_id, Reply::PluginStep(observation));
             }
             MachineEvent::ProviderAuthRefreshCandidate { .. }
+            | MachineEvent::NativeProfileCompleted { .. }
             | MachineEvent::ServiceAuthCandidate { .. } => {}
             MachineEvent::PluginHostResponse {
                 request_id,
@@ -826,7 +872,7 @@ impl MachineControl {
     fn begin_request<'a>(
         &'a self,
         machine_id: &str,
-        request_id: &'a str,
+        request_id: &str,
         command: MachineCommand,
         kind: ReplyKind,
         binding: Option<RequestBinding<'_>>,
@@ -922,7 +968,7 @@ impl MachineControl {
             receiver,
             PendingRequestGuard {
                 live: &self.live,
-                request_id,
+                request_id: request_id.to_owned(),
                 ticket,
             },
         ))
@@ -1034,16 +1080,6 @@ impl MachineControl {
             )),
             Err(_) => Err(AdapterFailure::local("Machine adapter request timed out")),
         }
-    }
-
-    pub async fn command_request(
-        &self,
-        machine_id: &str,
-        request_id: String,
-        command: MachineCommand,
-    ) -> Result<(), String> {
-        self.command_request_with_timeout(machine_id, request_id, command, PROVIDER_COMMAND_TIMEOUT)
-            .await
     }
 
     /// Caller-generated command correlation IDs must be fresh per invocation;
@@ -1439,6 +1475,187 @@ impl MachineControl {
             Some(RequestBinding::Reactivate(connection, target)),
         )
         .await
+    }
+
+    pub(crate) async fn query_native_profile(
+        &self,
+        connection: &ConnectionToken,
+        login: &crate::store::provider_accounts::logins::Receipt,
+    ) -> Result<Option<crate::provider_account::NativeProfileReceipt>, String> {
+        let generation = login
+            .native_generation
+            .ok_or("native_generation_required")?;
+        let request_id = format!("native-observe-{}", uuid::Uuid::new_v4());
+        let command = MachineCommand::QueryNativeProfile {
+            request_id: request_id.clone(),
+            provider: login.provider_id.clone(),
+            account_id: login.input.account_id.clone(),
+            generation,
+            login_request_id: login.request_id.clone(),
+        };
+        let (rx, _pending) = self.begin_request(
+            &login.input.machine_id,
+            &request_id,
+            command,
+            ReplyKind::NativeProfile,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx).await;
+        if !self.is_current(connection) {
+            return Err("authentication_connection_changed".into());
+        }
+        match result {
+            Ok(Ok(Reply::NativeProfile(profile))) => Ok(profile.map(|profile| *profile)),
+            _ => Err("native_observation_unavailable".into()),
+        }
+    }
+
+    /// Caller must admit the owner-scoped revocation and confirm session stops.
+    /// A generic command ACK never completes this typed request.
+    pub(crate) fn begin_native_logout<'a>(
+        &'a self,
+        connection: &'a ConnectionToken,
+        machine: &str,
+        logout: &'a crate::provider_account::NativeLogoutRequest,
+    ) -> Result<
+        impl Future<Output = Result<crate::provider_account::NativeLogoutObservation, String>> + 'a,
+        String,
+    > {
+        if logout.account_id.is_default() || logout.generation == 0 {
+            return Err("named_native_profile_required".into());
+        }
+        let request_id = format!("native-logout-{}", uuid::Uuid::new_v4());
+        let (rx, pending) = self.begin_request(
+            machine,
+            &request_id,
+            MachineCommand::NativeLogout {
+                request_id: request_id.clone(),
+                logout: logout.clone(),
+            },
+            ReplyKind::NativeLogout,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        Ok(async move {
+            let _pending = pending;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(125), rx).await;
+            if !self.is_current(connection) {
+                return Err("authentication_connection_changed".into());
+            }
+            match result {
+                Ok(Ok(Reply::NativeLogout(Some(observation))))
+                    if observation.request == *logout =>
+                {
+                    Ok(observation)
+                }
+                _ => Err("native_logout_unconfirmed".into()),
+            }
+        })
+    }
+
+    /// Preparation is not readmission. Require the exact typed receipt on the
+    /// same authenticated connection, never a generic command acknowledgement.
+    pub(crate) async fn prepare_native_binding(
+        &self,
+        connection: &ConnectionToken,
+        machine: &str,
+        binding: &crate::provider_account::PreparedBinding,
+    ) -> Result<(), String> {
+        if binding.target.account_id.is_default()
+            || binding.target.account_id != binding.stopped.request.account_id
+        {
+            return Err("native_binding_scope_mismatch".into());
+        }
+        let request_id = format!("binding-prepare-{}", uuid::Uuid::new_v4());
+        let (rx, _pending) = self.begin_request(
+            machine,
+            &request_id,
+            MachineCommand::PrepareNativeBinding {
+                request_id: request_id.clone(),
+                binding: Box::new(binding.clone()),
+            },
+            ReplyKind::NativeBinding,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), rx).await;
+        if !self.is_current(connection) {
+            return Err("authentication_connection_changed".into());
+        }
+        match result {
+            Ok(Ok(Reply::NativeBinding(Some(observed)))) if *observed == *binding => Ok(()),
+            _ => Err("native_binding_preparation_unconfirmed".into()),
+        }
+    }
+
+    /// Read only retained evidence on the exact authenticated connection.
+    pub(crate) async fn query_worker_exit(
+        &self,
+        connection: &ConnectionToken,
+        machine: &str,
+        worker: &crate::provider_account::WorkerExitRequest,
+    ) -> Result<crate::provider_account::WorkerExitObservation, String> {
+        if worker.account_id.is_default() {
+            return Err("named_account_required".into());
+        }
+        let request_id = format!("worker-exit-{}", uuid::Uuid::new_v4());
+        let (rx, _pending) = self.begin_request(
+            machine,
+            &request_id,
+            MachineCommand::QueryWorkerExit {
+                request_id: request_id.clone(),
+                worker: worker.clone(),
+            },
+            ReplyKind::WorkerExit,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+        if !self.is_current(connection) {
+            return Err("authentication_connection_changed".into());
+        }
+        match result {
+            Ok(Ok(Reply::WorkerExit(Some(observation))))
+                if observation.request == *worker && !observation.launch_id.is_nil() =>
+            {
+                Ok(observation)
+            }
+            _ => Err("worker_exit_unconfirmed".into()),
+        }
+    }
+
+    /// Read only retained evidence on the exact authenticated connection.
+    pub(crate) async fn query_login_stop(
+        &self,
+        connection: &ConnectionToken,
+        machine: &str,
+        login: &crate::provider_account::LoginStopRequest,
+    ) -> Result<crate::provider_account::LoginStopObservation, String> {
+        if login.account_id.is_default() {
+            return Err("named_account_required".into());
+        }
+        let request_id = format!("login-stop-{}", uuid::Uuid::new_v4());
+        let (rx, _pending) = self.begin_request(
+            machine,
+            &request_id,
+            MachineCommand::QueryLoginStop {
+                request_id: request_id.clone(),
+                login: login.clone(),
+            },
+            ReplyKind::LoginStop,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+        if !self.is_current(connection) {
+            return Err("authentication_connection_changed".into());
+        }
+        match result {
+            Ok(Ok(Reply::LoginStop(Some(observation))))
+                if observation.request == *login
+                    && observation.process_started == observation.leader_exited
+                    && (!observation.process_tree_exited || observation.leader_exited) =>
+            {
+                Ok(observation)
+            }
+            _ => Err("login_stop_unconfirmed".into()),
+        }
     }
 
     async fn command_receipt(
@@ -2510,8 +2727,10 @@ mod tests {
         control.record_remote(
             &connection,
             MachineEvent::ProviderAuthRefreshCandidate {
+                native_identity: None,
                 request_id: "refresh-1".to_owned(),
                 provider_id: "grok".to_owned(),
+                account_id: crate::provider_account::ProviderAccountId::default(),
                 expected_generation: 3,
                 provider_version: "1.1.8".to_owned(),
                 generation_digest: format!("sha256:{}", "ab".repeat(32)),
@@ -2844,6 +3063,7 @@ mod tests {
                 "old",
                 MachineCommand::BeginLogin {
                     request_id: "request".to_owned(),
+                    account_id: crate::provider_account::ProviderAccountId::default(),
                     provider: "gemini".to_owned(),
                     auth_method: Some("code-assist".to_owned()),
                 },

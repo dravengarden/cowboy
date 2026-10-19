@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.5.2",
+  "version": "3.5.3",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.14",
+  "sdk_version": "3.1.15",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
@@ -33,7 +33,7 @@
         "Working"
       ],
       "interval_ms": 4200,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "Codex is working"
@@ -41,8 +41,8 @@
   "configuration_presets": [
     {
       "id": "sol-6-1-medium",
-      "name": "Sol 6.1 · Medium",
-      "detail": "GPT-6.1-Sol · Medium reasoning",
+      "name": "Sol 6.1 \u00b7 Medium",
+      "detail": "GPT-6.1-Sol \u00b7 Medium reasoning",
       "is_default": true,
       "values": {
         "model": "gpt-6.1-sol",
@@ -51,8 +51,8 @@
     },
     {
       "id": "astra-medium",
-      "name": "Astra · Medium",
-      "detail": "GPT-6-Astra · Medium reasoning",
+      "name": "Astra \u00b7 Medium",
+      "detail": "GPT-6-Astra \u00b7 Medium reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6-astra",
@@ -61,8 +61,8 @@
     },
     {
       "id": "astra-max",
-      "name": "Astra · Max",
-      "detail": "GPT-6-Astra · Max reasoning",
+      "name": "Astra \u00b7 Max",
+      "detail": "GPT-6-Astra \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6-astra",
@@ -71,8 +71,8 @@
     },
     {
       "id": "luna-6-max",
-      "name": "Luna 6 · Max",
-      "detail": "GPT-6-Luna · Max reasoning",
+      "name": "Luna 6 \u00b7 Max",
+      "detail": "GPT-6-Luna \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6-luna",
@@ -81,8 +81,8 @@
     },
     {
       "id": "sol-6-1-max",
-      "name": "Sol 6.1 · Max",
-      "detail": "GPT-6.1-Sol · Max reasoning",
+      "name": "Sol 6.1 \u00b7 Max",
+      "detail": "GPT-6.1-Sol \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6.1-sol",

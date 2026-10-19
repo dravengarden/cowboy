@@ -35,6 +35,89 @@ import {
   subscribeProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 
+test("native identity recipes require the new SDK and bounded native output paths", () => {
+  const candidate = manifest();
+  candidate.sdk_version = PROVIDER_SDK_VERSION;
+  const identity = {
+    kind: "fresh_login_json_v1" as const,
+    authority: "fixture",
+    relative_path: ".profile.json",
+    subject_path: ["account", "id"],
+    tenant_path: ["tenant"],
+  };
+  candidate.authentication.methods = [{
+    id: "native",
+    label: "Native account",
+    flow: "browser_code",
+    required_bundle_keys: [],
+    native_identity: identity,
+    executor: {
+      kind: "command_v1",
+      component: { kind: "provider_cli", slot: "fixture" },
+      arguments: ["auth", "login"],
+      terminal: "pipes",
+      challenge: "browser_code",
+      environment: {},
+      preflight: [],
+    },
+  }];
+  validateProviderManifest(candidate);
+  candidate.authentication.methods[0]!.native_logout = {
+    kind: "command_v1",
+    arguments: ["auth", "logout"],
+  };
+  validateProviderManifest(candidate);
+  for (
+    const logout of [
+      { kind: "other", arguments: ["logout"] },
+      { kind: "command_v1", arguments: ["logout"], extra: true },
+      { kind: "command_v1", arguments: [] },
+      { kind: "command_v1", arguments: Array(33).fill("logout") },
+      { kind: "command_v1", arguments: ["secret\nargument"] },
+      { kind: "command_v1", arguments: ["界".repeat(342)] },
+    ]
+  ) {
+    const invalid = structuredClone(candidate);
+    Object.assign(invalid.authentication.methods[0]!, {
+      native_logout: logout,
+    });
+    assertThrows(() => validateProviderManifest(invalid));
+  }
+  const noIdentity = structuredClone(candidate);
+  delete noIdentity.authentication.methods[0]!.native_identity;
+  assertThrows(() => validateProviderManifest(noIdentity));
+  const old = structuredClone(candidate);
+  old.sdk_version = "3.1.14";
+  assertThrows(() => validateProviderManifest(old));
+  for (
+    const invalid of [
+      { ...identity, kind: "unknown" },
+      { ...identity, extra: "ignored" },
+      { ...identity, relative_path: "../other-account" },
+      { ...identity, relative_path: "" },
+      { ...identity, relative_path: "a".repeat(513) },
+      { ...identity, subject_path: [] },
+      { ...identity, subject_path: ["x".repeat(129)] },
+      { ...identity, tenant_path: ["control\u0000"] },
+    ]
+  ) {
+    const broken = structuredClone(candidate);
+    Object.assign(broken.authentication.methods[0]!, {
+      native_identity: invalid,
+    });
+    assertThrows(() => validateProviderManifest(broken));
+  }
+  const secret = structuredClone(candidate);
+  secret.authentication.methods[0]!.flow = "secret_input";
+  secret.authentication.methods[0]!.required_bundle_keys = ["key"];
+  secret.authentication.methods[0]!.executor = {
+    kind: "secret_input_v1",
+    bundle_key: "key",
+    verification_url: "https://example.com/keys",
+  };
+  assertThrows(() => validateProviderManifest(secret));
+});
+
 test("managed profiles require signed capability and validate every argument binding", () => {
   const candidate = manifest();
   candidate.sdk_version = PROVIDER_SDK_VERSION;
@@ -692,6 +775,14 @@ test("Provider Catalog validates exact temporary authentication executors", () =
     authentications: [],
     authentication_executors: [executor],
   });
+  validateProviderCatalog({
+    providers: [],
+    authentications: [],
+    authentication_executors: [
+      { ...executor, machine_id: "machine-a" },
+      { ...executor, machine_id: "machine-b" },
+    ],
+  });
   assertThrows(
     () =>
       validateProviderCatalog({
@@ -749,6 +840,46 @@ test("Service authentication selects the newest exact active executor", () => {
       "account",
     ),
     older,
+  );
+  const catalog = {
+    providers: [latest, older],
+    authentications: [],
+    authentication_executors: [
+      {
+        machine_id: "machine-a",
+        provider_id: older.provider_id,
+        provider_version: older.provider_version,
+        generation_digest: older.artifact_digest!,
+      },
+      {
+        machine_id: "machine-b",
+        provider_id: latest.provider_id,
+        provider_version: latest.provider_version,
+        generation_digest: latest.artifact_digest!,
+      },
+    ],
+  };
+  assertEquals(
+    providerAuthenticationExecutorEntry(
+      catalog,
+      older.provider_id,
+      "account",
+      "machine-a",
+    ),
+    { ...older, machine_id: "machine-a" },
+  );
+  assertEquals(
+    providerAuthenticationExecutorEntry(
+      catalog,
+      older.provider_id,
+      "account",
+      "offline",
+    ),
+    undefined,
+  );
+  assertEquals(
+    providerAuthenticationExecutorEntry(catalog, older.provider_id, "account"),
+    { ...latest, machine_id: "machine-b" },
   );
 });
 

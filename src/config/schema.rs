@@ -12,6 +12,13 @@ use super::{Field, Key, Kind, Reload, Scope, Value};
 
 // ---- Service (Controller) -------------------------------------------------
 
+pub const ACCOUNT_REVOCATION_RETRY_INTERVAL: Key<Duration> =
+    Key::new(Scope::Service, "accounts.revocation_retry_interval");
+pub const ACCOUNT_NATIVE_CLAUDE_LOGIN: Key<bool> =
+    Key::new(Scope::Service, "accounts.native_claude_login");
+pub const ACCOUNT_NATIVE_CLAUDE_SESSIONS: Key<bool> =
+    Key::new(Scope::Service, "accounts.native_claude_sessions");
+
 pub const PLUGIN_GENERATION_RETENTION_INTERVAL: Key<Duration> =
     Key::new(Scope::Service, "plugins.generation_retention_interval");
 pub const PLUGIN_URGENT_RETENTION_COOLDOWN: Key<Duration> =
@@ -41,6 +48,30 @@ pub const SESSIONS_MEMORY_RECLAIM_MIN_IDLE: Key<Duration> =
     Key::new(Scope::Service, "sessions.memory_reclaim_min_idle");
 
 pub static SERVICE_FIELDS: &[Field] = &[
+    Field {
+        key: "accounts.native_claude_sessions",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Allow new named Claude sessions with an admitted native login.\nDoes not start logins or bypass Machine, release, identity or runtime checks.\nDisabling refuses new creation; existing sessions keep their lifecycle checks.",
+    },
+    Field {
+        key: "accounts.native_claude_login",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Allow explicit named Claude native logins on account-aware Machines.\nDoes not enable named session creation, copy credentials, or start a login.\nDisabling refuses new logins; existing receipt recovery and cleanup remain available.",
+    },
+    Field {
+        key: "accounts.revocation_retry_interval",
+        kind: Kind::Duration {
+            min: Duration::from_secs(30),
+            max: Duration::from_hours(24),
+        },
+        default: Value::Duration(Duration::from_mins(1)),
+        reload: Reload::Live,
+        doc: "Delay between bounded recovery pages of existing account revocation intents.\nDoes not start login, probe Providers, or declare upstream logout complete.",
+    },
     Field {
         key: "plugins.generation_retention_interval",
         kind: Kind::Duration {

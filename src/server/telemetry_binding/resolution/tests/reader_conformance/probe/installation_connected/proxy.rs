@@ -478,6 +478,7 @@ fn installation_relay_refuses_old_protocols_auth_and_read_only_target_queries() 
         command_frame(
             MachineCommand::BeginLogin {
                 request_id: "forbidden".into(),
+                account_id: Default::default(),
                 provider: "forbidden".into(),
                 auth_method: None
             },

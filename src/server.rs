@@ -94,6 +94,7 @@ mod operator_approval;
 mod persistence_tests;
 mod plugin_install;
 mod preferences;
+mod provider_accounts;
 mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
@@ -168,6 +169,11 @@ const fn provider_session_has_active_turn(status: crate::agent_model::Status) ->
 
 #[derive(Clone)]
 struct ProviderAuthExecutor {
+    native_login: Option<provider_accounts::login::NativeLogin>,
+    named_login: Option<provider_accounts::login::NamedLogin>,
+    cancel_requested: bool,
+    owner_user_id: String,
+    account_id: crate::provider_account::ProviderAccountId,
     machine_id: String,
     connection: crate::machine_control::ConnectionToken,
     provider_id: String,
@@ -181,13 +187,48 @@ struct ProviderAuthExecutor {
 }
 
 impl ProviderAuthExecutor {
-    fn active(&self, control: &MachineControl, timestamp: i64) -> bool {
-        self.expires_at_ms > timestamp && control.is_current(&self.connection)
+    fn auth_scope<'a>(
+        &'a self,
+        state: &'a AppState,
+    ) -> Option<&'a crate::provider_service::ProviderAuthService> {
+        if self.native_login.is_some() {
+            return None;
+        }
+        Some(
+            self.named_login
+                .as_ref()
+                .map_or(&state.provider_auth, |login| &login.scope),
+        )
+    }
+    fn owned_by(&self, owner: &str, provider: &str) -> bool {
+        self.owner_user_id == owner && self.provider_id == provider
     }
 
+    // Called while holding the executor map lock. A failed validation/commit
+    // must remain retryable; only durable credential ownership consumes it.
+    fn promote_once<T, E>(
+        &mut self,
+        commit: impl FnOnce(u64) -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
+        if self.promotion_started {
+            return Ok(None);
+        }
+        let committed = commit(self.expected_generation)?;
+        self.promotion_started = true;
+        Ok(Some(committed))
+    }
+
+    fn active(&self, control: &MachineControl, timestamp: i64) -> bool {
+        !self.cancel_requested
+            && self.expires_at_ms > timestamp
+            && control.is_current(&self.connection)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn accepts_candidate(
         &self,
         machine_id: &str,
+        account_id: &crate::provider_account::ProviderAccountId,
         provider_id: &str,
         auth_method: &str,
         provider_version: &str,
@@ -195,6 +236,7 @@ impl ProviderAuthExecutor {
         auth_contract_fingerprint: &str,
     ) -> bool {
         self.machine_id == machine_id
+            && self.account_id == *account_id
             && self.provider_id == provider_id
             && self.provider_version == provider_version
             && self.generation_digest == generation_digest
@@ -225,6 +267,9 @@ fn reconcile_provider_auth_executors(
 ) -> ProviderAuthReconciliation {
     let mut expired = Vec::new();
     executors.retain(|request_id, executor| {
+        if !executor.account_id.is_default() {
+            return true;
+        }
         let active = executor.active(control, timestamp);
         if !active {
             expired.push((executor.provider_id.clone(), request_id.clone()));
@@ -233,7 +278,9 @@ fn reconcile_provider_auth_executors(
     });
     let active = executors
         .iter()
-        .filter(|(_, executor)| executor.provider_id == provider_id)
+        .filter(|(_, executor)| {
+            executor.account_id.is_default() && executor.provider_id == provider_id
+        })
         .max_by_key(|(_, executor)| executor.expires_at_ms)
         .map(|(request_id, executor)| (request_id.clone(), executor.clone()));
     ProviderAuthReconciliation { expired, active }
@@ -242,13 +289,39 @@ fn reconcile_provider_auth_executors(
 fn resumed_provider_authentication_response(
     request_id: String,
     executor: &ProviderAuthExecutor,
+    request: &ProviderAuthStartRequest,
+    owner_user_id: &str,
 ) -> Response {
+    // Default credentials remain Service-wide, but the temporary native login
+    // and its challenges belong only to the initiating product user.
+    if executor.owner_user_id != owner_user_id {
+        return (
+            StatusCode::CONFLICT,
+            "Provider authentication is already in progress",
+        )
+            .into_response();
+    }
+    if executor.auth_method != request.method
+        || request
+            .machine_id
+            .as_ref()
+            .is_some_and(|id| id != &executor.machine_id)
+        || executor.provider_version != request.provider_version
+        || executor.generation_digest != request.generation_digest
+    {
+        return (
+            StatusCode::CONFLICT,
+            "A different authentication flow is active; cancel it before starting another",
+        )
+            .into_response();
+    }
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "request_id": request_id,
             "expires_at_ms": executor.expires_at_ms,
             "method": executor.auth_method,
+            "machine_id": executor.machine_id,
             "resumed": true,
         })),
     )
@@ -5249,6 +5322,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path == "/api/preferences" || path.starts_with("/api/preferences/") {
         return RouteAuth::Product;
+    }
+    if path == "/api/provider-accounts" || path.starts_with("/api/provider-accounts/") {
+        return RouteAuth::ProductOperator;
     }
     if path == "/api/drafts"
         || path.starts_with("/api/drafts/")
@@ -10391,6 +10467,9 @@ async fn serve_axum(
         .route("/api/sync/dataset", get(sync_dataset::get_dataset))
         .route("/api/drafts", get(draft_documents::list))
         .route("/api/preferences/{scope}", get(preferences::read))
+        .route("/api/provider-accounts", get(provider_accounts::read).put(provider_accounts::update).layer(DefaultBodyLimit::max(16 * 1024)))
+        .route("/api/provider-accounts/login-operations/{operation}", get(provider_accounts::login::http_receipt).delete(provider_accounts::login::http_cancel))
+        .route("/api/provider-accounts/{account_id}/login", get(provider_accounts::login::options).post(provider_accounts::login::start).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/preferences", put(preferences::update).layer(DefaultBodyLimit::max(64 * 1024)))
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route("/api/drafts/{id}", get(draft_documents::read))
@@ -10712,6 +10791,7 @@ async fn serve_axum(
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
+    let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
@@ -10726,6 +10806,7 @@ async fn serve_axum(
     convergence_task.abort();
     provider_update_task.abort();
     generation_retention_task.abort();
+    account_recovery_task.abort();
     usage_broadcast_task.abort();
     code_buffers.shutdown().await;
     result?;
@@ -12165,7 +12246,37 @@ async fn api_machine_events(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
 ) -> Response {
-    Json(state.machine_control.events(&machine_id)).into_response()
+    // Native login details are available only through the owner-checked
+    // authentication endpoint, never through shared Machine diagnostics.
+    Json(
+        state
+            .machine_control
+            .events(&machine_id)
+            .into_iter()
+            .filter(machine_diagnostic_event_visible)
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+fn machine_diagnostic_event_visible(event: &crate::machine_protocol::MachineEvent) -> bool {
+    use crate::machine_protocol::MachineEvent;
+    match event {
+        MachineEvent::LoginChallenge { .. }
+        | MachineEvent::LoginState { .. }
+        | MachineEvent::ServiceAuthCandidate { .. }
+        | MachineEvent::NativeProfileCompleted { .. }
+        | MachineEvent::NativeProfileObserved { .. }
+        | MachineEvent::NativeLogoutObserved { .. }
+        | MachineEvent::LoginStopObserved { .. }
+        | MachineEvent::WorkerExitObserved { .. }
+        | MachineEvent::NativeBindingPrepared { .. }
+        | MachineEvent::ProviderAuthRefreshCandidate { .. } => false,
+        MachineEvent::CommandResult { request_id, .. } => {
+            !request_id.starts_with("provider-login-")
+        }
+        _ => true,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -12646,6 +12757,8 @@ fn product_machine_is_visible(
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct ProviderAuthenticationExecutorIdentity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine_id: Option<String>,
     provider_id: String,
     provider_version: String,
     generation_digest: String,
@@ -12653,6 +12766,7 @@ struct ProviderAuthenticationExecutorIdentity {
 
 async fn connected_provider_authentication_executors(
     state: &AppState,
+    include_machine: bool,
 ) -> Vec<ProviderAuthenticationExecutorIdentity> {
     let Some(store) = state.store.as_ref() else {
         return Vec::new();
@@ -12697,6 +12811,7 @@ async fn connected_provider_authentication_executors(
                 continue;
             }
             executors.insert(ProviderAuthenticationExecutorIdentity {
+                machine_id: include_machine.then(|| machine.id.clone()),
                 provider_id: installed.plugin_id,
                 provider_version: installed.plugin_version,
                 generation_digest: installed.generation_digest,
@@ -12706,44 +12821,70 @@ async fn connected_provider_authentication_executors(
     executors.into_iter().collect()
 }
 
-async fn api_providers(State(state): State<Arc<AppState>>) -> Response {
-    let providers = state.provider_catalog.entries();
-    let authentication_executors = connected_provider_authentication_executors(&state).await;
-    Json(serde_json::json!({
-        "providers": providers,
-        "authentications": state.provider_auth.statuses(),
-        "authentication_executors": authentication_executors,
-    }))
-    .into_response()
+fn machine_auth_discovery_requested(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-cowboy-auth-machine")
+        .is_some_and(|value| value == "1")
 }
 
-async fn api_plugins(State(state): State<Arc<AppState>>) -> Response {
-    let authentication_executors = connected_provider_authentication_executors(&state).await;
+async fn api_providers(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let providers = state.provider_catalog.entries();
+    let authentication_executors = connected_provider_authentication_executors(
+        &state,
+        machine_auth_discovery_requested(&headers),
+    )
+    .await;
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::VARY, "x-cowboy-auth-machine"),
+        ],
+        Json(serde_json::json!({
+            "providers": providers,
+            "authentications": state.provider_auth.statuses(),
+            "authentication_executors": authentication_executors,
+        })),
+    )
+        .into_response()
+}
+
+async fn api_plugins(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let authentication_executors = connected_provider_authentication_executors(
+        &state,
+        machine_auth_discovery_requested(&headers),
+    )
+    .await;
     let inventory = state.plugin_catalog.inventory();
     let hosts = inventory
         .runtime
         .map_or_else(Vec::new, |runtime| runtime.public_descriptors());
-    Json(serde_json::json!({
-        "component_release": crate::plugin::active_component_release(),
-        "platform": {
-            "schema_version": 1,
-            "storage": state.plugin_storage.kind(),
-            "slots": crate::plugin_host::PluginSlotId::all()
-                .iter()
-                .map(|slot| slot.as_str())
-                .collect::<Vec<_>>(),
-            "host_api": crate::plugin_host::PLUGIN_HOST_API_VERSION,
-            "renderer_schema": crate::plugin_host::PLUGIN_RENDERER_SCHEMA_VERSION,
-            "native_host_api": crate::plugin_host::PLUGIN_NATIVE_HOST_API_VERSION,
-            "surface_transport": "typed-renderer-v1",
-            "hosts": hosts,
-        },
-        "plugins": inventory.entries,
-        "providers": state.provider_catalog.entries(),
-        "authentications": state.provider_auth.statuses(),
-        "authentication_executors": authentication_executors,
-    }))
-    .into_response()
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::VARY, "x-cowboy-auth-machine"),
+        ],
+        Json(serde_json::json!({
+            "component_release": crate::plugin::active_component_release(),
+            "platform": {
+                "schema_version": 1,
+                "storage": state.plugin_storage.kind(),
+                "slots": crate::plugin_host::PluginSlotId::all()
+                    .iter()
+                    .map(|slot| slot.as_str())
+                    .collect::<Vec<_>>(),
+                "host_api": crate::plugin_host::PLUGIN_HOST_API_VERSION,
+                "renderer_schema": crate::plugin_host::PLUGIN_RENDERER_SCHEMA_VERSION,
+                "native_host_api": crate::plugin_host::PLUGIN_NATIVE_HOST_API_VERSION,
+                "surface_transport": "typed-renderer-v1",
+                "hosts": hosts,
+            },
+            "plugins": inventory.entries,
+            "providers": state.provider_catalog.entries(),
+            "authentications": state.provider_auth.statuses(),
+            "authentication_executors": authentication_executors,
+        })),
+    )
+        .into_response()
 }
 
 async fn api_plugin_call(
@@ -13295,6 +13436,7 @@ struct PluginUninstallRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderAuthCommitRequest {
     /// Exact Provider-declared authentication method that produced this bundle.
     method: String,
@@ -13446,7 +13588,10 @@ async fn api_provider_auth_logout(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderAuthStartRequest {
+    #[serde(default)]
+    machine_id: Option<String>,
     method: String,
     provider_version: String,
     generation_digest: String,
@@ -13454,6 +13599,7 @@ struct ProviderAuthStartRequest {
 
 async fn api_provider_auth_start(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
     Path(provider_id): Path<String>,
     Json(request): Json<ProviderAuthStartRequest>,
 ) -> Response {
@@ -13501,11 +13647,23 @@ async fn api_provider_auth_start(
             .cancel_authentication(&expired_provider, &expired_request);
     }
     if let Some((request_id, executor)) = resumable {
-        return resumed_provider_authentication_response(request_id, &executor);
+        return resumed_provider_authentication_response(
+            request_id,
+            &executor,
+            &request,
+            &auth.principal.user_id,
+        );
     }
     let candidates = state.machine_control.connected_machine_ids();
     let mut executor = None;
     for machine_id in candidates {
+        if request
+            .machine_id
+            .as_ref()
+            .is_some_and(|id| id != &machine_id)
+        {
+            continue;
+        }
         if !state.supervisor.runtime_allowed(&provider_id, &machine_id) {
             continue;
         }
@@ -13557,12 +13715,22 @@ async fn api_provider_auth_start(
                 .provider_auth
                 .cancel_authentication(&expired_provider, &expired_request);
         }
-        return resumed_provider_authentication_response(active_request_id, &active_executor);
+        return resumed_provider_authentication_response(
+            active_request_id,
+            &active_executor,
+            &request,
+            &auth.principal.user_id,
+        );
     }
     executors.insert(
         request_id.clone(),
         ProviderAuthExecutor {
+            native_login: None,
+            named_login: None,
+            cancel_requested: false,
+            owner_user_id: auth.principal.user_id.clone(),
             machine_id: machine_id.clone(),
+            account_id: Default::default(),
             connection: connection.clone(),
             provider_id: provider_id.clone(),
             provider_version: request.provider_version.clone(),
@@ -13578,7 +13746,6 @@ async fn api_provider_auth_start(
             expires_at_ms,
         },
     );
-    drop(executors);
     for (expired_provider, expired_request) in reconciliation.expired {
         state
             .provider_auth
@@ -13588,29 +13755,34 @@ async fn api_provider_auth_start(
         .provider_auth
         .begin_authentication(&package, &request_id)
     {
-        state.provider_auth_executors.lock().remove(&request_id);
+        executors.remove(&request_id);
         return (StatusCode::CONFLICT, error.to_string()).into_response();
     }
     if let Err(error) = state.machine_control.send_on_connection(
         &connection,
         crate::machine_protocol::MachineCommand::BeginLogin {
             request_id: request_id.clone(),
+            account_id: Default::default(),
             provider: provider_id.clone(),
             auth_method: Some(request.method.clone()),
         },
     ) {
-        state.provider_auth_executors.lock().remove(&request_id);
+        executors.remove(&request_id);
         state
             .provider_auth
             .cancel_authentication(&provider_id, &request_id);
         return (StatusCode::CONFLICT, error).into_response();
     }
+    // Publish the executor, transient state and BeginLogin under one lock.
+    // Cancellation must never overtake the initial command enqueue.
+    drop(executors);
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "request_id": request_id,
             "expires_at_ms": expires_at_ms,
             "method": request.method,
+            "machine_id": machine_id,
             "resumed": false,
         })),
     )
@@ -13619,6 +13791,7 @@ async fn api_provider_auth_start(
 
 async fn api_provider_auth_events(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
     Path((provider_id, request_id)): Path<(String, String)>,
 ) -> Response {
     let executor = state
@@ -13626,29 +13799,58 @@ async fn api_provider_auth_events(
         .lock()
         .get(&request_id)
         .cloned();
-    let Some(executor) = executor.filter(|value| value.provider_id == provider_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            "authentication request is not active",
+    let Some(executor) =
+        executor.filter(|value| value.owned_by(&auth.principal.user_id, &provider_id))
+    else {
+        return provider_accounts::login::native_events(
+            &state,
+            &auth.principal.user_id,
+            &provider_id,
+            &request_id,
+            None,
         )
-            .into_response();
+        .await;
     };
+    if executor.native_login.is_some() {
+        return provider_accounts::login::native_events(
+            &state,
+            &auth.principal.user_id,
+            &provider_id,
+            &request_id,
+            Some(&executor),
+        )
+        .await;
+    }
     if !executor.active(&state.machine_control, now_ms()) {
-        state.provider_auth_executors.lock().remove(&request_id);
-        state
-            .provider_auth
-            .cancel_authentication(&provider_id, &request_id);
-        let _ = state.machine_control.send_on_connection(
-            &executor.connection,
-            crate::machine_protocol::MachineCommand::CancelLogin {
-                request_id: request_id.clone(),
-            },
-        );
+        if let Some(active) = state.provider_auth_executors.lock().get_mut(&request_id) {
+            active.cancel_requested = true;
+        }
+        let cleanup = provider_accounts::login::cancel(&state, &executor, &request_id).await;
+        if let Err(error) = cleanup {
+            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        }
+        if let Err(error) = provider_accounts::login::dispatch_cancel(
+            &state.machine_control,
+            &state.provider_auth_executors,
+            &executor,
+            &request_id,
+        )
+        .await
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        }
         return (
             StatusCode::NOT_FOUND,
             "authentication request expired or its Machine disconnected; start a new authorization",
         )
             .into_response();
+    }
+    if executor.named_login.is_some()
+        && executor.promotion_started
+        && let Err(error) =
+            provider_accounts::login::recover_pending(&state, &executor, &request_id).await
+    {
+        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
     let events: Vec<_> = state
         .machine_control
@@ -13663,26 +13865,54 @@ async fn api_provider_auth_events(
             _ => false,
         })
         .collect();
-    Json(serde_json::json!({ "request_id": request_id, "events": events })).into_response()
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "request_id": request_id, "events": events })),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderAuthSubmitRequest {
     code: String,
 }
 
 async fn api_provider_auth_submit(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
     Path((provider_id, request_id)): Path<(String, String)>,
     Json(request): Json<ProviderAuthSubmitRequest>,
 ) -> Response {
-    let executor = state
-        .provider_auth_executors
-        .lock()
-        .get(&request_id)
-        .cloned();
+    submit_provider_auth_code(
+        &state.provider_auth_executors,
+        &state.machine_control,
+        &auth.principal.user_id,
+        &provider_id,
+        request_id,
+        request.code,
+    )
+}
+
+fn submit_provider_auth_code(
+    executors: &parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
+    control: &MachineControl,
+    owner: &str,
+    provider: &str,
+    request_id: String,
+    code: String,
+) -> Response {
+    let code = match crate::provider_account::login_code(&code) {
+        Ok(code) => code.to_owned(),
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    // Keep validation and enqueue serialized with cancellation/promotion.
+    let executors = executors.lock();
+    let executor = executors.get(&request_id);
     let Some(executor) = executor.filter(|value| {
-        value.provider_id == provider_id && value.active(&state.machine_control, now_ms())
+        value.owned_by(owner, provider)
+            && !value.promotion_started
+            && value.active(control, now_ms())
     }) else {
         return (
             StatusCode::NOT_FOUND,
@@ -13690,12 +13920,9 @@ async fn api_provider_auth_submit(
         )
             .into_response();
     };
-    match state.machine_control.send_on_connection(
+    match control.send_on_connection(
         &executor.connection,
-        crate::machine_protocol::MachineCommand::SubmitLoginCode {
-            request_id,
-            code: request.code,
-        },
+        crate::machine_protocol::MachineCommand::SubmitLoginCode { request_id, code },
     ) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
@@ -13704,18 +13931,27 @@ async fn api_provider_auth_submit(
 
 async fn api_provider_auth_cancel(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
     Path((provider_id, request_id)): Path<(String, String)>,
+) -> Response {
+    cancel_provider_auth_request(&state, &auth.principal.user_id, &provider_id, request_id).await
+}
+
+async fn cancel_provider_auth_request(
+    state: &Arc<AppState>,
+    owner: &str,
+    provider_id: &str,
+    request_id: String,
 ) -> Response {
     let executor = {
         let mut executors = state.provider_auth_executors.lock();
-        if executors
-            .get(&request_id)
-            .is_some_and(|value| value.provider_id == provider_id)
-        {
-            executors.remove(&request_id)
-        } else {
-            None
-        }
+        executors
+            .get_mut(&request_id)
+            .filter(|value| value.owned_by(owner, provider_id))
+            .map(|executor| {
+                executor.cancel_requested = true;
+                executor.clone()
+            })
     };
     let Some(executor) = executor else {
         return (
@@ -13724,13 +13960,18 @@ async fn api_provider_auth_cancel(
         )
             .into_response();
     };
-    state
-        .provider_auth
-        .cancel_authentication(&provider_id, &request_id);
-    match state.machine_control.send_on_connection(
-        &executor.connection,
-        crate::machine_protocol::MachineCommand::CancelLogin { request_id },
-    ) {
+    let cleanup = provider_accounts::login::cancel(state, &executor, &request_id).await;
+    if let Err(error) = cleanup {
+        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+    }
+    match provider_accounts::login::dispatch_cancel(
+        &state.machine_control,
+        &state.provider_auth_executors,
+        &executor,
+        &request_id,
+    )
+    .await
+    {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
@@ -13798,6 +14039,7 @@ fn provider_auth_recovery_generations(
 ) -> Option<(u64, u64)> {
     let expected_generation = session.provider_auth_generation?;
     (status.provider_id == session.provider
+        && status.account_id == session.provider_account_id
         && status.authentication_state
             == crate::provider_service::ServiceAuthenticationState::Ready
         && status.auth_generation > expected_generation
@@ -13830,10 +14072,10 @@ fn recover_failed_provider_sessions(
         else {
             continue;
         };
-        let Some(status) = statuses
-            .iter()
-            .find(|status| status.provider_id == session.provider)
-        else {
+        let Some(status) = statuses.iter().find(|status| {
+            status.provider_id == session.provider
+                && status.account_id == session.provider_account_id
+        }) else {
             continue;
         };
         let Some(outcome) = replicas.get(&session.provider) else {
@@ -13939,8 +14181,25 @@ async fn sync_provider_auth_to_machine(
     machine_id: &str,
     provider_id: &str,
 ) -> Result<u64, String> {
+    sync_provider_account_auth_to_machine(
+        state,
+        machine_id,
+        provider_id,
+        &crate::provider_account::ProviderAccountId::default(),
+    )
+    .await
+}
+
+async fn sync_provider_account_auth_to_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<u64, String> {
     let connection = state.machine_control.operation_connection(machine_id)?;
-    let envelope = provider_auth_envelope_for_machine(state, machine_id, provider_id).await?;
+    let envelope =
+        provider_account_auth_envelope_for_machine(state, machine_id, provider_id, account_id)
+            .await?;
     state
         .provider_auth_sync
         .apply(&state.machine_control, &connection, envelope)
@@ -13952,6 +14211,21 @@ async fn provider_auth_envelope_for_machine(
     machine_id: &str,
     provider_id: &str,
 ) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
+    provider_account_auth_envelope_for_machine(
+        state,
+        machine_id,
+        provider_id,
+        &crate::provider_account::ProviderAccountId::default(),
+    )
+    .await
+}
+
+async fn provider_account_auth_envelope_for_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
     let store = state
         .store
         .as_ref()
@@ -13961,10 +14235,133 @@ async fn provider_auth_envelope_for_machine(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Machine {machine_id:?} has no enrolled encryption key"))?;
+    let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
+    if account_id.is_default()
+        || scope.status(provider_id).is_some_and(|status| {
+            status.authentication_state
+                == crate::provider_service::ServiceAuthenticationState::SignedOut
+        })
+    {
+        let envelope = scope
+            .seal_for_machine(provider_id, &public_key)
+            .map_err(|error| error.to_string())?;
+        if !account_id.is_default()
+            && envelope.action != crate::machine_protocol::ProviderAuthAction::Wipe
+        {
+            return Err("Provider grant changed during cleanup".into());
+        }
+        Ok(envelope)
+    } else {
+        scope
+            .seal_current_grant(store, machine_id, provider_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+async fn provider_auth_scope_for_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<Arc<crate::provider_service::ProviderAuthService>, String> {
+    if account_id.is_default() {
+        return Ok(Arc::clone(&state.provider_auth));
+    }
+    if state
+        .machine_control
+        .connection_protocol(machine_id)
+        .is_none_or(|(_, protocol)| {
+            protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+        })
+    {
+        return Err("Machine does not support named Provider accounts".to_owned());
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or("Provider authentication requires persistence")?;
+    let key = store
+        .machine_encryption_public_key(machine_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("Machine has no enrolled encryption key")?;
     state
         .provider_auth
-        .seal_for_machine(provider_id, &public_key)
+        .existing_machine_grant(account_id, &key)
         .map_err(|error| error.to_string())
+}
+
+async fn reconcile_account_refresh(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    result: crate::provider_service::ProviderAuthRefreshResult,
+) -> Result<(), String> {
+    let providers = match result {
+        crate::provider_service::ProviderAuthRefreshResult::Stale { .. } => {
+            vec![provider_id.to_owned()]
+        }
+        crate::provider_service::ProviderAuthRefreshResult::Unchanged(_) => return Ok(()),
+        crate::provider_service::ProviderAuthRefreshResult::Updated(statuses) => statuses
+            .into_iter()
+            .map(|status| status.provider_id)
+            .collect(),
+    };
+    // A native refresh belongs to this Machine grant. Never broadcast it to
+    // another account or overwrite another Machine's independent refresh lineage.
+    for provider in providers {
+        sync_and_mark_account_grant(state, machine_id, &provider, account_id).await?;
+    }
+    Ok(())
+}
+
+async fn sync_and_mark_account_grant(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+) -> Result<(), String> {
+    let generation =
+        sync_provider_account_auth_to_machine(state, machine_id, provider_id, account_id).await?;
+    provider_auth_scope_for_machine(state, machine_id, account_id)
+        .await?
+        .mark_distribution(
+            provider_id,
+            generation,
+            crate::provider_service::ServiceDistributionState::Current,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn reconcile_machine_account_grants(
+    state: &Arc<AppState>,
+    machine_id: &str,
+) -> Result<(), String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or("Provider authentication requires persistence")?;
+    let key = store
+        .machine_encryption_public_key(machine_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("Machine has no enrolled encryption key")?;
+    let statuses = state
+        .provider_auth
+        .machine_account_replica_statuses(&key)
+        .map_err(|error| error.to_string())?;
+    for status in statuses {
+        if let Err(error) =
+            sync_and_mark_account_grant(state, machine_id, &status.provider_id, &status.account_id)
+                .await
+        {
+            tracing::warn!(%error, %machine_id, account = status.account_id.as_str(), provider = %status.provider_id,
+                "account credential reconciliation remains pending");
+        }
+    }
+    Ok(())
 }
 
 fn failed_provider_auth_projection_ids(
@@ -13989,6 +14386,8 @@ async fn accept_provider_auth_refresh_candidate(
     installed: Option<crate::machine_protocol::PluginInventory>,
     request_id: &str,
     provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    native_identity: Option<&crate::provider_account::NativeIdentity>,
     expected_generation: u64,
     provider_version: &str,
     generation_digest: &str,
@@ -14003,8 +14402,10 @@ async fn accept_provider_auth_refresh_candidate(
                 && installed.plugin_version == provider_version
                 && installed.generation_digest == generation_digest
                 && installed.state == crate::machine_protocol::PluginInstallationState::Active
-                && installed.auth_generation == Some(expected_generation)
-                && installed.replica_state == crate::machine_protocol::ProviderReplicaState::Current
+                && (!account_id.is_default()
+                    || (installed.auth_generation == Some(expected_generation)
+                        && installed.replica_state
+                            == crate::machine_protocol::ProviderReplicaState::Current))
         })
         .ok_or_else(|| {
             "credential refresh does not match the Machine's active Provider generation".to_owned()
@@ -14022,7 +14423,7 @@ async fn accept_provider_auth_refresh_candidate(
     }
     if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint
         || package.manifest.authentication.portable_schema != portable_schema
-        || installed.auth_generation != Some(expected_generation)
+        || (account_id.is_default() && installed.auth_generation != Some(expected_generation))
     {
         return Err("credential refresh contract does not match the active Provider".to_owned());
     }
@@ -14034,11 +14435,41 @@ async fn accept_provider_auth_refresh_candidate(
     let packages = state
         .provider_catalog
         .packages_for_authentication_scope(portable_schema);
-    match state
-        .provider_auth
-        .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
-        .map_err(|error| error.to_string())?
-    {
+    let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
+    let result = if account_id.is_default() {
+        scope
+            .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
+            .map_err(|error| error.to_string())?
+    } else {
+        let method = package
+            .manifest
+            .authentication
+            .methods
+            .iter()
+            .find(|method| method.id == auth_method)
+            .ok_or("unknown refresh method")?;
+        provider_accounts::validate_native_evidence(
+            provider_id,
+            method.native_identity.as_ref(),
+            native_identity,
+        )
+        .map_err(str::to_owned)?;
+        scope
+            .refresh_current_grant(
+                state.store.as_ref().ok_or("refresh requires persistence")?,
+                machine_id,
+                &package,
+                &bundle,
+                expected_generation,
+                native_identity.ok_or("named refresh requires native identity")?,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+    };
+    if !account_id.is_default() {
+        return reconcile_account_refresh(state, machine_id, provider_id, account_id, result).await;
+    }
+    match result {
         crate::provider_service::ProviderAuthRefreshResult::Stale { current_generation } => {
             tracing::info!(
                 %request_id,
@@ -14086,6 +14517,8 @@ async fn accept_service_auth_candidate(
     machine_id: &str,
     request_id: &str,
     provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    native_identity: Option<&crate::provider_account::NativeIdentity>,
     auth_method: &str,
     provider_version: &str,
     generation_digest: &str,
@@ -14094,7 +14527,28 @@ async fn accept_service_auth_candidate(
     values: BTreeMap<String, String>,
     account_label: Option<String>,
 ) -> Result<(), String> {
-    let executor = {
+    if !account_id.is_default() {
+        return provider_accounts::login::accept(
+            state,
+            provider_accounts::login::Candidate {
+                machine: machine_id,
+                request: request_id,
+                provider: provider_id,
+                account: account_id,
+                identity: native_identity,
+                version: provider_version,
+                digest: generation_digest,
+                contract: auth_contract_fingerprint,
+                bundle: crate::machine_protocol::PortableCredentialBundle {
+                    portable_schema: portable_schema.into(),
+                    method_id: auth_method.into(),
+                    values,
+                },
+            },
+        )
+        .await;
+    }
+    let (executor, statuses) = {
         let mut executors = state.provider_auth_executors.lock();
         let executor = executors
             .get_mut(request_id)
@@ -14104,6 +14558,7 @@ async fn accept_service_auth_candidate(
         }
         if !executor.accepts_candidate(
             machine_id,
+            account_id,
             provider_id,
             auth_method,
             provider_version,
@@ -14115,49 +14570,66 @@ async fn accept_service_auth_candidate(
         if executor.promotion_started {
             return Ok(());
         }
-        executor.promotion_started = true;
-        executor.clone()
-    };
-    let package = state
-        .provider_catalog
-        .package(provider_id, provider_version, generation_digest)
-        .ok_or_else(|| {
-            "authentication candidate references an untrusted Agent Plugin release".to_owned()
-        })?;
-    if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint {
-        return Err("authentication candidate contract fingerprint mismatch".to_owned());
-    }
-    if package.manifest.authentication.portable_schema != portable_schema {
-        return Err("authentication candidate portable schema mismatch".to_owned());
-    }
-    let bundle = crate::machine_protocol::PortableCredentialBundle {
-        portable_schema: portable_schema.to_owned(),
-        method_id: auth_method.to_owned(),
-        values,
-    };
-    let packages = state
-        .provider_catalog
-        .packages_for_authentication_scope(portable_schema);
-    let statuses = (if packages.len() == 1 {
-        state
-            .provider_auth
-            .commit(
-                &packages[0],
-                &bundle,
-                account_label.clone(),
-                Some(executor.expected_generation),
-            )
-            .map(|status| vec![status])
-    } else {
-        state.provider_auth.commit_shared(
-            &packages,
-            &bundle,
-            account_label.clone(),
+        let package = state
+            .provider_catalog
+            .package(provider_id, provider_version, generation_digest)
+            .ok_or_else(|| {
+                "authentication candidate references an untrusted Agent Plugin release".to_owned()
+            })?;
+        if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint {
+            return Err("authentication candidate contract fingerprint mismatch".to_owned());
+        }
+        if package.manifest.authentication.portable_schema != portable_schema {
+            return Err("authentication candidate portable schema mismatch".to_owned());
+        }
+        let method = package
+            .manifest
+            .authentication
+            .methods
+            .iter()
+            .find(|method| method.id == auth_method)
+            .ok_or_else(|| "authentication method is not declared".to_owned())?;
+        provider_accounts::validate_native_evidence(
             provider_id,
-            Some(executor.expected_generation),
+            method.native_identity.as_ref(),
+            native_identity,
         )
-    })
-    .map_err(|error| error.to_string())?;
+        .map_err(str::to_owned)?;
+        let bundle = crate::machine_protocol::PortableCredentialBundle {
+            portable_schema: portable_schema.to_owned(),
+            method_id: auth_method.to_owned(),
+            values,
+        };
+        let packages = state
+            .provider_catalog
+            .packages_for_authentication_scope(portable_schema);
+        let statuses = executor.promote_once(|expected_generation| {
+            (if packages.len() == 1 {
+                state
+                    .provider_auth
+                    .commit(
+                        &packages[0],
+                        &bundle,
+                        account_label.clone(),
+                        Some(expected_generation),
+                    )
+                    .map(|status| vec![status])
+            } else {
+                state.provider_auth.commit_shared(
+                    &packages,
+                    &bundle,
+                    account_label.clone(),
+                    provider_id,
+                    Some(expected_generation),
+                )
+            })
+            .map_err(|error| error.to_string())
+        })?;
+        let Some(statuses) = statuses else {
+            return Ok(());
+        };
+        (executor.clone(), statuses)
+    };
     let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
     recover_failed_provider_sessions(state, &statuses, &replicas);
     let mut warnings = Vec::new();
@@ -14191,17 +14663,19 @@ async fn accept_service_auth_candidate(
     let finalize_request_id = machine_request_id("provider-auth-finalize");
     if let Err(error) = state
         .machine_control
-        .command_request(
-            machine_id,
+        .command_on_connection(
+            &executor.connection,
             finalize_request_id.clone(),
             crate::machine_protocol::MachineCommand::FinalizeProviderAuthCandidate {
                 request_id: finalize_request_id,
+                account_id: executor.account_id.clone(),
                 provider_id: provider_id.to_owned(),
                 auth_method: auth_method.to_owned(),
                 candidate_request_id: request_id.to_owned(),
             },
         )
         .await
+        .map_err(|error| error.detail)
     {
         tracing::warn!(%error, %provider_id, %request_id, "cleaning temporary Provider authentication home");
         state.machine_control.record_service_login(
@@ -14977,6 +15451,15 @@ async fn handle_machine_ws(
             observed_at_ms: now_ms(),
         },
     );
+    if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+        let sync_state = Arc::clone(&state);
+        let machine_id = hello.machine_id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = reconcile_machine_account_grants(&sync_state, &machine_id).await {
+                tracing::warn!(%error, %machine_id, "cannot reconcile account credential grants");
+            }
+        });
+    }
     for authentication in state.provider_auth.replica_statuses() {
         let sync_state = Arc::clone(&state);
         let machine_id = hello.machine_id.clone();
@@ -15053,9 +15536,22 @@ async fn handle_machine_ws(
         // Install before the broker handshake finishes. Snapshot replay of
         // restored workers can take seconds; without a runtime in the router
         // every send/open in that window fails with "hawk is not connected".
-        let runtime =
-            RemoteRuntime::connecting(hub, label.clone(), generation, provider_auth, protocol);
+        let runtime = RemoteRuntime::connecting(
+            hub,
+            label.clone(),
+            generation,
+            provider_auth,
+            protocol,
+            if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+                hello.encryption_public_key.clone()
+            } else {
+                None
+            },
+        );
         runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
+        if let Some(store) = state.store.as_ref() {
+            runtime.attach_native_admission(machine_id.clone(), store.clone());
+        }
         router.install(machine_id.clone(), Arc::clone(&runtime));
         tokio::spawn(async move {
             match RemoteBootstrap::from_stream(label, runtime_core).await {
@@ -15426,10 +15922,34 @@ async fn handle_machine_ws(
                 }
             }
             crate::machine_protocol::MachineFrame::Event {
+                event: crate::machine_protocol::MachineEvent::NativeProfileCompleted { profile },
+            } => {
+                let completion_state = Arc::clone(&state);
+                let completion_connection = connection.clone();
+                tokio::spawn(async move {
+                    if let Err(code) = provider_accounts::login::accept_native_completion(
+                        &completion_state,
+                        &completion_connection,
+                        &profile,
+                    )
+                    .await
+                    {
+                        // Do not log account identity or let rejected events
+                        // overwrite another request's legitimate status.
+                        tracing::warn!(%code, "native Provider completion was not recorded");
+                    }
+                });
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, None)
+                    .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
                 event:
                     crate::machine_protocol::MachineEvent::ServiceAuthCandidate {
                         request_id,
                         provider_id,
+                        account_id,
+                        native_identity,
                         auth_method,
                         provider_version,
                         generation_digest,
@@ -15447,6 +15967,8 @@ async fn handle_machine_ws(
                         &candidate_machine_id,
                         &request_id,
                         &provider_id,
+                        &account_id,
+                        native_identity.as_ref(),
                         &auth_method,
                         &provider_version,
                         &generation_digest,
@@ -15458,9 +15980,30 @@ async fn handle_machine_ws(
                     .await
                     {
                         tracing::warn!(%error, %provider_id, "temporary Provider login could not be promoted");
-                        candidate_state
-                            .provider_auth
-                            .fail_authentication(&provider_id, &request_id);
+                        // A rejected candidate from another account must not
+                        // poison the legitimate request's transient status.
+                        // Serialize failure publication with promotion. An
+                        // older rejected candidate must not overwrite a later
+                        // successful commit's status.
+                        let executors = candidate_state.provider_auth_executors.lock();
+                        let Some(executor) = executors.get(&request_id).filter(|executor| {
+                            !executor.promotion_started
+                                && executor.accepts_candidate(
+                                    &candidate_machine_id,
+                                    &account_id,
+                                    &provider_id,
+                                    &auth_method,
+                                    &provider_version,
+                                    &generation_digest,
+                                    &auth_contract_fingerprint,
+                                )
+                        }) else {
+                            return;
+                        };
+                        let Some(scope) = executor.auth_scope(&candidate_state) else {
+                            return;
+                        };
+                        scope.fail_authentication(&provider_id, &request_id);
                         candidate_state.machine_control.record_service_login(
                             &candidate_machine_id,
                             crate::machine_control::ServiceLoginNotice {
@@ -15480,8 +16023,10 @@ async fn handle_machine_ws(
             crate::machine_protocol::MachineFrame::Event {
                 event:
                     crate::machine_protocol::MachineEvent::ProviderAuthRefreshCandidate {
+                        native_identity,
                         request_id,
                         provider_id,
+                        account_id,
                         expected_generation,
                         provider_version,
                         generation_digest,
@@ -15504,6 +16049,8 @@ async fn handle_machine_ws(
                         installed,
                         &request_id,
                         &provider_id,
+                        &account_id,
+                        native_identity.as_ref(),
                         expected_generation,
                         &provider_version,
                         &generation_digest,
@@ -15521,10 +16068,11 @@ async fn handle_machine_ws(
                             expected_generation,
                             "Machine-refreshed Provider credentials were rejected"
                         );
-                        if let Err(reconcile_error) = sync_provider_auth_to_machine(
+                        if let Err(reconcile_error) = sync_provider_account_auth_to_machine(
                             &refresh_state,
                             &refresh_machine_id,
                             &provider_id,
+                            &account_id,
                         )
                         .await
                         {
@@ -15591,9 +16139,16 @@ async fn handle_machine_ws(
                             | crate::machine_protocol::AuthState::Error
                     )
                 {
-                    state
-                        .provider_auth
-                        .fail_authentication(provider, request_id);
+                    let executors = state.provider_auth_executors.lock();
+                    if let Some(executor) = executors.get(request_id).filter(|executor| {
+                        executor.machine_id == hello.machine_id
+                            && executor.provider_id == *provider
+                            && !executor.promotion_started
+                            && executor.active(&state.machine_control, now_ms())
+                    }) && let Some(scope) = executor.auth_scope(&state)
+                    {
+                        scope.fail_authentication(provider, request_id);
+                    }
                 }
                 state.machine_control.record_remote(&connection, event);
                 store
@@ -15812,6 +16367,7 @@ fn apply_session_provider_reload(
                 state.supervisor.reload_session_provider(
                     meta,
                     crate::supervisor::ProviderGeneration {
+                        account_id: Some(&meta.provider_account_id),
                         version: &target.version,
                         digest: &target.digest,
                         auth_generation: meta.provider_auth_generation,
@@ -16104,6 +16660,8 @@ struct NewSessionRequest {
     #[serde(default)]
     provider: String,
     #[serde(default)]
+    provider_account_id: Option<crate::provider_account::ProviderAccountId>,
+    #[serde(default)]
     folder_id: Option<String>,
     #[serde(default)]
     preset: Option<String>,
@@ -16202,6 +16760,27 @@ fn resolve_provider_generation(
     provider_id: &str,
     service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
 ) -> Result<ResolvedProviderGeneration, String> {
+    resolve_provider_generation_with_auth(
+        catalog,
+        plugins,
+        inventory,
+        provider_id,
+        SchedulingAuthentication::Service(service_auth),
+    )
+}
+
+enum SchedulingAuthentication<'a> {
+    Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
+    Native(&'a crate::provider_account::NativeProfileReceipt),
+}
+
+fn resolve_provider_generation_with_auth(
+    catalog: &crate::provider_catalog::ProviderCatalog,
+    plugins: &crate::plugin_catalog::PluginCatalog,
+    inventory: &[crate::machine_protocol::PluginInventory],
+    provider_id: &str,
+    authentication: SchedulingAuthentication<'_>,
+) -> Result<ResolvedProviderGeneration, String> {
     let installed = inventory
         .iter()
         .find(|provider| {
@@ -16244,11 +16823,16 @@ fn resolve_provider_generation(
             "installed Provider contract fingerprint does not match the Catalog".to_owned(),
         );
     }
-    let auth_generation = resolve_scheduling_auth_generation(
-        installed,
-        package.manifest.authentication.required,
-        service_auth,
-    )?;
+    let auth_generation = match authentication {
+        SchedulingAuthentication::Service(service_auth) => resolve_scheduling_auth_generation(
+            installed,
+            package.manifest.authentication.required,
+            service_auth,
+        )?,
+        SchedulingAuthentication::Native(profile) => Some(
+            provider_accounts::native_generation::resolve(profile, installed, &package.manifest)?,
+        ),
+    };
     Ok(ResolvedProviderGeneration {
         version: installed.plugin_version.clone(),
         digest: installed.generation_digest.clone(),
@@ -16261,6 +16845,7 @@ fn resolve_provider_generation(
 #[derive(Debug, Serialize)]
 struct NewSessionResponse {
     session_id: String,
+    provider_account_id: crate::provider_account::ProviderAccountId,
     provider_version: String,
     provider_generation_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16350,6 +16935,23 @@ async fn api_new_session(
         req.provider = folder_defaults::value(&defaults, DefaultKey::Provider)
             .unwrap_or_else(|| "claude-code".into());
     }
+    let provider_account_id = match provider_accounts::resolve_for_create(
+        &state,
+        &principal.user_id,
+        &req.provider,
+        req.provider_account_id.as_ref(),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(code) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error":{"code":code}})),
+            )
+                .into_response();
+        }
+    };
     if req.machine_id == "local" {
         req.machine_id =
             folder_defaults::value(&defaults, DefaultKey::Machine).unwrap_or(req.machine_id);
@@ -16408,6 +17010,7 @@ async fn api_new_session(
             "provider": req.provider, "machine_id": req.machine_id, "runtime_machine_id": runtime,
             "cwd": req.cwd.unwrap_or_default(), "origin": req.origin, "initial_prompt": req.initial_prompt,
             "folder_id": req.folder_id, "preset": req.preset,
+            "provider_account_id": provider_account_id,
         })).expect("typed creation request");
         return execution::sessions::create(State(state), Extension(authenticated), Json(request))
             .await;
@@ -16510,14 +17113,16 @@ async fn api_new_session(
                 serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(value).ok()
             })
             .unwrap_or_default();
-        let provider_auth = state.provider_auth.status(&req.provider);
-        let provider_generation = match resolve_provider_generation(
-            &state.provider_catalog,
-            &state.plugin_catalog,
+        let provider_generation = match provider_accounts::registration::generation(
+            &state,
             &providers,
             &req.provider,
-            provider_auth.as_ref(),
-        ) {
+            &principal.user_id,
+            &provider_account_id,
+            &req.machine_id,
+        )
+        .await
+        {
             Ok(generation) => generation,
             Err(error) => return (StatusCode::CONFLICT, error).into_response(),
         };
@@ -16538,49 +17143,32 @@ async fn api_new_session(
             Ok(values) => values,
             Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
         };
-        // Hold both guards through the synchronous durable registration. The
-        // lifecycle read guard makes an uninstall snapshot include this new
-        // session; the Service auth read guard prevents logout/refresh from
-        // changing the generation after readiness was checked.
-        let plugin_creation_fence = state.plugin_lifecycle_fences.read();
-        if plugin_creation_fence.contains_key(&(req.machine_id.clone(), req.provider.clone())) {
-            return (
-                StatusCode::CONFLICT,
-                "Provider is changing on the selected Machine",
-            )
-                .into_response();
-        }
-        let registration = state.provider_auth.with_scheduling_generation(
+        let registration = state.supervisor.prepare_session_on_with_id(
+            &session_id,
             &req.provider,
-            provider_generation.auth_generation.is_some(),
-            provider_generation.auth_generation,
-            || {
-                state.supervisor.register_session_on_with_id(
-                    &session_id,
-                    &req.provider,
-                    Some(source_path.to_owned()),
-                    req.origin,
-                    req.system,
-                    crate::supervisor::SessionPlacement {
-                        machine_id: &req.machine_id,
-                        workspace: Some(&selected_workspace),
-                        execution_binding: None,
-                    },
-                    crate::supervisor::ProviderGeneration {
-                        version: &provider_generation.version,
-                        digest: &provider_generation.digest,
-                        auth_generation: provider_generation.auth_generation,
-                        behavior: Some(&provider_generation.behavior),
-                    },
-                    product_session_owner(state.product_auth_enabled, &principal),
-                )
+            Some(source_path.to_owned()),
+            req.origin,
+            req.system,
+            crate::supervisor::SessionPlacement {
+                machine_id: &req.machine_id,
+                workspace: Some(&selected_workspace),
+                execution_binding: None,
             },
+            crate::supervisor::ProviderGeneration {
+                account_id: Some(&provider_account_id),
+                version: &provider_generation.version,
+                digest: &provider_generation.digest,
+                auth_generation: provider_generation.auth_generation,
+                behavior: Some(&provider_generation.behavior),
+            },
+            product_session_owner(state.product_auth_enabled, &principal),
         );
-        drop(plugin_creation_fence);
-        match registration {
-            Ok(Ok(_)) => {}
-            Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
-            Err(error) => return (StatusCode::CONFLICT, error.to_string()).into_response(),
+        let registration = match registration {
+            Ok(registration) => registration,
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        };
+        if let Err(error) = provider_accounts::registration::register(&state, registration).await {
+            return (StatusCode::CONFLICT, error).into_response();
         }
 
         if let Err(error) = folder_defaults::apply_created(
@@ -16692,6 +17280,7 @@ async fn api_new_session(
             StatusCode::CREATED,
             Json(NewSessionResponse {
                 session_id,
+                provider_account_id: provider_account_id.clone(),
                 provider_version: provider_generation.version,
                 provider_generation_digest: provider_generation.digest,
                 provider_auth_generation: provider_generation.auth_generation,
@@ -16707,6 +17296,7 @@ async fn api_new_session(
         req.system,
         &req.machine_id,
         crate::supervisor::ProviderGeneration {
+            account_id: Some(&provider_account_id),
             version: "",
             digest: "",
             auth_generation: None,
@@ -16735,6 +17325,7 @@ async fn api_new_session(
                     session_id,
                     provider_version: String::new(),
                     provider_generation_digest: String::new(),
+                    provider_account_id,
                     provider_auth_generation: None,
                 }),
             )
@@ -16889,7 +17480,12 @@ mod machine_provider_tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let control = crate::machine_control::MachineControl::default();
         let executor = ProviderAuthExecutor {
+            native_login: None,
+            named_login: None,
+            cancel_requested: false,
+            owner_user_id: "owner".into(),
             machine_id: "hawk".to_owned(),
+            account_id: Default::default(),
             connection: control.install(
                 "hawk".into(),
                 "fixture".into(),
@@ -16908,6 +17504,7 @@ mod machine_provider_tests {
         };
         assert!(executor.accepts_candidate(
             "hawk",
+            &Default::default(),
             "gemini",
             "api-key",
             "1.0.0",
@@ -16916,10 +17513,21 @@ mod machine_provider_tests {
         ));
         assert!(!executor.accepts_candidate(
             "hawk",
+            &Default::default(),
             "gemini",
             "api-key",
             "1.0.0",
             "sha256:other-release",
+            "sha256:auth",
+        ));
+        let another_account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        assert!(!executor.accepts_candidate(
+            "hawk",
+            &another_account,
+            "gemini",
+            "api-key",
+            "1.0.0",
+            "sha256:release",
             "sha256:auth",
         ));
     }
@@ -16930,6 +17538,8 @@ mod machine_provider_tests {
     ) -> crate::provider_service::ProviderAuthenticationStatus {
         crate::provider_service::ProviderAuthenticationStatus {
             provider_id: "gemini".to_owned(),
+            account_id: crate::provider_account::ProviderAccountId::default(),
+            recipient_key: None,
             auth_generation: generation,
             authentication_state: state,
             distribution_state: crate::provider_service::ServiceDistributionState::Current,
@@ -17006,6 +17616,58 @@ mod machine_provider_tests {
     }
 
     #[test]
+    fn native_scheduling_uses_its_own_exact_generation_and_identity() {
+        use super::provider_accounts::native_generation::resolve;
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+        let manifest = source.compile().unwrap();
+        let mut installed = installed_auth(99);
+        installed.plugin_id = manifest.id.clone();
+        installed.plugin_version = manifest.version.clone();
+        let profile = crate::provider_account::NativeProfileReceipt {
+            account_id: "11111111-1111-1111-1111-111111111111"
+                .to_owned()
+                .try_into()
+                .unwrap(),
+            provider_id: manifest.id.clone(),
+            request_id: "fixture".into(),
+            generation: 7,
+            method: "claude-subscription".into(),
+            provider_version: manifest.version.clone(),
+            generation_digest: installed.generation_digest.clone(),
+            auth_contract_fingerprint: manifest.compatibility.auth_contract_fingerprint.clone(),
+            identity: crate::provider_account::NativeIdentity {
+                authority: "claude-ai".into(),
+                subject: "personal-account".into(),
+                tenant: Some("personal-org".into()),
+            },
+        };
+        assert_eq!(resolve(&profile, &installed, &manifest), Ok(7));
+        installed.auth_generation = None;
+        assert_eq!(resolve(&profile, &installed, &manifest), Ok(7));
+        for field in 0..9 {
+            let mut bad = profile.clone();
+            match field {
+                0 => bad.account_id = crate::provider_account::ProviderAccountId::default(),
+                1 => bad.provider_id = "codex".into(),
+                2 => bad.provider_version = "other".into(),
+                3 => bad.generation_digest = "other".into(),
+                4 => bad.auth_contract_fingerprint = "other".into(),
+                5 => bad.generation = 0,
+                6 => bad.method = "api-key".into(),
+                7 => bad.identity.authority = "other".into(),
+                _ => bad.identity.tenant = None,
+            }
+            assert!(
+                resolve(&bad, &installed, &manifest).is_err(),
+                "field {field}"
+            );
+        }
+        installed.plugin_version = "upgraded".into();
+        assert!(resolve(&profile, &installed, &manifest).is_err());
+    }
+
+    #[test]
     fn only_failed_current_provider_projections_request_service_repair() {
         let mut failed = installed_auth(7);
         failed.materialization_state =
@@ -17032,6 +17694,7 @@ mod machine_provider_tests {
             provider: "gemini".to_owned(),
             provider_version: "1.0.0".to_owned(),
             provider_generation_digest: "sha256:provider".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: Some(7),
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -17094,6 +17757,22 @@ mod machine_provider_tests {
             ),
             Some((7, 8))
         );
+        let mut named_session = session.clone();
+        named_session.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let mut named_status = ready.clone();
+        named_status.account_id = named_session.provider_account_id.clone();
+        for (session, status) in [(&named_session, &ready), (&session, &named_status)] {
+            assert_eq!(
+                provider_auth_recovery_generations(
+                    session,
+                    status,
+                    &synchronized,
+                    &status.auth_contract_fingerprint,
+                ),
+                None,
+                "a matching Provider and generation must not cross account identity"
+            );
+        }
         assert_eq!(
             provider_auth_recovery_generations(
                 &session,
@@ -21738,6 +22417,20 @@ mod bootstrap_tests {
         use super::{RouteAuth, classify_route};
         use axum::http::Method;
         assert_eq!(
+            classify_route(&Method::POST, "/api/provider-accounts/account/login"),
+            RouteAuth::ProductOperator
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/provider-accounts/account/login"),
+            RouteAuth::ProductOperator
+        );
+        for method in [Method::GET, Method::PUT] {
+            assert_eq!(
+                classify_route(&method, "/api/provider-accounts"),
+                RouteAuth::ProductOperator
+            );
+        }
+        assert_eq!(
             classify_route(&Method::GET, "/api/preferences/about"),
             RouteAuth::Product
         );
@@ -21884,6 +22577,8 @@ mod provider_install_tests {
     fn authentication(auth_generation: u64) -> ProviderAuthenticationStatus {
         ProviderAuthenticationStatus {
             provider_id: "codex".to_owned(),
+            account_id: crate::provider_account::ProviderAccountId::default(),
+            recipient_key: None,
             auth_generation,
             authentication_state: ServiceAuthenticationState::Ready,
             distribution_state: ServiceDistributionState::Failed,
@@ -21957,6 +22652,237 @@ mod provider_auth_resume_tests {
     use super::{MachineControl, ProviderAuthExecutor, reconcile_provider_auth_executors};
     use std::collections::HashMap;
 
+    #[test]
+    fn machine_auth_discovery_preserves_legacy_catalog_schema() {
+        let identity = |machine_id| super::ProviderAuthenticationExecutorIdentity {
+            machine_id,
+            provider_id: "claude-code".into(),
+            provider_version: "1.0.0".into(),
+            generation_digest: "sha256:fixture".into(),
+        };
+        let legacy = serde_json::to_value(identity(None)).unwrap();
+        assert!(legacy.get("machine_id").is_none());
+        let scoped = std::collections::BTreeSet::from([
+            identity(Some("machine-a".into())),
+            identity(Some("machine-b".into())),
+        ]);
+        assert_eq!(scoped.len(), 2);
+        assert!(!super::machine_auth_discovery_requested(
+            &super::HeaderMap::new()
+        ));
+        for (value, expected) in [("1", true), ("0", false), ("2", false)] {
+            let mut headers = super::HeaderMap::new();
+            headers.insert("x-cowboy-auth-machine", value.parse().unwrap());
+            assert_eq!(super::machine_auth_discovery_requested(&headers), expected);
+        }
+    }
+
+    #[test]
+    fn legacy_auth_requests_reject_unsupported_scope_instead_of_using_default() {
+        use serde_json::json;
+        let start =
+            json!({"method":"native", "provider_version":"1", "generation_digest":"sha256:x"});
+        let commit = json!({"method":"api-key", "values":{}});
+        let submit = json!({"code":"fixture"});
+        assert!(serde_json::from_value::<super::ProviderAuthStartRequest>(start.clone()).is_ok());
+        assert!(serde_json::from_value::<super::ProviderAuthCommitRequest>(commit.clone()).is_ok());
+        assert!(serde_json::from_value::<super::ProviderAuthSubmitRequest>(submit.clone()).is_ok());
+        for field in ["account_id", "subscription_id"] {
+            let scoped = |mut value: serde_json::Value| {
+                value[field] = json!("explicit-scope");
+                value
+            };
+            assert!(
+                serde_json::from_value::<super::ProviderAuthStartRequest>(scoped(start.clone()))
+                    .is_err()
+            );
+            assert!(
+                serde_json::from_value::<super::ProviderAuthCommitRequest>(scoped(commit.clone()))
+                    .is_err()
+            );
+            assert!(
+                serde_json::from_value::<super::ProviderAuthSubmitRequest>(scoped(submit.clone()))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn login_resume_requires_the_same_method_and_signed_release() {
+        let control = control();
+        let active = executor(&control, "claude-code", "claude-account", 2_000);
+        for changed in [
+            None,
+            Some("method"),
+            Some("version"),
+            Some("digest"),
+            Some("machine"),
+            Some("owner"),
+        ] {
+            let request = super::ProviderAuthStartRequest {
+                machine_id: Some(
+                    if changed == Some("machine") {
+                        "other-machine"
+                    } else {
+                        &active.machine_id
+                    }
+                    .into(),
+                ),
+                method: if changed == Some("method") {
+                    "api-key"
+                } else {
+                    &active.auth_method
+                }
+                .into(),
+                provider_version: if changed == Some("version") {
+                    "2.0.0"
+                } else {
+                    &active.provider_version
+                }
+                .into(),
+                generation_digest: if changed == Some("digest") {
+                    "sha256:other"
+                } else {
+                    &active.generation_digest
+                }
+                .into(),
+            };
+            let response = super::resumed_provider_authentication_response(
+                "request".into(),
+                &active,
+                &request,
+                if changed == Some("owner") {
+                    "other-user"
+                } else {
+                    "owner"
+                },
+            );
+            assert_eq!(
+                response.status(),
+                if changed.is_none() {
+                    axum::http::StatusCode::ACCEPTED
+                } else {
+                    axum::http::StatusCode::CONFLICT
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn login_management_requires_both_owner_and_provider() {
+        let control = control();
+        let active = executor(&control, "claude-code", "claude-account", 2_000);
+        assert!(active.owned_by("owner", "claude-code"));
+        assert!(!active.owned_by("other-user", "claude-code"));
+        assert!(!active.owned_by("owner", "codex"));
+        assert!(!active.owned_by("", "claude-code"));
+    }
+
+    #[test]
+    fn rejected_and_cancelled_login_submissions_never_reach_the_machine() {
+        use crate::machine_protocol::MachineCommand;
+        use axum::http::StatusCode;
+        let control = MachineControl::default();
+        let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
+        control.install(
+            "machine".into(),
+            "epoch".into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            tx,
+        );
+        let active = executor(&control, "claude-code", "claude-account", i64::MAX);
+        let executors = parking_lot::Mutex::new(HashMap::from([("request".into(), active)]));
+        for code in [
+            "secret\ncommand".into(),
+            "secret\0".into(),
+            "x".repeat(4097),
+        ] {
+            assert_eq!(
+                super::submit_provider_auth_code(
+                    &executors,
+                    &control,
+                    "owner",
+                    "claude-code",
+                    "request".into(),
+                    code,
+                )
+                .status(),
+                StatusCode::BAD_REQUEST
+            );
+            assert!(commands.try_recv().is_err());
+        }
+        let submit = |owner: &str, provider: &str| {
+            super::submit_provider_auth_code(
+                &executors,
+                &control,
+                owner,
+                provider,
+                "request".into(),
+                "private-code".into(),
+            )
+            .status()
+        };
+        assert_eq!(submit("other-user", "claude-code"), StatusCode::NOT_FOUND);
+        assert_eq!(submit("owner", "codex"), StatusCode::NOT_FOUND);
+        assert!(commands.try_recv().is_err());
+        assert_eq!(submit("owner", "claude-code"), StatusCode::ACCEPTED);
+        assert!(matches!(commands.try_recv().unwrap(),
+            MachineCommand::SubmitLoginCode { request_id, code }
+            if request_id == "request" && code == "private-code"));
+        executors
+            .lock()
+            .get_mut("request")
+            .unwrap()
+            .promotion_started = true;
+        assert_eq!(submit("owner", "claude-code"), StatusCode::NOT_FOUND);
+        assert!(commands.try_recv().is_err());
+        executors.lock().remove("request");
+        assert_eq!(submit("owner", "claude-code"), StatusCode::NOT_FOUND);
+        assert!(commands.try_recv().is_err());
+        let mut expired = executor(&control, "claude-code", "claude-account", 0);
+        executors.lock().insert("request".into(), expired.clone());
+        assert_eq!(submit("owner", "claude-code"), StatusCode::NOT_FOUND);
+        expired.expires_at_ms = i64::MAX;
+        executors.lock().insert("request".into(), expired);
+        let (replacement_tx, mut replacement_commands) = tokio::sync::mpsc::unbounded_channel();
+        control.install(
+            "machine".into(),
+            "epoch".into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            replacement_tx,
+        );
+        assert_eq!(submit("owner", "claude-code"), StatusCode::NOT_FOUND);
+        assert!(commands.try_recv().is_err());
+        assert!(replacement_commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn shared_machine_diagnostics_exclude_native_login_details() {
+        use crate::machine_protocol::MachineEvent;
+        let challenge = MachineEvent::LoginChallenge {
+            request_id: "provider-login-fixture".into(),
+            provider: "claude-code".into(),
+            verification_url: "https://example.invalid/login".into(),
+            user_code: Some("private-code".into()),
+            input_required: false,
+            input_label: None,
+            secret_input: false,
+            expires_at_ms: 2_000,
+        };
+        assert!(!super::machine_diagnostic_event_visible(&challenge));
+        for (request_id, visible) in [("provider-login-fixture", false), ("install-fixture", true)]
+        {
+            let event: MachineEvent = serde_json::from_value(serde_json::json!({
+                "event":"command_result", "request_id":request_id,
+                "accepted":false, "detail":"command output"
+            }))
+            .unwrap();
+            assert_eq!(super::machine_diagnostic_event_visible(&event), visible);
+        }
+    }
+
     fn control() -> MachineControl {
         let control = MachineControl::default();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -21977,7 +22903,12 @@ mod provider_auth_resume_tests {
         expires_at_ms: i64,
     ) -> ProviderAuthExecutor {
         ProviderAuthExecutor {
+            native_login: None,
+            named_login: None,
+            cancel_requested: false,
+            owner_user_id: "owner".into(),
             machine_id: "machine".to_owned(),
+            account_id: Default::default(),
             connection: control.operation_connection("machine").unwrap(),
             provider_id: provider_id.to_owned(),
             provider_version: "1.0.0".to_owned(),
@@ -21988,6 +22919,26 @@ mod provider_auth_resume_tests {
             promotion_started: false,
             expires_at_ms,
         }
+    }
+
+    #[test]
+    fn failed_credential_promotion_can_retry_but_success_commits_only_once() {
+        let control = control();
+        let mut active = executor(&control, "claude-code", "claude-account", 2_000);
+        active.expected_generation = 7;
+        let failed = active.promote_once::<(), _>(|generation| {
+            assert_eq!(generation, 7);
+            Err("rejected credential bundle")
+        });
+        assert_eq!(failed, Err("rejected credential bundle"));
+        assert!(!active.promotion_started);
+        let retry = active.promote_once::<_, &str>(|generation| {
+            assert_eq!(generation, 7);
+            Ok("committed")
+        });
+        assert_eq!(retry, Ok(Some("committed")));
+        let duplicate = active.promote_once::<(), &str>(|_| panic!("duplicate credential commit"));
+        assert_eq!(duplicate, Ok(None));
     }
 
     #[test]

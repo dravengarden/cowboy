@@ -42,6 +42,7 @@ mod core_security;
 pub(crate) mod draft_documents;
 mod managed_calls;
 pub(crate) mod preferences;
+pub(crate) mod provider_accounts;
 mod workspace_documents;
 pub(crate) use core_security::HandoffPoint;
 mod plugin_installations;
@@ -3251,7 +3252,7 @@ impl PostgresStorage {
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, provider_version, provider_generation_digest, \
-             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
+             provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, folder_id, \
@@ -3266,6 +3267,10 @@ impl PostgresStorage {
         let mut out = Vec::with_capacity(session_rows.len());
         for row in session_rows {
             let id = row.id.clone();
+            let Ok(account_id) = row.provider_account_id.clone().try_into() else {
+                tracing::warn!(session_id = %id, "Skipping session with invalid Provider account identity");
+                continue;
+            };
             let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
                 "WITH recent AS MATERIALIZED ( \
                      SELECT seq, payload FROM events \
@@ -3365,7 +3370,7 @@ impl PostgresStorage {
             let mobile_review_state = row.mobile_review_state.clone();
             let folder_id = row.folder_id.clone();
             out.push(LoadedSession {
-                meta: row.into_meta(),
+                meta: row.into_meta(account_id),
                 events,
                 event_count,
                 reached_start,
@@ -3703,8 +3708,8 @@ impl PostgresStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding, provider_account_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17, $18)",
         )
         .bind(&m.id)
         .bind(&m.provider)
@@ -3728,6 +3733,7 @@ impl PostgresStorage {
         .bind(m.system)
         .bind(m.owner_user_id.as_deref())
         .bind(m.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
+        .bind(m.provider_account_id.as_str())
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT session {}", m.id))?;
@@ -8856,6 +8862,7 @@ struct SessionRow {
     provider_version: String,
     provider_generation_digest: String,
     provider_auth_generation: Option<i64>,
+    provider_account_id: String,
     provider_behavior: Option<serde_json::Value>,
     machine_id: String,
     workspace_id: Option<String>,
@@ -8880,7 +8887,7 @@ struct SessionRow {
 }
 
 impl SessionRow {
-    fn into_meta(self) -> SessionMeta {
+    fn into_meta(self, account_id: crate::provider_account::ProviderAccountId) -> SessionMeta {
         SessionMeta {
             id: self.id,
             provider: self.provider,
@@ -8889,6 +8896,7 @@ impl SessionRow {
             provider_auth_generation: self
                 .provider_auth_generation
                 .and_then(|value| u64::try_from(value).ok()),
+            provider_account_id: account_id,
             provider_behavior: self
                 .provider_behavior
                 .and_then(|value| serde_json::from_value(value).ok()),
@@ -8945,6 +8953,7 @@ mod storage_contract_tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -10377,7 +10386,9 @@ mod storage_contract_tests {
         assert_machine_contract(store).await?;
         assert_provider_action_contract(store).await?;
         assert_product_user_contract(store).await?;
-        store.insert_session(&session(session_id)).await?;
+        let mut pinned_session = session(session_id);
+        pinned_session.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        store.insert_session(&pinned_session).await?;
         let companion_id = format!("{session_id}-artifact");
         store.insert_session(&session(&companion_id)).await?;
         let numeric_id = session_id
@@ -10545,6 +10556,10 @@ mod storage_contract_tests {
             Some("agent-thread")
         );
         assert!(restored.meta.provider_auth_generation.is_none());
+        assert_eq!(
+            restored.meta.provider_account_id,
+            pinned_session.provider_account_id
+        );
         assert_eq!(restored.meta.title, "Storage contract retargeted");
         assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
         assert!(restored.meta.owner_user_id.is_none());
@@ -10637,6 +10652,7 @@ mod storage_contract_tests {
         // The persistence operation must never overwrite the credential home
         // or native context, even if its input contains unrelated stale fields.
         reloaded.provider_auth_generation = Some(999);
+        reloaded.provider_account_id = crate::provider_account::ProviderAccountId::default();
         reloaded.agent_session_id = Some("must-not-replace".to_owned());
         store.reload_provider(&reloaded).await?;
         let after_reload = store
@@ -10661,6 +10677,10 @@ mod storage_contract_tests {
             restored.meta.provider_auth_generation
         );
         assert_eq!(after_reload.meta.cwd, restored.meta.cwd);
+        assert_eq!(
+            after_reload.meta.provider_account_id,
+            restored.meta.provider_account_id
+        );
         assert_eq!(after_reload.meta.title, restored.meta.title);
         assert_eq!(after_reload.config_preferences, restored.config_preferences);
         assert_eq!(after_reload.queue[0].id, "queue-1");
@@ -10931,7 +10951,7 @@ mod storage_contract_tests {
         std::fs::create_dir_all(&root).unwrap();
         let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
         let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
-        run_storage_contract(&store, "sess-900000001")
+        Box::pin(run_storage_contract(&store, "sess-900000001"))
             .await
             .unwrap();
         assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000011")
@@ -10952,7 +10972,7 @@ mod storage_contract_tests {
         let store = Store::connect("sqlite::memory:", root.join("artifacts"))
             .await
             .unwrap();
-        run_storage_contract(&store, "sess-900000003")
+        Box::pin(run_storage_contract(&store, "sess-900000003"))
             .await
             .unwrap();
         assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000013")
@@ -11462,7 +11482,7 @@ mod storage_contract_tests {
             std::env::temp_dir().join(format!("cowboy-postgres-contract-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
-        run_storage_contract(&store, "sess-900000002")
+        Box::pin(run_storage_contract(&store, "sess-900000002"))
             .await
             .unwrap();
         assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000012")

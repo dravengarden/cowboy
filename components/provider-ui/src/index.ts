@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.14" as const;
+export const PROVIDER_SDK_VERSION = "3.1.15" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -436,6 +436,14 @@ export interface ProviderManifest {
           >;
         };
       required_bundle_keys: string[];
+      native_identity?: {
+        kind: "fresh_login_json_v1";
+        authority: string;
+        relative_path: string;
+        subject_path: string[];
+        tenant_path?: string[] | null;
+      };
+      native_logout?: { kind: "command_v1"; arguments: string[] };
     }>;
     credential_files: Array<{
       bundle_key: string;
@@ -635,9 +643,10 @@ export interface ProviderCatalogResponse {
 }
 
 /** Exact active Provider generations on connected Machines that may execute a
- * temporary Cowboy Service authentication flow. Machine identity stays
- * private because the Service UI only needs a trusted release identity. */
+ * temporary Cowboy Service authentication flow. Older Controllers omit Machine
+ * identity; those entries cannot satisfy an explicit Machine selection. */
 export interface ProviderAuthenticationExecutor {
+  machine_id?: string;
   provider_id: string;
   provider_version: string;
   generation_digest: string;
@@ -873,7 +882,8 @@ export function validateProviderCatalog(
       !Array.isArray(authentication.methods) ||
       authentication.methods.some((method) =>
         isRecord(method) &&
-        ("executor" in method || "required_bundle_keys" in method)
+        ("executor" in method || "required_bundle_keys" in method ||
+          "native_identity" in method || "native_logout" in method)
       )
     ) {
       throw new Error("Provider Catalog exposed a private Provider contract");
@@ -940,10 +950,14 @@ export function validateProviderCatalog(
     if (
       !isRecord(raw) ||
       !hasOnlyKeys(raw, [
+        "machine_id",
         "provider_id",
         "provider_version",
         "generation_digest",
       ]) ||
+      (raw.machine_id !== undefined &&
+        (typeof raw.machine_id !== "string" ||
+          !isIdentifier(raw.machine_id))) ||
       typeof raw.provider_id !== "string" ||
       !isIdentifier(raw.provider_id) ||
       typeof raw.provider_version !== "string" ||
@@ -953,8 +967,9 @@ export function validateProviderCatalog(
     ) {
       throw new Error("Invalid Provider authentication executor");
     }
-    const identity =
-      `${raw.provider_id}:${raw.provider_version}:${raw.generation_digest}`;
+    const identity = `${
+      raw.machine_id ?? ""
+    }:${raw.provider_id}:${raw.provider_version}:${raw.generation_digest}`;
     if (executorIdentities.has(identity)) {
       throw new Error("Duplicate Provider authentication executor");
     }
@@ -1388,6 +1403,7 @@ export function validateProviderManifest(
     authentication,
     runtime.platforms,
     sidecarAuthEnvironment,
+    input.sdk_version,
   );
   if (
     typeof compatibility.min_controller_contract !== "number" ||
@@ -1491,6 +1507,7 @@ function validateAuthentication(
   authentication: Record<string, unknown>,
   platforms: unknown[],
   sidecarAuthEnvironment: Set<string>,
+  sdkVersion: string,
 ): void {
   const environmentProjection = authentication.environment_projection;
   if (
@@ -1541,6 +1558,57 @@ function validateAuthentication(
       throw new Error("Invalid Provider authentication method");
     }
     methods.add(method.id);
+    if (
+      method.native_identity !== undefined && method.native_identity !== null
+    ) {
+      const identity = method.native_identity;
+      const fieldPath = (path: unknown): boolean =>
+        Array.isArray(path) &&
+        path.length > 0 && path.length <= 16 && path.every((part) =>
+          typeof part === "string" && part.length > 0 &&
+          new TextEncoder().encode(part).length <= 128 &&
+          !/[\p{Cc}]/u.test(part)
+        );
+      if (
+        compareProviderVersions(sdkVersion, "3.1.15") < 0 ||
+        method.executor.kind !== "command_v1" || !isRecord(identity) ||
+        !hasOnlyKeys(identity, [
+          "kind",
+          "authority",
+          "relative_path",
+          "subject_path",
+          "tenant_path",
+        ]) ||
+        identity.kind !== "fresh_login_json_v1" ||
+        typeof identity.authority !== "string" ||
+        !isIdentifier(identity.authority) ||
+        typeof identity.relative_path !== "string" ||
+        new TextEncoder().encode(identity.relative_path).length > 512 ||
+        !isSafeRelativePath(identity.relative_path) ||
+        !fieldPath(identity.subject_path) ||
+        (identity.tenant_path !== undefined && identity.tenant_path !== null &&
+          !fieldPath(identity.tenant_path))
+      ) {
+        throw new Error("Invalid Provider native identity recipe");
+      }
+    }
+    if (method.native_logout !== undefined && method.native_logout !== null) {
+      const logout = method.native_logout;
+      if (
+        !isRecord(method.native_identity) ||
+        method.executor.kind !== "command_v1" ||
+        !isRecord(logout) || !hasOnlyKeys(logout, ["kind", "arguments"]) ||
+        logout.kind !== "command_v1" || !Array.isArray(logout.arguments) ||
+        logout.arguments.length === 0 || logout.arguments.length > 32 ||
+        !logout.arguments.every((argument) =>
+          typeof argument === "string" && argument.length > 0 &&
+          new TextEncoder().encode(argument).length <= 1024 &&
+          !/[\p{Cc}]/u.test(argument)
+        )
+      ) {
+        throw new Error("Invalid Provider native logout recipe");
+      }
+    }
     if (method.executor.kind === "secret_input_v1") {
       if (
         method.flow !== "secret_input" ||
@@ -1696,6 +1764,8 @@ function validateProviderUiManifestContract(
         "flow",
         "executor",
         "required_bundle_keys",
+        "native_identity",
+        "native_logout",
       ]) ||
       !["device_code", "browser_code", "secret_input", "service_broker"]
         .includes(String(method.flow))

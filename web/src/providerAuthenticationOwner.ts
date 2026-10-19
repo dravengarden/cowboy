@@ -73,9 +73,9 @@ interface Ports {
     provider: string,
     method: string,
   ) =>
-    | ProviderCatalogEntry
+    | (ProviderCatalogEntry & { machine_id?: string })
     | undefined
-    | Promise<ProviderCatalogEntry | undefined>;
+    | Promise<(ProviderCatalogEntry & { machine_id?: string }) | undefined>;
   refresh: () => Promise<unknown>;
   closeBrowser: () => void;
   copy: (text: string) => Promise<boolean>;
@@ -479,6 +479,9 @@ export function createProviderAuthenticationOwner(
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({
                   method,
+                  ...(executor.machine_id
+                    ? { machine_id: executor.machine_id }
+                    : {}),
                   provider_version: executor.provider_version,
                   generation_digest: executor.artifact_digest,
                 }),
@@ -489,6 +492,13 @@ export function createProviderAuthenticationOwner(
               "Could not start Provider authentication",
             );
             const body = record(await response.json());
+            if (
+              executor.machine_id && body.machine_id !== executor.machine_id
+            ) {
+              throw new Error(
+                "Authentication Machine changed. Restart sign-in on the selected Machine.",
+              );
+            }
             if (
               !text(body.request_id, 256) || !body.request_id ||
               !timestamp(body.expires_at_ms)

@@ -36,6 +36,7 @@ pub struct SessionPlacement<'a> {
 /// the Controller before a session is registered.
 #[derive(Clone, Copy)]
 pub struct ProviderGeneration<'a> {
+    pub account_id: Option<&'a crate::provider_account::ProviderAccountId>,
     pub version: &'a str,
     pub digest: &'a str,
     pub auth_generation: Option<u64>,
@@ -229,6 +230,42 @@ impl Supervisor {
         provider_generation: ProviderGeneration<'_>,
         owner: Option<SessionOwner<'_>>,
     ) -> Result<String, String> {
+        // This synchronous compatibility path cannot lock and validate a
+        // durable native login binding. Named callers must prepare metadata
+        // and use the account-aware Store registration before publication.
+        if provider_generation
+            .account_id
+            .is_some_and(|account| !account.is_default())
+        {
+            return Err("named_account_requires_verified_registration".into());
+        }
+        let registration = self.prepare_session_on_with_id(
+            id,
+            provider,
+            cwd,
+            origin,
+            system,
+            placement,
+            provider_generation,
+            owner,
+        )?;
+        self.hub.create_session(registration);
+        Ok(id.to_owned())
+    }
+
+    /// Validate and construct registration without publishing or starting it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_session_on_with_id(
+        &self,
+        id: &str,
+        provider: &str,
+        cwd: Option<String>,
+        origin: SessionOrigin,
+        system: bool,
+        placement: SessionPlacement<'_>,
+        provider_generation: ProviderGeneration<'_>,
+        owner: Option<SessionOwner<'_>>,
+    ) -> Result<SessionRegistration, String> {
         let SessionPlacement {
             machine_id,
             workspace,
@@ -236,6 +273,7 @@ impl Supervisor {
         } = placement;
         self.runtime_restrictions.check(provider, machine_id)?;
         let ProviderGeneration {
+            account_id,
             version,
             digest,
             auth_generation,
@@ -268,12 +306,13 @@ impl Supervisor {
         };
 
         let title = format!("{provider} · {}", cwd.display());
-        self.hub.create_session(SessionRegistration {
+        Ok(SessionRegistration {
             id: id.to_owned(),
             provider: provider.to_owned(),
             provider_version: version.to_owned(),
             provider_generation_digest: digest.to_owned(),
             provider_auth_generation: auth_generation,
+            provider_account_id: account_id.cloned().unwrap_or_default(),
             provider_behavior: behavior.cloned(),
             machine_id: machine_id.to_owned(),
             workspace_id: workspace.map(|value| value.id.clone()),
@@ -286,9 +325,7 @@ impl Supervisor {
             system,
             owner_user_id: owner.map(|owner| owner.user_id.to_owned()),
             owner_username: owner.and_then(|owner| owner.username.map(str::to_owned)),
-        });
-
-        Ok(id.to_owned())
+        })
     }
 
     /// Start the worker for an already registered fresh session.
@@ -382,6 +419,7 @@ impl Supervisor {
             provider: spec.id.clone(),
             provider_version: meta.provider_version,
             provider_generation_digest: meta.provider_generation_digest,
+            provider_account_id: meta.provider_account_id.clone(),
             provider_auth_generation: meta.provider_auth_generation,
             provider_behavior: meta.provider_behavior,
             cwd: cwd.display().to_string(),
@@ -736,13 +774,38 @@ impl Supervisor {
 
     /// Build the idempotent worker launch declaration for a persisted session.
     fn start_session(&self, session_id: &str) -> Result<StartSession, String> {
+        self.session_declaration(session_id, None)
+    }
+
+    /// Internal migration declaration only; never activates a worker. Fresh
+    /// account admission remains the Controller/transport caller's obligation.
+    pub(crate) fn readmission_session(
+        &self,
+        session_id: &str,
+        target: &crate::provider_account::NativeProfileReceipt,
+    ) -> Result<StartSession, String> {
+        let mut declaration = self.session_declaration(session_id, Some(target))?;
+        declaration.adopt_only = true;
+        declaration.agent_session_id = None;
+        Ok(declaration)
+    }
+
+    fn session_declaration(
+        &self,
+        session_id: &str,
+        readmission: Option<&crate::provider_account::NativeProfileReceipt>,
+    ) -> Result<StartSession, String> {
         let meta = self
             .hub
             .session_list()
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        meta.require_runtime_launch()?;
+        if let Some(target) = readmission {
+            meta.require_native_readmission(target)?;
+        } else {
+            meta.require_runtime_launch()?;
+        }
         self.runtime_restrictions
             .check(&meta.provider, &meta.machine_id)?;
         let configuration = session_configuration(&meta);
@@ -754,6 +817,7 @@ impl Supervisor {
             provider: meta.provider,
             provider_version: meta.provider_version,
             provider_generation_digest: meta.provider_generation_digest,
+            provider_account_id: meta.provider_account_id.clone(),
             provider_auth_generation: meta.provider_auth_generation,
             provider_behavior: meta.provider_behavior,
             cwd: meta.cwd,
@@ -1295,6 +1359,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: cwd.to_owned(),
@@ -1334,6 +1399,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -1354,6 +1420,80 @@ mod tests {
         let router = RuntimeRouter::new();
         router.install("hawk".to_owned(), runtime);
         Supervisor::new(hub, root, 0, router)
+    }
+
+    #[tokio::test]
+    async fn migrated_native_declaration_keeps_placement_and_never_starts_a_worker() {
+        let root = TestDir::new();
+        let seed = Hub::new();
+        preparing_web_session(&seed, &root.path().display().to_string());
+        let mut original = seed.session_info("s").unwrap().meta;
+        original.provider = "claude-code".into();
+        original.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        original.owner_user_id = Some("owner".into());
+        original.provider_version = "old".into();
+        original.provider_generation_digest = "old-digest".into();
+        original.provider_auth_generation = Some(1);
+        original.agent_session_id = Some("old-thread".into());
+        original.status = Status::Exited;
+        let hub = Hub::new();
+        assert!(hub.project_persisted_session(original.clone()));
+        let target: crate::provider_account::NativeProfileReceipt = serde_json::from_value(serde_json::json!({
+            "account_id":original.provider_account_id,"provider_id":"claude-code","request_id":"login","generation":2,
+            "method":"native","provider_version":"new","generation_digest":"new-digest","auth_contract_fingerprint":"fixture",
+            "identity":{"authority":"fixture","subject":"private","tenant":null}
+        })).unwrap();
+        let behavior = crate::provider::legacy_behavior("claude-code");
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.connect_for_test();
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        assert!(supervisor.readmission_session("s", &target).is_err());
+        hub.project_native_binding(&original, &target, &behavior)
+            .unwrap();
+        let declaration = supervisor.readmission_session("s", &target).unwrap();
+        assert!(declaration.adopt_only);
+        assert!(declaration.agent_session_id.is_none());
+        assert_eq!(declaration.cwd, original.cwd);
+        assert_eq!(declaration.execution_binding, original.execution_binding);
+        assert_eq!(declaration.provider_behavior.as_ref(), Some(&behavior));
+        assert_eq!(declaration.provider_auth_generation, Some(2));
+        assert!(runtime.pending_for_test().is_empty());
+        let restricted = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone())
+            .with_runtime_restrictions(Arc::new(
+                crate::project_placement::RuntimeRestrictions::parse(&["claude-code=ovh".into()])
+                    .unwrap(),
+            ));
+        assert!(restricted.readmission_session("s", &target).is_err());
+        assert!(restricted.start_registered_session("s").is_err());
+        let admission = crate::provider_account::PreparedBinding {
+            operation: "move".into(),
+            target,
+            stopped: crate::provider_account::WorkerExitObservation {
+                request: crate::provider_account::WorkerExitRequest {
+                    session_id: "s".into(),
+                    account_id: original.provider_account_id,
+                    stop_command_id: Some("stop".into()),
+                },
+                launch_id: uuid::Uuid::new_v4(),
+            },
+        };
+        let waiting = runtime
+            .readmit_account_session(declaration, admission)
+            .unwrap();
+        assert!(
+            matches!(runtime.pending_for_test().as_slice(), [CoreCommand::ReadmitAccountSession { session, .. }] if session.adopt_only)
+        );
+        drop(waiting);
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(!runtime.has_worker("s"));
+        supervisor.start_registered_session("s").unwrap();
+        assert!(runtime.pending_for_test().iter().any(
+            |command| matches!(command, CoreCommand::EnsureSession { session }
+                if !session.adopt_only && session.provider_auth_generation == Some(2)
+                && session.agent_session_id.is_none() && session.cwd == original.cwd)
+        ));
+        // Queueing is not admission: this fixture has no Store or transport.
+        assert!(!runtime.has_worker("s"));
     }
 
     #[tokio::test]
@@ -1394,6 +1534,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compatibility_registration_rejects_named_accounts_without_side_effects() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        let account: crate::provider_account::ProviderAccountId =
+            "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        for eager in [false, true] {
+            let generation = ProviderGeneration {
+                account_id: Some(&account),
+                version: "1.0.0",
+                digest: "digest",
+                auth_generation: Some(1),
+                behavior: None,
+            };
+            let result = if eager {
+                supervisor.new_session_on_with_id(
+                    "refused",
+                    "claude-code",
+                    None,
+                    SessionOrigin::Web,
+                    false,
+                    "hawk",
+                    generation,
+                    None,
+                )
+            } else {
+                supervisor.register_session_on_with_id(
+                    "refused",
+                    "claude-code",
+                    None,
+                    SessionOrigin::Web,
+                    false,
+                    SessionPlacement {
+                        machine_id: "hawk",
+                        workspace: None,
+                        execution_binding: None,
+                    },
+                    generation,
+                    None,
+                )
+            };
+            assert_eq!(
+                result.unwrap_err(),
+                "named_account_requires_verified_registration"
+            );
+            assert!(hub.session_list().is_empty());
+            assert!(runtime.pending_for_test().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn runtime_restriction_refuses_new_registration_before_mutating_sessions() {
         let root = TestDir::new();
         let hub = Hub::new();
@@ -1411,6 +1603,7 @@ mod tests {
             false,
             "hawk",
             ProviderGeneration {
+                account_id: None,
                 version: "",
                 digest: "",
                 auth_generation: None,
@@ -1473,6 +1666,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -1517,6 +1711,7 @@ mod tests {
             provider_version: "1.0.0".into(),
             provider_generation_digest: "fixture".into(),
             provider_auth_generation: None,
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_behavior: Some(serde_json::from_value(serde_json::json!({
                 "schema_version": 1, "permission": "acp_config_full_access_v1",
                 "session": "portable_v1", "turn_end": "portable_v1", "configuration": "acp_config_options_v1",
@@ -1806,6 +2001,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -1902,6 +2098,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -2410,6 +2607,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: "old".to_owned(),
             provider_generation_digest: "old-digest".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: Some(7),
             provider_behavior: Some(provider::legacy_behavior("codex")),
             machine_id: "local".to_owned(),
@@ -2435,6 +2633,7 @@ mod tests {
         let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
         let behavior = provider::legacy_behavior("codex");
         let target = ProviderGeneration {
+            account_id: None,
             version: "new",
             digest: "new-digest",
             auth_generation: Some(999),

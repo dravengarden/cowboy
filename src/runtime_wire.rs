@@ -22,7 +22,11 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
+/// Named subscriptions must never be sent to peers that ignore their identity.
+pub const PROVIDER_ACCOUNT_PROTOCOL_VERSION: u16 = 5;
+/// Private per-launch token; never a Provider credential or inherited setting.
+pub const WORKER_LAUNCH_ENV: &str = "COWBOY_ACCOUNT_WORKER_LAUNCH";
 /// Oldest runtime protocol this build accepts during a mixed-generation roll.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 /// Upper bound for a single IPC frame. Large binary artifacts are referenced by
@@ -236,6 +240,8 @@ impl WorkerSnapshot {
 pub struct StartSession {
     pub session_id: String,
     pub provider: String,
+    #[serde(default)]
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
     /// Immutable Provider package identity. These fields are independent from
     /// `generation`, which remains the Cowboy worker-binary generation.
     #[serde(default)]
@@ -289,6 +295,19 @@ pub struct StartSession {
 }
 
 pub const SESSION_EXTENSIONS_SCHEMA: u16 = 1;
+
+impl StartSession {
+    #[must_use]
+    pub fn minimum_protocol(&self) -> u16 {
+        if !self.provider_account_id.is_default() {
+            PROVIDER_ACCOUNT_PROTOCOL_VERSION
+        } else if self.execution_binding.is_some() {
+            2
+        } else {
+            MIN_PROTOCOL_VERSION
+        }
+    }
+}
 
 /// Per-session switches for session-extension Plugins. Which memory backend
 /// and call profiles serve them is resolved by the runtime Machine from its
@@ -382,6 +401,18 @@ pub enum CoreCommand {
         session_id: String,
         command_id: String,
     },
+    /// Stop a named account's worker without deleting its session. This is
+    /// process-stop evidence only, not account-wide logout or credential cleanup.
+    QuiesceAccountSession {
+        session_id: String,
+        command_id: String,
+        account_id: crate::provider_account::ProviderAccountId,
+    },
+    ReadmitAccountSession {
+        session: Box<StartSession>,
+        binding: Box<crate::provider_account::PreparedBinding>,
+        command_id: String,
+    },
     SetDesiredGeneration {
         generation: String,
         /// Concrete worker executable for this generation. Optional keeps the
@@ -393,6 +424,9 @@ pub enum CoreCommand {
     /// CLI/adapter update. Busy turns drain before their worker is replaced.
     RollProvider {
         provider: String,
+        /// None rolls the installed Provider; Some rolls only this credential scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account_id: Option<crate::provider_account::ProviderAccountId>,
     },
 }
 
@@ -401,7 +435,8 @@ impl CoreCommand {
     pub fn session_id(&self) -> Option<&str> {
         match self {
             Self::EnsureSession { session } => Some(&session.session_id),
-            Self::RecoverExecutionSession { session, .. } => Some(&session.session_id),
+            Self::RecoverExecutionSession { session, .. }
+            | Self::ReadmitAccountSession { session, .. } => Some(&session.session_id),
             Self::CancelTurn { session_id, .. }
             | Self::Steer { session_id, .. }
             | Self::Prompt { session_id, .. }
@@ -410,6 +445,7 @@ impl CoreCommand {
             | Self::SetConfigOption { session_id, .. }
             | Self::DrainSession { session_id, .. }
             | Self::StopSession { session_id, .. }
+            | Self::QuiesceAccountSession { session_id, .. }
             | Self::HibernateSession { session_id, .. } => Some(session_id),
             Self::SetDesiredGeneration { .. } | Self::RollProvider { .. } => None,
         }
@@ -1060,7 +1096,28 @@ mod tests {
             panic!("ensure command")
         };
         assert!(!session.adopt_only);
+        assert!(session.provider_account_id.is_default());
         assert_eq!(session.context_window, None);
         assert_eq!(session.auto_compact_token_limit, None);
+    }
+
+    #[test]
+    fn account_identity_cannot_be_dropped_or_coerced_during_launch_decode() {
+        let mut raw = serde_json::json!({"session_id":"s", "provider":"claude-code",
+            "cwd":"/work", "generation":"g", "provider_account_id":"11111111-1111-4111-8111-111111111111"});
+        let launch: StartSession = serde_json::from_value(raw.clone()).unwrap();
+        assert!(!launch.provider_account_id.is_default());
+        assert_eq!(
+            serde_json::to_value(&launch).unwrap()["provider_account_id"],
+            raw["provider_account_id"]
+        );
+        for id in [
+            serde_json::Value::Null,
+            serde_json::json!("../default"),
+            serde_json::json!(""),
+        ] {
+            raw["provider_account_id"] = id;
+            assert!(serde_json::from_value::<StartSession>(raw.clone()).is_err());
+        }
     }
 }

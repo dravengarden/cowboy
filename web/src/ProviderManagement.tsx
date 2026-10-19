@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
 import { ProviderAccountSwitch } from "./ProviderAccountSwitch";
+import { SubscriptionManagement } from "./SubscriptionManagement";
 import { alpha } from "@mui/material/styles";
 import {
   useCallback,
@@ -137,12 +138,15 @@ export function ProviderAuthenticationManagement({
   authenticationRequestId?: number | undefined;
 } = {}): React.JSX.Element {
   return (
-    <ProviderManagement
-      scope="service"
-      focusProviderId={focusProviderId}
-      autoBeginAuthentication={autoBeginAuthentication}
-      authenticationRequestId={authenticationRequestId}
-    />
+    <Stack spacing={2}>
+      <SubscriptionManagement />
+      <ProviderManagement
+        scope="service"
+        focusProviderId={focusProviderId}
+        autoBeginAuthentication={autoBeginAuthentication}
+        authenticationRequestId={authenticationRequestId}
+      />
+    </Stack>
   );
 }
 
@@ -463,6 +467,7 @@ function ProviderManagement(
         await loadProviderCatalog(true),
         provider,
         method,
+        scope === "machine" ? machine.id : undefined,
       ),
     refresh: () => loadProviderCatalog(true),
     closeBrowser: () => closeAuthenticationBrowser(),

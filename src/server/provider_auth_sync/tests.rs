@@ -8,6 +8,7 @@ fn envelope(generation: u64) -> SealedProviderAuth {
     // are independently required. No production credentials or runtime spawn.
     SealedProviderAuth {
         envelope_schema: 1,
+        account_id: crate::provider_account::ProviderAccountId::default(),
         provider_id: "fixture-provider".into(),
         auth_generation: generation,
         auth_contract_fingerprint: "fixture-contract".into(),
@@ -19,6 +20,55 @@ fn envelope(generation: u64) -> SealedProviderAuth {
         service_public_key: "fixture-service".into(),
         signature: "fixture-signature".into(),
     }
+}
+
+#[test]
+fn account_identity_is_bound_and_not_coalesced_with_the_default() {
+    let legacy = envelope(1);
+    let encoded = serde_json::to_value(&legacy).unwrap();
+    assert!(encoded.get("account_id").is_none());
+    assert_eq!(
+        serde_json::from_value::<SealedProviderAuth>(encoded).unwrap(),
+        legacy
+    );
+    let mut named = legacy.clone();
+    named.envelope_schema = 2;
+    named.account_id = crate::provider_account::ProviderAccountId::try_from(
+        "11111111-1111-4111-8111-111111111111".to_owned(),
+    )
+    .unwrap();
+    let mut other = named.clone();
+    other.account_id = crate::provider_account::ProviderAccountId::try_from(
+        "22222222-2222-4222-8222-222222222222".to_owned(),
+    )
+    .unwrap();
+    assert_ne!(named.proof(), other.proof());
+    assert_ne!(named.authentication_aad(), other.authentication_aad());
+    let control = MachineControl::default();
+    let (connection, _rx) = connect(&control, "machine-1");
+    let sync = Coordinator::default();
+    let Admission::Owner(first) = sync.begin(&connection, Identity::from(&named)).unwrap() else {
+        panic!("first owner missing")
+    };
+    let Admission::Owner(second) = sync.begin(&connection, Identity::from(&other)).unwrap() else {
+        panic!("accounts were coalesced")
+    };
+    assert_eq!(sync.flights.lock().len(), 2);
+    drop(first);
+    drop(second);
+    let command = MachineCommand::ApplyProviderAuth {
+        request_id: "fixture".into(),
+        envelope: Box::new(named),
+    };
+    assert_eq!(
+        command.minimum_protocol(),
+        crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+    );
+    assert!(command.minimum_protocol() <= crate::machine_protocol::MACHINE_PROTOCOL_VERSION);
+    assert!(
+        command.minimum_protocol() > 35,
+        "legacy peers must not ignore account identity"
+    );
 }
 
 fn connect(

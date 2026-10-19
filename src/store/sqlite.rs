@@ -355,6 +355,7 @@ struct SqliteSessionRow {
     provider_version: String,
     provider_generation_digest: String,
     provider_auth_generation: Option<i64>,
+    provider_account_id: String,
     provider_behavior: Option<serde_json::Value>,
     machine_id: String,
     workspace_id: Option<String>,
@@ -1549,7 +1550,7 @@ fn provider_diagnostic_detail(
 }
 
 impl SqliteSessionRow {
-    fn into_meta(self) -> SessionMeta {
+    fn into_meta(self, account_id: crate::provider_account::ProviderAccountId) -> SessionMeta {
         SessionMeta {
             id: self.id,
             provider: self.provider,
@@ -1558,6 +1559,7 @@ impl SqliteSessionRow {
             provider_auth_generation: self
                 .provider_auth_generation
                 .and_then(|value| u64::try_from(value).ok()),
+            provider_account_id: account_id,
             provider_behavior: self
                 .provider_behavior
                 .and_then(|value| serde_json::from_value(value).ok()),
@@ -2281,10 +2283,11 @@ impl SqliteStorage {
             .map_or(1, |value| value.saturating_add(1)))
     }
 
+    #[allow(clippy::too_many_lines)] // Keep account quarantine before per-session history restoration.
     pub(super) async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SqliteSessionRow> = sqlx::query_as(
             "SELECT id, provider, provider_version, provider_generation_digest, \
-             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
+             provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, folder_id, \
@@ -2300,6 +2303,10 @@ impl SqliteStorage {
         let mut output = Vec::with_capacity(session_rows.len());
         for row in session_rows {
             let id = row.id.clone();
+            let Ok(account_id) = row.provider_account_id.clone().try_into() else {
+                tracing::warn!(session_id = %id, "Skipping session with invalid Provider account identity");
+                continue;
+            };
             let event_rows: Vec<EventRow> = sqlx::query_as(
                 "WITH recent AS MATERIALIZED ( \
                      SELECT seq, payload FROM events \
@@ -2364,7 +2371,7 @@ impl SqliteStorage {
             let mobile_review_state = row.mobile_review_state.clone();
             let folder_id = row.folder_id.clone();
             output.push(LoadedSession {
-                meta: row.into_meta(),
+                meta: row.into_meta(account_id),
                 events,
                 event_count,
                 reached_start,
@@ -2629,8 +2636,8 @@ impl SqliteStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16, ?17)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding, provider_account_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16, ?17, ?18)",
         )
         .bind(&meta.id)
         .bind(&meta.provider)
@@ -2657,6 +2664,7 @@ impl SqliteStorage {
         .bind(meta.system)
         .bind(meta.owner_user_id.as_deref())
         .bind(meta.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
+        .bind(meta.provider_account_id.as_str())
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT SQLite session {}", meta.id))?;

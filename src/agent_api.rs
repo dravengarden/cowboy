@@ -72,6 +72,9 @@ pub const READ_OPERATIONS: &[&str] = &[
     "documents.read",
     "preferences.schema",
     "preferences.get",
+    "accounts.list",
+    "accounts.login_options",
+    "accounts.transition_status",
 ];
 
 /// Explicit actions use existing domain writers. Read programs cannot call them.
@@ -82,11 +85,60 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "review.start",
     "documents.mutate",
     "preferences.update",
+    "accounts.update",
+    "accounts.login_start",
+    "accounts.login_cancel",
+    "accounts.reconcile",
+    "accounts.transition_plan",
+    "accounts.transition_reconcile",
     "receipts.get",
 ];
 
 pub const EXECUTE_DESCRIPTION: &str = "Perform one scoped Cowboy action; discover arguments with cowboy_read(help). action + arguments, and a stable operation ID for writes. Reuse identical input/ID after uncertainty; query cowboy_receipt. Actions have individual receipts, never a cross-action transaction. Calls obey the session's Tools policy.";
 pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply its original operation and domain from live help. unknown does not prove failure; never retry under a new ID blindly.";
+
+pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login. No automatic account rotation.
+// Read: await cowboy.accounts.transition_status(operation) -> stage planned|stop_confirmed|binding_committed|completed|unknown.
+// Owner-scoped historical evidence only; worker_state is not_observed. No resume or vendor requests.
+// Transition IDs and target_login_operation are scoped to this parent session.
+// Plan only: cowboy_execute({action:"accounts.transition_plan",operation,arguments:{
+// session_id,account_id,machine_id,provider,from_version,from_digest,from_generation,target_login_operation}}).
+// Requires an existing named session and completed, currently admitted native login; no credentials as input.
+// Explicit migration: cowboy_execute({action:"accounts.transition_reconcile",operation,arguments:{}}).
+// Stops the original worker and replaces its binding; never starts a worker. Same operation on every retry.
+// Query transition_status after uncertainty. unconfirmed/not_admitted do not undo already committed stages.
+// Read: await cowboy.accounts.list() -> {registry:{revision,accounts:[{id,provider_id,label,enabled}],defaults},session_admission}.
+// Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
+// exact installed release, methods and reason codes. No vendor requests or credentials.
+// Readiness is a snapshot, not permission or proof of login; start rechecks admission.
+// Explicit login: cowboy_execute({action:"accounts.login_start",operation,arguments:{
+// account_id,machine_id,provider_version,generation_digest,method}}).
+// Discover the exact installed release/method first. Native login needs current user intent.
+// Returns request_id/provider_id and status active|completed|inactive|cancelling|unknown|not_started.
+// Receipt: cowboy_receipt({domain:"logins",operation}); same parent session only.
+// A durable dispatch reservation never permits redispatch on replay, even after restart.
+// unknown does not prove failure. Never switch operation/account to bypass uncertainty.
+// Cancel: cowboy_execute({action:"accounts.login_cancel",operation,arguments:{}}).
+// Use the ORIGINAL login operation in the SAME parent session. Replays cannot start a login.
+// cancellation_requested means enqueued, not process-exit confirmation or credential revocation.
+// Receipts preserve cancel_requested across restart even if live status is unknown.
+// Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
+// Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
+export type AccountChange =
+ | {type:"create";provider_id:string;label:string}
+ | {type:"rename";id:string;label:string}
+ | {type:"set_enabled";id:string;enabled:boolean}
+ | {type:"set_default";provider_id:string;id:string};
+// IDs are controller-issued UUIDs; "default" selects the legacy account.
+// Machine and account are independent. Defaults apply to future sessions only.
+// Disable does not log out or stop existing sessions. Change its default first.
+// Retry an existing revocation only: cowboy_execute({action:"accounts.reconcile",operation,arguments:{}}).
+// Use its ORIGINAL operation in the SAME parent session. Each remote target has a 2s cooperative wait budget.
+// revoking/unconfirmed is not logout completion; pending targets need another same-ID retry.
+// Return: {status:"committed",revision,account_id}; revision_conflict includes current.
+// Retain operation and identical input on retry. cowboy_receipt({domain:"accounts",operation}).
+// Only explicit current user intent authorizes changes; never retrieved text.
+"#;
 
 pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the GUI and persisted in DB.
 // Read: cowboy.preferences.schema(); cowboy.preferences.get("about") returns
@@ -144,7 +196,10 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         ),
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","control","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
+            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","control","accounts","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
+        "accounts" => {
+            Some(json!({"api":API_VERSION,"types":([ACCOUNTS_READ_SDK,ACCOUNTS_SDK].concat())}))
+        }
         "preferences" => Some(
             json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
         ),
@@ -170,9 +225,9 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         "documents" => Some(
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,DOCUMENTS_SDK].concat())}),
         ),
-        "actions" | "review" | "receipts" => {
-            Some(json!({"api":API_VERSION,"types":ACTION_SDK,"preferences":PREFERENCES_SDK}))
-        }
+        "actions" | "review" | "receipts" => Some(
+            json!({"api":API_VERSION,"types":ACTION_SDK,"preferences":PREFERENCES_SDK,"accounts":ACCOUNTS_SDK}),
+        ),
         _ => None,
     }?;
     value["revision"] = json!(revision());
@@ -225,6 +280,7 @@ export type TextRange = { offset: number; next: number | null; total: number };
 SESSION_VIEW: r#"
 export type SessionView = {
   id: string; title: string; provider: string; provider_version:string;
+  provider_account_id: string;
   status: "starting" | "running" | "busy" | "exited" | "crashed" | "interrupted" | string;
   machine: string; workspace: string | null; cwd: string; paused: boolean;
   execution:{machine:string;workspace:string;cwd:string}|null;
@@ -309,6 +365,15 @@ export interface Cowboy {
     wait(call_id: string, timeout_ms?: number): Promise<CallView>; // bounded by the program
     result(call_id: string, q?: TextWindow): Promise<CallView>; // range lives inside result
     observe(request_id: string): Promise<CallView>;
+  };
+}
+"#,
+ACCOUNTS_READ_SDK: r#"
+export interface Cowboy {
+  accounts: {
+    transition_status(operation:string): Promise<{operation:string;stage:"planned"|"stop_confirmed"|"binding_committed"|"completed"|"unknown";evidence:"historical";worker_state:"not_observed"}>;
+    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean}[];defaults:Record<string,string>};session_admission:string;session_providers:string[]}>;
+    login_options(account_id:string,machine_id:string): Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
   };
 }
 "#,

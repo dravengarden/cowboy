@@ -21,6 +21,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
 import { AiInstallationPicker, installationCapacity } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
+import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { MachineProjects } from "./MachineProjects";
 import {
     Fragment,
@@ -2936,6 +2937,7 @@ export function CreateDialog({
     const machineId = placement.machineId;
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
+    const subscription = useSessionSubscription(open && variant === "session", provider);
     const desktop = useSurfaceProfile().kind === "desktop";
     // Desktop keyboard layer (FOCUS.md "Modals"): a text field is Insert,
     // everything else is Normal, where the shared modal grammar runs (digits
@@ -3069,6 +3071,10 @@ export function CreateDialog({
             setCreateError("The Sessions directory was removed. Choose another directory or Global.");
             return;
         }
+        if (!subscription.allowed) {
+            setCreateError("Choose an available subscription before creating this session.");
+            return;
+        }
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
         // created.
@@ -3086,6 +3092,7 @@ export function CreateDialog({
                     },
                     body: JSON.stringify({
                         provider,
+                        provider_account_id: subscription.value || undefined,
                         machine_id: machineId,
                         runtime_machine_id: placement.runtimeMachineId,
                         cwd,
@@ -3106,6 +3113,7 @@ export function CreateDialog({
                     provider_version?: string;
                     provider_generation_digest?: string;
                     provider_auth_generation?: number;
+                    provider_account_id?: string;
                     machine_id?: string;
                     cwd?: string;
                     execution_binding?: unknown;
@@ -3141,6 +3149,7 @@ export function CreateDialog({
                         }
                         : {}),
                     machine_id: data.machine_id ?? placement.runtimeMachineId,
+                    ...(data.provider_account_id ? { provider_account_id: data.provider_account_id } : {}),
                     cwd: data.cwd ?? sourcePath,
                     ...(Object.hasOwn(data, "execution_binding") ? { execution_binding: data.execution_binding } : {}),
                     title: trimmedTitle || `${provider} · ${sourcePath}`,
@@ -3359,6 +3368,7 @@ export function CreateDialog({
                                 : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
                                 : "No ready AI installation can use this project. Check Machines in Settings."}
                         />
+                        <SessionSubscription state={subscription} disabled={creating} desktop={desktop} />
                         <Typography variant="caption" color="text.secondary">
                             Git projects open in a session worktree. Other directories are shared in place.
                         </Typography>
@@ -3407,7 +3417,7 @@ export function CreateDialog({
     );
     const canCreate = !creating && (editingFolderDefault || variant === "draft" ||
         (variant === "folder" ? normalizeSessionFolderName(folderName) !== null && !folderPresetMismatch
-            : placement.ready && providerAvailable(provider) && presetAvailable && Boolean(provider && machineId && cwd)));
+            : subscription.allowed && placement.ready && providerAvailable(provider) && presetAvailable && Boolean(provider && machineId && cwd)));
     const createLabel = editingFolderDefault ? "Back to folder" : variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
     const dialogTitle = editingFolderDefault ? FOLDER_DEFAULT_FIELDS[folderDefaultField!] : folderOnly ? "New folder" : "Create";
     // The cover sheet is the touch presentation. A Desktop window below the

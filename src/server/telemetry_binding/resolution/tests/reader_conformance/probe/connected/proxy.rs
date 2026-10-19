@@ -433,6 +433,7 @@ fn relay_drops_only_one_selected_ack_and_never_admits_worker_commands() {
         serde_json::to_string(&MachineFrame::Command {
             command: MachineCommand::BeginLogin {
                 request_id: "fixture".into(),
+                account_id: Default::default(),
                 provider: "forbidden".into(),
                 auth_method: None,
             },
@@ -487,6 +488,7 @@ fn relay_admits_only_one_exact_empty_broker_generation_without_an_executable() {
         },
         CoreCommand::RollProvider {
             provider: "forbidden".into(),
+            account_id: None,
         },
     ] {
         let frame = Message::Text(

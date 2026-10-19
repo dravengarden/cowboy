@@ -6,6 +6,8 @@ use cowboy::worker::WorkerArgs;
 #[derive(Debug, Parser)]
 #[command(name = "cowboy-acp-worker", version)]
 struct Args {
+    #[arg(long, hide = true)]
+    launch_gate: bool,
     #[arg(long)]
     socket: PathBuf,
     #[arg(long)]
@@ -18,6 +20,8 @@ struct Args {
     provider_generation_digest: String,
     #[arg(long)]
     provider_auth_generation: Option<u64>,
+    #[arg(long, default_value = "default")]
+    provider_account_id: cowboy::provider_account::ProviderAccountId,
     #[arg(long)]
     cwd: PathBuf,
     #[arg(long)]
@@ -37,6 +41,16 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if args.launch_gate {
+        anyhow::ensure!(
+            !args.provider_account_id.is_default(),
+            "launch gate requires a named account"
+        );
+        cowboy::worker::startup_gate::wait(
+            &mut std::io::stdin().lock(),
+            &std::env::var(cowboy::worker::startup_gate::LAUNCH_ENV)?,
+        )?;
+    }
     let mut context = cowboy::logs::Context::new("cowboy-worker");
     context.session = args.session_id.clone();
     context.generation = args.generation.clone();
@@ -50,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
             provider: args.provider,
             provider_version: args.provider_version,
             provider_generation_digest: args.provider_generation_digest,
+            provider_account_id: args.provider_account_id.clone(),
             provider_auth_generation: args.provider_auth_generation,
             cwd: args.cwd,
             resume: args.resume,

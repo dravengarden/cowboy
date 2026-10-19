@@ -56,7 +56,14 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         // adding a wire command requires an explicit core classification.
         MachineCommand::Reconcile { .. }
         | MachineCommand::BeginLogin { .. }
+        | MachineCommand::BeginNativeLogin { .. }
+        | MachineCommand::QueryNativeProfile { .. }
+        | MachineCommand::NativeLogout { .. }
+        | MachineCommand::QueryLoginStop { .. }
+        | MachineCommand::QueryWorkerExit { .. }
+        | MachineCommand::PrepareNativeBinding { .. }
         | MachineCommand::CancelLogin { .. }
+        | MachineCommand::CancelLoginRequest { .. }
         | MachineCommand::SubmitLoginCode { .. }
         | MachineCommand::UpdateNpmComponent { .. }
         | MachineCommand::RefreshInventory { .. }

@@ -1,11 +1,11 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.37",
+  "version": "3.1.38",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.14",
+  "sdk_version": "3.1.15",
   "display": {
-    "name": "Claude Code · DeepSeek",
+    "name": "Claude Code \u00b7 DeepSeek",
     "vendor": "DeepSeek",
     "summary": "Claude Code in an isolated DeepSeek runtime with a one-million-token lane",
     "accent": "#4D6BFE",
@@ -34,12 +34,12 @@
     "indicator": {
       "kind": "glyph_cycle",
       "frames": [
-        "·",
-        "✢",
+        "\u00b7",
+        "\u2722",
         "*",
-        "✶",
-        "✻",
-        "✽"
+        "\u2736",
+        "\u273b",
+        "\u273d"
       ],
       "interval_ms": 200
     },
@@ -60,7 +60,7 @@
         "Working"
       ],
       "interval_ms": 3500,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "Claude Code DeepSeek is working"
@@ -68,8 +68,8 @@
   "configuration_presets": [
     {
       "id": "deepseek-flash-max",
-      "name": "Flash · Max",
-      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
+      "name": "Flash \u00b7 Max",
+      "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
       "is_default": true,
       "values": {
         "model": "deepseek-flash[1m]",

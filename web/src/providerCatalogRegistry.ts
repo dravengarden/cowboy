@@ -31,7 +31,7 @@ export async function loadProviderCatalog(
   if (!force && cached) return cached;
   const read = webPluginHosts.beginRead("catalog");
   const request = fetch("/api/plugins", {
-    headers: { accept: "application/json" },
+    headers: { accept: "application/json", "x-cowboy-auth-machine": "1" },
     cache: "no-store",
     credentials: "same-origin",
     signal: read.signal,
@@ -266,15 +266,19 @@ export function providerAuthenticationExecutorEntry(
   catalog: ProviderCatalogResponse,
   providerId: string,
   methodId: string,
-): ProviderCatalogEntry | undefined {
+  machineId?: string,
+): (ProviderCatalogEntry & { machine_id?: string }) | undefined {
+  const executors = catalog.authentication_executors.filter((executor) =>
+    executor.provider_id === providerId &&
+    (machineId === undefined || executor.machine_id === machineId)
+  );
   const available = new Set(
-    catalog.authentication_executors
-      .filter((executor) => executor.provider_id === providerId)
+    executors
       .map((executor) =>
         `${executor.provider_version}:${executor.generation_digest}`
       ),
   );
-  return catalog.providers
+  const entry = catalog.providers
     .filter((entry) =>
       entry.provider_id === providerId &&
       entry.release_state === "ready" &&
@@ -290,6 +294,18 @@ export function providerAuthenticationExecutorEntry(
         left.provider_version,
       )
     )[0];
+  if (!entry) return undefined;
+  const executor = executors
+    .filter((executor) =>
+      executor.provider_version === entry.provider_version &&
+      executor.generation_digest === entry.artifact_digest
+    )
+    .sort((left, right) =>
+      (left.machine_id ?? "").localeCompare(right.machine_id ?? "")
+    )[0];
+  return executor?.machine_id
+    ? { ...entry, machine_id: executor.machine_id }
+    : entry;
 }
 
 export function providerEntryForIdentity(

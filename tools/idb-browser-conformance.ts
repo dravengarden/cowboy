@@ -29,11 +29,14 @@ if (
   suite !== "draft-documents" && suite !== "editor-plugin-sandbox" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics" && suite !== "review-context"
+  suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "subscriptions"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "review-context"
+const entry = suite === "subscriptions"
+  ? "runSubscriptionsBrowserConformance"
+  : suite === "review-context"
   ? "runReviewContextBrowserConformance"
   : suite === "info-metrics"
   ? "runInfoMetricsBrowserConformance"
@@ -278,6 +281,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 16
         : suite === "info-metrics"
         ? 20
+        : suite === "subscriptions"
+        ? 8
         : suite === "about-layout"
         ? 10
         : suite === "session-maintenance"

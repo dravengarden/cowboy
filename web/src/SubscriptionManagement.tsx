@@ -1,0 +1,194 @@
+import { Alert, Box, Button, MenuItem, Stack, TextField, Typography } from "@mui/material";
+import { useEffect, useRef, useState } from "react";
+import { latestProviderEntries, useProviderCatalog } from "./providerCatalog";
+import { productSessionSignal } from "./productSessionEnd";
+import { productSyncPrincipal } from "./productSyncIdentity";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
+import { providerSubscriptionEnabled } from "./SessionSubscription";
+
+interface Account { id: string; provider_id: string; label: string; enabled: boolean }
+interface Snapshot {
+  dataset: { dataset_id: string; user_id: string };
+  registry: { revision: number; accounts: Account[]; defaults: Record<string, string> };
+  session_admission: string;
+  session_providers?: string[];
+}
+type Change = { type: "create"; provider_id: string; label: string }
+  | { type: "rename"; id: string; label: string }
+  | { type: "set_enabled"; id: string; enabled: boolean }
+  | { type: "set_default"; provider_id: string; id: string };
+interface Pending { operation: string; dataset: string; expected_revision: number; change: Change }
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function revision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function text(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+
+export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is Snapshot {
+  if (!owner || !record(value) || !record(value.dataset) || !record(value.registry)) return false;
+  const { dataset, registry } = value;
+  return dataset.user_id === owner && text(dataset.dataset_id) && revision(registry.revision) &&
+    (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
+    typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
+    Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
+      text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean");
+}
+
+export function validPendingSubscription(value: unknown): value is Pending {
+  if (!record(value) || !text(value.operation) || !text(value.dataset) || !revision(value.expected_revision) || !record(value.change)) return false;
+  if (Object.keys(value).some((key) => !["operation", "dataset", "expected_revision", "change"].includes(key))) return false;
+  const change = value.change;
+  const fields = change.type === "create" ? ["type", "provider_id", "label"]
+    : change.type === "rename" ? ["type", "id", "label"]
+    : change.type === "set_enabled" ? ["type", "id", "enabled"]
+    : change.type === "set_default" ? ["type", "provider_id", "id"] : [];
+  if (fields.length === 0 || Object.keys(change).some((key) => !fields.includes(key))) return false;
+  switch (change.type) {
+    case "create": return text(change.provider_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
+    case "rename": return text(change.id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
+    case "set_enabled": return text(change.id) && typeof change.enabled === "boolean";
+    case "set_default": return text(change.provider_id) && text(change.id);
+    default: return false;
+  }
+}
+
+export function validSubscriptionLabel(value: string): boolean {
+  return Boolean(value.trim()) && new TextEncoder().encode(value.trim()).length <= 128 &&
+    !Array.from(value).some((character) => {
+      const code = character.codePointAt(0)!;
+      return code < 32 || (code >= 127 && code <= 159);
+    });
+}
+
+/** Only explicit domain rejections establish that this mutation did not commit. */
+export function subscriptionWriteRejected(status: number, code: string | undefined): boolean {
+  return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable"].includes(code ?? "");
+}
+
+/** Metadata only. Native authentication remains a distinct explicit action. */
+export function SubscriptionManagement(): React.JSX.Element {
+  const { catalog } = useProviderCatalog();
+  const providers = latestProviderEntries(catalog?.providers ?? []);
+  const [snapshot, setSnapshot] = useState<Snapshot>();
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState<Pending>();
+  const [busy, setBusy] = useState(false);
+  const [journalReady, setJournalReady] = useState(false);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [provider, setProvider] = useState("");
+  const [label, setLabel] = useState("");
+  const lock = useRef(false);
+  const alive = useRef(false);
+  const loading = useRef(0);
+  const owner = productSyncPrincipal();
+  const journalKey = `cowboy:subscription-write:${owner ?? "unbound"}`;
+  const live = () => alive.current && !productSessionSignal().aborted && owner === productSyncPrincipal();
+  async function load() {
+    const sequence = ++loading.current;
+    try {
+      const response = await fetch("/api/provider-accounts", { cache: "no-store", signal: productSessionSignal() });
+      if (!response.ok) throw new Error("Could not load subscriptions.");
+      const value: unknown = await response.json();
+      if (!live() || sequence !== loading.current) return;
+      if (!validSubscriptionSnapshot(value, owner)) {
+        throw new Error("Account changed. Reload before editing subscriptions.");
+      }
+      setSnapshot((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id || value.registry.revision >= old.registry.revision ? value : old);
+    } catch (cause) { if (live() && sequence === loading.current) setError(String(cause)); }
+  }
+  useEffect(() => {
+    alive.current = true;
+    try {
+      const saved = sessionStorage.getItem(journalKey);
+      if (saved) {
+        const value: unknown = JSON.parse(saved);
+        if (!validPendingSubscription(value)) throw new Error("Invalid pending subscription change.");
+        setPending(value);
+        setError("A previous change needs reconciliation. Retry sends the same operation.");
+      }
+      setJournalReady(true);
+    } catch { setError("Could not read the pending subscription change. Local storage must be available before editing."); }
+    void load();
+    const refresh = (event: Event) => {
+      const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
+      if (!scopes || Object.hasOwn(scopes, "provider_accounts")) void load();
+    };
+    window.addEventListener(PREFERENCES_CHANGED, refresh);
+    return () => { alive.current = false; ++loading.current; window.removeEventListener(PREFERENCES_CHANGED, refresh); };
+    // This panel belongs to one authenticated product mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  async function commit(input: Pending) {
+    if (lock.current || !snapshot || !journalReady || !live()) return;
+    if (input.dataset !== snapshot.dataset.dataset_id) {
+      setError("This pending change belongs to another dataset. It will not be submitted.");
+      return;
+    }
+    lock.current = true;
+    setBusy(true);
+    try {
+      // Persist before sending so remounting or reloading this tab cannot silently
+      // replace an uncertain create with a second operation.
+      sessionStorage.setItem(journalKey, JSON.stringify(input));
+      setPending(input);
+      const response = await fetch("/api/provider-accounts", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        signal: productSessionSignal(), body: JSON.stringify(input),
+      });
+      const result = await response.json() as { status?: string; error?: { code?: string } };
+      if (!live()) return;
+      if (response.ok && result.status === "committed") {
+        sessionStorage.removeItem(journalKey);
+        setPending(undefined); setError(""); setLabel("");
+        if (input.change.type === "rename") {
+          const id = input.change.id;
+          setNames((old) => { const next = { ...old }; delete next[id]; return next; });
+        }
+        await load();
+      } else if (response.status === 409 && result.error?.code === "revision_conflict") {
+        sessionStorage.removeItem(journalKey); setPending(undefined);
+        setError("Subscriptions changed elsewhere. Review the refreshed list before applying your change again.");
+        await load();
+      } else if (subscriptionWriteRejected(response.status, result.error?.code)) {
+        sessionStorage.removeItem(journalKey); setPending(undefined);
+        setError(`Change rejected (${result.error!.code}). Review the list before trying again.`);
+        await load();
+      } else {
+        setError("The change is not confirmed. Retry uses the same operation; no login or account rotation will run.");
+      }
+    } catch { if (live()) setError("The change is not confirmed. Retry uses the same operation."); }
+    finally { lock.current = false; if (live()) setBusy(false); }
+  }
+  function save(change: Change) {
+    if (!snapshot || pending || busy || !journalReady) return;
+    void commit({ operation: crypto.randomUUID(), dataset: snapshot.dataset.dataset_id,
+      expected_revision: snapshot.registry.revision, change });
+  }
+  const disabled = busy || Boolean(pending) || !snapshot || !journalReady;
+  return <Stack spacing={1.5}>
+    <Typography variant="subtitle1">Subscriptions</Typography>
+    <Typography variant="body2" color="text.secondary">Manage subscriptions independently of Machines. Disabling blocks account access in Cowboy, including existing session bindings, but does not stop running processes or sign out. Re-enabling requires a new login.</Typography>
+    {snapshot?.session_admission !== "enabled" && <Alert severity="info">Additional subscriptions cannot create sessions in this release. Account records can be prepared here.</Alert>}
+    {error && <Alert severity="warning" action={<Button disabled={busy} onClick={() => pending ? void commit(pending) : void load()}>Retry</Button>}>{error}</Alert>}
+    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+      <TextField select label="Provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled} fullWidth size="small">
+        {providers.map((entry) => <MenuItem key={entry.provider_id} value={entry.provider_id}>{entry.manifest.display.name}</MenuItem>)}
+      </TextField>
+      <TextField label="Account label" value={label} onChange={(event) => setLabel(event.target.value)} disabled={disabled} fullWidth size="small" />
+      <Button disabled={disabled || !provider || !validSubscriptionLabel(label)} onClick={() => save({ type: "create", provider_id: provider, label: label.trim() })}>Add</Button>
+    </Stack>
+    {snapshot?.registry.accounts.map((account) => <Box key={account.id} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} sx={{ flex: 1, minWidth: 120 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
+        <Button disabled={disabled || !validSubscriptionLabel(names[account.id] ?? "") || names[account.id]?.trim() === account.label} onClick={() => save({ type: "rename", id: account.id, label: names[account.id]!.trim() })}>Save name</Button>
+        <Typography variant="caption" color="text.secondary">{account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{!account.enabled ? " · Disabled" : ""}</Typography>
+        <Button disabled={disabled} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.enabled ? "Disable" : "Enable"}</Button>
+        <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
+        {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
+      </Stack>
+    </Box>)}
+  </Stack>;
+}

@@ -1,10 +1,10 @@
 //! Cowboy Service-owned Provider authentication vault and replica sealing.
 //!
 //! Authentication is intentionally not a Machine property. The Service owns
-//! one monotonically increasing generation per Provider, encrypts the portable
-//! bundle at rest, and seals that generation independently to every enrolled
-//! Machine. Machines may materialize a replica only after the signed Provider
-//! authentication contract matches exactly.
+//! each credential lineage's generation and encrypted bundle. Named native
+//! login grants are scoped to their enrolled Machine's encryption key while
+//! subscription identity remains independent of execution placement. Machines
+//! materialize replicas only after the signed authentication contract matches.
 
 #![warn(clippy::pedantic)]
 
@@ -13,6 +13,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, ensure};
@@ -27,6 +28,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::machine_auth::{MachineIdentity, PROVIDER_AUTH_SIGNATURE_NAMESPACE};
 use crate::machine_protocol::{PortableCredentialBundle, ProviderAuthAction, SealedProviderAuth};
+use crate::provider_account::ProviderAccountId;
 
 const VAULT_SCHEMA: u16 = 1;
 const AUTH_ENVELOPE_SCHEMA: u16 = 1;
@@ -34,6 +36,8 @@ const MAX_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
 const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 const VAULT_DOMAIN: &[u8] = b"cowboy-provider-auth-vault-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) mod grants;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +63,10 @@ pub(crate) enum ServiceDistributionState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProviderAuthenticationStatus {
     pub provider_id: String,
+    pub account_id: ProviderAccountId,
+    /// Public enrollment key, not a credential. None denotes portable state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_key: Option<String>,
     pub auth_generation: u64,
     pub authentication_state: ServiceAuthenticationState,
     pub distribution_state: ServiceDistributionState,
@@ -85,6 +93,13 @@ pub(crate) enum ProviderAuthRefreshResult {
 struct StoredProviderAuthentication {
     vault_schema: u16,
     provider_id: String,
+    #[serde(default, skip_serializing_if = "ProviderAccountId::is_default")]
+    account_id: ProviderAccountId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipient_key: Option<String>,
+    /// Authenticated commitment to one DB promotion intent and exact bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    promotion_commitment: Option<String>,
     auth_generation: u64,
     authentication_state: ServiceAuthenticationState,
     distribution_state: ServiceDistributionState,
@@ -105,9 +120,19 @@ struct TransientAuthenticationStatus {
 }
 
 impl StoredProviderAuthentication {
+    fn require_legacy_admission(&self) -> Result<()> {
+        ensure!(
+            self.promotion_commitment.is_none(),
+            "Provider grant requires current journal admission"
+        );
+        Ok(())
+    }
+
     fn status(&self) -> ProviderAuthenticationStatus {
         ProviderAuthenticationStatus {
             provider_id: self.provider_id.clone(),
+            account_id: self.account_id.clone(),
+            recipient_key: self.recipient_key.clone(),
             auth_generation: self.auth_generation,
             authentication_state: self.authentication_state,
             distribution_state: self.distribution_state,
@@ -121,23 +146,64 @@ impl StoredProviderAuthentication {
     }
 }
 
+// Closing one descriptor does not release flock while a forked child still
+// holds the same open-file description before exec. Release the logical vault
+// owner's lock explicitly so immediate reopen does not depend on child timing.
+struct VaultOwner(fs::File);
+
+impl Drop for VaultOwner {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 pub(crate) struct ProviderAuthService {
     root: PathBuf,
+    account_id: ProviderAccountId,
+    accounts: parking_lot::Mutex<BTreeMap<ProviderAccountId, Arc<Self>>>,
+    recipient_key: Option<String>,
+    grants: parking_lot::Mutex<BTreeMap<String, Arc<Self>>>,
     vault_key: [u8; 32],
     signer: MachineIdentity,
     providers: RwLock<BTreeMap<String, StoredProviderAuthentication>>,
     transient: RwLock<BTreeMap<String, TransientAuthenticationStatus>>,
+    // Drop scoped owners before releasing the outer vault's ownership.
+    _owner: VaultOwner,
 }
 
 impl ProviderAuthService {
     pub(crate) fn open(data_dir: &Path) -> Result<Self> {
-        let root = data_dir.join("provider-auth-service");
-        fs::create_dir_all(root.join("providers"))
-            .with_context(|| format!("creating Provider auth vault {}", root.display()))?;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-        fs::set_permissions(root.join("providers"), fs::Permissions::from_mode(0o700))?;
+        fs::create_dir_all(data_dir)?;
+        // The configured data location may itself be a host-managed symlink.
+        // Resolve that trusted anchor once; owned credential scopes below it
+        // still reject aliases.
+        let root = fs::canonicalize(data_dir)?.join("provider-auth-service");
+        Self::open_root(root, ProviderAccountId::default(), None, None)
+    }
+
+    fn open_root(
+        root: PathBuf,
+        account_id: ProviderAccountId,
+        service_signer: Option<MachineIdentity>,
+        recipient_key: Option<String>,
+    ) -> Result<Self> {
+        crate::provider_account::prepare_private_directory(&root)?;
+        crate::provider_account::prepare_private_directory(&root.join("providers"))?;
+        let owner = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(root.join("owner.lock"))?;
+        fs2::FileExt::try_lock_exclusive(&owner)
+            .context("Provider authentication vault is already owned by another instance")?;
+        let owner = VaultOwner(owner);
         let vault_key = load_or_create_secret(&root.join("vault.key"))?;
-        let signer = MachineIdentity::load_or_create(&root.join("signer"))?;
+        let signer = match service_signer {
+            Some(signer) => signer,
+            None => MachineIdentity::load_or_create(&root.join("signer"))?,
+        };
         let mut providers = BTreeMap::new();
         for entry in fs::read_dir(root.join("providers"))? {
             let path = entry?.path();
@@ -150,6 +216,14 @@ impl ProviderAuthService {
             .with_context(|| format!("decoding {}", path.display()))?;
             validate_stored(&stored)?;
             ensure!(
+                stored.account_id == account_id,
+                "Provider vault account mismatch"
+            );
+            ensure!(
+                stored.recipient_key == recipient_key,
+                "Provider vault recipient mismatch"
+            );
+            ensure!(
                 providers
                     .insert(stored.provider_id.clone(), stored)
                     .is_none(),
@@ -158,6 +232,11 @@ impl ProviderAuthService {
         }
         let service = Self {
             root,
+            _owner: owner,
+            account_id,
+            accounts: parking_lot::Mutex::new(BTreeMap::new()),
+            recipient_key,
+            grants: parking_lot::Mutex::new(BTreeMap::new()),
             vault_key,
             signer,
             providers: RwLock::new(providers),
@@ -166,7 +245,163 @@ impl ProviderAuthService {
         for stored in service.providers.read().values() {
             validate_vault_plaintext(stored, &service.open_vault(stored)?)?;
         }
+        service.reopen_scopes()?;
         Ok(service)
+    }
+
+    fn reopen_scopes(&self) -> Result<()> {
+        if self.account_id.is_default() && self.root.join("accounts").exists() {
+            for entry in fs::read_dir(self.root.join("accounts"))? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let Ok(account) =
+                    ProviderAccountId::try_from(entry.file_name().to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                if self.account(&account).is_err() {
+                    // Quarantine this lineage. Selecting it still returns its
+                    // error; unrelated accounts must remain available.
+                    tracing::warn!(
+                        account_id = account.as_str(),
+                        "Provider account vault unavailable"
+                    );
+                }
+            }
+        }
+        if !self.account_id.is_default()
+            && self.recipient_key.is_none()
+            && self.root.join("machines").exists()
+        {
+            for entry in fs::read_dir(self.root.join("machines"))? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(entry.file_name().to_string_lossy().as_bytes())
+                else {
+                    continue;
+                };
+                if bytes.len() != 32 {
+                    continue;
+                }
+                let recipient = base64::engine::general_purpose::STANDARD.encode(bytes);
+                if self.machine_grant(&recipient).is_err() {
+                    tracing::warn!(
+                        account_id = self.account_id.as_str(),
+                        "Provider Machine grant unavailable"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve one independently locked credential lineage. Admission and DB
+    /// ownership must be checked by the caller before opening a named account.
+    pub(crate) fn account(&self, account: &ProviderAccountId) -> Result<Arc<Self>> {
+        ensure!(
+            !account.is_default(),
+            "default authentication uses the root vault"
+        );
+        ensure!(
+            self.account_id.is_default(),
+            "cannot nest Provider account scopes"
+        );
+        let mut accounts = self.accounts.lock();
+        if let Some(service) = accounts.get(account) {
+            return Ok(Arc::clone(service));
+        }
+        ensure!(accounts.len() < 128, "Provider account capacity exceeded");
+        let parent = self.root.join("accounts");
+        crate::provider_account::prepare_private_directory(&parent)?;
+        let service = Arc::new(Self::open_root(
+            parent.join(account.as_str()),
+            account.clone(),
+            Some(self.signer.clone()),
+            None,
+        )?);
+        accounts.insert(account.clone(), Arc::clone(&service));
+        Ok(service)
+    }
+
+    /// A subscription can own multiple independent native login grants. Only
+    /// the enrolled recipient of this grant can receive its credentials; this
+    /// does not constrain the account's execution placement on other Machines.
+    /// The caller verifies account ownership and enrollment before opening this
+    /// empty scope, then verifies native identity before committing credentials.
+    pub(crate) fn machine_grant(&self, recipient_key: &str) -> Result<Arc<Self>> {
+        ensure!(
+            !self.account_id.is_default() && self.recipient_key.is_none(),
+            "Machine grants require a named account scope"
+        );
+        let recipient = decode_fixed::<32>(recipient_key, "Machine encryption public key")?;
+        // Reject non-contributory keys before creating persistent grant state.
+        let shared = StaticSecret::from([91_u8; 32]).diffie_hellman(&PublicKey::from(recipient));
+        ensure!(
+            shared.as_bytes().iter().any(|byte| *byte != 0),
+            "Machine encryption public key is non-contributory"
+        );
+        let canonical = base64::engine::general_purpose::STANDARD.encode(recipient);
+        let mut grants = self.grants.lock();
+        if let Some(grant) = grants.get(&canonical) {
+            return Ok(Arc::clone(grant));
+        }
+        ensure!(
+            grants.len() < 256,
+            "Provider Machine grant capacity exceeded"
+        );
+        let parent = self.root.join("machines");
+        crate::provider_account::prepare_private_directory(&parent)?;
+        let grant = Arc::new(Self::open_root(
+            parent.join(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(recipient)),
+            self.account_id.clone(),
+            Some(self.signer.clone()),
+            Some(canonical.clone()),
+        )?);
+        grants.insert(canonical, Arc::clone(&grant));
+        Ok(grant)
+    }
+
+    fn vault_schema(&self) -> u16 {
+        if self.recipient_key.is_some() {
+            3
+        } else if self.account_id.is_default() {
+            VAULT_SCHEMA
+        } else {
+            2
+        }
+    }
+
+    /// Refresh/reconciliation is lookup-only. An untrusted observation must
+    /// never create a new account or mint a Machine authorization grant.
+    pub(crate) fn existing_machine_grant(
+        &self,
+        account: &ProviderAccountId,
+        recipient_key: &str,
+    ) -> Result<Arc<Self>> {
+        ensure!(
+            self.account_id.is_default() && !account.is_default(),
+            "named account lookup requires the root vault"
+        );
+        let recipient = decode_fixed::<32>(recipient_key, "Machine encryption public key")?;
+        let canonical = base64::engine::general_purpose::STANDARD.encode(recipient);
+        let scoped = self
+            .accounts
+            .lock()
+            .get(account)
+            .cloned()
+            .context("Provider account is not authorized")?;
+        let grant = scoped
+            .grants
+            .lock()
+            .get(&canonical)
+            .cloned()
+            .context("Provider account is not authorized on this Machine")?;
+        Ok(grant)
     }
 
     #[must_use]
@@ -195,6 +430,27 @@ impl ProviderAuthService {
             .values()
             .map(StoredProviderAuthentication::status)
             .collect()
+    }
+
+    pub(crate) fn machine_account_replica_statuses(
+        &self,
+        recipient_key: &str,
+    ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        ensure!(
+            self.account_id.is_default(),
+            "account inventory requires the root vault"
+        );
+        let recipient = decode_fixed::<32>(recipient_key, "Machine encryption public key")?;
+        let canonical = base64::engine::general_purpose::STANDARD.encode(recipient);
+        let accounts: Vec<_> = self.accounts.lock().values().cloned().collect();
+        let mut statuses = Vec::new();
+        for account in accounts {
+            let grant = account.grants.lock().get(&canonical).cloned();
+            if let Some(grant) = grant {
+                statuses.extend(grant.replica_statuses());
+            }
+        }
+        Ok(statuses)
     }
 
     #[must_use]
@@ -232,6 +488,8 @@ impl ProviderAuthService {
         );
         let status = ProviderAuthenticationStatus {
             provider_id: provider_id.clone(),
+            account_id: self.account_id.clone(),
+            recipient_key: self.recipient_key.clone(),
             auth_generation: current.as_ref().map_or(0, |stored| stored.auth_generation),
             authentication_state: ServiceAuthenticationState::Authenticating,
             distribution_state: current
@@ -299,6 +557,7 @@ impl ProviderAuthService {
         let stored = providers
             .get(provider_id)
             .context("Provider is not authenticated at Cowboy Service scope")?;
+        stored.require_legacy_admission()?;
         ensure!(
             stored.authentication_state == ServiceAuthenticationState::Ready,
             "Provider authentication is not ready at Cowboy Service scope"
@@ -354,8 +613,15 @@ impl ProviderAuthService {
                 .any(|package| package.manifest.id == requested_provider_id),
             "authentication scope does not contain the requested Provider"
         );
+        self.require_portable_packages(packages)?;
         for package in packages {
             validate_bundle(&package.manifest.authentication, bundle)?;
+            ensure!(
+                self.account_id.is_default()
+                    || self.recipient_key.is_some()
+                    || package.manifest.authentication.refresh != RefreshOwnership::CompareAndSwap,
+                "Named account native refresh credentials require a Machine-bound grant"
+            );
         }
         let plaintext = serde_json::to_vec(bundle)?;
         ensure!(
@@ -370,12 +636,7 @@ impl ProviderAuthService {
                 "Provider authentication generation changed; restart authentication"
             );
         }
-        let current_generation = packages
-            .iter()
-            .filter_map(|package| providers.get(&package.manifest.id))
-            .map(|stored| stored.auth_generation)
-            .max()
-            .unwrap_or(0);
+        let current_generation = maximum_auth_generation(packages, &providers);
         if let Some(expected) = expected_generation {
             ensure!(
                 current_generation == expected,
@@ -396,10 +657,14 @@ impl ProviderAuthService {
                 generation,
                 &package.manifest.compatibility.auth_contract_fingerprint,
                 &plaintext,
+                None,
             )?;
             stored_values.push(StoredProviderAuthentication {
-                vault_schema: VAULT_SCHEMA,
+                promotion_commitment: None,
+                vault_schema: self.vault_schema(),
+                recipient_key: self.recipient_key.clone(),
                 provider_id: provider_id.clone(),
+                account_id: self.account_id.clone(),
                 auth_generation: generation,
                 authentication_state: ServiceAuthenticationState::Ready,
                 distribution_state: ServiceDistributionState::Pending,
@@ -441,6 +706,7 @@ impl ProviderAuthService {
         requested_provider_id: &str,
         expected_generation: u64,
     ) -> Result<ProviderAuthRefreshResult> {
+        self.require_portable_packages(packages)?;
         let (requested_package, plaintext) =
             validate_refresh_request(packages, bundle, requested_provider_id)?;
 
@@ -449,12 +715,12 @@ impl ProviderAuthService {
             .get(requested_provider_id)
             .cloned()
             .context("Provider is not authenticated at Cowboy Service scope")?;
-        let current_generation = packages
+        let current_generation =
+            maximum_auth_generation(packages, &providers).max(current.auth_generation);
+        packages
             .iter()
             .filter_map(|package| providers.get(&package.manifest.id))
-            .map(|stored| stored.auth_generation)
-            .max()
-            .unwrap_or(current.auth_generation);
+            .try_for_each(StoredProviderAuthentication::require_legacy_admission)?;
         if current.auth_generation != expected_generation
             || current_generation != expected_generation
         {
@@ -512,9 +778,12 @@ impl ProviderAuthService {
                 generation,
                 &package.manifest.compatibility.auth_contract_fingerprint,
                 &plaintext,
+                None,
             )?;
             stored_values.push(StoredProviderAuthentication {
-                vault_schema: VAULT_SCHEMA,
+                promotion_commitment: None,
+                vault_schema: self.vault_schema(),
+                recipient_key: self.recipient_key.clone(),
                 provider_id: provider_id.clone(),
                 auth_generation: generation,
                 authentication_state: ServiceAuthenticationState::Ready,
@@ -530,6 +799,7 @@ impl ProviderAuthService {
                 nonce,
                 ciphertext,
                 account_label: current.account_label.clone(),
+                account_id: self.account_id.clone(),
                 updated_at_ms: now_ms(),
             });
         }
@@ -582,12 +852,16 @@ impl ProviderAuthService {
                 generation,
                 &current.auth_contract_fingerprint,
                 &[],
+                None,
             )?;
             statuses.push(self.replace_locked(
                 &mut providers,
                 StoredProviderAuthentication {
-                    vault_schema: VAULT_SCHEMA,
+                    promotion_commitment: None,
+                    vault_schema: self.vault_schema(),
+                    recipient_key: self.recipient_key.clone(),
                     provider_id: current.provider_id,
+                    account_id: self.account_id.clone(),
                     auth_generation: generation,
                     authentication_state: ServiceAuthenticationState::SignedOut,
                     distribution_state: ServiceDistributionState::Revoking,
@@ -616,7 +890,22 @@ impl ProviderAuthService {
         provider_id: &str,
         machine_public_key: &str,
     ) -> Result<SealedProviderAuth> {
+        self.seal_for_machine_with_admission(provider_id, machine_public_key, None)
+    }
+
+    fn seal_for_machine_with_admission(
+        &self,
+        provider_id: &str,
+        machine_public_key: &str,
+        admitted: Option<(&str, u64)>,
+    ) -> Result<SealedProviderAuth> {
         let recipient = decode_fixed::<32>(machine_public_key, "Machine encryption public key")?;
+        ensure!(
+            self.recipient_key.as_ref().is_none_or(
+                |key| key == &base64::engine::general_purpose::STANDARD.encode(recipient)
+            ),
+            "Provider grant belongs to another Machine"
+        );
         let stored = self
             .providers
             .read()
@@ -624,8 +913,21 @@ impl ProviderAuthService {
             .cloned()
             .context("Provider is not authenticated at Cowboy Service scope")?;
         let plaintext = if stored.action == ProviderAuthAction::Apply {
+            crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+                .map_err(anyhow::Error::msg)?;
+            if let Some((commitment, generation)) = admitted {
+                ensure!(
+                    stored.promotion_commitment.as_deref() == Some(commitment)
+                        && stored.auth_generation >= generation
+                        && stored.authentication_state == ServiceAuthenticationState::Ready,
+                    "Provider grant changed after journal admission"
+                );
+            } else {
+                stored.require_legacy_admission()?;
+            }
             self.open_vault(&stored)?
         } else {
+            ensure!(admitted.is_none(), "Provider grant was revoked");
             Vec::new()
         };
 
@@ -639,8 +941,13 @@ impl ProviderAuthService {
         let key = derive_seal_key(shared.as_bytes());
         let nonce = random_bytes::<24>()?;
         let mut envelope = SealedProviderAuth {
-            envelope_schema: AUTH_ENVELOPE_SCHEMA,
+            envelope_schema: if self.account_id.is_default() {
+                AUTH_ENVELOPE_SCHEMA
+            } else {
+                2
+            },
             provider_id: stored.provider_id,
+            account_id: self.account_id.clone(),
             auth_generation: stored.auth_generation,
             auth_contract_fingerprint: stored.auth_contract_fingerprint,
             projection_schema: stored.projection_schema,
@@ -732,20 +1039,45 @@ impl ProviderAuthService {
         Ok(status)
     }
 
+    fn require_portable_packages(&self, packages: &[ProviderPackage]) -> Result<()> {
+        for package in packages {
+            crate::provider_account::portable_credentials_allowed(
+                &self.account_id,
+                &package.manifest.id,
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
+
     fn seal_vault(
         &self,
         provider_id: &str,
         generation: u64,
         fingerprint: &str,
         plaintext: &[u8],
+        promotion_commitment: Option<&str>,
     ) -> Result<(String, String)> {
+        // Wipe encrypts no credential bytes and must remain available for
+        // retiring historical portable state even when new imports are denied.
+        if !plaintext.is_empty() {
+            crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
+                .map_err(anyhow::Error::msg)?;
+        }
         let nonce = random_bytes::<24>()?;
         let ciphertext = XChaCha20Poly1305::new(Key::from_slice(&self.vault_key))
             .encrypt(
                 XNonce::from_slice(&nonce),
                 Payload {
                     msg: plaintext,
-                    aad: &vault_aad(provider_id, generation, fingerprint),
+                    aad: &vault_aad(
+                        provider_id,
+                        generation,
+                        fingerprint,
+                        &self.account_id,
+                        self.recipient_key.as_deref(),
+                        promotion_commitment,
+                    ),
                 },
             )
             .map_err(|_| anyhow::anyhow!("encrypting Provider auth vault failed"))?;
@@ -756,6 +1088,19 @@ impl ProviderAuthService {
     }
 
     fn open_vault(&self, stored: &StoredProviderAuthentication) -> Result<Vec<u8>> {
+        crate::provider_account::portable_credentials_allowed(
+            &self.account_id,
+            &stored.provider_id,
+        )
+        .map_err(anyhow::Error::msg)?;
+        ensure!(
+            stored.account_id == self.account_id,
+            "Provider vault account mismatch"
+        );
+        ensure!(
+            stored.recipient_key == self.recipient_key,
+            "Provider vault recipient mismatch"
+        );
         let nonce = decode_fixed::<24>(&stored.nonce, "vault nonce")?;
         let ciphertext = base64::engine::general_purpose::STANDARD
             .decode(&stored.ciphertext)
@@ -773,6 +1118,9 @@ impl ProviderAuthService {
                         &stored.provider_id,
                         stored.auth_generation,
                         &stored.auth_contract_fingerprint,
+                        &stored.account_id,
+                        stored.recipient_key.as_deref(),
+                        stored.promotion_commitment.as_deref(),
                     ),
                 },
             )
@@ -780,9 +1128,41 @@ impl ProviderAuthService {
     }
 }
 
+fn maximum_auth_generation(
+    packages: &[ProviderPackage],
+    providers: &BTreeMap<String, StoredProviderAuthentication>,
+) -> u64 {
+    packages
+        .iter()
+        .filter_map(|package| providers.get(&package.manifest.id))
+        .map(|stored| stored.auth_generation)
+        .max()
+        .unwrap_or(0)
+}
+
 fn validate_stored(stored: &StoredProviderAuthentication) -> Result<()> {
     ensure!(
-        stored.vault_schema == VAULT_SCHEMA,
+        stored
+            .promotion_commitment
+            .as_ref()
+            .is_none_or(|value| stored.vault_schema == 3
+                && stored.action == ProviderAuthAction::Apply
+                && value.len() == 64
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
+        "invalid Provider promotion commitment"
+    );
+    ensure!(
+        (stored.vault_schema == VAULT_SCHEMA
+            && stored.account_id.is_default()
+            && stored.recipient_key.is_none())
+            || (stored.vault_schema == 2
+                && !stored.account_id.is_default()
+                && stored.recipient_key.is_none())
+            || (stored.vault_schema == 3
+                && !stored.account_id.is_default()
+                && stored.recipient_key.is_some()),
         "unsupported Provider vault schema"
     );
     ensure!(
@@ -997,23 +1377,17 @@ fn derive_seal_key(shared: &[u8; 32]) -> [u8; 32] {
 }
 
 fn provider_auth_aad(envelope: &SealedProviderAuth) -> Vec<u8> {
-    let action = match envelope.action {
-        ProviderAuthAction::Apply => "apply",
-        ProviderAuthAction::Wipe => "wipe",
-    };
-    format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n",
-        envelope.envelope_schema,
-        envelope.provider_id,
-        envelope.auth_generation,
-        envelope.auth_contract_fingerprint,
-        envelope.projection_schema,
-        action
-    )
-    .into_bytes()
+    envelope.authentication_aad()
 }
 
-fn vault_aad(provider_id: &str, generation: u64, fingerprint: &str) -> Vec<u8> {
+fn vault_aad(
+    provider_id: &str,
+    generation: u64,
+    fingerprint: &str,
+    account: &ProviderAccountId,
+    recipient: Option<&str>,
+    promotion_commitment: Option<&str>,
+) -> Vec<u8> {
     let mut output = VAULT_DOMAIN.to_vec();
     output.extend_from_slice(provider_id.as_bytes());
     output.push(b'\n');
@@ -1021,6 +1395,21 @@ fn vault_aad(provider_id: &str, generation: u64, fingerprint: &str) -> Vec<u8> {
     output.push(b'\n');
     output.extend_from_slice(fingerprint.as_bytes());
     output.push(b'\n');
+    if !account.is_default() {
+        output.extend_from_slice(b"account:");
+        output.extend_from_slice(account.as_str().as_bytes());
+        output.push(b'\n');
+    }
+    if let Some(recipient) = recipient {
+        output.extend_from_slice(b"recipient:");
+        output.extend_from_slice(recipient.as_bytes());
+        output.push(b'\n');
+    }
+    if let Some(commitment) = promotion_commitment {
+        output.extend_from_slice(b"promotion:");
+        output.extend_from_slice(commitment.as_bytes());
+        output.push(b'\n');
+    }
     output
 }
 
@@ -1045,6 +1434,9 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     file.sync_all()?;
     fs::rename(&temporary, path).with_context(|| format!("activating {}", path.display()))?;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    // A commit receipt must survive loss of power, not just process restart.
+    // sync_all on the temporary file alone does not persist the directory entry.
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -1054,7 +1446,390 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    mod grant_commits;
     use super::*;
+
+    #[test]
+    fn named_claude_credentials_cannot_enter_the_portable_vault() {
+        let (root, service) = service();
+        let account = service
+            .account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let error = account
+            .seal_vault("claude-code", 1, "contract", b"synthetic-secret", None)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "native_owned_credentials_required");
+        assert!(!account.root.join("providers/claude-code.json").exists());
+        assert!(
+            account
+                .seal_vault("claude-deepseek", 1, "contract", b"synthetic-api-key", None)
+                .is_ok()
+        );
+        assert!(
+            service
+                .seal_vault("claude-code", 1, "contract", b"synthetic-legacy", None)
+                .is_ok()
+        );
+        let package = package("claude-deepseek");
+        account
+            .commit(&package, &bundle(&package), None, None)
+            .unwrap();
+        // Simulate retained metadata from the prototype, without creating or
+        // decrypting any Claude credential. Cleanup must work from metadata.
+        let mut retained = account
+            .providers
+            .read()
+            .get("claude-deepseek")
+            .unwrap()
+            .clone();
+        retained.provider_id = "claude-code".into();
+        assert!(account.open_vault(&retained).is_err());
+        account
+            .providers
+            .write()
+            .insert("claude-code".into(), retained);
+        account.logout("claude-code").unwrap();
+        let key = PublicKey::from(&StaticSecret::from([42; 32]));
+        let envelope = account
+            .seal_for_machine(
+                "claude-code",
+                &base64::engine::general_purpose::STANDARD.encode(key.as_bytes()),
+            )
+            .unwrap();
+        assert_eq!(envelope.action, ProviderAuthAction::Wipe);
+        drop(account);
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn account_and_machine_vaults_reject_directory_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let (root, service) = service();
+        let id: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let parent = service.root.join("accounts");
+        fs::create_dir(&parent).unwrap();
+        let target = root.join("unrelated");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, parent.join(id.as_str())).unwrap();
+        assert!(service.account(&id).is_err());
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+        fs::remove_file(parent.join(id.as_str())).unwrap();
+        let account = service.account(&id).unwrap();
+        let recipient = PublicKey::from(&StaticSecret::from([42; 32]));
+        let key = base64::engine::general_purpose::STANDARD.encode(recipient.as_bytes());
+        let grants = account.root.join("machines");
+        fs::create_dir(&grants).unwrap();
+        let name = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(recipient.as_bytes());
+        symlink(&target, grants.join(&name)).unwrap();
+        assert!(account.machine_grant(&key).is_err());
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+        fs::remove_file(grants.join(&name)).unwrap();
+        let grant = account.machine_grant(&key).unwrap();
+        assert_eq!(grant.recipient_key.as_deref(), Some(key.as_str()));
+    }
+
+    #[test]
+    fn configured_data_location_may_be_a_symlink_but_vault_root_may_not() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let alias = root.path().join("configured-data");
+        symlink(&data, &alias).unwrap();
+        let service = ProviderAuthService::open(&alias).unwrap();
+        assert_eq!(
+            service.root,
+            fs::canonicalize(&data)
+                .unwrap()
+                .join("provider-auth-service")
+        );
+        drop(service);
+        let relocated = data.join("relocated");
+        fs::rename(data.join("provider-auth-service"), &relocated).unwrap();
+        symlink(&relocated, data.join("provider-auth-service")).unwrap();
+        assert!(ProviderAuthService::open(&alias).is_err());
+    }
+
+    #[test]
+    fn refresh_grant_lookup_never_creates_or_crosses_authorization() {
+        let (root, service) = service();
+        let id: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let key = |byte| {
+            base64::engine::general_purpose::STANDARD
+                .encode(PublicKey::from(&StaticSecret::from([byte; 32])).as_bytes())
+        };
+        let first_key = key(7);
+        let second_key = key(8);
+        assert!(service.existing_machine_grant(&id, &first_key).is_err());
+        assert!(service.accounts.lock().is_empty());
+        let account = service.account(&id).unwrap();
+        assert!(service.existing_machine_grant(&id, &first_key).is_err());
+        assert!(account.grants.lock().is_empty());
+        let grant = account.machine_grant(&first_key).unwrap();
+        assert!(Arc::ptr_eq(
+            &grant,
+            &service.existing_machine_grant(&id, &first_key).unwrap()
+        ));
+        assert!(service.existing_machine_grant(&id, &second_key).is_err());
+        assert!(service.existing_machine_grant(&other, &first_key).is_err());
+        assert_eq!(account.grants.lock().len(), 1);
+        assert_eq!(service.accounts.lock().len(), 1);
+        assert!(!service.root.join("accounts").join(other.as_str()).exists());
+        drop(grant);
+        drop(account);
+        drop(service);
+        let service = ProviderAuthService::open(&root).unwrap();
+        assert!(service.existing_machine_grant(&id, &first_key).is_ok());
+        assert!(service.existing_machine_grant(&id, &second_key).is_err());
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_named_vault_does_not_disable_default_authentication() {
+        let (root, service) = service();
+        let package = package("claude-deepseek");
+        service
+            .commit(&package, &bundle(&package), None, Some(0))
+            .unwrap();
+        let id =
+            ProviderAccountId::try_from("11111111-1111-4111-8111-111111111111".to_owned()).unwrap();
+        let account = service.account(&id).unwrap();
+        let broken = account.root.join("providers/claude-deepseek.json");
+        account
+            .commit(&package, &bundle(&package), None, Some(0))
+            .unwrap();
+        drop(account);
+        drop(service);
+        fs::write(broken, b"invalid vault fixture").unwrap();
+        let service = ProviderAuthService::open(&root).unwrap();
+        assert!(service.account(&id).is_err());
+        assert_eq!(
+            service
+                .status("claude-deepseek")
+                .unwrap()
+                .authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One grant fixture covers refresh, revoke, recipient isolation and restart.
+    fn one_subscription_has_independent_machine_grants() {
+        let (root, service) = service();
+        let id =
+            ProviderAccountId::try_from("11111111-1111-4111-8111-111111111111".to_owned()).unwrap();
+        let account = service.account(&id).unwrap();
+        let key = |byte| {
+            base64::engine::general_purpose::STANDARD
+                .encode(PublicKey::from(&StaticSecret::from([byte; 32])).as_bytes())
+        };
+        let first_key = key(7);
+        let second_key = key(8);
+        let first = account.machine_grant(&first_key).unwrap();
+        let second = account.machine_grant(&second_key).unwrap();
+        assert!(Arc::ptr_eq(
+            &first,
+            &account.machine_grant(&first_key).unwrap()
+        ));
+        assert!(first.machine_grant(&second_key).is_err());
+        assert!(service.machine_grant(&first_key).is_err());
+        let package = package("gemini");
+        let bundle = bundle(&package);
+        // A named native login must never enter a portable, multi-writer vault.
+        assert!(account.commit(&package, &bundle, None, Some(0)).is_err());
+        first.commit(&package, &bundle, None, Some(0)).unwrap();
+        let mut second_bundle = bundle.clone();
+        second_bundle.values.insert(
+            "oauth_creds_json".into(),
+            base64::engine::general_purpose::STANDARD.encode(br#"{"token":"second-native-login"}"#),
+        );
+        second
+            .commit(&package, &second_bundle, None, Some(0))
+            .unwrap();
+        let stored = first.providers.read()["gemini"].clone();
+        assert_eq!(stored.vault_schema, 3);
+        assert!(second.open_vault(&stored).is_err());
+        let mut swapped = stored;
+        swapped.recipient_key = Some(second_key.clone());
+        assert!(second.open_vault(&swapped).is_err());
+        assert!(first.seal_for_machine("gemini", &first_key).is_ok());
+        assert!(second.seal_for_machine("gemini", &second_key).is_ok());
+        assert!(first.seal_for_machine("gemini", &second_key).is_err());
+        assert!(second.seal_for_machine("gemini", &first_key).is_err());
+        assert!(account.status("gemini").is_none());
+        let mut refreshed = bundle;
+        refreshed.values.insert(
+            "oauth_creds_json".into(),
+            base64::engine::general_purpose::STANDARD.encode(br#"{"token":"first-refreshed"}"#),
+        );
+        assert!(matches!(
+            first
+                .compare_and_swap_refresh(std::slice::from_ref(&package), &refreshed, "gemini", 1)
+                .unwrap(),
+            ProviderAuthRefreshResult::Updated(_)
+        ));
+        let second_stored = second.providers.read()["gemini"].clone();
+        let first_inventory = service
+            .machine_account_replica_statuses(&first_key)
+            .unwrap();
+        let second_inventory = service
+            .machine_account_replica_statuses(&second_key)
+            .unwrap();
+        assert_eq!(first_inventory.len(), 1);
+        assert_eq!(first_inventory[0].auth_generation, 2);
+        assert_eq!(first_inventory[0].account_id, id);
+        assert_eq!(second_inventory.len(), 1);
+        assert_eq!(second_inventory[0].auth_generation, 1);
+        assert!(
+            service
+                .machine_account_replica_statuses(&key(9))
+                .unwrap()
+                .is_empty()
+        );
+        let unchanged: PortableCredentialBundle =
+            serde_json::from_slice(&second.open_vault(&second_stored).unwrap()).unwrap();
+        assert_eq!(unchanged, second_bundle);
+        first.logout("gemini").unwrap();
+        assert_eq!(first.status("gemini").unwrap().auth_generation, 3);
+        assert_eq!(second.status("gemini").unwrap().auth_generation, 1);
+        assert_eq!(
+            second.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        drop(first);
+        drop(second);
+        drop(account);
+        drop(service);
+        let reopened = ProviderAuthService::open(&root).unwrap();
+        let account = reopened.account(&id).unwrap();
+        assert_eq!(
+            account
+                .machine_grant(&first_key)
+                .unwrap()
+                .status("gemini")
+                .unwrap()
+                .authentication_state,
+            ServiceAuthenticationState::SignedOut
+        );
+        assert_eq!(
+            account
+                .machine_grant(&second_key)
+                .unwrap()
+                .status("gemini")
+                .unwrap()
+                .authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        assert!(
+            account
+                .machine_grant(&first_key)
+                .unwrap()
+                .seal_for_machine("gemini", &second_key)
+                .is_err()
+        );
+        drop(account);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::used_underscore_binding)] // Inspect the RAII-only descriptor to model fork/dup.
+    fn vault_owner_releases_lock_even_when_a_child_retains_the_descriptor() {
+        let (root, service) = service();
+        // dup, like fork before exec, retains the same open-file description.
+        // This makes the reopen race deterministic without spawning an agent
+        // or depending on process scheduler timing.
+        let inherited = service._owner.0.try_clone().unwrap();
+        assert!(ProviderAuthService::open(&root).is_err());
+        drop(service);
+        let reopened = ProviderAuthService::open(&root).unwrap();
+        assert!(ProviderAuthService::open(&root).is_err());
+        drop(inherited);
+        assert!(ProviderAuthService::open(&root).is_err());
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn account_vaults_have_independent_credentials_generations_and_owners() {
+        let (root, service) = service();
+        let service = Arc::new(service);
+        let first_id =
+            ProviderAccountId::try_from("11111111-1111-4111-8111-111111111111".to_owned()).unwrap();
+        let second_id =
+            ProviderAccountId::try_from("22222222-2222-4222-8222-222222222222".to_owned()).unwrap();
+        let first = service.account(&first_id).unwrap();
+        let second = service.account(&second_id).unwrap();
+        assert_eq!(first.signer.public_key(), service.signer.public_key());
+        assert_eq!(second.signer.public_key(), service.signer.public_key());
+        assert!(Arc::ptr_eq(&first, &service.account(&first_id).unwrap()));
+        assert!(service.account(&ProviderAccountId::default()).is_err());
+        assert!(ProviderAuthService::open(&root).is_err());
+        let package = package("claude-deepseek");
+        let first_bundle = bundle(&package);
+        let mut second_bundle = first_bundle.clone();
+        second_bundle.values.insert(
+            "api_key".into(),
+            base64::engine::general_purpose::STANDARD.encode(b"second-secret"),
+        );
+        first
+            .commit(&package, &first_bundle, Some("Personal".into()), Some(0))
+            .unwrap();
+        second
+            .commit(&package, &second_bundle, Some("Personal".into()), Some(0))
+            .unwrap();
+        assert!(service.status("claude-deepseek").is_none());
+        let first_stored = first.providers.read()["claude-deepseek"].clone();
+        assert!(second.open_vault(&first_stored).is_err());
+        let mut relabelled = first_stored.clone();
+        relabelled.account_id = second_id.clone();
+        assert!(second.open_vault(&relabelled).is_err());
+        first.logout("claude-deepseek").unwrap();
+        assert_eq!(first.status("claude-deepseek").unwrap().auth_generation, 2);
+        let second_status = second.status("claude-deepseek").unwrap();
+        assert_eq!(second_status.auth_generation, 1);
+        assert_eq!(second_status.account_id, second_id);
+        assert_eq!(
+            second_status.authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        assert!(
+            second
+                .with_scheduling_generation("claude-deepseek", true, Some(1), || ())
+                .is_ok()
+        );
+        drop(first);
+        drop(second);
+        drop(service);
+        let reopened = Arc::new(ProviderAuthService::open(&root).unwrap());
+        assert_eq!(
+            reopened
+                .account(&first_id)
+                .unwrap()
+                .status("claude-deepseek")
+                .unwrap()
+                .authentication_state,
+            ServiceAuthenticationState::SignedOut
+        );
+        assert_eq!(
+            reopened
+                .account(&second_id)
+                .unwrap()
+                .status("claude-deepseek")
+                .unwrap()
+                .auth_generation,
+            1
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn package(id: &str) -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(match id {
@@ -1153,6 +1928,54 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_native_login_has_one_owner_and_stale_cancel_cannot_remove_it() {
+        let (root, service) = service();
+        let package = package("gemini");
+        let barrier = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = ["login-a", "login-b"]
+                .into_iter()
+                .map(|request| {
+                    let service = &service;
+                    let package = &package;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        (
+                            request,
+                            service.begin_authentication(package, request).is_ok(),
+                        )
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|(_, accepted)| *accepted).count(), 1);
+        let winner = results.iter().find(|(_, accepted)| *accepted).unwrap().0;
+        let loser = results.iter().find(|(_, accepted)| !*accepted).unwrap().0;
+        service.cancel_authentication("gemini", loser);
+        assert_eq!(
+            service.active_authentication_request("gemini").as_deref(),
+            Some(winner)
+        );
+        service.cancel_authentication("gemini", winner);
+        assert!(service.active_authentication_request("gemini").is_none());
+        service
+            .begin_authentication(&package, "next-login")
+            .unwrap();
+        service.cancel_authentication("gemini", winner);
+        assert_eq!(
+            service.active_authentication_request("gemini").as_deref(),
+            Some("next-login")
+        );
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn service_generation_is_durable_cas_and_sealed_per_machine() {
         let (root, service) = service();
         let package = package("gemini");
@@ -1245,6 +2068,7 @@ mod tests {
         assert_eq!(wipe.auth_generation, 2);
         assert_eq!(wipe.action, ProviderAuthAction::Wipe);
 
+        drop(service);
         let reopened = ProviderAuthService::open(&root).unwrap();
         let reopened = reopened.status("gemini").unwrap();
         assert_eq!(reopened.auth_generation, 2);
@@ -1279,9 +2103,10 @@ mod tests {
                 .to_string()
                 .contains("not ready")
         );
-        let reopened = ProviderAuthService::open(&root).unwrap();
+        drop(service);
+        let service = ProviderAuthService::open(&root).unwrap();
         assert_eq!(
-            reopened.status("gemini").unwrap().authentication_state,
+            service.status("gemini").unwrap().authentication_state,
             ServiceAuthenticationState::Expired
         );
 

@@ -165,6 +165,9 @@ as a deprecated override for one release.
 | Scope | Key | Default | Reload |
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
+| Service | `accounts.revocation_retry_interval` | `"1m"` | live |
+| Service | `accounts.native_claude_login` | `false` | live |
+| Service | `accounts.native_claude_sessions` | `false` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
 | Service | `plugins.catalog_keep_releases` | `3` | live |
 | Service | `plugins.repin_dormant_sessions` | `false` | live |

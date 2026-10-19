@@ -22,7 +22,8 @@ if (
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
-  suite !== "loading-progress"
+  suite !== "loading-progress" &&
+  suite !== "subscriptions"
 ) {
   throw new Error("unknown suite");
 }
@@ -54,7 +55,8 @@ await build({
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "session-maintenance" || suite === "dormant-session" ||
         suite === "about-layout" || suite === "info-metrics" ||
-        suite === "loading-progress" || suite === "review-context"
+        suite === "loading-progress" || suite === "review-context" ||
+        suite === "subscriptions"
         ? "development"
         : "production",
     ),
@@ -112,6 +114,8 @@ await build({
           ? "../web/src/infoMetricsBrowserConformance.tsx"
           : suite === "dormant-session"
           ? "../web/src/dormantSessionBrowserConformance.tsx"
+          : suite === "subscriptions"
+          ? "../web/src/subscriptionsBrowserConformance.tsx"
           : suite === "about-layout"
           ? "../web/src/aboutLayoutBrowserConformance.tsx"
           : suite === "session-maintenance"

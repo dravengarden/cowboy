@@ -15,6 +15,16 @@ use sqlx::{Connection as _, Row as _};
 use super::sqlite::SqliteStorage;
 
 const TABLES: &[&str] = &[
+    "provider_account_registries",
+    "provider_account_operations",
+    "provider_account_stops",
+    "provider_account_grants",
+    "provider_grant_routes",
+    "provider_login_operations",
+    "provider_native_generations",
+    "provider_session_transitions",
+    "provider_session_transition_stops",
+    "provider_session_transition_commits",
     "agent_api_operations",
     "user_preference_owners",
     "user_preferences",
@@ -36,6 +46,14 @@ const TABLES: &[&str] = &[
     "plugin_uninstall_resolutions",
     "telemetry_binding_journal",
     "users",
+    "user_devices",
+    "user_device_refresh_tokens",
+    "active_client_leases",
+    "capacity_waiters",
+    "oidc_logout_jtis",
+    "auth_audit_events",
+    "external_passkey_ceremonies",
+    "session_folders",
     "sessions",
     "managed_agent_calls",
     "events",
@@ -422,6 +440,17 @@ pub(crate) async fn postgres_to_sqlite(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn copy_contract_covers_the_complete_migrated_schema() {
+        let mut destination = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&mut destination)
+            .await
+            .unwrap();
+        let expected = TABLES.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(sqlite_tables(&mut destination).await.unwrap(), expected);
+    }
 
     #[tokio::test]
     #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]

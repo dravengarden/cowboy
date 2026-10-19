@@ -440,6 +440,9 @@ pub struct ProviderUpdateOffer {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
+    /// Resolved once at creation; independent of runtime Machine and auth generation.
+    #[serde(default)]
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
     /// Exact Agent Plugin release, changed only by an explicit idle reload.
     #[serde(default)]
     pub provider_version: String,
@@ -558,9 +561,66 @@ pub struct SessionMeta {
 }
 
 impl SessionMeta {
+    fn require_provider_release_transition(
+        &self,
+        version: &str,
+        digest: &str,
+    ) -> Result<(), String> {
+        if !self.provider_account_id.is_default()
+            && (self.provider_version != version || self.provider_generation_digest != digest)
+        {
+            return Err("named account release change requires a verified login transition".into());
+        }
+        Ok(())
+    }
+
     /// Binding identity alone cannot authorize execution. The selected exact
-    /// signed Provider must also accept this executor contract.
+    /// signed Provider must also accept this executor contract. This is a
+    /// structural check only: named dispatch and projection require the fresh
+    /// Store admission enforced by RemoteRuntime, never this cached metadata.
     pub(crate) fn require_runtime_launch(&self) -> Result<(), String> {
+        if !self.provider_account_id.is_default()
+            && (self.closing
+                || self.provider != "claude-code"
+                || self.machine_id.is_empty()
+                || self.machine_id == "local"
+                || self.owner_user_id.as_ref().is_none_or(String::is_empty)
+                || self.provider_version.is_empty()
+                || self.provider_generation_digest.is_empty()
+                || self
+                    .provider_auth_generation
+                    .is_none_or(|generation| generation == 0)
+                || self.provider_behavior.is_none())
+        {
+            return Err("Named account requires a complete enrolled native binding".into());
+        }
+        self.require_runtime_environment()
+    }
+
+    /// Structural check only. The caller must separately hold current native
+    /// account/session admission before dispatching this dormant declaration.
+    pub(crate) fn require_native_readmission(
+        &self,
+        target: &crate::provider_account::NativeProfileReceipt,
+    ) -> Result<(), String> {
+        if self.provider_account_id.is_default()
+            || self.closing
+            || self.status != Status::Exited
+            || self.owner_user_id.is_none()
+            || self.agent_session_id.is_some()
+            || self.provider_account_id != target.account_id
+            || self.provider != target.provider_id
+            || self.provider_version != target.provider_version
+            || self.provider_generation_digest != target.generation_digest
+            || self.provider_auth_generation != Some(target.generation)
+            || target.generation == 0
+        {
+            return Err("native readmission does not match the dormant session".into());
+        }
+        self.require_runtime_environment()
+    }
+
+    fn require_runtime_environment(&self) -> Result<(), String> {
         if let Some(binding) = &self.execution_binding {
             if let Some(child) = binding.managed_child() {
                 return if child.accepts(&self.id, &self.machine_id, &self.cwd)
@@ -654,6 +714,7 @@ fn display_config_options(session: &Session) -> Option<serde_json::Value> {
 pub struct SessionRegistration {
     pub id: String,
     pub provider: String,
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
     pub provider_version: String,
     pub provider_generation_digest: String,
     pub provider_auth_generation: Option<u64>,
@@ -2604,10 +2665,11 @@ impl Hub {
             return false;
         }
         if self.session_info(&worker.session_id).is_some_and(|info| {
-            info.meta.execution_binding.is_some()
+            (info.meta.execution_binding.is_some() || !info.meta.provider_account_id.is_default())
                 && !worker.launch.as_ref().is_some_and(|launch| {
                     launch.execution_binding == info.meta.execution_binding
                         && launch.provider == info.meta.provider
+                        && launch.provider_account_id == info.meta.provider_account_id
                         && launch.provider_version == info.meta.provider_version
                         && launch.provider_generation_digest == info.meta.provider_generation_digest
                         && launch.provider_auth_generation == info.meta.provider_auth_generation
@@ -3212,6 +3274,7 @@ impl Hub {
             provider,
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "local".to_owned(),
@@ -3230,9 +3293,15 @@ impl Hub {
 
     /// Register a session on a specific stable machine identity.
     pub fn create_session(&self, registration: SessionRegistration) {
+        self.project_new_session(Self::prepare_session(registration), true);
+    }
+
+    /// Construct metadata without publishing it or enqueuing a database write.
+    pub(crate) fn prepare_session(registration: SessionRegistration) -> SessionMeta {
         let SessionRegistration {
             id,
             provider,
+            provider_account_id,
             provider_version,
             provider_generation_digest,
             provider_auth_generation,
@@ -3249,19 +3318,10 @@ impl Hub {
             owner_user_id,
             owner_username,
         } = registration;
-        // A managed child takes only its parent's preset; its worker refuses
-        // every other option, so interactive defaults would never apply.
-        let config_preferences = if execution_binding
-            .as_ref()
-            .is_some_and(|binding| binding.managed().is_some())
-        {
-            serde_json::json!({})
-        } else {
-            default_config_preferences(&provider, provider_behavior.as_ref())
-        };
-        let meta = SessionMeta {
+        SessionMeta {
             id: id.clone(),
             provider,
+            provider_account_id,
             provider_version,
             provider_generation_digest,
             provider_auth_generation,
@@ -3290,9 +3350,32 @@ impl Hub {
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
+        }
+    }
+
+    /// Only for a committed row, with current account admission held by caller.
+    /// Refuse a collision rather than replacing live transcript/runtime state.
+    pub(crate) fn project_persisted_session(&self, meta: SessionMeta) -> bool {
+        self.project_new_session(meta, false)
+    }
+
+    fn project_new_session(&self, meta: SessionMeta, persist: bool) -> bool {
+        let id = meta.id.clone();
+        // Managed children take only their parent's preset.
+        let config_preferences = if meta
+            .execution_binding
+            .as_ref()
+            .is_some_and(|binding| binding.managed().is_some())
+        {
+            serde_json::json!({})
+        } else {
+            default_config_preferences(&meta.provider, meta.provider_behavior.as_ref())
         };
         {
             let mut sessions = self.inner.sessions.lock();
+            if sessions.contains_key(&id) {
+                return false;
+            }
             let mut order = self.inner.order.lock();
             sessions.insert(
                 id.clone(),
@@ -3327,7 +3410,9 @@ impl Hub {
             order.push(id.clone());
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::InsertSession(Box::new(meta)));
+            if persist {
+                let _ = tx.send(StoreWrite::InsertSession(Box::new(meta)));
+            }
             if config_preferences
                 .as_object()
                 .is_some_and(|preferences| !preferences.is_empty())
@@ -3339,6 +3424,7 @@ impl Hub {
             }
         }
         self.broadcast_sessions();
+        true
     }
 
     /// Remove a session entirely. Drops its event log and broadcasts the
@@ -4497,6 +4583,64 @@ impl Hub {
         Ok(())
     }
 
+    /// Project a binding already committed by the guarded Store writer. This
+    /// deliberately enqueues no persistence write and never starts a worker.
+    pub(crate) fn project_native_binding(
+        &self,
+        expected: &SessionMeta,
+        target: &crate::provider_account::NativeProfileReceipt,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    ) -> Result<(), String> {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(&expected.id)
+                .ok_or_else(|| "session no longer exists".to_owned())?;
+            let meta = &mut session.meta;
+            if expected.provider_account_id.is_default()
+                || target.account_id != expected.provider_account_id
+                || target.provider_id != expected.provider
+                || expected
+                    .provider_auth_generation
+                    .is_none_or(|old| old >= target.generation)
+                || meta.closing
+                || session.in_flight
+                || meta.status != Status::Exited
+                || meta.owner_user_id != expected.owner_user_id
+                || meta.provider_account_id != expected.provider_account_id
+                || meta.provider != expected.provider
+                || meta.machine_id != expected.machine_id
+            {
+                return Err("native binding projection scope changed".into());
+            }
+            if meta.provider_auth_generation == Some(target.generation)
+                && meta.provider_version == target.provider_version
+                && meta.provider_generation_digest == target.generation_digest
+                && meta.provider_behavior.as_ref() == Some(behavior)
+                && meta.agent_session_id.is_none()
+            {
+                return Ok(());
+            }
+            if meta.provider_auth_generation != expected.provider_auth_generation
+                || meta.provider_version != expected.provider_version
+                || meta.provider_generation_digest != expected.provider_generation_digest
+            {
+                return Err("native binding projection conflicts with current binding".into());
+            }
+            meta.provider_version.clone_from(&target.provider_version);
+            meta.provider_generation_digest
+                .clone_from(&target.generation_digest);
+            meta.provider_auth_generation = Some(target.generation);
+            meta.provider_behavior = Some(behavior.clone());
+            meta.agent_session_id = None;
+            session.initial_config_options = None;
+            session.provider_generation_missing = false;
+            session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
     fn repin_workerless_provider(
         &self,
         expected: &SessionMeta,
@@ -4520,6 +4664,7 @@ impl Hub {
                 return Err("session is no longer dormant".to_owned());
             }
             if session.meta.provider != expected.provider
+                || session.meta.provider_account_id != expected.provider_account_id
                 || session.meta.provider_version != expected.provider_version
                 || session.meta.provider_generation_digest != expected.provider_generation_digest
                 || session.meta.provider_auth_generation != expected.provider_auth_generation
@@ -4535,6 +4680,9 @@ impl Hub {
                     "a saved native session is required to change Provider version".to_owned(),
                 );
             }
+            session
+                .meta
+                .require_provider_release_transition(version, digest)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -4580,6 +4728,7 @@ impl Hub {
                 );
             }
             if session.meta.provider != expected.provider
+                || session.meta.provider_account_id != expected.provider_account_id
                 || session.meta.status != expected.status
                 || session.meta.provider_version != expected.provider_version
                 || session.meta.provider_generation_digest != expected.provider_generation_digest
@@ -4602,6 +4751,9 @@ impl Hub {
             if automatic && session.meta.background_tasks > 0 {
                 return Err("session has background work in progress".to_owned());
             }
+            session
+                .meta
+                .require_provider_release_transition(version, digest)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -4674,6 +4826,14 @@ impl Hub {
                 return;
             };
             if session.meta.provider != launch.provider
+                || session.meta.provider_account_id != launch.provider_account_id
+                || session
+                    .meta
+                    .require_provider_release_transition(
+                        &launch.provider_version,
+                        &launch.provider_generation_digest,
+                    )
+                    .is_err()
                 || session.meta.require_runtime_launch().is_err()
                 || session.meta.cwd != launch.cwd
                 || session.meta.execution_binding != launch.execution_binding
@@ -5175,6 +5335,7 @@ impl Hub {
         let mut sessions = self.inner.sessions.lock();
         if let Some(session) = sessions.get_mut(&expected.id)
             && session.meta.provider == expected.provider
+            && session.meta.provider_account_id == expected.provider_account_id
             && session.meta.provider_generation_digest == expected.provider_generation_digest
             && session.meta.provider_version == expected.provider_version
             && session.meta.provider_auth_generation == expected.provider_auth_generation
@@ -6903,6 +7064,7 @@ mod managed_call_tests {
             provider: "codex".to_owned(),
             provider_version: "3.4.0".to_owned(),
             provider_generation_digest: "generation".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -6942,6 +7104,7 @@ mod managed_call_tests {
             provider: meta.provider.clone(),
             provider_version: "3.3.0".to_owned(),
             provider_generation_digest: "older-generation".to_owned(),
+            provider_account_id: meta.provider_account_id.clone(),
             provider_auth_generation: meta.provider_auth_generation,
             provider_behavior: None,
             cwd: meta.cwd.clone(),
@@ -6991,6 +7154,7 @@ mod managed_call_tests {
             provider: meta.provider.clone(),
             provider_version: "3.3.0".to_owned(),
             provider_generation_digest: "older-generation".to_owned(),
+            provider_account_id: meta.provider_account_id.clone(),
             provider_auth_generation: meta.provider_auth_generation,
             provider_behavior: None,
             cwd: meta.cwd.clone(),
@@ -7085,6 +7249,7 @@ mod session_owner_tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "local".to_owned(),
@@ -7696,6 +7861,7 @@ mod runtime_reconciliation_tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 machine_id: "hawk".to_owned(),
@@ -10450,6 +10616,133 @@ mod core_tests {
         (hub, meta)
     }
 
+    #[test]
+    fn native_binding_projection_is_scoped_idempotent_and_preserves_user_state() {
+        let (hub, before) = provider_reload_fixture();
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut(&before.id).unwrap();
+            session.meta.provider = "claude-code".into();
+            session.meta.provider_account_id = account;
+            session.meta.provider_auth_generation = Some(1);
+            session.meta.status = Status::Exited;
+        }
+        let expected = hub.session_info(&before.id).unwrap().meta;
+        let target = crate::provider_account::NativeProfileReceipt {
+            account_id: expected.provider_account_id.clone(),
+            provider_id: expected.provider.clone(),
+            request_id: "login".into(),
+            generation: 2,
+            method: "native".into(),
+            provider_version: "new".into(),
+            generation_digest: "new-digest".into(),
+            auth_contract_fingerprint: "fixture".into(),
+            identity: crate::provider_account::NativeIdentity {
+                authority: "fixture".into(),
+                subject: "private".into(),
+                tenant: None,
+            },
+        };
+        let behavior = crate::provider::legacy_behavior("claude-code");
+        hub.add_draft(&before.id, "keep draft".into(), vec![], None);
+        let history = hub.snapshot(&before.id).unwrap().0;
+        let mut wrong = expected.clone();
+        wrong.machine_id = "different".into();
+        assert!(
+            hub.project_native_binding(&wrong, &target, &behavior)
+                .is_err()
+        );
+        hub.set_status(&before.id, Status::Running, None);
+        assert!(
+            hub.project_native_binding(&expected, &target, &behavior)
+                .is_err()
+        );
+        hub.set_status(&before.id, Status::Exited, None);
+        hub.project_native_binding(&expected, &target, &behavior)
+            .unwrap();
+        let epoch = hub.inner.sessions.lock()[&before.id].lifecycle_epoch;
+        hub.project_native_binding(&expected, &target, &behavior)
+            .unwrap();
+        assert_eq!(hub.inner.sessions.lock()[&before.id].lifecycle_epoch, epoch);
+        let after = hub.session_info(&before.id).unwrap();
+        assert_eq!(after.meta.provider_auth_generation, Some(2));
+        assert!(after.meta.agent_session_id.is_none());
+        assert_eq!(after.meta.status, Status::Exited);
+        native_readmission_declaration_contract(after.meta.clone(), &target);
+        assert_eq!(after.drafts_count, 1);
+        assert_eq!(after.meta.cwd, expected.cwd);
+        assert_eq!(after.meta.title, expected.title);
+        assert_eq!(
+            hub.config_preferences(&before.id).unwrap()["model"],
+            "saved-model"
+        );
+        assert!(hub.snapshot(&before.id).unwrap().0.len() >= history.len());
+        let mut stale = target.clone();
+        stale.generation = 3;
+        assert!(
+            hub.project_native_binding(&expected, &stale, &behavior)
+                .is_err()
+        );
+        assert_eq!(
+            hub.session_info(&before.id)
+                .unwrap()
+                .meta
+                .provider_auth_generation,
+            Some(2)
+        );
+    }
+
+    fn native_readmission_declaration_contract(
+        mut meta: SessionMeta,
+        target: &crate::provider_account::NativeProfileReceipt,
+    ) {
+        meta.owner_user_id = Some("owner".into());
+        assert!(meta.require_native_readmission(target).is_ok());
+        meta.machine_id = "hawk".into();
+        assert!(meta.require_runtime_launch().is_ok());
+        for field in 0..9 {
+            let mut wrong = meta.clone();
+            match field {
+                0 => wrong.owner_user_id = None,
+                1 => wrong.owner_user_id = Some(String::new()),
+                2 => wrong.closing = true,
+                3 => wrong.machine_id = "local".into(),
+                4 => wrong.provider = "codex".into(),
+                5 => wrong.provider_version.clear(),
+                6 => wrong.provider_generation_digest.clear(),
+                7 => wrong.provider_auth_generation = Some(0),
+                _ => wrong.provider_behavior = None,
+            }
+            assert!(wrong.require_runtime_launch().is_err());
+        }
+        for field in 0..9 {
+            let mut wrong = meta.clone();
+            match field {
+                0 => wrong.owner_user_id = None,
+                1 => wrong.status = Status::Running,
+                2 => wrong.closing = true,
+                3 => wrong.agent_session_id = Some("old-thread".into()),
+                4 => {
+                    wrong.provider_account_id =
+                        crate::provider_account::ProviderAccountId::default()
+                }
+                5 => wrong.provider = "other".into(),
+                6 => wrong.provider_version = "old".into(),
+                7 => wrong.provider_generation_digest = "old".into(),
+                _ => wrong.provider_auth_generation = None,
+            }
+            assert!(
+                wrong.require_native_readmission(target).is_err(),
+                "field {field}"
+            );
+        }
+        let mut wrong_target = target.clone();
+        wrong_target.generation = 0;
+        meta.provider_auth_generation = Some(0);
+        assert!(meta.require_native_readmission(&wrong_target).is_err());
+    }
+
     #[tokio::test]
     async fn provider_reload_preserves_identity_and_fences_new_prompts() {
         let (hub, before) = provider_reload_fixture();
@@ -10484,6 +10777,41 @@ mod core_tests {
         assert_eq!(
             serde_json::to_value(&hub.snapshot(&before.id).unwrap().0[..history.len()]).unwrap(),
             serde_json::to_value(history).unwrap()
+        );
+    }
+
+    #[test]
+    fn named_release_changes_cannot_repin_or_reload_an_old_login() {
+        let (hub, meta) = provider_reload_fixture();
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut(&meta.id).unwrap();
+            session.meta.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+            session.meta.provider_auth_generation = Some(7);
+        }
+        let behavior = crate::provider::legacy_behavior("codex");
+        for automatic in [false, true] {
+            let before = hub.session_info(&meta.id).unwrap().meta;
+            assert!(
+                hub.begin_provider_reload(&before, "new", "new-digest", &behavior, automatic)
+                    .unwrap_err()
+                    .contains("verified login transition")
+            );
+            assert_eq!(
+                serde_json::to_value(hub.session_info(&meta.id).unwrap().meta).unwrap(),
+                serde_json::to_value(before).unwrap()
+            );
+        }
+        hub.set_status(&meta.id, Status::Exited, None);
+        let before = hub.session_info(&meta.id).unwrap().meta;
+        assert!(
+            hub.repin_dormant_provider(&before, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("verified login transition")
+        );
+        assert_eq!(
+            serde_json::to_value(hub.session_info(&meta.id).unwrap().meta).unwrap(),
+            serde_json::to_value(before).unwrap()
         );
     }
 
@@ -10649,6 +10977,7 @@ mod core_tests {
             provider: before.provider.clone(),
             provider_version: "actual".to_owned(),
             provider_generation_digest: "actual-digest".to_owned(),
+            provider_account_id: before.provider_account_id.clone(),
             provider_auth_generation: before.provider_auth_generation,
             provider_behavior: Some(behavior),
             cwd: before.cwd.clone(),
@@ -11171,6 +11500,7 @@ mod core_tests {
             provider: "grok".to_owned(),
             provider_version: "1.1.8".to_owned(),
             provider_generation_digest: "sha256:provider".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: Some(2),
             provider_behavior: None,
             machine_id: "hawk".to_owned(),

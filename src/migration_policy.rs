@@ -6,6 +6,42 @@ use sha2::Digest as _;
 
 const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
+        "0071_provider_session_transition_commits.sql",
+        "a68327cd66f5b1784d80e920da95669f0870293be195d57346d7375ccfd6f66f",
+    ),
+    (
+        "0070_provider_session_transition_stops.sql",
+        "b854379d745dddfa54765bfb195c36ad2c3e83f5c66fadb6abd7e76c53b183b3",
+    ),
+    (
+        "0069_provider_session_transitions.sql",
+        "3b571504c09c7e2b257e7014beeee7ad7c6d48218651afd6a6182c521b043e66",
+    ),
+    (
+        "0068_provider_account_stops.sql",
+        "03a910155d73a25810f331d44bb15365ab55fc1f717ab7ac4d5b9eea44a8b981",
+    ),
+    (
+        "0067_provider_native_generations.sql",
+        "47fae9a93007ddf554e974b43425193db7baf97cfaaee09606a5096cd9980f2c",
+    ),
+    (
+        "0066_provider_login_operations.sql",
+        "1783f99fa0baf50fd7e6b8d80ab1029565362b27f956e837d10cd8b2dfeb8b90",
+    ),
+    (
+        "0065_provider_grant_routes.sql",
+        "020346acd973ca740e91eda5690999396f5a43bab6a30b102603db80fc757d0f",
+    ),
+    (
+        "0064_provider_account_grants.sql",
+        "47e6dc49c15aa0cf888c8421e374d4132889e3fb984584671da97f043d2213e7",
+    ),
+    (
+        "0063_provider_accounts.sql",
+        "8c0c4d522409af38789db6c4f9a8c0a122774064f1ce30a914e4a2432cae6d1d",
+    ),
+    (
         "0062_managed_call_dismissal.sql",
         "f18cbf45a51affa4822e79f1bdef8006784607082da5187f9507bd3d736cae07",
     ),
@@ -123,6 +159,42 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0045_provider_session_transition_commits.sql",
+        "a68327cd66f5b1784d80e920da95669f0870293be195d57346d7375ccfd6f66f",
+    ),
+    (
+        "0044_provider_session_transition_stops.sql",
+        "b854379d745dddfa54765bfb195c36ad2c3e83f5c66fadb6abd7e76c53b183b3",
+    ),
+    (
+        "0043_provider_session_transitions.sql",
+        "3b571504c09c7e2b257e7014beeee7ad7c6d48218651afd6a6182c521b043e66",
+    ),
+    (
+        "0042_provider_account_stops.sql",
+        "03a910155d73a25810f331d44bb15365ab55fc1f717ab7ac4d5b9eea44a8b981",
+    ),
+    (
+        "0041_provider_native_generations.sql",
+        "2267eeba8fd59adaeee25898e0936156241cb269078636c577117536f92a422d",
+    ),
+    (
+        "0040_provider_login_operations.sql",
+        "1783f99fa0baf50fd7e6b8d80ab1029565362b27f956e837d10cd8b2dfeb8b90",
+    ),
+    (
+        "0039_provider_grant_routes.sql",
+        "020346acd973ca740e91eda5690999396f5a43bab6a30b102603db80fc757d0f",
+    ),
+    (
+        "0038_provider_account_grants.sql",
+        "47e6dc49c15aa0cf888c8421e374d4132889e3fb984584671da97f043d2213e7",
+    ),
+    (
+        "0037_provider_accounts.sql",
+        "8c0c4d522409af38789db6c4f9a8c0a122774064f1ce30a914e4a2432cae6d1d",
+    ),
     (
         "0036_managed_call_dismissal.sql",
         "f18cbf45a51affa4822e79f1bdef8006784607082da5187f9507bd3d736cae07",

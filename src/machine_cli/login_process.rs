@@ -2,12 +2,15 @@
 use std::process::ExitStatus;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::AsyncWriteExt as _;
 use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 pub(super) const TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+mod output;
+pub(super) use crate::cgroup::Containment;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Failure {
@@ -16,6 +19,7 @@ pub(super) enum Failure {
     Read,
     Write,
     Wait,
+    Cleanup,
 }
 
 impl Failure {
@@ -26,8 +30,37 @@ impl Failure {
             Self::Read => "could not read provider login output",
             Self::Write => "could not send the authorization value",
             Self::Wait => "could not wait for provider login completion",
+            Self::Cleanup => "provider login process exit is unconfirmed; cleanup is required",
         }
     }
+}
+
+/// Synchronous admission before native spawn. Call while holding the login
+/// registry lock so connection teardown cannot revoke between check and spawn.
+pub(super) fn check(cancel: &watch::Receiver<bool>, deadline: Instant) -> Result<(), Failure> {
+    if *cancel.borrow() || cancel.has_changed().is_err() {
+        Err(Failure::Cancelled)
+    } else if Instant::now() >= deadline {
+        Err(Failure::Expired)
+    } else {
+        Ok(())
+    }
+}
+
+/// A later cancellation cannot turn missing exit evidence into a clean stop.
+pub(super) fn reconcile(
+    status: Result<ExitStatus, Failure>,
+    registered: bool,
+    cancel: &watch::Receiver<bool>,
+    deadline: Instant,
+) -> Result<ExitStatus, Failure> {
+    if matches!(status, Err(Failure::Cleanup)) {
+        return status;
+    }
+    if !registered {
+        return Err(Failure::Cancelled);
+    }
+    check(cancel, deadline).and(status)
 }
 
 async fn cancelled(cancel: &mut watch::Receiver<bool>) {
@@ -38,9 +71,23 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
     }
 }
 
+/// Caller holds the login registry lock until publication has finished.
+pub(super) fn publish(
+    registered: bool,
+    cancel: &watch::Receiver<bool>,
+    deadline: Instant,
+    send: impl FnOnce() -> Result<(), ()>,
+) -> Result<(), Failure> {
+    if !registered {
+        return Err(Failure::Cancelled);
+    }
+    check(cancel, deadline)?;
+    send().map_err(|()| Failure::Write)
+}
+
 pub(super) async fn input(
     cancel: &mut watch::Receiver<bool>,
-    input: &mut mpsc::UnboundedReceiver<String>,
+    input: &mut mpsc::Receiver<String>,
     deadline: Instant,
 ) -> Result<String, Failure> {
     tokio::select! {
@@ -54,15 +101,55 @@ pub(super) async fn input(
 /// The caller must spawn a fresh process group. Cancellation also covers a
 /// blocked stdin write and a child that closed its output but has not exited.
 pub(super) async fn run(
-    mut child: Child,
+    child: Child,
     cancel: &mut watch::Receiver<bool>,
-    input: &mut mpsc::UnboundedReceiver<String>,
+    input: &mut mpsc::Receiver<String>,
     deadline: Instant,
     on_line: impl FnMut(String),
 ) -> Result<ExitStatus, Failure> {
     let process_group = child
         .id()
         .map(crate::plugin_process::PluginProcessGroup::new);
+    run_owned(child, cancel, input, deadline, on_line, process_group).await
+}
+
+/// The pre-spawn guard already owns containment; never move this child into
+/// the legacy post-spawn group, which would invalidate its exit observation.
+pub(super) async fn run_contained(
+    child: Child,
+    cancel: &mut watch::Receiver<bool>,
+    input: &mut mpsc::Receiver<String>,
+    deadline: Instant,
+    on_line: impl FnMut(String),
+    containment: Containment,
+) -> Result<ExitStatus, Failure> {
+    let result = run_owned(child, cancel, input, deadline, on_line, None).await;
+    containment.finish().await.map_err(|_| Failure::Cleanup)?;
+    result
+}
+
+pub(super) async fn run_optional_containment(
+    child: Child,
+    cancel: &mut watch::Receiver<bool>,
+    input: &mut mpsc::Receiver<String>,
+    deadline: Instant,
+    on_line: impl FnMut(String),
+    containment: Option<Containment>,
+) -> Result<ExitStatus, Failure> {
+    match containment {
+        Some(guard) => run_contained(child, cancel, input, deadline, on_line, guard).await,
+        None => run(child, cancel, input, deadline, on_line).await,
+    }
+}
+
+async fn run_owned(
+    mut child: Child,
+    cancel: &mut watch::Receiver<bool>,
+    input: &mut mpsc::Receiver<String>,
+    deadline: Instant,
+    on_line: impl FnMut(String),
+    process_group: Option<crate::plugin_process::PluginProcessGroup>,
+) -> Result<ExitStatus, Failure> {
     let result = tokio::select! {
         biased;
         () = cancelled(cancel) => Err(Failure::Cancelled),
@@ -74,19 +161,31 @@ pub(super) async fn run(
     drop(process_group);
     if result.is_err() {
         let _ = child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        confirm_leader_exit(child.wait(), Duration::from_secs(2)).await?;
     }
     result
 }
 
+/// A kill signal is not exit evidence. This confirms only the owned leader;
+/// process-group/cgroup cleanup remains a separate containment obligation.
+async fn confirm_leader_exit(
+    wait: impl std::future::Future<Output = std::io::Result<ExitStatus>>,
+    timeout: Duration,
+) -> Result<(), Failure> {
+    match tokio::time::timeout(timeout, wait).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) | Err(_) => Err(Failure::Cleanup),
+    }
+}
+
 async fn drive(
     child: &mut Child,
-    input: &mut mpsc::UnboundedReceiver<String>,
+    input: &mut mpsc::Receiver<String>,
     mut on_line: impl FnMut(String),
 ) -> Result<ExitStatus, Failure> {
     let mut stdin = child.stdin.take().expect("piped login stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("piped login stdout")).lines();
-    let mut stderr = BufReader::new(child.stderr.take().expect("piped login stderr")).lines();
+    let mut stdout = output::Output::new(child.stdout.take().expect("piped login stdout"));
+    let mut stderr = output::Output::new(child.stderr.take().expect("piped login stderr"));
     let mut stdout_open = true;
     let mut stderr_open = true;
     loop {

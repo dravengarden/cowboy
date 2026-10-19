@@ -19,6 +19,12 @@
 
 use std::path::{Path, PathBuf};
 
+// Named authentication and Direct workers use a separate fail-closed owner.
+#[cfg(feature = "machine-host")]
+mod containment;
+#[cfg(feature = "machine-host")]
+pub(crate) use containment::Containment;
+
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
 /// The deterministic leaf-cgroup path for a session, or None if cowboy's own

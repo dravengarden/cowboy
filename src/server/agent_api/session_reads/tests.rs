@@ -5,6 +5,7 @@ fn session(hub: &Hub, id: &str, owner: Option<&str>, system: bool) {
     hub.create_session(SessionRegistration {
         id: id.into(),
         provider: "codex".into(),
+        provider_account_id: Default::default(),
         provider_version: String::new(),
         provider_generation_digest: String::new(),
         provider_auth_generation: None,

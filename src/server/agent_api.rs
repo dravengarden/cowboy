@@ -280,6 +280,46 @@ impl Host for SessionHost<'_> {
                 only_keys(&args, &[])?;
                 Ok(crate::store::preferences::schema())
             }
+            "accounts.list" => {
+                only_keys(&args, &[])?;
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                super::provider_accounts::read_value(self.state, &owner)
+                    .await
+                    .map_err(str::to_owned)
+            }
+            "accounts.transition_status" => {
+                only_keys(&args, &["operation"])?;
+                let operation = arg_str(&args, "operation")?;
+                if !crate::managed_calls::valid_id(operation) {
+                    return Err("invalid_argument".into());
+                }
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                let mut value = super::provider_accounts::transitions::status(
+                    self.state,
+                    &owner,
+                    &actions::document_operation(&self.meta.id, operation),
+                )
+                .await
+                .map_err(str::to_owned)?;
+                value["operation"] = json!(operation);
+                Ok(value)
+            }
+            "accounts.login_options" => {
+                only_keys(&args, &["account_id", "machine_id"])?;
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                let account = crate::provider_account::ProviderAccountId::try_from(
+                    arg_str(&args, "account_id")?.to_owned(),
+                )
+                .map_err(|_| "invalid_argument".to_owned())?;
+                super::provider_accounts::login::options_value(
+                    self.state,
+                    &owner,
+                    &account,
+                    arg_str(&args, "machine_id")?,
+                )
+                .await
+                .map_err(str::to_owned)
+            }
             "preferences.get" => {
                 only_keys(&args, &["scope"])?;
                 let owner = self
@@ -465,6 +505,7 @@ fn session_view(info: &SessionInfo) -> Value {
         "id": meta.id,
         "title": meta.title,
         "provider": meta.provider,
+        "provider_account_id": meta.provider_account_id,
         "provider_version": meta.provider_version,
         "status": meta.status,
         "machine": meta.machine_id,

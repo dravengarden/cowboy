@@ -18,15 +18,31 @@ impl MachinePluginStore {
     pub async fn validate_auth_refresh_candidate(
         self: &std::sync::Arc<Self>,
         candidate: &ProviderAuthRefreshCandidate,
-    ) -> Result<()> {
+    ) -> Result<Option<crate::provider_account::NativeIdentity>> {
+        let named = !candidate.account_id.is_default();
         let store = std::sync::Arc::clone(self);
         let candidate = candidate.clone();
         let probe =
             tokio::task::spawn_blocking(move || store.prepare_refresh_probe(&candidate)).await??;
         let Some(probe) = probe else {
-            return Ok(());
+            ensure!(!named, "named refresh requires a signed native probe");
+            return Ok(None);
         };
-        probe.validate(Duration::from_secs(5)).await
+        probe.validate(Duration::from_secs(5)).await?;
+        if !named {
+            return Ok(None);
+        }
+        let (auth, bundle) = probe
+            .credentials
+            .as_ref()
+            .context("named refresh has no credential contract")?;
+        let recipe = auth
+            .methods
+            .iter()
+            .find(|method| method.id == bundle.method_id)
+            .and_then(|method| method.native_identity.as_ref())
+            .context("named refresh requires a signed identity recipe")?;
+        native_identity::read(&probe.directory.0.join("home"), recipe).map(Some)
     }
 }
 
@@ -99,6 +115,10 @@ impl MachinePluginStore {
             .iter()
             .find(|method| method.id == candidate.bundle.method_id)
             .context("unknown refresh authentication method")?;
+        ensure!(
+            candidate.account_id.is_default() || method.native_identity.is_some(),
+            "named refresh requires a signed identity recipe"
+        );
         let cowboy_provider_sdk::AuthExecutor::CommandV1 { component, .. } = &method.executor
         else {
             return Ok(None);

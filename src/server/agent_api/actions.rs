@@ -109,7 +109,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
     Ok(action)
 }
 
-fn document_operation(parent: &str, operation: &str) -> String {
+pub(super) fn document_operation(parent: &str, operation: &str) -> String {
     format!(
         "agent-{}",
         crate::admin::hex_sha256(
@@ -212,6 +212,13 @@ pub(in crate::server) async fn read_parent(
     Ok(())
 }
 
+pub(super) async fn account_owner(
+    state: &AppState,
+    meta: &SessionMeta,
+) -> Result<String, &'static str> {
+    document_owner(&state.hub, state.store.as_ref(), meta).await
+}
+
 async fn active_preference_owner(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,
@@ -269,6 +276,34 @@ async fn execute(
             "control" => Ok(success(
                 super::control::receipt(state, meta, &input.operation).await?,
             )),
+            "logins" => {
+                let owner = account_owner(state, meta).await?;
+                Ok(success(
+                    super::super::provider_accounts::login::operation_receipt(
+                        state,
+                        &owner,
+                        &document_operation(&meta.id, &input.operation),
+                    )
+                    .await?,
+                ))
+            }
+            "accounts" => {
+                let owner = account_owner(state, meta).await?;
+                let receipt = state
+                    .store
+                    .as_ref()
+                    .ok_or("unavailable")?
+                    .provider_account_receipt(
+                        &owner,
+                        &document_operation(&meta.id, &input.operation),
+                    )
+                    .await
+                    .map_err(|_| "unavailable")?;
+                Ok(success(match receipt {
+                    Some(receipt) => super::super::provider_accounts::receipt_value(&receipt),
+                    None => json!({"status":"unknown"}),
+                }))
+            }
             "preferences" => {
                 let owner = preference_owner(state, meta).await?;
                 let receipt = state
@@ -345,6 +380,95 @@ async fn execute(
         "control.apply" => Ok(success(
             super::control::apply(state, meta, args, operation).await?,
         )),
+        "accounts.transition_plan" => {
+            let mut input: crate::store::provider_accounts::transitions::Request =
+                serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            if !crate::managed_calls::valid_id(&input.target_login_operation) {
+                return Err("invalid_argument");
+            }
+            input.target_login_operation =
+                document_operation(&meta.id, &input.target_login_operation);
+            let owner = account_owner(state, meta).await?;
+            let operation = document_operation(&meta.id, operation);
+            super::super::provider_accounts::transitions::plan(state, &owner, &operation, input)
+                .await?;
+            Ok(success(
+                super::super::provider_accounts::transitions::status(state, &owner, &operation)
+                    .await?,
+            ))
+        }
+        "accounts.transition_reconcile" => {
+            if args.as_object().is_none_or(|args| !args.is_empty()) {
+                return Err("invalid_argument");
+            }
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::transitions::reconcile(
+                    state,
+                    &owner,
+                    &document_operation(&meta.id, operation),
+                )
+                .await?,
+            ))
+        }
+        "accounts.reconcile" => {
+            if args.as_object().is_none_or(|args| !args.is_empty()) {
+                return Err("invalid_argument");
+            }
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::reconcile(
+                    state,
+                    &owner,
+                    &document_operation(&meta.id, operation),
+                )
+                .await?,
+            ))
+        }
+        "accounts.login_cancel" => {
+            if args.as_object().is_none_or(|args| !args.is_empty()) {
+                return Err("invalid_argument");
+            }
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::login::cancel_operation(
+                    state,
+                    &owner,
+                    &document_operation(&meta.id, operation),
+                )
+                .await?,
+            ))
+        }
+        "accounts.login_start" => {
+            let input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::login::start_operation(
+                    state,
+                    &owner,
+                    &document_operation(&meta.id, operation),
+                    input,
+                )
+                .await?,
+            ))
+        }
+        "accounts.update" => {
+            let input: crate::store::provider_accounts::Mutation =
+                serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            let owner = account_owner(state, meta).await?;
+            let value = super::super::provider_accounts::update_value(
+                state,
+                &owner,
+                &document_operation(&meta.id, operation),
+                &input,
+            )
+            .await?;
+            if value.get("error").is_some() {
+                Ok(json!({"state":"error","error":value["error"],"current":value["current"]}))
+            } else {
+                Ok(success(value))
+            }
+        }
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
             if args["scope"] == "zed" {
@@ -512,6 +636,7 @@ mod tests {
             provider: "codex".into(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "machine".into(),

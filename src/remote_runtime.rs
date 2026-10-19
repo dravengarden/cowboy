@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
@@ -16,6 +16,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::core::{Event, Hub, Status, config_option_accepts};
 
+pub(crate) mod account_stop;
+mod native_admission;
 mod startup_watch;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole,
@@ -56,19 +58,21 @@ pub struct RemoteBootstrap {
     writer: OwnedWriteHalf,
     workers: Vec<WorkerSnapshot>,
     buffered: Vec<Frame>,
+    protocol: u16,
 }
 
 impl RemoteBootstrap {
     /// Acquire the Machine broker controller lease through an authenticated
     /// transport, such as a Machine WebSocket tunnel.
     pub async fn from_stream(socket: PathBuf, stream: UnixStream) -> Result<Self> {
-        let (reader, writer, workers, buffered) = connect_settled_stream(stream).await?;
+        let (reader, writer, workers, buffered, protocol) = connect_settled_stream(stream).await?;
         Ok(Self {
             socket,
             reader,
             writer,
             workers,
             buffered,
+            protocol,
         })
     }
 }
@@ -80,6 +84,7 @@ struct Shared {
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
     current_turn_protocol: bool,
     delivery_controls_protocol: bool,
+    account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
@@ -113,11 +118,15 @@ struct Shared {
     command_counter: AtomicU64,
     turn_counter: AtomicU64,
     connected: AtomicBool,
+    account_stop_epoch: AtomicU64,
+    protocol: AtomicU16,
     shutdown: AtomicBool,
     desired_generation: String,
     desired_worker_command: Option<String>,
     provider_auth: Option<Arc<crate::provider_service::ProviderAuthService>>,
+    auth_recipient_key: Option<String>,
     telemetry: Mutex<Option<(String, crate::observability::Observability)>>,
+    native_store: Mutex<Option<(String, crate::store::Store)>>,
 }
 
 pub struct RemoteRuntime {
@@ -192,6 +201,7 @@ impl RemoteRuntime {
         desired_generation: String,
         provider_auth: Arc<crate::provider_service::ProviderAuthService>,
         machine_protocol: u16,
+        auth_recipient_key: Option<String>,
     ) -> Arc<Self> {
         let (notify, notify_rx) = mpsc::unbounded_channel();
         Arc::new(Self {
@@ -204,6 +214,7 @@ impl RemoteRuntime {
                     >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
                 delivery_controls_protocol: machine_protocol
                     >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
+                account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
@@ -217,11 +228,15 @@ impl RemoteRuntime {
                 command_counter: AtomicU64::new(seed_counter()),
                 turn_counter: AtomicU64::new(seed_counter()),
                 connected: AtomicBool::new(false),
+                account_stop_epoch: AtomicU64::new(0),
+                protocol: AtomicU16::new(0),
                 shutdown: AtomicBool::new(false),
                 desired_generation,
                 desired_worker_command: None,
                 provider_auth: Some(provider_auth),
+                auth_recipient_key,
                 telemetry: Mutex::new(None),
+                native_store: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -253,6 +268,7 @@ impl RemoteRuntime {
                 steering: Mutex::new(HashMap::new()),
                 current_turn_protocol: true,
                 delivery_controls_protocol: true,
+                account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
@@ -280,11 +296,15 @@ impl RemoteRuntime {
                 command_counter: AtomicU64::new(seed_counter()),
                 turn_counter: AtomicU64::new(seed_counter()),
                 connected: AtomicBool::new(false),
+                account_stop_epoch: AtomicU64::new(0),
+                protocol: AtomicU16::new(bootstrap.protocol),
                 shutdown: AtomicBool::new(false),
                 desired_generation,
                 desired_worker_command,
                 provider_auth,
+                auth_recipient_key: None,
                 telemetry: Mutex::new(None),
+                native_store: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -300,6 +320,7 @@ impl RemoteRuntime {
             writer,
             workers,
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         Self::new(
             hub,
@@ -315,7 +336,20 @@ impl RemoteRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn for_native_transport_test(hub: Hub, recipient: String) -> Arc<Self> {
+        let mut runtime = Self::for_test(hub, vec![]);
+        let runtime_mut = Arc::get_mut(&mut runtime).unwrap();
+        Arc::get_mut(&mut runtime_mut.shared)
+            .unwrap()
+            .auth_recipient_key = Some(recipient);
+        runtime
+    }
+
+    #[cfg(test)]
     pub(crate) fn connect_for_test(&self) {
+        self.shared
+            .account_stop_epoch
+            .fetch_add(1, Ordering::AcqRel);
         self.shared.connected.store(true, Ordering::Release);
     }
 
@@ -332,27 +366,21 @@ impl RemoteRuntime {
         let Some(notify_rx) = self.notify_rx.lock().take() else {
             return;
         };
-        {
-            let mut declarations = self.shared.declarations.lock();
-            for worker in &bootstrap.workers {
-                if let Some(mut session) = worker.launch.clone() {
-                    session.adopt_only = true;
-                    declarations
-                        .entry(session.session_id.clone())
-                        .or_insert(session);
-                }
-            }
-        }
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {
             // Production installs a connecting runtime with an empty worker
             // map. Seed ownership before marking the broker ready; projecting
             // only Hub metadata temporarily makes every live slot look free.
-            merge_worker_snapshots(&shared, bootstrap.workers);
+            merge_worker_snapshots(&shared, bootstrap.workers).await;
             connection_manager(
                 shared,
                 notify_rx,
-                Some((bootstrap.reader, bootstrap.writer, bootstrap.buffered)),
+                Some((
+                    bootstrap.reader,
+                    bootstrap.writer,
+                    bootstrap.buffered,
+                    bootstrap.protocol,
+                )),
             )
             .await;
         });
@@ -698,6 +726,58 @@ impl RemoteRuntime {
         telemetry: crate::observability::Observability,
     ) {
         *self.shared.telemetry.lock() = Some((machine, telemetry));
+    }
+
+    pub(crate) fn attach_native_admission(&self, machine: String, store: crate::store::Store) {
+        *self.shared.native_store.lock() = Some((machine, store));
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn send_native_test<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        writer: &mut W,
+        command: CoreCommand,
+    ) -> Result<bool> {
+        native_admission::send(&self.shared, writer, command).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn snapshot_native_test(&self, worker: WorkerSnapshot) -> bool {
+        self.shared.workers.lock().clear();
+        let id = worker.session_id.clone();
+        handle_frame(
+            &self.shared,
+            Frame::Snapshot {
+                worker: Box::new(worker),
+            },
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
+        self.shared.workers.lock().contains_key(&id)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn event_native_test(
+        &self,
+        worker: &WorkerSnapshot,
+        cached: bool,
+        epoch: &str,
+    ) -> bool {
+        self.shared.workers.lock().clear();
+        if cached {
+            self.shared
+                .workers
+                .lock()
+                .insert(worker.session_id.clone(), worker.clone());
+        }
+        let projected = AtomicBool::new(false);
+        let admitted = native_admission::event(&self.shared, &worker.session_id, epoch, || {
+            projected.store(true, Ordering::Release);
+        })
+        .await;
+        assert_eq!(admitted, projected.load(Ordering::Acquire));
+        admitted
     }
 
     pub(crate) fn prompt_traced(
@@ -1215,6 +1295,7 @@ async fn connect_once(
     FrameReader<OwnedReadHalf>,
     OwnedWriteHalf,
     Vec<WorkerSnapshot>,
+    u16,
 )> {
     let stream = UnixStream::connect(socket)
         .await
@@ -1236,7 +1317,12 @@ async fn connect_once(
     )
     .await?;
     match read_frame(&mut reader).await? {
-        Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
+        Some(Frame::Welcome {
+            workers, protocol, ..
+        }) => {
+            validate_protocol(protocol)?;
+            Ok((FrameReader::new(reader), writer, workers, protocol))
+        }
         Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected Cowboy: {reason}"),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => anyhow::bail!("Machine broker closed during handshake"),
@@ -1249,6 +1335,7 @@ async fn connect_once_stream(
     FrameReader<OwnedReadHalf>,
     OwnedWriteHalf,
     Vec<WorkerSnapshot>,
+    u16,
 )> {
     let (mut reader, mut writer) = stream.into_split();
     write_broker_frame(
@@ -1267,11 +1354,24 @@ async fn connect_once_stream(
     )
     .await?;
     match read_frame(&mut reader).await? {
-        Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
+        Some(Frame::Welcome {
+            workers, protocol, ..
+        }) => {
+            validate_protocol(protocol)?;
+            Ok((FrameReader::new(reader), writer, workers, protocol))
+        }
         Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected Cowboy: {reason}"),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => anyhow::bail!("Machine broker closed during handshake"),
     }
+}
+
+fn validate_protocol(protocol: u16) -> Result<()> {
+    anyhow::ensure!(
+        (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol),
+        "Machine broker selected an unsupported runtime protocol"
+    );
+    Ok(())
 }
 
 /// Let surviving workers converge around every new broker connection, not only
@@ -1285,8 +1385,9 @@ async fn connect_settled(
     OwnedWriteHalf,
     Vec<WorkerSnapshot>,
     Vec<Frame>,
+    u16,
 )> {
-    let (mut reader, writer, mut workers) = connect_once(socket).await?;
+    let (mut reader, writer, mut workers, protocol) = connect_once(socket).await?;
     let mut buffered = Vec::new();
     let now = tokio::time::Instant::now();
     let minimum_settle = now + Duration::from_millis(500);
@@ -1317,7 +1418,7 @@ async fn connect_settled(
             Err(_) => break,
         }
     }
-    Ok((reader, writer, workers, buffered))
+    Ok((reader, writer, workers, buffered, protocol))
 }
 
 async fn connect_settled_stream(
@@ -1327,8 +1428,9 @@ async fn connect_settled_stream(
     OwnedWriteHalf,
     Vec<WorkerSnapshot>,
     Vec<Frame>,
+    u16,
 )> {
-    let (mut reader, writer, mut workers) = connect_once_stream(stream).await?;
+    let (mut reader, writer, mut workers, protocol) = connect_once_stream(stream).await?;
     let mut buffered = Vec::new();
     let now = tokio::time::Instant::now();
     let minimum_settle = now + Duration::from_millis(500);
@@ -1359,30 +1461,30 @@ async fn connect_settled_stream(
             Err(_) => break,
         }
     }
-    Ok((reader, writer, workers, buffered))
+    Ok((reader, writer, workers, buffered, protocol))
 }
 
 async fn connection_manager(
     shared: Arc<Shared>,
     mut notify_rx: mpsc::UnboundedReceiver<()>,
-    mut initial: Option<(FrameReader<OwnedReadHalf>, OwnedWriteHalf, Vec<Frame>)>,
+    mut initial: Option<(FrameReader<OwnedReadHalf>, OwnedWriteHalf, Vec<Frame>, u16)>,
 ) {
     let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
     loop {
         if shared.shutdown.load(Ordering::Acquire) {
             return;
         }
-        let connection =
-            match initial.take() {
-                Some(connection) => Ok(connection),
-                None => connect_settled(&shared.socket).await.map(
-                    |(reader, writer, workers, buffered)| {
-                        merge_worker_snapshots(&shared, workers);
-                        (reader, writer, buffered)
-                    },
-                ),
-            };
-        let (reader, writer, buffered) = match connection {
+        let connection = match initial.take() {
+            Some(connection) => Ok(connection),
+            None => match connect_settled(&shared.socket).await {
+                Ok((reader, writer, workers, buffered, protocol)) => {
+                    merge_worker_snapshots(&shared, workers).await;
+                    Ok((reader, writer, buffered, protocol))
+                }
+                Err(error) => Err(error),
+            },
+        };
+        let (reader, writer, buffered, protocol) = match connection {
             Ok(connection) => connection,
             Err(error) => {
                 shared.connected.store(false, Ordering::Release);
@@ -1397,6 +1499,8 @@ async fn connection_manager(
             }
         };
         let connected_at = tokio::time::Instant::now();
+        shared.protocol.store(protocol, Ordering::Release);
+        shared.account_stop_epoch.fetch_add(1, Ordering::AcqRel);
         shared.connected.store(true, Ordering::Release);
         shared.sent.lock().clear();
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
@@ -1486,6 +1590,29 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         if shared.sent.lock().contains(&key) {
             continue;
         }
+        if !command_supported(shared, &command) {
+            anyhow::ensure!(
+                command.session_id().is_some(),
+                "Machine runtime upgrade required for account-scoped Provider maintenance"
+            );
+            if let Some(session_id) = command.session_id() {
+                handle_frame(
+                    shared,
+                    Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id: key,
+                        accepted: false,
+                        reason: Some(
+                            "Machine runtime upgrade required for the selected subscription"
+                                .to_owned(),
+                        ),
+                    },
+                    writer,
+                )
+                .await?;
+            }
+            continue;
+        }
         if command
             .session_id()
             .is_some_and(|id| !shared.hub.accepts_runtime_projection(id))
@@ -1502,7 +1629,22 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
                 continue;
             }
         }
-        write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
+        if !native_admission::send(shared, writer, command.clone()).await? {
+            if let Some(session_id) = command.session_id() {
+                handle_frame(
+                    shared,
+                    Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id: key,
+                        accepted: false,
+                        reason: Some("Native account launch admission denied".into()),
+                    },
+                    writer,
+                )
+                .await?;
+            }
+            continue;
+        }
         shared.sent.lock().insert(key);
     }
     Ok(())
@@ -1532,6 +1674,39 @@ fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
     }
 }
 
+fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
+    if shared.protocol.load(Ordering::Acquire)
+        >= crate::runtime_wire::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+    {
+        return true;
+    }
+    match command {
+        CoreCommand::QuiesceAccountSession { .. }
+        | CoreCommand::ReadmitAccountSession { .. }
+        | CoreCommand::RollProvider {
+            account_id: Some(_),
+            ..
+        } => false,
+        CoreCommand::EnsureSession { session } => session.provider_account_id.is_default(),
+        CoreCommand::RecoverExecutionSession { session, .. } => {
+            session.provider_account_id.is_default()
+        }
+        // Stop/cancel remain available to fence a surviving worker on an old host.
+        CoreCommand::StopSession { .. } | CoreCommand::Cancel { .. } => true,
+        _ => command.session_id().is_none_or(|id| {
+            shared
+                .hub
+                .session_info(id)
+                .is_none_or(|info| info.meta.provider_account_id.is_default())
+                && shared
+                    .declarations
+                    .lock()
+                    .get(id)
+                    .is_none_or(|session| session.provider_account_id.is_default())
+        }),
+    }
+}
+
 async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
@@ -1543,13 +1718,24 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
             continue;
         }
         session.adopt_only = true;
-        write_broker_frame(
-            writer,
-            &Frame::CoreCommand {
-                command: CoreCommand::EnsureSession { session },
+        if !command_supported(
+            shared,
+            &CoreCommand::EnsureSession {
+                session: session.clone(),
             },
-        )
-        .await?;
+        ) {
+            shared.hub.broadcast_error(
+                Some(session.session_id.clone()),
+                "Machine runtime upgrade required for the selected subscription".to_owned(),
+            );
+            continue;
+        }
+        let id = session.session_id.clone();
+        if !native_admission::send(shared, writer, CoreCommand::EnsureSession { session }).await? {
+            shared
+                .hub
+                .broadcast_error(Some(id), "Native account recovery admission denied".into());
+        }
     }
     Ok(())
 }
@@ -1564,6 +1750,7 @@ fn snapshot_satisfies_ensure(worker: &WorkerSnapshot, session: &StartSession) ->
     if launch.cwd != session.cwd
         || launch.execution_binding != session.execution_binding
         || launch.provider != session.provider
+        || launch.provider_account_id != session.provider_account_id
         || launch.provider_version != session.provider_version
         || launch.provider_generation_digest != session.provider_generation_digest
         || launch.provider_auth_generation != session.provider_auth_generation
@@ -1636,84 +1823,91 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 );
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
-                let resetting = shared.resetting.lock().contains(&session_id);
-                let stale_idle = matches!(
-                    event,
-                    RuntimeEvent::Status {
-                        state: WorkerState::Running | WorkerState::Draining,
-                        ..
-                    }
-                ) && shared
-                    .workers
-                    .lock()
-                    .get(&session_id)
-                    .is_some_and(|worker| worker.current_turn_id.is_some());
-                if stale_idle {
-                    tracing::warn!(
-                        session = %session_id,
-                        runtime_seq,
-                        "ignoring stale idle status while a newer turn is active"
-                    );
-                } else if !resetting && shared.hub.accepts_runtime_projection(&session_id) {
-                    if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
-                        telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
-                    }
-                    let auto_permission = codex_full_access_permission(shared, &session_id, &event);
-                    let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
-                    if let RuntimeEvent::Update { update, .. } = &event
-                        && update
-                            .get("sessionUpdate")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
-                        && let (Some(cmid), Some(outcome)) = (
-                            update.get("cmid").and_then(serde_json::Value::as_str),
-                            update.get("outcome").and_then(serde_json::Value::as_str),
-                        )
-                        && let Some(waiter) = shared
-                            .steering
-                            .lock()
-                            .remove(&(session_id.clone(), cmid.to_owned()))
-                    {
-                        let _ = waiter.send(outcome.to_owned());
-                    }
-                    if let RuntimeEvent::TurnEnded { turn_id, .. } = &event {
-                        acknowledge_prompt_finish(shared, &session_id, turn_id);
-                    }
-                    update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
-                    if let RuntimeEvent::Status {
-                        state: WorkerState::Crashed | WorkerState::Exited,
-                        detail,
-                    } = &event
-                    {
-                        fail_config_startup(
-                            shared,
-                            &session_id,
-                            detail
-                                .as_deref()
-                                .unwrap_or("worker exited before configuration completed"),
-                        );
-                    }
-                    let worker = shared.workers.lock().get(&session_id).cloned();
-                    let idle_guard = worker
-                        .as_ref()
-                        .and_then(|worker| idle_snapshot_guard(shared, worker));
-                    if is_config_options && let Some(worker) = worker.as_ref() {
-                        sync_config_for_worker(shared, worker);
-                    }
-                    if let Some((request_id, option_id)) = auto_permission {
-                        tracing::info!(
+                native_admission::event(shared, &session_id, &worker_epoch, || {
+                    let resetting = shared.resetting.lock().contains(&session_id);
+                    let stale_idle = matches!(
+                        event,
+                        RuntimeEvent::Status {
+                            state: WorkerState::Running | WorkerState::Draining,
+                            ..
+                        }
+                    ) && shared
+                        .workers
+                        .lock()
+                        .get(&session_id)
+                        .is_some_and(|worker| worker.current_turn_id.is_some());
+                    if stale_idle {
+                        tracing::warn!(
                             session = %session_id,
-                            %request_id,
-                            %option_id,
-                            "auto-approving Codex full-access permission at runtime boundary"
+                            runtime_seq,
+                            "ignoring stale idle status while a newer turn is active"
                         );
-                        queue_permission(shared, &session_id, request_id, option_id);
-                    } else {
-                        mark_projected_provider_auth_expired(shared, &session_id, &event);
-                        apply_event(&shared.hub, &session_id, event);
-                        reconcile_idle_guard(shared, &session_id, idle_guard);
+                    } else if !resetting && shared.hub.accepts_runtime_projection(&session_id) {
+                        if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
+                            telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
+                        }
+                        let auto_permission =
+                            codex_full_access_permission(shared, &session_id, &event);
+                        let is_config_options =
+                            matches!(&event, RuntimeEvent::ConfigOptions { .. });
+                        if let RuntimeEvent::Update { update, .. } = &event
+                            && update
+                                .get("sessionUpdate")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
+                            && let (Some(cmid), Some(outcome)) = (
+                                update.get("cmid").and_then(serde_json::Value::as_str),
+                                update.get("outcome").and_then(serde_json::Value::as_str),
+                            )
+                            && let Some(waiter) = shared
+                                .steering
+                                .lock()
+                                .remove(&(session_id.clone(), cmid.to_owned()))
+                        {
+                            let _ = waiter.send(outcome.to_owned());
+                        }
+                        if let RuntimeEvent::TurnEnded { turn_id, .. } = &event {
+                            acknowledge_prompt_finish(shared, &session_id, turn_id);
+                        }
+                        update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
+                        if let RuntimeEvent::Status {
+                            state: WorkerState::Crashed | WorkerState::Exited,
+                            detail,
+                        } = &event
+                        {
+                            fail_config_startup(
+                                shared,
+                                &session_id,
+                                detail
+                                    .as_deref()
+                                    .unwrap_or("worker exited before configuration completed"),
+                            );
+                        }
+                        let worker = shared.workers.lock().get(&session_id).cloned();
+                        let idle_guard = worker
+                            .as_ref()
+                            .and_then(|worker| idle_snapshot_guard(shared, worker));
+                        if is_config_options && let Some(worker) = worker.as_ref() {
+                            sync_config_for_worker(shared, worker);
+                        }
+                        if let Some((request_id, option_id)) = auto_permission {
+                            tracing::info!(
+                                session = %session_id,
+                                %request_id,
+                                %option_id,
+                                "auto-approving Codex full-access permission at runtime boundary"
+                            );
+                            queue_permission(shared, &session_id, request_id, option_id);
+                        } else {
+                            mark_projected_provider_auth_expired(shared, &session_id, &event);
+                            apply_event(&shared.hub, &session_id, event);
+                            reconcile_idle_guard(shared, &session_id, idle_guard);
+                        }
                     }
-                }
+                })
+                .await;
+                // ACK means consumed, not authorized or projected. Rejected
+                // events must not loop forever or establish process-exit proof.
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
             write_broker_frame(
@@ -1732,7 +1926,18 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             accepted,
             reason,
         } => {
-            let command = shared.pending.lock().remove(&command_id);
+            let command = {
+                let mut pending = shared.pending.lock();
+                if pending.get(&command_id).is_some_and(|command| {
+                    command
+                        .session_id()
+                        .is_some_and(|expected| expected != session_id)
+                }) {
+                    tracing::warn!(%command_id, "ignoring mismatched Machine command acknowledgement");
+                    return Ok(());
+                }
+                pending.remove(&command_id)
+            };
             if !accepted
                 && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
                     &command
@@ -1746,6 +1951,15 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 let _ = waiter.send("unknown".into());
             }
             shared.sent.lock().remove(&command_id);
+            if matches!(
+                &command,
+                Some(
+                    CoreCommand::QuiesceAccountSession { .. }
+                        | CoreCommand::ReadmitAccountSession { .. }
+                )
+            ) {
+                account_stop::acknowledge(shared, &command_id, accepted, reason.clone());
+            }
             if let Some(CoreCommand::Prompt {
                 trace: Some(trace), ..
             }) = &command
@@ -1773,7 +1987,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     .remove(&session_id)
                     .and_then(|(_, pending)| pending);
                 if accepted && let Some(worker) = replacement {
-                    adopt_snapshot(shared, &worker);
+                    adopt_snapshot(shared, &worker).await;
                 }
                 shared.hub.set_status(
                     &session_id,
@@ -1817,23 +2031,26 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             }
         }
         Frame::Snapshot { worker } => {
-            let session_id = worker.session_id.clone();
-            if shared.resetting.lock().contains(&session_id) {
-                // Only a live worker other than the one being replaced (and
-                // not the broker's registry placeholder) is the replacement.
-                if let Some((replaced, pending)) =
-                    shared.reset_replacements.lock().get_mut(&session_id)
-                    && worker.worker_epoch != *replaced
-                    && !worker.worker_epoch.starts_with("broker-")
-                    && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
-                {
-                    *pending = Some(*worker);
+            native_admission::snapshot(shared, &worker, || {
+                let session_id = worker.session_id.clone();
+                if shared.resetting.lock().contains(&session_id) {
+                    // Only a live worker other than the one being replaced (and
+                    // not the broker's registry placeholder) is the replacement.
+                    if let Some((replaced, pending)) =
+                        shared.reset_replacements.lock().get_mut(&session_id)
+                        && worker.worker_epoch != *replaced
+                        && !worker.worker_epoch.starts_with("broker-")
+                        && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                    {
+                        *pending = Some((*worker).clone());
+                    }
+                    return;
                 }
-                return Ok(());
-            }
-            adopt_snapshot(shared, &worker);
+                project_snapshot(shared, &worker);
+            })
+            .await;
         }
-        Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
+        Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers).await,
         Frame::Heartbeat => {}
         Frame::Reject { reason } => anyhow::bail!("Machine broker rejected controller: {reason}"),
         other => tracing::debug!(?other, "ignoring unrelated Machine broker frame"),
@@ -1921,7 +2138,11 @@ fn begin_reset(shared: &Shared, session_id: &str) {
         .insert(session_id.to_owned(), (replaced, None));
 }
 
-fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+async fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    native_admission::snapshot(shared, worker, || project_snapshot(shared, worker)).await;
+}
+
+fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
     update_declaration(shared, worker);
     shared
         .workers
@@ -1931,30 +2152,30 @@ fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
     apply_snapshot(shared, worker);
 }
 
-fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
-    let mut current = HashMap::new();
-    for worker in workers {
-        if shared.resetting.lock().contains(&worker.session_id) {
-            continue;
-        }
-        update_declaration(shared, &worker);
-        apply_snapshot(shared, &worker);
-        acknowledge_pending_ensure_from_snapshot(shared, &worker);
-        current.insert(worker.session_id.clone(), worker);
-    }
-    *shared.workers.lock() = current;
+async fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
+    let ids: HashSet<_> = workers
+        .iter()
+        .map(|worker| worker.session_id.clone())
+        .collect();
+    merge_worker_snapshots(shared, workers).await;
+    shared.workers.lock().retain(|id, _| ids.contains(id));
 }
 
-fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
-    let mut current = shared.workers.lock();
+async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
     for worker in workers {
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
-        update_declaration(shared, &worker);
-        apply_snapshot(shared, &worker);
-        acknowledge_pending_ensure_from_snapshot(shared, &worker);
-        current.insert(worker.session_id.clone(), worker);
+        native_admission::snapshot(shared, &worker, || {
+            update_declaration(shared, &worker);
+            apply_snapshot(shared, &worker);
+            acknowledge_pending_ensure_from_snapshot(shared, &worker);
+            shared
+                .workers
+                .lock()
+                .insert(worker.session_id.clone(), worker.clone());
+        })
+        .await;
     }
 }
 
@@ -2608,7 +2829,7 @@ fn projected_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
     event: &RuntimeEvent,
-) -> Option<(String, u64)> {
+) -> Option<(String, crate::provider_account::ProviderAccountId, u64)> {
     let RuntimeEvent::Status {
         detail: Some(detail),
         ..
@@ -2620,19 +2841,32 @@ fn projected_provider_auth_failure(
         return None;
     }
     let meta = hub.session_info(session_id)?.meta;
-    Some((meta.provider, meta.provider_auth_generation?))
+    Some((
+        meta.provider,
+        meta.provider_account_id,
+        meta.provider_auth_generation?,
+    ))
 }
 
 fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
     let Some(provider_auth) = shared.provider_auth.as_ref() else {
         return;
     };
-    let Some((provider_id, generation)) =
+    let Some((provider_id, account_id, generation)) =
         projected_provider_auth_failure(&shared.hub, session_id, event)
     else {
         return;
     };
-    match provider_auth.mark_expired(&provider_id, generation) {
+    let scope = if account_id.is_default() {
+        Ok(Arc::clone(provider_auth))
+    } else {
+        shared
+            .auth_recipient_key
+            .as_deref()
+            .context("runtime has no enrolled credential recipient")
+            .and_then(|key| provider_auth.existing_machine_grant(&account_id, key))
+    };
+    match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {
         Ok(Some(status)) => tracing::warn!(
             session = session_id,
             provider = %provider_id,
@@ -2810,6 +3044,7 @@ mod tests {
                 provider: "codex".into(),
                 provider_version: "1.0.0".into(),
                 provider_generation_digest: "sha256:original".into(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: Some(7),
                 provider_behavior: None,
                 machine_id: "ovh".into(),
@@ -2836,7 +3071,7 @@ mod tests {
             worker.config_options =
                 Some(serde_json::json!([{ "id": "model", "currentValue": "different" }]));
             assert!(!apply_snapshot(&runtime.shared, &worker));
-            update_worker_snapshots(&runtime.shared, vec![worker.clone()]);
+            update_worker_snapshots(&runtime.shared, vec![worker.clone()]).await;
             assert!(runtime.shared.declarations.lock().is_empty());
             reset_after_workspace_replacement(&runtime.shared, "s");
             assert!(runtime.pending_for_test().is_empty());
@@ -3288,6 +3523,7 @@ mod tests {
             provider: "grok".to_owned(),
             provider_version: "1.1.8".to_owned(),
             provider_generation_digest: "sha256:provider".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: Some(7),
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -3313,7 +3549,11 @@ mod tests {
 
         assert_eq!(
             projected_provider_auth_failure(&hub, "s", &rejected),
-            Some(("grok".to_owned(), 7))
+            Some((
+                "grok".to_owned(),
+                crate::provider_account::ProviderAccountId::default(),
+                7
+            ))
         );
         assert_eq!(projected_provider_auth_failure(&hub, "s", &unrelated), None);
     }
@@ -3328,6 +3568,98 @@ mod tests {
                 "sessionUpdate": "tool_call"
             }),
             cmid: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_rejection_expires_only_the_sessions_account_and_machine_grant() {
+        use crate::provider_service::{ProviderAuthService, ServiceAuthenticationState};
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let auth = Arc::new(ProviderAuthService::open(root.path()).unwrap());
+        let id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let other_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let key = |byte| {
+            base64::engine::general_purpose::STANDARD.encode(
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([byte; 32]))
+                    .as_bytes(),
+            )
+        };
+        let recipient = key(7);
+        let first = auth
+            .account(&id)
+            .unwrap()
+            .machine_grant(&recipient)
+            .unwrap();
+        let other_machine = auth.account(&id).unwrap().machine_grant(&key(8)).unwrap();
+        let other_account = auth
+            .account(&other_id)
+            .unwrap()
+            .machine_grant(&recipient)
+            .unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/gemini/provider.json")).unwrap();
+        let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+        let bundle = crate::machine_protocol::PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "code-assist".into(),
+            values: std::collections::BTreeMap::from([
+                ("settings_json".into(), "e30=".into()),
+                ("oauth_creds_json".into(), "e30=".into()),
+            ]),
+        };
+        for scope in [&auth, &first, &other_machine, &other_account] {
+            scope.commit(&package, &bundle, None, Some(0)).unwrap();
+        }
+        let hub = Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "named".into(),
+            provider: "gemini".into(),
+            provider_version: "fixture".into(),
+            provider_generation_digest: "sha256:fixture".into(),
+            provider_account_id: id,
+            provider_auth_generation: Some(1),
+            provider_behavior: None,
+            machine_id: "hawk".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".into(),
+            title: "test".into(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let mut runtime = RemoteRuntime::for_test(hub, Vec::new());
+        Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
+            .unwrap()
+            .provider_auth = Some(Arc::clone(&auth));
+        let rejected = RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some(crate::provider::provider_auth_required_detail(
+                "gemini", true,
+            )),
+        };
+        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
+        assert_eq!(
+            first.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
+            .unwrap()
+            .auth_recipient_key = Some(recipient);
+        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
+        assert_eq!(
+            first.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Expired
+        );
+        for scope in [&auth, &other_machine, &other_account] {
+            assert_eq!(
+                scope.status("gemini").unwrap().authentication_state,
+                ServiceAuthenticationState::Ready
+            );
         }
     }
 
@@ -3429,6 +3761,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/tmp".to_owned(),
@@ -3473,6 +3806,7 @@ mod tests {
             writer,
             workers: vec![snapshot("first"), snapshot("second")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         });
         for _ in 0..100 {
             if runtime.connected() {
@@ -3828,6 +4162,118 @@ mod tests {
             commands.push(command);
         }
         commands
+    }
+
+    #[tokio::test]
+    async fn old_broker_cannot_receive_named_account_launch_or_replay() {
+        let runtime = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        let mut session = snapshot("named").launch.unwrap();
+        session.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        runtime
+            .shared
+            .declarations
+            .lock()
+            .insert("named".into(), session.clone());
+        runtime.shared.protocol.store(2, Ordering::Release);
+        let quiesce = CoreCommand::QuiesceAccountSession {
+            session_id: "named".into(),
+            command_id: "quiesce".into(),
+            account_id: session.provider_account_id.clone(),
+        };
+        assert!(!command_supported(&runtime.shared, &quiesce));
+        runtime.queue(
+            "ensure:named".into(),
+            CoreCommand::EnsureSession {
+                session: session.clone(),
+            },
+        );
+        runtime.queue(
+            "prompt".into(),
+            CoreCommand::Prompt {
+                session_id: "named".into(),
+                command_id: "prompt".into(),
+                turn_id: "turn".into(),
+                content: Vec::new(),
+                cmid: None,
+                trace: None,
+                echo_artifacts: false,
+            },
+        );
+        assert!(pending_wire_commands(&runtime).await.is_empty());
+        let mut declarations = Vec::new();
+        send_declarations(&runtime.shared, &mut declarations)
+            .await
+            .unwrap();
+        assert!(declarations.is_empty());
+        assert!(runtime.pending_for_test().is_empty());
+
+        // Protocol compatibility is necessary, but never account authorization.
+        runtime
+            .shared
+            .protocol
+            .store(PROTOCOL_VERSION, Ordering::Release);
+        assert!(command_supported(&runtime.shared, &quiesce));
+        runtime.queue(
+            "ensure:named".into(),
+            CoreCommand::EnsureSession {
+                session: session.clone(),
+            },
+        );
+        assert!(command_supported(
+            &runtime.shared,
+            &CoreCommand::EnsureSession { session }
+        ));
+        assert!(pending_wire_commands(&runtime).await.is_empty());
+    }
+
+    #[test]
+    fn runtime_handshake_rejects_protocol_outside_offered_range() {
+        assert!(validate_protocol(0).is_err());
+        assert!(validate_protocol(PROTOCOL_VERSION + 1).is_err());
+        for protocol in MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION {
+            validate_protocol(protocol).unwrap();
+        }
+        let mut session = snapshot("protocol").launch.unwrap();
+        assert_eq!(session.minimum_protocol(), MIN_PROTOCOL_VERSION);
+        session.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        assert_eq!(
+            session.minimum_protocol(),
+            crate::runtime_wire::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_handshake_preserves_negotiated_protocol() {
+        for protocol in [0, 1, 2, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
+            let (client, mut peer) = UnixStream::pair().unwrap();
+            let broker = tokio::spawn(async move {
+                assert!(matches!(
+                    read_frame(&mut peer).await.unwrap(),
+                    Some(Frame::Hello {
+                        min_protocol: MIN_PROTOCOL_VERSION,
+                        max_protocol: PROTOCOL_VERSION,
+                        ..
+                    })
+                ));
+                write_frame(
+                    &mut peer,
+                    &Frame::Welcome {
+                        protocol,
+                        controller_epoch: 1,
+                        workers: Vec::new(),
+                    },
+                )
+                .await
+                .unwrap();
+            });
+            let connection = connect_once_stream(client).await;
+            if (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol) {
+                assert_eq!(connection.unwrap().3, protocol);
+            } else {
+                assert!(connection.is_err());
+            }
+            broker.await.unwrap();
+        }
     }
 
     /// The OVH incident: the reset was acknowledged, the Machine then lost the
@@ -4374,6 +4820,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: "3.4.0".to_owned(),
             provider_generation_digest: "generation".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             machine_id: "hawk".to_owned(),
@@ -4520,6 +4967,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub,
@@ -4528,7 +4976,7 @@ mod tests {
             Some("/bin/new-worker".to_owned()),
         );
 
-        merge_worker_snapshots(&runtime.shared, Vec::new());
+        merge_worker_snapshots(&runtime.shared, Vec::new()).await;
 
         assert!(runtime.has_worker("s"));
         assert!(runtime.shared.declarations.lock().contains_key("s"));
@@ -4745,6 +5193,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub,
@@ -4853,6 +5302,7 @@ mod tests {
             writer,
             workers: Vec::new(),
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub,
@@ -4912,6 +5362,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub,
@@ -5040,6 +5491,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime =
             RemoteRuntime::new(hub, &bootstrap, "gen-1".into(), Some("/bin/worker".into()));
@@ -5368,6 +5820,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub.clone(),
@@ -5456,6 +5909,7 @@ mod tests {
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub,
@@ -5558,6 +6012,7 @@ mod tests {
             writer,
             workers: Vec::new(),
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub.clone(),
@@ -5593,6 +6048,7 @@ mod tests {
             writer,
             workers: Vec::new(),
             buffered: Vec::new(),
+            protocol: PROTOCOL_VERSION,
         };
         let runtime = RemoteRuntime::new(
             hub.clone(),

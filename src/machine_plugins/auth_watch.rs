@@ -38,6 +38,28 @@ impl AuthWatchPlan {
 
 impl MachinePluginStore {
     pub fn auth_watch_plan(&self) -> Result<AuthWatchPlan> {
+        let mut plan = AuthWatchPlan::default();
+        if self.account_id.is_default() {
+            plan.discover(self.auth_base.clone());
+            plan.discover(self.auth_base.join("accounts"));
+        }
+        for scope in self.existing_auth_scopes() {
+            plan.discover(scope.auth_root.clone());
+            match scope.scoped_auth_watch_plan() {
+                Ok(scoped) => {
+                    plan.directories.extend(scoped.directories);
+                    plan.files.extend(scoped.files);
+                    plan.discovery.extend(scoped.discovery);
+                }
+                Err(error) if scope.account_id.is_default() => return Err(error),
+                Err(error) => tracing::warn!(account = scope.account_id.as_str(), %error,
+                    "cannot discover account credential watches"),
+            }
+        }
+        Ok(plan)
+    }
+
+    fn scoped_auth_watch_plan(&self) -> Result<AuthWatchPlan> {
         let root = self.auth_watch_root();
         let mut plan = AuthWatchPlan::default();
         plan.discover(root.clone());
@@ -82,6 +104,46 @@ impl MachinePluginStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_watch_discovery_is_scoped_and_does_not_follow_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let first = store
+            .for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let second = store
+            .for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let paths: Vec<_> = [&store, &first, &second]
+            .into_iter()
+            .map(|scope| {
+                let path = scope.auth_watch_root().join("grok/replica-current.json");
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, b"synthetic").unwrap();
+                path
+            })
+            .collect();
+        let outside = tempfile::tempdir().unwrap();
+        let alias = store
+            .auth_base
+            .join("accounts")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::os::unix::fs::symlink(outside.path(), &alias).unwrap();
+        fs::create_dir_all(store.auth_base.join("accounts/not-an-account/providers")).unwrap();
+        let plan = store.auth_watch_plan().unwrap();
+        assert!(
+            paths
+                .iter()
+                .all(|path| plan.relevant(std::slice::from_ref(path)))
+        );
+        assert!(!plan.directories.iter().any(|path| path.starts_with(&alias)));
+        assert_eq!(store.existing_auth_scopes().len(), 3);
+        let scoped = first.auth_watch_plan().unwrap();
+        assert!(scoped.relevant(&[paths[1].clone()]));
+        assert!(!scoped.relevant(&[paths[0].clone(), paths[2].clone()]));
+        assert_eq!(first.existing_auth_scopes().len(), 1);
+    }
 
     #[test]
     fn watches_only_credential_ancestors_and_tracks_atomic_replacement() {

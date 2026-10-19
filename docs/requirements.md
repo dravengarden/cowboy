@@ -120,6 +120,588 @@ of the Cowboy Service's authoritative Provider authentication state.
 
 ## Product requirements
 
+### Named Provider accounts: isolation acceptance
+
+Multiple personal subscriptions of the same Provider must be independent
+credential identities. Supporting them technically does not establish that a
+vendor permits any particular subscription usage or guarantee against account
+enforcement. Native authentication and published integration contracts remain
+the baseline; identity spoofing and automatic quota-driven account rotation
+are not account management features.
+
+An account has an opaque stable ID. Its display name, subscription tier,
+email, organization and credential generation must not substitute for that ID.
+Account metadata, defaults and session bindings belong in the database;
+credentials remain in protected authentication storage and must never be
+returned by UI, CLI, MCP, telemetry or ordinary error messages. Create Session
+must select an account explicitly or resolve a documented default once. The
+resulting binding is immutable: refresh, recovery, queue replay, child calls,
+hibernation and upgrades must never fall back to another account. Changing a
+default affects future sessions only.
+
+Machine and subscription are orthogonal session choices. The same subscription
+may run concurrently on several Machines; neither the account record nor its
+default may pin execution to one Machine. Readiness is evaluated for the chosen
+pair. A missing authorization must offer login on that Machine, never silently
+select another Machine or account. Mobile and desktop use the same two choices.
+
+Each account needs independent login state, writable credentials, native
+settings/history and revocation. Where the Provider permits managed portable
+credentials, encrypted vault entries and signed replicas must also be independent;
+their encryption AAD and signatures bind account, Provider and generation.
+An account's refresh or logout must not roll another account's workers.
+A Service CAS after refresh is insufficient to serialize upstream
+refresh-token use: the implementation must coordinate before a refresh can
+reach the vendor, including across Machines. Copying a refresh token to several
+independent writers is not an isolation design. Prefer independently established
+native login grants on each Machine, attached to the same verified subscription
+identity. A grant's destination is not an account's execution placement. Separate
+native grants need separate vault entries, generations and revocation receipts;
+never distribute a Machine-bound grant to another recipient. Do not claim that
+separate logins are independent refresh lineages until the exact native Provider
+contract has been verified. An API key's documented sharing rules are distinct
+from rotating OAuth credentials.
+
+The credential-storage boundary must also satisfy the Provider's current terms.
+Rechecked 2026-10-17: Anthropic's
+[authentication and credential-use rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+permit end users to sign into an unmodified hosted Claude Code binary, but prohibit
+third-party developers from collecting, storing or intermediating claude.ai
+credentials/session tokens. Consequently, named Claude subscriptions must use
+Machine-local, native-owned credentials; their OAuth bundles must not enter the
+Controller candidate/vault/replica pipeline. The Controller may retain account
+metadata, verified identity fingerprints and lifecycle receipts, not OAuth tokens.
+The generic portable vault remains applicable only where the Provider's contract
+permits managed credential storage. Independent native login per Machine remains
+required; encrypted central storage does not itself resolve this policy boundary.
+The current candidate-promotion prototype is not an accepted Claude subscription
+architecture. Native-owned authorization/status/logout and lifecycle proof must
+replace that path before any named Claude runtime admission or real-account test.
+An explicit transitional first-party fence enforces this at named login
+discovery/admission, candidate acceptance, Machine export/refresh/apply, and
+Service vault encryption/decryption/sealing. Its closed reason code is
+`native_owned_credentials_required`. Protocol upgrades or identity recipes cannot
+remove that fence. Legacy `default` accounts retain their existing migration
+boundary, and cleanup/Wipe remain possible. The fence is deleted only when the
+separate native-owned lifecycle passes acceptance; it is not that implementation.
+
+Directory separation prevents accidental mixing but is not a security boundary
+against an agent with host filesystem access. Strong instance isolation needs
+enforced filesystem, process, inherited-descriptor and local-IPC boundaries,
+including native credential stores. The Controller, Machine supervisor and
+host administrator remain trusted. Existing agent root and passwordless sudo
+capabilities are retained by explicit user choice. These privileged agents are
+inside that trust boundary: directory isolation cannot prevent them from reading
+host-owned credentials. Do not promise adversarial isolation from host root or
+remove those capabilities as an implicit prerequisite. Account isolation must
+still prevent accidental credential selection, inherited-environment leakage,
+cross-account refresh, and lifecycle mutations through supported Cowboy paths.
+
+Rollout is gated on negative tests with synthetic credentials: cross-account
+read/write, relabelled encrypted envelopes, concurrent login/refresh/logout,
+crash/restart, stale receipts, revoked accounts, old peers and session recovery.
+Legacy credentials retain the reserved `default` identity and their original
+schema-one encoding. Named-account envelopes require protocol 36. Protocols
+through 35 predate account support; the independent login and session rollout
+gates default off.
+Account metadata uses an owner-scoped DB registry with transactional revisions
+and replay receipts. HTTP, CLI and the existing four MCP tools share that writer;
+schema discovery is on demand. Metadata operations do not query vendors or
+activate workers. The session's immutable account ID is persisted independently
+of its Machine, carried in worker launches, and checked during reconciliation.
+Legacy rows migrate to `default`; malformed stored identities are quarantined,
+never coerced into a different account. These paths do not yet enable named
+sessions: native login identity verification, account-aware lifecycle receipts
+and public creation UI must pass end-to-end admission before the gate opens.
+Native identity binding uses the same transactional registry writer through an
+internal-only mutation that HTTP and MCP cannot deserialize. The registry stores
+only a domain-separated fingerprint of Provider, native authority, subject and
+optional tenant. Machine, label, email and plan are not binding inputs. A bound
+identity cannot be replaced; matching re-verification is idempotent, and another
+subscription under the same owner cannot bind the same native identity. Disabled
+accounts cannot receive bindings. Raw native identifiers are not stored in the
+registry or operation receipt. The writer is implemented; fresh native evidence
+production and admission remain required before named login promotion opens.
+Signed native login methods can declare a `fresh_login_json_v1` identity recipe.
+The Machine reads only that request's new login home after the native command
+succeeds; it never scans existing profiles. The reader opens every path component
+without following symlinks, accepts regular files only, caps input at 256 KiB,
+and rejects absent or malformed subject/tenant fields without logging their
+contents. The Controller checks the evidence against the signed method's
+authority and tenant requirements. Legacy methods omit the recipe from their
+serialized contract. The candidate Claude Provider declares the identity and
+logout recipes; production native-login acceptance remains a separate rollout
+requirement. The owner-scoped promotion transaction and durable login-dispatch
+reservation are implemented and tested with synthetic data.
+Local runtime protocol five carries subscription identity. Controller handshakes
+retain the negotiated version on every connection: older brokers receive neither
+named-account declarations nor their queued launches and prompts. Named workers
+require protocol five, and the broker refuses older workers before they acquire
+ownership of a named session. Authentication changes roll only the affected
+account's workers; Provider software maintenance may still roll all its accounts.
+Refresh candidates and authentication receipts carry the account identity.
+Native login commands, credential candidates and temporary-home finalization
+also carry the account identity; named operations require Machine protocol 36.
+The Machine selects one account store before launching login and retains it
+through credential export and cleanup. A duplicate active login request cannot
+replace the original task's input or cancellation channels. Controller candidate
+admission checks the executor's account before promotion. Named login requires
+a signed native identity recipe and Machine protocol 36; runtime rollout stays
+closed until first-party native acceptance and revocation lifecycle are complete.
+Candidate validation and credential commit are serialized against cancellation
+and duplicate promotion. A failed validation or commit does not consume the
+request; after a successful commit, duplicate candidates cannot commit again.
+Failure notices must match the full executor identity and cannot overwrite a
+successful promotion. Credential export uses descriptor-relative, no-follow
+regular-file reads with per-file and remaining-bundle bounds before allocation;
+special files cannot block login export.
+Credential watches discover only Cowboy-owned account roots and credential
+ancestors, without following account-directory symlinks or watching native
+history recursively. A named refresh uses an already-authorized Machine grant;
+observation and reconnect inventory never create accounts or grants. Its CAS,
+rejected-candidate repair and reconnect synchronization target that grant alone.
+Legacy Plugin inventory auth fields continue to describe only `default`, and
+named refresh events are withheld from Controllers below protocol 36 before
+native validation and again at the outbound event boundary.
+Runtime authentication failures expire only the session's account and enrolled
+Machine grant; a missing recipient never falls back to the default vault.
+Automatic authentication recovery also requires the session's exact account ID;
+a newer generation for another account cannot revive that session. Account,
+Machine-grant and projection directories reject symbolic-link aliases before
+creating private state or changing permissions. This does not protect against
+concurrent filesystem replacement by the trusted host administrator.
+The legacy login APIs reject unknown scope selectors instead of silently
+modifying default credentials. Resuming a login requires the same authentication
+method and signed release; changing either requires cancellation first.
+Login executor discovery retains Machine identity even when multiple Machines
+have the same release. A start request can pin `machine_id`; explicit selection
+never falls back to another Machine, and resumed logins must match it. The Web
+client sends the discovered Machine and checks it in the accepted response;
+Machine management uses that Machine's installed release. Legacy unscoped
+clients remain supported, but an older catalog without Machine identities
+cannot satisfy an explicit selection. Discovery opts in with
+`X-Cowboy-Auth-Machine: 1`; legacy catalog readers retain their original closed
+schema and release-level deduplication. Responses are not cached and vary on
+that header.
+Temporary native logins start with a cleared environment and private HOME,
+XDG paths, temporary directory and working directory. Only network/certificate
+settings and the signed login contract's explicit settings are forwarded.
+Native credential export reads the temporary login's files, never ambient
+Provider API keys; secret input is a separate explicit executor.
+All accounts use the established Service signing identity; a new account cannot
+bootstrap another trust root. Until account-aware uninstall receipts are wired,
+uninstall refuses before mutation when named-account plaintext projections
+exist. A corrupt named vault is quarantined without disabling default accounts.
+Machine-bound grants use independent schema-three vaults and include the
+recipient key in vault authentication data. Sealing to another Machine is
+rejected before credentials are opened. Refreshable named-account credentials
+cannot be committed to an unbound portable vault. This is a storage admission
+boundary, not proof of native OAuth grant independence: native account matching,
+login routing, session binding and grant-aware lifecycle receipts remain rollout
+requirements.
+Machine-local native profile storage is separate from that portable prototype.
+Profiles reserve an account/Provider/generation and login request, pin the login
+installation, and bind native identity before becoming usable. Incomplete or
+reused reservations refuse another native login. Named Claude runtime home and
+credential-directory resolution now use only this local profile path; missing,
+linked, incomplete, mismatched or incompatible metadata refuses launch without
+opening a sealed portable replica. Runtime preparation does not read credential
+files. Default accounts retain their existing compatibility path.
+Authenticated account-scoped wipe now also revokes local native profiles. Each
+wipe first durably fences the entire account/Provider native profile set. A
+partial cleanup or restart retains that fence: profile reads, completion
+receipts, new login reservations and uninstall remain refused until the wipe
+finishes. Only after every profile is durably revoked and its home removed may
+the temporary fence be removed; individual revocation markers remain.
+Each profile receives a durable revocation marker before its home is removed;
+operation reservations and bound identity survive cleanup and restart. Recreated
+homes cannot restore admission. Cleanup does not follow credential-directory
+symlinks or read credential contents, and a failed cleanup returns an error
+rather than a successful materialization receipt. This local wipe is not proof
+of worker exit or upstream native logout.
+After a confirmed local wipe, an incomplete historical login need not acquire
+an identity to permit a fresh request or uninstall. Its durable revocation and
+absent home are required; its old request ID remains permanently reserved.
+Recreated homes, including dangling links, block fresh requests and uninstall.
+Uninstall permits retained records only when revocation is durable and no home
+remains. Pending reservations, malformed records and linked
+or recreated homes continue to fence uninstall.
+Machine native login dispatch now uses the prepare/complete entry points and
+emits metadata-only completion evidence to the Controller journal. The public
+entry point remains closed until Controller orchestration, native logout and
+worker revocation are connected and accepted. Native generations are reserved
+in the same DB transaction as the login operation, independently per owner,
+account and Machine. Replays retain their original number; cancellation never
+recycles it. Store copy preserves counters, and migration seeds counters from
+earlier native completion evidence.
+Controller native completion now performs identity binding as a separate DB
+transaction after recording the evidence. Binding requires the exact recorded
+completion, the latest reserved generation on that Machine, an uncancelled
+operation, an enabled account and unchanged active Machine enrollment. Initial
+binding also requires the registry revision observed at login preparation.
+The resulting revision is saved atomically in that login's receipt; a repeat
+requires that exact revision and identity to remain current. Disable followed
+by enable cannot renew an old binding, even if the identity still matches or
+the caller supplies the new revision. A different native identity
+cannot replace the subscription's existing identity. Binding emits the account
+preference notification but neither creates a grant nor marks the account
+SignedIn. Historical completion remains readable when current binding is refused.
+Use of a native binding runs through a synchronous DB-serialized callback that
+rechecks its exact owner/operation evidence, current generation, account revision,
+identity, enablement and Machine enrollment. Cancellation and revocation use
+the same lock order. The callback returns no reusable authorization object;
+callers must still verify live connection and action permissions. Controller
+completion notifications use this boundary and recheck the original executor.
+This boundary alone is not a worker lease or proof of later runtime cleanup.
+The internal account-aware runtime command `QuiesceAccountSession` stops a
+matching named account's worker, including a busy worker, without deleting the
+session declaration or native thread identity. It fences replacement launches
+before stopping and keeps that fence after success. A launch still in progress
+or an unconfirmed stop returns refusal; only confirmed termination permits a
+successful acknowledgement. The caller may retry after reconciliation. Old
+runtime protocols reject this command. A separate account-stop fence
+refuses Reset (including a replacement account) and Hibernate before either can
+clear ordinary launch cancellation or discard the session declaration. The
+Machine auth store persists a session/account stop intent before stopping, using
+an atomic file replacement and directory sync. After a broker restart, adoption,
+launch and worker registration still refuse the stopped session. Unknown storage
+errors and damaged markers cannot restore admission. Retrying a stop without a
+retained declaration requires the exact persisted session/account identity.
+These markers are never cleared by login, credential wipe or ordinary session
+maintenance; they record stop intent, not confirmed termination or vendor logout.
+Startup validates the bounded recovery set (including filename/record identity)
+before runtime admission; incomplete atomic-write staging files are ignored.
+For systemd-owned workers, a broker-lifetime background task replays stops
+serially, retries unconfirmed stops, and retains the durable intent after success.
+It rechecks evidence before every effect and emits no synthetic Controller ack.
+Direct mode cannot infer old-process exit from an empty post-restart PID table;
+such reconciliation remains explicitly unconfirmed until ownership is established.
+This remains a per-session barrier, not an account-wide revocation receipt or a
+backward-compatible reader guarantee for older Machine releases.
+Ordinary adoption and Reset also reject a different subscription when either
+the retained declaration or the attached worker's launch identifies the original
+account, before modifying lineage or sending worker commands.
+Worker snapshots also preserve that binding: a different account is rejected
+against either the declaration or the previous accepted worker launch. A named
+account cannot be erased by omitting launch metadata; legacy default-account
+snapshots retain compatibility. Refused snapshots do not replace accepted state.
+This is a per-session stop primitive.
+The Controller transport exposes a disposable observer for a stable,
+operation/account/session-scoped stop command. A matching positive broker
+acknowledgement confirms process stop; refusal, timeout and observer loss do
+not. Dropping or timing out the observer retains the queued idempotent command
+for reconnect, and retry attaches a new observer without growing the pending
+queue. A stale observer cannot remove its replacement. Command acknowledgements
+with a mismatched session ID do not consume pending commands. These transport
+results still require durable lifecycle recording before account-wide completion.
+The separate `provider_account_stops` journal records historical positive stop
+evidence without changing the immutable revocation operation receipt. First
+write requires the exact account/session/Machine in that operation's plan, a
+currently revoking and disabled account, a non-revoked Machine with the same
+enrollment fingerprint, and a live-connection recheck after DB validation.
+Identical concurrent/repeated evidence is idempotent; conflicting evidence is
+rejected. Historical reads survive restart and enrollment changes but confer no
+dispatch authority. The caller must obtain a positive scoped broker result;
+timeouts and requests sent are never eligible evidence. This journal does not
+record native logout or grant revocation and is not account-wide completion.
+The internal single-session driver joins the immutable plan, current runtime,
+scoped stop acknowledgement and this journal. Dispatch admission holds the same
+owner and enrollment locks as evidence recording and rechecks the active runtime
+before enqueue. A positive acknowledgement is persisted only if that runtime
+and its captured connection epoch are still current (including reconnects that
+reuse the runtime object); offline or unconfirmed targets remain pending and refusals
+remain explicit. Historical evidence short-circuits retry without another send.
+The driver is not yet a public account-wide revocation or logout endpoint.
+An internal account session-stop pass reads the immutable plan once and runs at
+most four target steps concurrently. It retains each target's pending, refused
+or failed outcome without short-circuiting other Machines, and returns results
+in plan order. Restart/retry reads each confirmed stop from the journal instead
+of resending. Unplaced and offline targets remain pending. Completing this pass
+is not account-wide completion: login cancellation, grant revocation and native
+logout still require their own evidence.
+Machine login cancellation retains an active task's request reservation until
+that task cleans up; accepting a cancel signal cannot permit request-ID reuse
+while the old task can still mutate its registration. Cancelled logins refuse
+further authorization input. An abandoned task with no exit evidence remains
+unconfirmed, not successfully cancelled. Completed portable candidates are
+explicitly cleaned before cancellation removes their registration. A cleanup
+failure returns refusal, retains the registration for retry and blocks further
+authorization input; best-effort Drop cleanup is not a successful cancellation
+acknowledgement.
+Named login cancellation uses a separately correlated `CancelLoginRequest`
+command at the reserved account protocol floor. Native login also persists
+observed leader exit and whether login succeeded in its reserved generation,
+before emitting completion or cancellation observations. Missing evidence remains
+unknown after restart; a failed exit cannot be rewritten as successful. Native
+completion and runtime-home recovery require confirmed successful login. These
+records do not prove descendant termination or native logout.
+Controller registration remains
+until the original authenticated Machine accepts that command; refusal or an
+unknown transport result retains it for retry. A late login/code-submission
+acknowledgement cannot satisfy this request. Machine acceptance remains distinct
+from process-exit evidence and is not a durable logout completion receipt.
+After receiving acceptance, the Controller rechecks the connection and request
+ownership before removing its registration. A replacement connection or changed
+request retains the registration and returns an error. Dropping a waiting caller
+also retains the registration; a retry uses a new correlation ID, so the previous
+attempt's late acknowledgement cannot complete the retry.
+Login receipt reads can recover a lost native completion using the separately
+correlated `QueryNativeProfile` command at the reserved account protocol floor.
+The query reads existing Machine metadata only, creates no account directories,
+and runs no Provider process. Missing, incomplete or revoked profiles yield no
+completion evidence. Replies bypass diagnostic history and cannot be satisfied
+by a generic command acknowledgement. The Controller rechecks the connection,
+signed identity recipe and original enrollment before recording historical
+completion; the DB writer rechecks cancellation and account admission. Recovery
+does not bind a new runtime or declare the subscription signed in. Receipt reads
+also finish an interrupted identity-binding stage using the dispatch-time
+registry revision, never the current revision as a replacement. That revision
+is persisted together with the recipient fingerprint. Binding still rechecks
+cancellation, account admission, enrollment and the latest native generation;
+concurrent retries converge on the existing binding without advancing it again.
+Legacy records without the original revision remain historical observations.
+Account-wide enumeration, authorization revocation and native logout still need
+their own orchestration and acceptance before public admission opens.
+The internal `BeginRevocation` metadata transaction persists `revoking`, disables
+the account, removes its default selections and commits its operation receipt
+together. That same transaction marks every existing login reservation for this
+owner and account as cancellation requested, preserving its historical evidence.
+Its receipt also captures an immutable work list of the account's login and grant
+operations. The same transaction cancels prepared grants only; committed grants
+retain their exact generation and historical receipt for separate revocation.
+This cancellation does not certify vault cleanup, replica wipe or native logout.
+The internal committed-grant vault revoker authenticates the current vault and
+matches the account, recipient and original promotion commitment before writing
+a newer empty wipe generation. A different login returns superseded without a
+write. An authenticated later empty wipe is reported as already signed out,
+without another generation change, including after restart; this observes
+current local state, not which operation caused it. The caller still requires
+account-revocation admission. Neither result proves Machine cleanup or upstream
+logout, and historical committed DB receipts remain unchanged.
+An internal bounded local-grant pass applies this writer through a DB admission
+callback under the owner lock. It requires the grant in the immutable revocation
+plan, exact account/Provider/Machine scope and a currently disabled, revoking
+account. Historical recipient fingerprints locate only existing local vaults;
+an offline or re-enrolled Machine does not redirect cleanup to a new recipient.
+Cancelled promotions use their existing compare-and-swap cleanup. Missing vaults,
+superseded grants and failures remain explicit per-target outcomes. This stage
+does not mark the whole account revoked or authorize any remote delivery.
+Recovery discovery scans the durable operation journal in keyset pages of at
+most 32 examined records, advancing across historical records as well as active
+ones. It returns only operations whose account is currently disabled and
+revoking. Restart recovery uses these locators, not an in-memory task list;
+locators do not bypass the execution stage's admission checks. Background
+scheduling remains gated until the remaining lifecycle stages are connected.
+The immutable work list retains all grant phases and includes login and grant
+operation locators and session placements, including deleted sessions and
+offline or revoked Machines. The list is captured under the admission lock;
+future named-session creation must share that lock. Missing placement remains
+unresolved work. Replaying the same operation returns the original list after a
+restart, rather than reconstructing it from current online Machines. Locators
+are not authority to dispatch and do not prove cleanup or native logout.
+Other accounts remain unchanged. This intent does not prove native process exit
+or logout. Concurrent retries share that receipt. Public metadata deserialization
+cannot invoke this transition, and Enable cannot clear it. Login discovery,
+new login claims, identity binding and grant admission require both enabled and
+not revoking. Missing `revoking` in historical records defaults to false.
+Fresh login dispatch is serialized under the same owner and Machine locks:
+the operation stores the dispatch recipient fingerprint in that transaction,
+before invoking the enqueue callback. A second invocation with the original
+claim is refused. Completion cannot replace that fingerprint with a newly
+enrolled Machine key. Historical records without the fingerprint are not
+eligible for restart dispatch recovery; current enrollment is not evidence of
+the original recipient.
+Immediately before enqueue it rechecks the exact uncancelled reservation,
+prepared registry revision, account admission and enrolled recipient identity.
+The callback must also check the live connection. Historical claims cannot
+dispatch. A commit error after enqueue remains an unknown outcome, never a
+reason to send again; later revocation still needs runtime cleanup.
+This is a durable admission fence, not a completed-revocation receipt; Machine
+enumeration, native logout and proof-based completion remain to be connected.
+The internal DB promotion journal binds an owner-scoped operation to the exact
+account, Machine, recipient key hash, candidate hash, native identity hash and
+expected vault generation. Preparing it first locks and checks the current,
+non-revoked Machine enrollment and exact recipient key; failed admission must
+leave both account identity and operation journal unchanged. It binds native identity in the same DB
+transaction. Duplicate operations return history; changing their input is
+rejected. Any registry revision change before finalization cancels the attempt,
+including disable followed by enable. Journal entries contain no credentials
+or raw native identities. A prepared or committed journal receipt alone cannot
+authorize distribution. Vault commits bind the exact prepared intent into the
+credential file's authenticated encryption data and sync the file and parent
+directory before returning an opaque commit proof. Recovery authenticates that
+same entry; another candidate, changed credentials or a superseding generation
+cannot reuse it. DB finalization requires this proof. The named login callback
+prepares this record from its owner-bound executor and verified native identity,
+commits under the executor lock, then finalizes and synchronizes only that
+Machine grant. Cancellation fences new submissions before DB cleanup; an unknown
+cleanup result retains the request for retry. Owner polling can recover an
+uncertain post-write result without executing native login again.
+Cancellation dispatch failure also retains the fenced request. Explicit cancel,
+expiry polling and replacement-login cleanup share this rule; they cannot drop
+the request or redirect cancellation onto a replacement connection. Concurrent
+retries serialize enqueue/removal. Successful enqueue means cancellation was
+requested, not that native process termination has been confirmed.
+MCP cancellation resolves only the original parent-scoped login operation and
+persists cancel intent before dispatch. The fresh login claimant rechecks that
+intent after executor registration, covering cancellation before registration.
+Restart preserves the intent but does not imply process-exit confirmation.
+Authorization input is one line of at most 4096 bytes at CLI, HTTP and Machine
+ingress, with one queued response per login. Native stdout and stderr each have
+a 64 KiB line limit and 1 MiB total limit; partial reads survive select cancellation
+without losing challenge bytes. Exceeding a limit terminates the login through
+the same process cleanup path without logging the rejected contents.
+Machine native-login spawn checks cancellation and expiry before launch while
+holding the same request registry lock used by cancel and connection teardown.
+A queued task whose request was removed, connection revoked or deadline elapsed
+must not briefly launch the Provider CLI before noticing cancellation. Already
+launched processes remain covered by process-group cancellation and the deadline.
+After cancellation, expiry or native I/O failure, the login task must observe
+the owned leader's exit within the bounded cleanup wait. Wait errors or timeout
+return a cleanup-required error, never a cancelled/signed-out result. This
+confirms only the leader; it does not establish descendant or same-boot orphan
+termination, which remains part of native-account release acceptance.
+Temporary native-login homes have a task-owned cleanup guard. Before spawn or
+after confirmed process exit, early return and failed candidate enqueue remove
+only that account/request's home. After spawn, task abortion or an unconfirmed
+exit retains the home and exclusive login reservation, including across a
+same-boot Machine restart. Later cancellation or connection teardown must not
+overwrite an unconfirmed-exit error with a signed-out result.
+Candidate export/enqueue serializes with connection revocation; successful
+enqueue transfers the armed cleanup guard to the connection's request registry,
+not proof of promotion. Finalization validates the account and Provider before
+releasing that guard; cancellation and connection teardown also delete the home.
+Normal cleanup errors are reported, and drop cleanup failures are logged rather
+than silently discarded. After native process completion, the Machine durably
+marks the temporary home before exporting a candidate. On startup, under its
+exclusive journal owner and before accepting logins, it removes marked
+completed homes in validated account/Provider scopes. On Linux, a canonical kernel
+boot ID is also persisted before native spawn: a different current boot proves
+that processes from the recorded boot cannot remain on this Machine, permitting
+recovery of interrupted logins after a host reboot. Missing, malformed or
+unavailable boot identity never authorizes deletion. Recovery does not follow
+directory or marker symlinks and does not touch installed credential replicas.
+Directory age is not process-exit evidence: unmarked, legacy or malformed homes
+are retained with diagnostics. Recovery of a same-boot crash during native
+execution still requires process-lifecycle reconciliation; startup must not
+guess that it exited.
+Native login home creation serializes inspection and creation across store
+clones. Any remaining entry in that account/Provider's candidate directory
+blocks another native login on the same Machine until cleanup is confirmed;
+this fence survives daemon restart and cannot be bypassed with a new request ID.
+Other account and Provider scopes remain independent. Creation rejects linked
+Provider/candidate directories rather than writing into their targets.
+Named login completion also requires an acknowledged temporary-home cleanup on
+the original Machine connection. Enqueue alone is not confirmation, and cleanup
+cannot migrate to a replacement connection. Rejection or an uncertain response
+leaves completion pending so owner polling can retry the same candidate cleanup.
+Concurrent callbacks and owner polls share one completion lock per login request.
+Agent-initiated native login reserves an owner/parent-scoped immutable operation
+and request ID in DB before enqueue. Only the newly committed claimant may
+dispatch. CLI login requires a stable operation ID and shares this reservation
+mechanism through the HTTP route; a separate owner-scoped HTTP namespace and
+read-only receipt endpoint prevent retries from launching another native login.
+Replay and restart never regain dispatch authority. Reservations are not
+authentication success or runtime authority, and contain no native secrets.
+An uncertain reservation or send must be observed, never retried with a new
+operation automatically. SQLite and PostgreSQL enforce the same contract.
+Only acknowledged success is cached; failures and interrupted attempts remain
+retryable. Completed requests can restore their completion notice after event
+history eviction without repeating grant synchronization or Machine cleanup.
+Cancellation, expiry and connection replacement are rechecked after waiting.
+
+The shared desktop/mobile Create dialog lists subscription choices independently
+of both workspace and runtime Machine. It sends only the chosen immutable ID,
+preserves the server-returned binding in its optimistic session projection,
+and refuses unavailable or disabled selections instead of falling back.
+Account defaults are resolved by the server at creation. Until the runtime
+admission gate opens, named choices remain visibly unavailable. A failed registry
+load never silently chooses another subscription; the user may explicitly select
+the existing `default` account or retry. This creation field is not an account
+management or native-login UI.
+
+Remaining release acceptance is explicit: first-party native identity recipes
+and independent refresh lineage need exact-native validation; same-boot orphan
+termination needs confirmed process ownership; account revocation needs complete
+worker/grant cleanup receipts; native login UI and MCP login lifecycle parity
+remain to be completed. The shared mobile/desktop Settings panel now manages
+account metadata, enablement and defaults through the DB writer. It preserves
+uncertain writes across panel remounts and tab reloads, refreshes on account
+preference notifications, and keeps named defaults unavailable while admission
+is closed. This is metadata management, not native login acceptance.
+Public named-session admission
+must remain closed until those requirements pass. Synthetic tests and a passing
+repository gate alone do not authorize enabling the unfinished runtime path.
+For Claude, the native-owned credential architecture above is a prerequisite to
+that acceptance, not a task that can be discharged by testing real credentials
+against the current central-vault prototype.
+Normal promotion re-reads and matches the owner-scoped DB intent before writing
+credentials. The vault independently recomputes the candidate digest from the
+exact Provider package, credential bundle and native identity fingerprint;
+candidate substitution is rejected before the first write and on terminal
+retries. Only the digest belongs in the DB. Promotion shares finalization and
+cancellation cleanup with recovery.
+Terminal retries return history without replacing newer credentials; uncertain
+DB outcomes retain the durable vault proof rather than guessing a rollback.
+Recovery of one operation rechecks its owner, Machine and currently enrolled
+recipient key, then uses an existing vault only. It never restarts native login
+or creates a grant. A cancelled journal is reconciled with conditional vault
+cleanup; a newer generation is left intact. Operation-bound credentials cannot
+use the legacy distribution, scheduling or refresh paths, even after DB
+finalization: historical commit evidence is not current runtime authorization.
+Wipe tombstones remain distributable so this admission fence cannot block cleanup.
+The internal current-admission callback locks the owner's account registry and
+the Machine enrollment row in one DB transaction. It requires a committed
+operation, unchanged registry revision, enabled matching native account and the
+same non-revoked enrolled recipient. Its borrowed admission cannot be serialized
+or independently constructed. Sealing checks the exact vault commitment,
+generation and ready state again. This defines an admission point, not a lease:
+later revocation still requires runtime cleanup and the caller must use the
+current authenticated Machine connection before dispatch.
+Named credential synchronization, including reconnect synchronization, resolves
+the vault commitment through a primary-key DB route to its owner and operation,
+then uses current admission and exact-generation sealing. The route is inserted
+atomically with journal finalization and is only a locator, never authority.
+Missing routes refuse distribution without scanning accounts or falling back to
+default credentials. Historical entries predating this route index require a
+new verified login operation; migration does not fabricate authorization.
+Signed-out named grants may send only wipe envelopes through the cleanup path,
+including a recheck of the envelope action if the vault changes concurrently.
+Named native refresh carries identity evidence from the existing signed probe's
+isolated home; absence of a signed probe or identity recipe refuses promotion.
+The Controller checks the recipe and bound identity within current account and
+Machine admission. Refresh uses CAS on that Machine grant alone, retains the
+original authenticated login commitment, and advances only the encrypted vault
+generation. The journal's committed generation is the lineage's initial floor;
+distribution seals the current authenticated generation in that same lineage.
+Another login changes the commitment and cannot be authorized by the old route.
+Default-account wire messages omit identity evidence, preserving their old shape.
+Identity admission must observe a fresh native login in a clean, scoped home;
+an existing config directory, email label or cached usage record alone is not
+proof of the credential's account. Upstream issue #87447 reports conflicting
+identity signals in Windows Desktop-hosted sessions; this is a regression case
+to test, not evidence that Cowboy's pinned standalone CLI has the same defect.
+
+Research references (checked 2026-10-17):
+
+- [Claude Code authentication policy](https://code.claude.com/docs/en/legal-and-compliance)
+- [Current SDK subscription guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+- [Native Claude configuration directories](https://code.claude.com/docs/en/env-vars)
+- [Native multi-account login and Console exceptions](https://code.claude.com/docs/en/authentication)
+- [Reported Desktop config-root/account mismatch and author corrections](https://github.com/anthropics/claude-code/issues/87447)
+- [CC Switch threat model](https://github.com/farion1231/cc-switch/security)
+- [Historical Keychain isolation report](https://github.com/anthropics/claude-code/issues/20553)
+- [Historical concurrent refresh report](https://github.com/anthropics/claude-code/issues/25609)
+- [Bubblewrap security model](https://github.com/containers/bubblewrap/security)
+
+Historical reports supply regression scenarios, not proof that the same bug
+persists in the exact installed native CLI. Native CLI profile support owns
+local authentication; Cowboy's residual responsibility is account-bound
+scheduling, persistence, distribution and enforced runtime isolation. Replace
+local adapters when native runtimes provide the same verified boundary. Codex
+uses its native authentication extension surfaces; Claude remains adapter-backed
+and must fail closed where an equivalent supported boundary is unavailable.
+
 ### CR-0: Integrations are versioned plugins over versioned components
 
 Every first-party integration has a generic `plugin.json` manifest with an
@@ -469,6 +1051,16 @@ credential generations. They may report generation zero before the first
 successful commit, are visible through the Catalog, and are never sealed or
 replicated. Scheduling and Machine synchronization consult only a durable,
 validated generation.
+
+Temporary native login requests belong to the initiating product user. Only
+that user may resume the request, read its challenges, submit a code, or cancel
+it. A concurrent login by another user reports a conflict without disclosing
+the request. Shared Machine diagnostics exclude login challenges, login state,
+credential candidates, and login command results; the owner-checked login
+endpoint is the sole challenge-reading surface.
+Login publication and command enqueue are serialized with cancellation; rejected
+or cancelled requests cannot enqueue a code submission. Challenge responses
+must not be cached.
 
 Each Provider declares a typed authentication contract: login flow, portable
 credential schema, Machine projection schema, validation, import, refresh,

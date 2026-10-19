@@ -161,6 +161,38 @@ test("sign-in waits for refreshed executor inventory and admits only one start",
   }
 });
 
+test("sign-in pins the selected Machine and rejects a substituted executor", async () => {
+  for (const returnedMachine of ["machine-a", "machine-b", undefined]) {
+    const f = authFixture(() =>
+      Promise.resolve({
+        ...managementEntryFixture("example"),
+        machine_id: "machine-a",
+      })
+    );
+    try {
+      f.open();
+      const start = f.owner.start("key");
+      await settle();
+      assertEquals(
+        JSON.parse(String(f.calls[0]!.init.body)).machine_id,
+        "machine-a",
+      );
+      f.reply(0, {
+        request_id: "request-a",
+        expires_at_ms: 1_999_999_999_999,
+        machine_id: returnedMachine,
+      });
+      await start;
+      assertEquals(f.calls.length, returnedMachine === "machine-a" ? 2 : 1);
+      if (returnedMachine !== "machine-a") {
+        assertStringIncludes(f.owner.snapshot().error ?? "", "Machine changed");
+      }
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
 test("closing during executor refresh prevents a late sign-in mutation", async () => {
   const selection = deferredFixture<
     ReturnType<typeof managementEntryFixture>

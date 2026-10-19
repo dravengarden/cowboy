@@ -9,6 +9,7 @@ fn advertised_actions_follow_the_authorized_grant_for_remote_sessions() {
         provider: "codex".into(),
         provider_version: String::new(),
         provider_generation_digest: String::new(),
+        provider_account_id: crate::provider_account::ProviderAccountId::default(),
         provider_auth_generation: None,
         provider_behavior: None,
         machine_id: "runtime".into(),
@@ -358,12 +359,68 @@ impl Host for FakeHost {
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
             "documents.read" => Ok(json!({"body": "x".repeat(MAX_REPLY_BYTES)})),
+            "accounts.transition_status" => {
+                only_keys(&args, &["operation"])?;
+                Ok(json!({"operation":args["operation"],"stage":"completed",
+                    "evidence":"historical","worker_state":"not_observed"}))
+            }
+            "accounts.login_options" => {
+                only_keys(&args, &["account_id", "machine_id"])?;
+                Ok(
+                    json!({"account_id":args["account_id"],"machine_id":args["machine_id"],"available":false,"reason":"machine_account_protocol_required"}),
+                )
+            }
             "session.usage" | "session.history" | "sessions.history" | "sessions.usage"
             | "sessions.events" | "sessions.message" | "sessions.queue" | "sessions.drafts"
             | "usage.list" | "usage.read" => Ok(json!({"op":op,"args":args})),
             _ => Err("unknown_operation".into()),
         }
     }
+}
+
+#[tokio::test]
+async fn login_discovery_keeps_account_and_machine_independent_in_one_program() {
+    let Some(value) = run(
+        r#"
+        return await Promise.all(["machine-a", "machine-b"].map(async machine => {
+            const option = await cowboy.accounts.login_options("account-1", machine);
+            return {account: option.account_id, machine: option.machine_id, reason: option.reason};
+        }));
+        "#,
+        true,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value["state"], "ok");
+    assert_eq!(
+        value["value"],
+        json!([
+            {"account":"account-1","machine":"machine-a","reason":"machine_account_protocol_required"},
+            {"account":"account-1","machine":"machine-b","reason":"machine_account_protocol_required"},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn transition_status_program_preserves_historical_evidence_boundary() {
+    let Some(value) = run(
+        "return await cowboy.accounts.transition_status('move-1');",
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value["state"], "ok");
+    assert_eq!(
+        value["value"],
+        json!({"operation":"move-1","stage":"completed",
+        "evidence":"historical","worker_state":"not_observed"})
+    );
 }
 
 async fn run(code: &str, typescript: bool, timeout_ms: u64) -> Option<Value> {

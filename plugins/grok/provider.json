@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.1.38",
+  "version": "3.1.39",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.14",
+  "sdk_version": "3.1.15",
   "display": {
     "name": "Grok Build",
     "vendor": "xAI",
@@ -23,7 +23,7 @@
       "kind": "text",
       "value": {
         "source": "literal",
-        "value": "Working…"
+        "value": "Working\u2026"
       },
       "effect": "shimmer"
     },
@@ -32,7 +32,7 @@
   "configuration_presets": [
     {
       "id": "grok-high",
-      "name": "High · Always approve",
+      "name": "High \u00b7 Always approve",
       "detail": "High reasoning with Provider-managed approval policy",
       "is_default": true,
       "values": {
@@ -59,7 +59,7 @@
       "thought": {
         "variant": "signal",
         "density": "compact",
-        "active_label": "Working…",
+        "active_label": "Working\u2026",
         "current_surface": "soft"
       }
     },

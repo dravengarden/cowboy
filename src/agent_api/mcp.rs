@@ -705,5 +705,53 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(matches!(
+            action(
+                "cowboy_execute",
+                &json!({"action":"accounts.login_start","arguments":{},"operation":"login-1"})
+            ),
+            Ok(Action::AgentInvoke {
+                operation: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            action(
+                "cowboy_receipt",
+                &json!({"domain":"logins","operation":"login-1"})
+            ),
+            Ok(Action::AgentInvoke {
+                operation: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            action(
+                "cowboy_execute",
+                &json!({"action":"accounts.login_cancel","arguments":{},"operation":"login-1"})
+            ),
+            Ok(Action::AgentInvoke { action, operation: Some(operation), .. })
+                if action == "accounts.login_cancel" && operation == "login-1"
+        ));
+    }
+
+    #[test]
+    fn revocation_retry_uses_existing_execute_tool() {
+        assert!(matches!(
+            action("cowboy_execute", &json!({
+                "action":"accounts.reconcile", "arguments":{}, "operation":"revoke-1"
+            })),
+            Ok(Action::AgentInvoke { action, operation: Some(operation), .. })
+                if action == "accounts.reconcile" && operation == "revoke-1"
+        ));
+        for name in ["accounts.transition_plan", "accounts.transition_reconcile"] {
+            assert!(matches!(
+                action("cowboy_execute", &json!({
+                    "action":name,"arguments":{},"operation":"move-1"
+                })),
+                Ok(Action::AgentInvoke { action, operation: Some(operation), .. })
+                    if action == name && operation == "move-1"
+            ));
+        }
     }
 }

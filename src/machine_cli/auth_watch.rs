@@ -77,6 +77,7 @@ impl Watches {
 pub(super) async fn start(
     providers: Arc<MachinePluginStore>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    protocol: u16,
 ) -> anyhow::Result<AuthWatcher> {
     let store = Arc::clone(&providers);
     let plan = tokio::task::spawn_blocking(move || store.auth_watch_plan()).await??;
@@ -104,7 +105,9 @@ pub(super) async fn start(
             })
             .await;
             match result {
-                Ok(Ok(())) => publish_provider_auth_observations(&providers, &events, false).await,
+                Ok(Ok(())) => {
+                    publish_provider_auth_observations(&providers, &events, false, protocol).await
+                }
                 other => {
                     tracing::warn!(error = ?other, "Provider credential reconciliation failed")
                 }
@@ -130,6 +133,42 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn named_refresh_is_never_serialized_to_a_legacy_controller() {
+        let account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let named = MachineEvent::ProviderAuthRefreshCandidate {
+            native_identity: None,
+            request_id: "refresh".into(),
+            provider_id: "claude-code".into(),
+            account_id,
+            expected_generation: 1,
+            provider_version: "fixture".into(),
+            generation_digest: "fixture".into(),
+            auth_contract_fingerprint: "fixture".into(),
+            portable_schema: "fixture".into(),
+            auth_method: "fixture".into(),
+            bundle: Default::default(),
+        };
+        for protocol in [31, 32] {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            super::super::publish_auth_refresh_events(
+                &tx,
+                Vec::new(),
+                vec![named.clone()],
+                protocol,
+            );
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                MachineEvent::PluginInventory { .. }
+            ));
+            if protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+                assert!(rx.try_recv().is_err());
+            } else {
+                assert_eq!(rx.try_recv().unwrap(), named);
+            }
+        }
+    }
+
+    #[test]
     fn refresh_after_upgrade_advertises_matching_generation_before_candidate() {
         let installed = |version: &str, digest: &str| {
             serde_json::from_value::<crate::machine_protocol::PluginInventory>(serde_json::json!({
@@ -146,8 +185,10 @@ mod tests {
             &tx,
             vec![installed("new", "new-digest")],
             vec![MachineEvent::ProviderAuthRefreshCandidate {
+                native_identity: None,
                 request_id: "refresh-fixture".into(),
                 provider_id: "claude-code".into(),
+                account_id: crate::provider_account::ProviderAccountId::default(),
                 expected_generation: 8,
                 provider_version: "new".into(),
                 generation_digest: "new-digest".into(),
@@ -156,6 +197,7 @@ mod tests {
                 auth_method: "fixture".into(),
                 bundle: Default::default(),
             }],
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
         );
         let mut accepted = false;
         while let Ok(event) = rx.try_recv() {
@@ -193,9 +235,21 @@ mod tests {
             MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap(),
         );
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        publish_provider_auth_observations(&store, &tx, false).await;
+        publish_provider_auth_observations(
+            &store,
+            &tx,
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        )
+        .await;
         assert!(rx.try_recv().is_err());
-        publish_provider_auth_observations(&store, &tx, true).await;
+        publish_provider_auth_observations(
+            &store,
+            &tx,
+            true,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        )
+        .await;
         assert!(matches!(
             rx.try_recv().unwrap(),
             MachineEvent::PluginInventory { .. }

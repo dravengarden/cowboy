@@ -2,8 +2,8 @@
 //! preparation and a storage compare-and-set. Recovery reuses the same identity.
 
 use super::super::{
-    AppState, AuthenticatedProductRequest, product_session_owner, resolve_machine_workspace,
-    resolve_provider_generation,
+    AppState, AuthenticatedProductRequest, product_session_owner, provider_accounts,
+    resolve_machine_workspace, resolve_provider_generation,
 };
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, PreparationV1};
@@ -134,6 +134,8 @@ pub(in crate::server) struct CreateRequest {
     #[serde(default)]
     provider: String,
     #[serde(default)]
+    provider_account_id: Option<crate::provider_account::ProviderAccountId>,
+    #[serde(default)]
     runtime_machine_id: String,
     #[serde(default)]
     machine_id: String,
@@ -166,6 +168,7 @@ pub(in crate::server) async fn create(
             "session_id":meta.id, "provider_version":meta.provider_version,
             "provider_generation_digest":meta.provider_generation_digest,
             "provider_auth_generation":meta.provider_auth_generation,
+            "provider_account_id":meta.provider_account_id,
             "machine_id":meta.machine_id,"cwd":meta.cwd,"execution_binding":meta.execution_binding,
         }))).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
@@ -188,6 +191,14 @@ async fn create_checked(
         request.provider =
             value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
     }
+    let provider_account_id = super::super::provider_accounts::resolve_for_create(
+        state,
+        &authenticated.principal.user_id,
+        &request.provider,
+        request.provider_account_id.as_ref(),
+    )
+    .await
+    .map_err(str::to_owned)?;
     if request.machine_id.is_empty() {
         request.machine_id = value(&defaults, DefaultKey::Machine).unwrap_or_default();
     }
@@ -280,14 +291,15 @@ async fn create_checked(
     } else {
         resolve_machine_workspace(&workspaces, Some(&request.cwd))?
     };
-    let authentication = state.provider_auth.status(&request.provider);
-    let generation = resolve_provider_generation(
-        &state.provider_catalog,
-        &state.plugin_catalog,
+    let generation = provider_accounts::registration::generation(
+        state,
         &providers(runtime),
         &request.provider,
-        authentication.as_ref(),
-    )?;
+        &authenticated.principal.user_id,
+        &provider_account_id,
+        &runtime.id,
+    )
+    .await?;
     let configuration = folder_defaults::preset_values(
         state,
         &request.provider,
@@ -326,41 +338,27 @@ async fn create_checked(
     let binding = ExecutionBinding::from_record(
         serde_json::to_value(&intent).map_err(|_| "Invalid execution preparation")?,
     );
-    {
-        let fence = state.plugin_lifecycle_fences.read();
-        if fence.contains_key(&(runtime.id.clone(), request.provider.clone())) {
-            return Err("Provider is changing on the runtime Machine".into());
-        }
-        state
-            .provider_auth
-            .with_scheduling_generation(
-                &request.provider,
-                generation.auth_generation.is_some(),
-                generation.auth_generation,
-                || {
-                    state.supervisor.register_session_on_with_id(
-                        &session_id,
-                        &request.provider,
-                        Some(intent.runtime.cwd.clone()),
-                        request.origin,
-                        false,
-                        crate::supervisor::SessionPlacement {
-                            machine_id: &runtime.id,
-                            workspace: Some(workspace),
-                            execution_binding: Some(&binding),
-                        },
-                        crate::supervisor::ProviderGeneration {
-                            version: &generation.version,
-                            digest: &generation.digest,
-                            auth_generation: generation.auth_generation,
-                            behavior: Some(&generation.behavior),
-                        },
-                        product_session_owner(state.product_auth_enabled, &authenticated.principal),
-                    )
-                },
-            )
-            .map_err(|error| error.to_string())??;
-    }
+    let registration = state.supervisor.prepare_session_on_with_id(
+        &session_id,
+        &request.provider,
+        Some(intent.runtime.cwd.clone()),
+        request.origin,
+        false,
+        crate::supervisor::SessionPlacement {
+            machine_id: &runtime.id,
+            workspace: Some(workspace),
+            execution_binding: Some(&binding),
+        },
+        crate::supervisor::ProviderGeneration {
+            account_id: Some(&provider_account_id),
+            version: &generation.version,
+            digest: &generation.digest,
+            auth_generation: generation.auth_generation,
+            behavior: Some(&generation.behavior),
+        },
+        product_session_owner(state.product_auth_enabled, &authenticated.principal),
+    )?;
+    provider_accounts::registration::register(state, registration).await?;
     folder_defaults::apply_created(
         state,
         &authenticated.principal,

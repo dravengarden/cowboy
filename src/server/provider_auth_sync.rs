@@ -22,6 +22,7 @@ type SyncResult = Result<(), String>;
 #[derive(PartialEq, Eq)]
 struct Identity {
     provider: String,
+    account: crate::provider_account::ProviderAccountId,
     generation: u64,
     schema: u16,
     contract: String,
@@ -34,6 +35,7 @@ impl From<&SealedProviderAuth> for Identity {
     fn from(envelope: &SealedProviderAuth) -> Self {
         Self {
             provider: envelope.provider_id.clone(),
+            account: envelope.account_id.clone(),
             generation: envelope.auth_generation,
             schema: envelope.envelope_schema,
             contract: envelope.auth_contract_fingerprint.clone(),
@@ -102,6 +104,7 @@ impl Coordinator {
         if let Some(flight) = flights.iter().find(|flight| {
             flight.connection.same(connection)
                 && flight.identity.provider == identity.provider
+                && flight.identity.account == identity.account
                 && flight.identity.generation == identity.generation
         }) {
             if flight.identity != identity {

@@ -153,6 +153,8 @@ export interface SessionMeta {
   provider_version?: string;
   provider_generation_digest?: string;
   provider_auth_generation?: number;
+  /** Immutable subscription identity; old servers omit the legacy default. */
+  provider_account_id?: string;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
   /** Present unknown/null bindings must stay present and cannot imply local execution. */

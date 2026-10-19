@@ -231,15 +231,22 @@ Never invent a command that its repository does not own.
   [`docs/agent-driven-plugin-release.md`](../../../docs/agent-driven-plugin-release.md)
   for exact release selection, operation identity, durable receipts and
   postflight. This uses the normal installer and requires no browser cookie.
-- Keep Provider authentication Cowboy Service-scoped. A release must not add a
-  Machine login control, perform login, or mutate the active Service credential.
+- Keep Provider authentication owned by Cowboy Service. Plugin release work
+  must not perform login or mutate active credentials. Named subscriptions use
+  the account lifecycle described in `docs/requirements.md`: a selected Machine
+  may execute native login for a Service-owned, recipient-bound grant. This does
+  not make the Machine the account owner or pin the subscription to that Machine.
 - Keep lifecycle effects on their typed surfaces: Service login/logout on
   `setup`, Machine install on `empty`, and Machine upgrade/uninstall on
   `settings`. The exact installed package owns a Machine card's layout; a newer
   release is only an upgrade target until activation succeeds.
-- Treat Machine credentials only as versioned replicas of the Service auth
-  generation. Never let a Provider dependency create an independent Machine
-  account, updater, refresh lineage, or credential store.
+- Treat Machine credentials as versioned projections of the selected
+  Service-owned account and grant. Legacy `default` credentials retain their
+  existing contract. Named rotating credentials require independently verified
+  native grants per recipient; never clone one refresh lineage across Machines.
+  Provider dependencies cannot silently switch accounts or create unmanaged
+  credential stores or updaters. The named-account admission gate must remain
+  closed until that lifecycle passes its acceptance tests.
 
 ## Audit candidates
 
@@ -281,8 +288,10 @@ guessing from a moving branch.
    runtime dependency resolution or self-update.
 4. Inspect all ordinary user-facing surfaces. Present the Provider name and
    Provider version; reject accidental ACP, adapter, gateway, or internal
-   dependency controls. Reject Machine-specific login, logout, account, or
-   credential controls. Developer-only diagnostics may identify internals or
+   dependency controls. Account ownership stays separate from the Machine that
+   executes native login; account connections and revocation belong to the
+   account lifecycle, not Plugin installation controls. Developer-only
+   diagnostics may identify internals or
    auth-replica convergence only when the package contract explicitly marks
    that surface as diagnostic.
 5. Bump the Provider version. Use a patch for a dependency-only compatible

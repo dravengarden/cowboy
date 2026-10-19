@@ -644,6 +644,7 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
                         execution_binding: Some(&binding),
                     },
                     crate::supervisor::ProviderGeneration {
+                        account_id: None,
                         version: &generation.version,
                         digest: &generation.digest,
                         auth_generation: generation.auth_generation,

@@ -27,6 +27,7 @@ use crate::runtime_wire::{
 };
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+pub mod startup_gate;
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
 
@@ -38,6 +39,7 @@ pub struct WorkerArgs {
     pub provider_version: String,
     pub provider_generation_digest: String,
     pub provider_auth_generation: Option<u64>,
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
     pub cwd: PathBuf,
     pub resume: Option<String>,
     pub system: bool,
@@ -492,6 +494,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     // This reserved host projection must never come from a parent process.
     spec.package_remove_env
         .insert(crate::worker_execution::DESCRIPTOR_ENV.to_owned());
+    spec.package_remove_env
+        .insert(startup_gate::LAUNCH_ENV.to_owned());
     let provider_behavior = (!args.provider_generation_digest.is_empty())
         .then(|| crate::provider::behavior(&args.provider));
     let configuration = provider_behavior.as_ref().map_or_else(
@@ -526,6 +530,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         provider: args.provider.clone(),
         provider_version: args.provider_version.clone(),
         provider_generation_digest: args.provider_generation_digest.clone(),
+        provider_account_id: args.provider_account_id.clone(),
         provider_auth_generation: args.provider_auth_generation,
         provider_behavior,
         cwd: args.cwd.display().to_string(),
@@ -762,15 +767,19 @@ async fn connected(
     done_rx: &mut mpsc::Receiver<()>,
 ) -> Result<ConnectedExit> {
     let (mut reader, mut writer) = stream.into_split();
+    let minimum_protocol = shared.snapshot.lock().launch.as_ref().map_or(
+        if shared.execution.is_some() {
+            2
+        } else {
+            MIN_PROTOCOL_VERSION
+        },
+        crate::runtime_wire::StartSession::minimum_protocol,
+    );
     write_frame(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Worker,
-            min_protocol: if shared.execution.is_some() {
-                2
-            } else {
-                MIN_PROTOCOL_VERSION
-            },
+            min_protocol: minimum_protocol,
             max_protocol: PROTOCOL_VERSION,
             build: env!("CARGO_PKG_VERSION").to_owned(),
             session_id: Some(shared.session_id.clone()),
@@ -782,7 +791,12 @@ async fn connected(
     )
     .await?;
     match read_frame(&mut reader).await? {
-        Some(Frame::Welcome { .. }) => {}
+        Some(Frame::Welcome { protocol, .. }) => {
+            anyhow::ensure!(
+                (minimum_protocol..=PROTOCOL_VERSION).contains(&protocol),
+                "Machine broker selected an unsupported runtime protocol"
+            );
+        }
         Some(Frame::Reject { reason }) => return Ok(ConnectedExit::Rejected { reason }),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => return Ok(ConnectedExit::Disconnected),
@@ -1965,6 +1979,7 @@ mod tests {
             provider: "codex-deepseek".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/work".to_owned(),

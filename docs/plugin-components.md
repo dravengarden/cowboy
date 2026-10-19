@@ -83,6 +83,14 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Candidate release 3.60.0 records provider-sdk 3.1.15 for optional signed native
+identity recipes, provider-ui 3.1.21 for exact authentication Machine discovery,
+and their transitive package consumers plugin-sdk 1.12.2 and provider-authoring
+1.0.9. All ten consuming Plugins advance independently by one patch version;
+their upstream executable pins remain unchanged. The Zed adapter package follows
+its Plugin identity. Historical records are unchanged. This source registration
+does not publish artifacts, activate Machines or open named-account admission.
+
 Scoped release 3.54.0 records app-shell 1.1.28 for UI sources already present on
 main but missing from the 3.53.0 digest. It changes no UI behavior. Review 1.0.1
 shortens its optional review guidance; Codex 3.4.8 and Claude Code 3.19.37 update

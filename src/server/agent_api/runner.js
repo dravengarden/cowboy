@@ -95,6 +95,11 @@ const cowboy = Object.freeze({
     schema: none,
     get: (scope) => ({ scope }),
   }),
+  accounts: namespace("accounts", {
+    transition_status: (operation) => ({ operation }),
+    list: none,
+    login_options: (account_id, machine_id) => ({ account_id, machine_id }),
+  }),
   session: namespace("session", {
     info: none,
     usage: none,

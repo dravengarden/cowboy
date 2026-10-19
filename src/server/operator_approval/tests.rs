@@ -12,6 +12,7 @@ async fn agent_approval_retains_parent_identity_and_cannot_survive_permission_re
         h.hub.create_session(crate::core::SessionRegistration {
             id: "parent".into(),
             provider: "codex".into(),
+            provider_account_id: Default::default(),
             provider_version: "1".into(),
             provider_generation_digest: "digest".into(),
             provider_auth_generation: Some(1),

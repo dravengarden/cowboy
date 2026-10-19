@@ -26,10 +26,13 @@ use crate::runtime_wire::{
     StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
 };
 
+mod account_worker;
 mod cleanups;
 pub(crate) mod deletions;
 mod incarnations;
 mod namespace;
+mod systemd_exit;
+mod worker_environment;
 
 /// Consecutive failed cleanup attempts (about three minutes of backoff) after
 /// which a nominated Session stops holding its handles in this process.
@@ -438,6 +441,9 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    /// Account stops must not be undone by ordinary reset or hibernation.
+    /// Cache only; the auth store retains stop intent across resident restarts.
+    account_quiesced_sessions: Mutex<HashSet<String>>,
     deletion_journal: Mutex<Option<deletions::Journal>>,
     /// Advisory nominations of deleted Sessions' original worktree roots, so a
     /// resident restart can finish artifact cleanup. Present only on a Machine
@@ -478,6 +484,9 @@ struct Broker {
     /// on macOS where per-session systemd units are unavailable. Entries are
     /// removed only by the task that reaps the matching child PID.
     direct_worker_pids: Arc<Mutex<HashMap<String, u32>>>,
+    /// Independent from the leader PID: failure or task abortion retains this
+    /// fence until the owned cgroup's empty observation has been confirmed.
+    direct_worker_trees: Arc<Mutex<HashSet<String>>>,
     desired_generation: Mutex<String>,
     previous_generation: Mutex<Option<String>>,
     generation_commands: Mutex<HashMap<String, PathBuf>>,
@@ -574,6 +583,7 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            account_quiesced_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
             cleanup_continuations: Mutex::new(None),
             #[cfg(test)]
@@ -589,6 +599,7 @@ impl Broker {
             unhealthy_generations: Mutex::new(HashMap::new()),
             healthy_generations: Mutex::new(HashSet::new()),
             direct_worker_pids: Arc::new(Mutex::new(HashMap::new())),
+            direct_worker_trees: Arc::new(Mutex::new(HashSet::new())),
             previous_generation: Mutex::new(None),
             generation_commands: Mutex::new(generation_commands),
             #[cfg(test)]
@@ -1095,12 +1106,26 @@ impl Broker {
                 .is_some_and(|launch| launch.session_id != session_id)
             || sessions.get(&session_id).is_some_and(|declared| {
                 declared.execution_binding.as_ref() != incoming
+                    || (launch.is_none() && !declared.provider_account_id.is_default())
                     || launch.as_ref().is_some_and(|launch| {
                         launch.provider != declared.provider
+                            || !account_worker::binding_matches(declared, launch)
                             || launch.cwd != declared.cwd
                             || launch.system != declared.system
                     })
             })
+            || self
+                .workers
+                .lock()
+                .get(&session_id)
+                .and_then(|worker| worker.snapshot.launch.as_ref())
+                .is_some_and(|previous| {
+                    launch
+                        .as_ref()
+                        .map_or(!previous.provider_account_id.is_default(), |incoming| {
+                            !account_worker::binding_matches(previous, incoming)
+                        })
+                })
         {
             if let Some(worker) = self.workers.lock().get(&session_id)
                 && worker.connection_id == connection_id
@@ -1187,6 +1212,20 @@ impl Broker {
 
     fn register_worker(&self, registration: WorkerRegistration) -> Result<()> {
         self.check_deletion_journal()?;
+        if let Some(exit) = self
+            .args
+            .provider_store
+            .account_worker_exit(&registration.session_id)?
+        {
+            ensure!(
+                !exit.tree_exited,
+                "account worker has no live launch reservation"
+            );
+        }
+        ensure!(
+            !self.account_session_stopped(&registration.session_id),
+            "account session is quiesced"
+        );
         let WorkerRegistration {
             session_id,
             epoch,
@@ -1803,6 +1842,47 @@ impl Broker {
         })
     }
 
+    fn account_session_stopped(&self, session: &str) -> bool {
+        if self.account_quiesced_sessions.lock().contains(session) {
+            return true;
+        }
+        // Storage errors cannot restore launch authority.
+        !matches!(
+            self.args.provider_store.account_session_stopped(session),
+            Ok(false)
+        )
+    }
+
+    fn account_binding_matches(&self, session: &StartSession) -> bool {
+        if !matches!(
+            self.args
+                .provider_store
+                .account_worker_binding_matches(session),
+            Ok(true)
+        ) {
+            return false;
+        }
+        let declaration_matches = self
+            .sessions
+            .lock()
+            .get(&session.session_id)
+            .is_none_or(|previous| account_worker::binding_matches(previous, session));
+        declaration_matches
+            && self
+                .workers
+                .lock()
+                .get(&session.session_id)
+                .is_none_or(|worker| {
+                    worker
+                        .snapshot
+                        .launch
+                        .as_ref()
+                        .map_or(session.provider_account_id.is_default(), |previous| {
+                            account_worker::binding_matches(previous, session)
+                        })
+                })
+    }
+
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
         let gate = self.session_lifecycle_gate(&session.session_id);
         let guard = gate.lock().await;
@@ -1814,6 +1894,22 @@ impl Broker {
         session: StartSession,
         _guard: &tokio::sync::MutexGuard<'_, ()>,
     ) {
+        if self.account_session_stopped(&session.session_id) {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                "account session is quiesced".into(),
+            );
+            return;
+        }
+        if !self.account_binding_matches(&session) {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                "session subscription cannot change through worker adoption".into(),
+            );
+            return;
+        }
         if let Err(error) = self.check_deletion_journal() {
             self.command_rejected(
                 &session.session_id,
@@ -2005,6 +2101,22 @@ impl Broker {
         session.adopt_only = false;
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
+        if !self.account_binding_matches(&session) {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "session subscription cannot change through reset".into(),
+            );
+            return;
+        }
+        if self.account_session_stopped(&session_id) {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "account session is quiesced; explicit account admission is required".into(),
+            );
+            return;
+        }
         let journal_admission = (|| -> Result<()> {
             if let Some(journal) = self.deletion_journal.lock().as_ref() {
                 journal.check()?;
@@ -2044,7 +2156,16 @@ impl Broker {
         self.pending_commands.lock().remove(&session_id);
         self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
-        self.force_recycle_failed_start(&session_id).await;
+        if !self.force_recycle_failed_start(&session_id).await {
+            self.resetting_sessions.lock().remove(&session_id);
+            self.sessions.lock().insert(session_id.clone(), session);
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "previous worker stop was not confirmed before reset".into(),
+            );
+            return;
+        }
 
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         while self.launching.lock().contains(&session_id) && tokio::time::Instant::now() < deadline
@@ -2096,6 +2217,14 @@ impl Broker {
     async fn hibernate_session(self: &Arc<Self>, session_id: String, command_id: String) {
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
+        if self.account_session_stopped(&session_id) {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "account session is quiesced; reconcile the account stop first".into(),
+            );
+            return;
+        }
         let snapshot = self
             .workers
             .lock()
@@ -2126,13 +2255,24 @@ impl Broker {
         // requests (`cache_keepalive`). Delete, reset and provider roll already
         // revoke it; hibernation releases the same resource.
         let released = self.sessions.lock().remove(&session_id);
-        if let Some(session) = released {
-            self.revoke_cache_protection(&session, &session_id, "session_hibernated");
+        if let Some(session) = &released {
+            self.revoke_cache_protection(session, &session_id, "session_hibernated");
         }
         self.awaiting_reconnect.lock().remove(&session_id);
         self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
-        self.force_recycle_failed_start(&session_id).await;
+        if !self.force_recycle_failed_start(&session_id).await {
+            if let Some(session) = released {
+                self.sessions.lock().insert(session_id.clone(), session);
+            }
+            // Retain the launch fence and worker ownership for reconciliation.
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "worker stop is unconfirmed; retry hibernation after reconciliation".into(),
+            );
+            return;
+        }
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.session_states.lock().remove(&session_id);
@@ -2149,6 +2289,173 @@ impl Broker {
             accepted: true,
             reason: None,
         });
+    }
+
+    async fn quiesce_account_session(
+        self: &Arc<Self>,
+        session_id: String,
+        command_id: String,
+        account_id: crate::provider_account::ProviderAccountId,
+    ) {
+        let gate = self.session_lifecycle_gate(&session_id);
+        let _guard = gate.lock().await;
+        let session = self.sessions.lock().get(&session_id).cloned();
+        let scope_matches = !account_id.is_default()
+            && match &session {
+                Some(session) => session.provider_account_id == account_id,
+                None => self
+                    .args
+                    .provider_store
+                    .account_stop_matches(&session_id, &account_id)
+                    .unwrap_or(false),
+            };
+        if !scope_matches {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "named account session scope mismatch".into(),
+            );
+            return;
+        }
+        // A restarted direct-spawn broker has no process ownership proof.
+        // An empty PID map is not evidence that a previously owned worker died.
+        if session.is_none() && self.args.spawn_mode == SpawnMode::Direct {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "account stop requires process ownership reconciliation".into(),
+            );
+            return;
+        }
+        if let Err(error) = self.args.provider_store.stop_account_session_scoped(
+            &session_id,
+            &account_id,
+            &command_id,
+        ) {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                format!("account stop persistence unconfirmed: {error}"),
+            );
+            return;
+        }
+        self.cancelled_sessions.lock().insert(session_id.clone());
+        self.account_quiesced_sessions
+            .lock()
+            .insert(session_id.clone());
+        if let Some(session) = &session {
+            self.revoke_cache_protection(session, &session_id, "account_quiesced");
+        }
+        // A concurrent launch can outlive its Stop command. Keep the fence and
+        // let the caller retry once that launch has observed cancellation.
+        if self.launching.lock().contains(&session_id) {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "worker launch cancellation is pending".into(),
+            );
+            return;
+        }
+        let snapshot = self
+            .workers
+            .lock()
+            .get(&session_id)
+            .map(|worker| worker.snapshot.clone());
+        if !self.force_recycle_failed_start(&session_id).await {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "account worker stop is unconfirmed".into(),
+            );
+            return;
+        }
+        self.awaiting_reconnect.lock().remove(&session_id);
+        self.pending_commands.lock().remove(&session_id);
+        self.session_states
+            .lock()
+            .insert(session_id.clone(), WorkerState::Exited);
+        if let Some(mut snapshot) = snapshot {
+            snapshot.state = WorkerState::Exited;
+            snapshot.current_turn_id = None;
+            snapshot.background_tasks = Some(0);
+            snapshot.exit_detail = Some("account worker stopped".into());
+            // Direct mode confirms the leader, not detached descendants.
+            // Do not manufacture a zero background-task count from that ACK.
+            if self.args.spawn_mode == SpawnMode::Direct {
+                snapshot.background_tasks = None;
+            }
+            self.send_controller(Frame::Snapshot {
+                worker: Box::new(snapshot),
+            });
+        }
+        // Retain the declaration, native thread and launch fence. The account
+        // lifecycle must separately authorize any future resume.
+        self.send_controller(Frame::CommandAck {
+            session_id,
+            command_id,
+            accepted: true,
+            reason: None,
+        });
+    }
+
+    /// Called only by current Controller migration admission, never ordinary
+    /// Ensure/Reset. Preparing a declaration must not start a worker.
+    #[allow(dead_code)] // Wire dispatch remains gated until Controller admission is connected.
+    async fn readmit_account_session(
+        self: &Arc<Self>,
+        session: StartSession,
+        binding: &crate::provider_account::PreparedBinding,
+    ) -> Result<()> {
+        let id = &session.session_id;
+        let gate = self.session_lifecycle_gate(id);
+        let _guard = gate.lock().await;
+        self.check_deletion_journal()?;
+        if let Some(journal) = self.deletion_journal.lock().as_ref() {
+            ensure!(!journal.deleted().contains(id), "session was deleted");
+        }
+        ensure!(
+            !self.launching.lock().contains(id)
+                && !self.workers.lock().contains_key(id)
+                && !self.direct_worker_pids.lock().contains_key(id),
+            "worker cleanup is pending"
+        );
+        let previous = self.sessions.lock().get(id).cloned();
+        if let Some(mut previous) = previous {
+            // Permit only the selected binding and native-thread reset. All
+            // workspace, extension and execution placement fields must agree.
+            previous
+                .provider_version
+                .clone_from(&session.provider_version);
+            previous
+                .provider_generation_digest
+                .clone_from(&session.provider_generation_digest);
+            previous.provider_auth_generation = session.provider_auth_generation;
+            previous
+                .provider_behavior
+                .clone_from(&session.provider_behavior);
+            previous.agent_session_id = None;
+            previous.adopt_only = true;
+            ensure!(previous == session, "readmission changed session context");
+        } else {
+            ensure!(
+                !self.cancelled_sessions.lock().contains(id),
+                "removed session cannot be readmitted"
+            );
+        }
+        // No await after local release. Old worker registrations still fail:
+        // the exit journal remains exited until a subsequent real spawn.
+        self.args
+            .provider_store
+            .readmit_native_session(binding, &session)?;
+        self.sessions.lock().insert(id.clone(), session.clone());
+        self.pending_commands.lock().remove(id);
+        self.awaiting_reconnect.lock().remove(id);
+        self.session_states
+            .lock()
+            .insert(id.clone(), WorkerState::Exited);
+        self.account_quiesced_sessions.lock().remove(id);
+        self.cancelled_sessions.lock().remove(id);
+        Ok(())
     }
 
     fn arm_reconnect_timeout(self: &Arc<Self>, session_id: String) {
@@ -2200,7 +2507,7 @@ impl Broker {
     ) -> Result<()> {
         // Previous generations may predate this mandatory launch field. They
         // must never be tried as an implicit recovery path for a bound worker.
-        if session.execution_binding.is_some() {
+        if session.execution_binding.is_some() || !session.provider_account_id.is_default() {
             return self.spawn_and_wait_ready(&session).await;
         }
         let generation_key = (session.generation.clone(), session.provider.clone());
@@ -2328,6 +2635,10 @@ impl Broker {
     }
 
     async fn spawn_and_wait_ready(&self, session: &StartSession) -> Result<()> {
+        ensure!(
+            !self.account_session_stopped(&session.session_id),
+            "account session is quiesced"
+        );
         if self.cancelled_sessions.lock().contains(&session.session_id) {
             anyhow::bail!("session {} was deleted during launch", session.session_id);
         }
@@ -2408,7 +2719,7 @@ impl Broker {
         }
     }
 
-    async fn force_recycle_failed_start(&self, session_id: &str) {
+    async fn force_recycle_failed_start(&self, session_id: &str) -> bool {
         self.route_worker(
             session_id,
             WorkerCommand::Stop {
@@ -2416,14 +2727,46 @@ impl Broker {
             },
         );
         if self.args.spawn_mode == SpawnMode::SystemdUser {
-            let _ = Command::new("systemctl")
-                .args([
-                    "--user",
-                    "stop",
-                    &worker_unit_name(&self.args.socket, session_id),
-                ])
-                .status()
-                .await;
+            let unit = format!(
+                "{}.service",
+                worker_unit_name(&self.args.socket, session_id)
+            );
+            // Never stop a named unit whose incarnation has changed.
+            let stop_allowed = match systemd_exit::stop_allowed(
+                &self.args.provider_store,
+                session_id,
+                &unit,
+            )
+            .await
+            {
+                Ok(allowed) => allowed,
+                Err(error) => {
+                    tracing::warn!(session = session_id, %error, "systemd stop identity unconfirmed");
+                    return false;
+                }
+            };
+            let mut command = Command::new("systemctl");
+            command.kill_on_drop(true);
+            command.args([
+                "--user",
+                "stop",
+                &worker_unit_name(&self.args.socket, session_id),
+            ]);
+            let stopped = !stop_allowed
+                || matches!(tokio::time::timeout(Duration::from_secs(30), command.status()).await, Ok(Ok(status)) if status.success());
+            // A collected unit makes stop fail even when its recorded tree
+            // has exited. Only scoped evidence may recover that case.
+            let confirmed = systemd_exit::confirm(&self.args.provider_store, session_id)
+                .await
+                .is_ok();
+            if !stopped && !confirmed {
+                tracing::error!(
+                    session = session_id,
+                    "worker systemd stop was not confirmed"
+                );
+                self.cancelled_sessions.lock().insert(session_id.to_owned());
+                return false;
+            }
         } else {
             let workers = Arc::clone(&self.direct_worker_pids);
             let pid = workers.lock().get(session_id).copied();
@@ -2439,11 +2782,37 @@ impl Broker {
                 .await
             {
                 tracing::error!(session = %session_id, pid, "failed-start direct worker remained owned after KILL timeout");
+                self.cancelled_sessions.lock().insert(session_id.to_owned());
+                return false;
             }
         }
-        // A worker whose IPC loop is wedged may never consume Stop. Fence it so
-        // a fallback generation can register; its stale connection is ignored.
+        if self.direct_worker_trees.lock().contains(session_id) {
+            tracing::error!(
+                session = session_id,
+                "direct worker subtree exit remains unconfirmed"
+            );
+            return false;
+        }
+        if let Err(error) = self
+            .args
+            .provider_store
+            .reconcile_account_worker_boot(session_id)
+        {
+            tracing::error!(session = session_id, %error, "worker boot evidence unconfirmed");
+            return false;
+        }
+        match self.args.provider_store.account_worker_exit(session_id) {
+            Ok(Some(receipt)) if !receipt.tree_exited => return false,
+            Err(error) => {
+                tracing::error!(session = session_id, %error, "worker exit journal unconfirmed");
+                return false;
+            }
+            Ok(_) => (), // Legacy workers have no tree proof; their ACK remains leader-only.
+        }
+        // Only confirmed process termination permits removing its IPC owner.
+        // An existing lifecycle fence belongs to the caller, not this helper.
         self.workers.lock().remove(session_id);
+        true
     }
 
     fn set_desired_generation(&self, generation: String, worker_command: Option<String>) {
@@ -2537,12 +2906,19 @@ impl Broker {
         }
     }
 
-    fn roll_provider(&self, provider: &str) {
+    fn roll_provider(
+        &self,
+        provider: &str,
+        account_id: Option<&crate::provider_account::ProviderAccountId>,
+    ) {
         let sessions: Vec<(String, StartSession)> = self
             .sessions
             .lock()
             .iter()
-            .filter(|(_, session)| session.provider == provider)
+            .filter(|(_, session)| {
+                session.provider == provider
+                    && account_id.is_none_or(|id| &session.provider_account_id == id)
+            })
             .map(|(session_id, session)| (session_id.clone(), session.clone()))
             .collect();
         tracing::info!(
@@ -2834,10 +3210,20 @@ impl Broker {
         // Verification reads and hashes the retained runtime; keep that file
         // work off the broker's async workers so other sessions keep flowing.
         let verification_started = Instant::now();
+        anyhow::ensure!(
+            session.provider_account_id.is_default()
+                || (!session.provider_generation_digest.is_empty()
+                    && session.provider_auth_generation.is_some()),
+            "Named account requires an exact authenticated Provider generation"
+        );
         let provider = if session.provider_generation_digest.is_empty() {
             None
         } else {
-            let store = Arc::clone(&self.args.provider_store);
+            let store = Arc::new(
+                self.args
+                    .provider_store
+                    .for_account(&session.provider_account_id)?,
+            );
             let (provider_id, digest, auth_generation) = (
                 session.provider.clone(),
                 session.provider_generation_digest.clone(),
@@ -3073,24 +3459,16 @@ impl Broker {
         let mut command = match self.args.spawn_mode {
             SpawnMode::Direct => {
                 let mut command = Command::new(&worker_command);
-                command.envs(&self.args.worker_environment);
                 if let Some(provider) = &provider {
-                    for name in &provider.remove_environment {
-                        command.env_remove(name);
-                    }
-                    for (name, _) in std::env::vars().filter(|(name, _)| {
-                        provider
-                            .remove_environment_prefixes
-                            .iter()
-                            .any(|prefix| name.starts_with(prefix))
-                    }) {
-                        command.env_remove(name);
-                    }
-                    // Apply signed Provider and credential projections after
-                    // inherited-variable scrubbing. Otherwise an auth value
-                    // with a scrubbed prefix can disappear only when the
-                    // broker happens to inherit a variable with the same name.
-                    command.envs(&provider.environment);
+                    worker_environment::apply(
+                        &mut command,
+                        &self.args.worker_environment,
+                        &provider.remove_environment,
+                        &provider.remove_environment_prefixes,
+                        &provider.environment,
+                    );
+                } else {
+                    command.envs(&self.args.worker_environment);
                 }
                 for (name, value) in &session_environment {
                     command.env(name, value);
@@ -3159,6 +3537,11 @@ impl Broker {
                 if let Some(fallback_for) = &session.fallback_for {
                     command.arg(format!("--setenv=COWBOY_FALLBACK_FOR={fallback_for}"));
                 }
+                if !session.provider_account_id.is_default() {
+                    command.arg(format!("--setenv={}", systemd_exit::LAUNCH_ENV));
+                    command.arg("--pipe");
+                    command.stdin(std::process::Stdio::piped());
+                }
                 command.arg(&worker_command);
                 command
             }
@@ -3182,6 +3565,14 @@ impl Broker {
             command
                 .arg("--provider-auth-generation")
                 .arg(auth_generation.to_string());
+        }
+        if !session.provider_account_id.is_default() {
+            command
+                .arg("--provider-account-id")
+                .arg(session.provider_account_id.as_str());
+            if self.args.spawn_mode == SpawnMode::SystemdUser {
+                command.arg("--launch-gate");
+            }
         }
         if let Some(binding) = &session.execution_binding {
             command
@@ -3215,6 +3606,13 @@ impl Broker {
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
+                !self
+                    .direct_worker_trees
+                    .lock()
+                    .contains(&session.session_id),
+                "previous direct worker subtree exit is unconfirmed"
+            );
+            ensure!(
                 !workers.contains_key(&session.session_id),
                 "direct worker {} acquired a process owner during launch",
                 session.session_id
@@ -3223,12 +3621,24 @@ impl Broker {
         } else {
             None
         };
-        let mut child = command
-            .spawn()
-            .with_context(|| match self.args.spawn_mode {
-                SpawnMode::Direct => "spawning worker process",
-                SpawnMode::SystemdUser => "starting transient worker unit",
-            })?;
+        let containment = if self.args.spawn_mode == SpawnMode::Direct
+            && !session.provider_account_id.is_default()
+        {
+            Some(
+                crate::cgroup::Containment::prepare(&mut command)
+                    .context("preparing named Direct worker containment")?,
+            )
+        } else {
+            None
+        };
+        // Every named launch invalidates earlier proof, including switching
+        // from Direct to systemd. A failed spawn leaves no process to reap.
+        let (mut child, contained_launch) =
+            account_worker::spawn_bound(&mut command, &self.args.provider_store, session)
+                .with_context(|| match self.args.spawn_mode {
+                    SpawnMode::Direct => "spawning worker process",
+                    SpawnMode::SystemdUser => "starting transient worker unit",
+                })?;
         let session_id = session.session_id.clone();
         let direct_pid = if self.args.spawn_mode == SpawnMode::Direct {
             let pid = child
@@ -3244,9 +3654,59 @@ impl Broker {
         };
         drop(direct_workers);
         let direct_worker_pids = Arc::clone(&self.direct_worker_pids);
+        let direct_worker_trees = Arc::clone(&self.direct_worker_trees);
+        let provider_store = Arc::clone(&self.args.provider_store);
+        let provider_account = session.provider_account_id.clone();
+        let systemd_unit = (self.args.spawn_mode == SpawnMode::SystemdUser
+            && contained_launch.is_some())
+        .then(|| {
+            format!(
+                "{}.service",
+                worker_unit_name(&self.args.socket, &session_id)
+            )
+        });
+        if containment.is_some() {
+            direct_worker_trees.lock().insert(session_id.clone());
+        }
         let (exit_tx, exit_rx) = oneshot::channel();
         tokio::spawn(async move {
+            // Taking stdin gives this scope ownership on success, error and
+            // cancellation. Dropping an incomplete token refuses startup.
+            if let Some(unit) = &systemd_unit
+                && let Some(mut input) = child.stdin.take()
+                && let Err(error) = systemd_exit::release_gate(
+                    &provider_store,
+                    &session_id,
+                    unit,
+                    contained_launch.expect("named systemd launch"),
+                    &mut input,
+                )
+                .await
+            {
+                tracing::warn!(session = %session_id, %error, "worker launch gate refused");
+            }
             let result = child.wait().await.map_err(|error| error.to_string());
+            if systemd_unit.is_some()
+                && result.is_ok()
+                && let Err(error) = systemd_exit::confirm(&provider_store, &session_id).await
+            {
+                tracing::warn!(session = %session_id, %error, "systemd worker tree exit unconfirmed");
+            }
+            if let Some(containment) = containment {
+                let tree_exited = containment.finish().await.is_ok();
+                let recorded = tree_exited
+                    && result.is_ok()
+                    && contained_launch.is_some_and(|launch| {
+                        provider_store
+                            .record_account_worker_exit(&session_id, &provider_account, launch)
+                            .is_ok()
+                    });
+                if recorded {
+                    direct_worker_trees.lock().remove(&session_id);
+                } else {
+                    tracing::error!(session = %session_id, "retaining Direct worker subtree fence after cleanup failure");
+                }
+            }
             if let Some(pid) = direct_pid {
                 if reap_direct_worker_group(&direct_worker_pids, &session_id, pid).await {
                     let mut workers = direct_worker_pids.lock();
@@ -3546,6 +4006,10 @@ async fn run_broker(
     incarnations: Option<incarnations::Store>,
     durable_state: DurableStateView,
 ) -> Result<()> {
+    let providers = Arc::clone(&args.provider_store);
+    let account_stops = tokio::task::spawn_blocking(move || providers.account_stops())
+        .await
+        .context("joining account stop recovery read")??;
     let broker = Arc::new(Broker::new(args));
     durable_state.attach(&broker);
     if let Some(store) = incarnations {
@@ -3568,7 +4032,79 @@ async fn run_broker(
     // A cancelled server must not retain the durable namespace's owner lock
     // through an orphaned monitor task.
     let _monitor = BrokerMonitor(tokio::spawn(monitor_workers(Arc::clone(&broker))));
+    let _account_recovery = BrokerMonitor(tokio::spawn(recover_account_stops(
+        Arc::clone(&broker),
+        account_stops,
+    )));
     accept_runtime_peers(broker.args.socket.clone(), listener, broker).await
+}
+
+async fn recover_account_stops(
+    broker: Arc<Broker>,
+    stops: Vec<(String, crate::provider_account::ProviderAccountId)>,
+) {
+    let stopping = Arc::clone(&broker);
+    recover_account_stops_with(broker, stops, move |session| {
+        let stopping = Arc::clone(&stopping);
+        async move { stopping.force_recycle_failed_start(&session).await }
+    })
+    .await;
+}
+
+async fn recover_account_stops_with<F, Fut>(
+    broker: Arc<Broker>,
+    stops: Vec<(String, crate::provider_account::ProviderAccountId)>,
+    mut stop: F,
+) where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    if stops.is_empty() {
+        return;
+    }
+    if broker.args.spawn_mode != SpawnMode::SystemdUser {
+        tracing::error!(
+            pending = stops.len(),
+            "durable account stops require direct process ownership reconciliation"
+        );
+        return;
+    }
+    let mut pending: VecDeque<_> = stops.into();
+    while let Some((session, account)) = pending.pop_front() {
+        let gate = broker.session_lifecycle_gate(&session);
+        let guard = gate.lock().await;
+        if !broker
+            .args
+            .provider_store
+            .account_stop_matches(&session, &account)
+            .unwrap_or(false)
+        {
+            tracing::error!(
+                session,
+                "account stop recovery evidence is unavailable; no process effect attempted"
+            );
+            return;
+        }
+        broker.cancelled_sessions.lock().insert(session.clone());
+        broker
+            .account_quiesced_sessions
+            .lock()
+            .insert(session.clone());
+        let stopped = stop(session.clone()).await;
+        if stopped {
+            broker.pending_commands.lock().remove(&session);
+            tracing::info!(
+                session,
+                "durable account stop recovered; credentials and stop intent retained"
+            );
+        } else {
+            pending.push_back((session, account));
+        }
+        drop(guard);
+        if !stopped && !pending.is_empty() {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
 }
 
 struct BrokerMonitor(tokio::task::JoinHandle<()>);
@@ -3767,6 +4303,22 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             let epoch =
                 worker_epoch.ok_or_else(|| anyhow::anyhow!("worker hello missing epoch"))?;
             let generation = generation.unwrap_or_else(|| "unknown".to_owned());
+            // A retained worker may silently discard additive launch fields.
+            // Refuse it before it can acquire ownership of a named subscription.
+            let minimum_protocol = broker
+                .sessions
+                .lock()
+                .get(&session_id)
+                .map_or(MIN_PROTOCOL_VERSION, StartSession::minimum_protocol);
+            if protocol < minimum_protocol {
+                let _ = tx.send(Frame::Reject {
+                    reason: "worker protocol does not support the session's launch identity"
+                        .to_owned(),
+                });
+                drop(tx);
+                let _ = writer_task.await;
+                return Ok(());
+            }
             if let Err(error) = broker.register_worker(WorkerRegistration {
                 session_id: session_id.clone(),
                 epoch: epoch.clone(),
@@ -3831,6 +4383,11 @@ fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
             session,
             command_id,
             ..
+        }
+        | CoreCommand::ReadmitAccountSession {
+            session,
+            command_id,
+            ..
         } => Some((session.session_id.clone(), command_id.clone())),
         CoreCommand::EnsureSession { session } => Some((
             session.session_id.clone(),
@@ -3872,6 +4429,11 @@ fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
         | CoreCommand::HibernateSession {
             session_id,
             command_id,
+        }
+        | CoreCommand::QuiesceAccountSession {
+            session_id,
+            command_id,
+            ..
         } => Some((session_id.clone(), command_id.clone())),
         CoreCommand::StopSession { .. }
         | CoreCommand::DrainSession { .. }
@@ -4032,8 +4594,12 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             // An exited agent keeps its worker process (and its launch) until
             // drained; only a live agent's Provider identity must match.
             let compatible = previous.iter().all(placed)
+                && previous
+                    .iter()
+                    .all(|old| old.provider_account_id == session.provider_account_id)
                 && worker.iter().all(|old| {
                     placed(old)
+                        && old.provider_account_id == session.provider_account_id
                         && (!worker_live
                             || (old.provider == session.provider
                                 && old.provider_version == session.provider_version
@@ -4333,13 +4899,39 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.arm_deleted_worker_unit_stop(&session_id);
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
+        CoreCommand::QuiesceAccountSession {
+            session_id,
+            command_id,
+            account_id,
+        } => {
+            broker
+                .quiesce_account_session(session_id, command_id, account_id)
+                .await;
+        }
+        CoreCommand::ReadmitAccountSession {
+            session,
+            binding,
+            command_id,
+        } => {
+            let session_id = session.session_id.clone();
+            let result = broker.readmit_account_session(*session, &binding).await;
+            broker.send_controller(Frame::CommandAck {
+                session_id,
+                command_id,
+                accepted: result.is_ok(),
+                reason: result.err().map(|error| error.to_string()),
+            });
+        }
         CoreCommand::SetDesiredGeneration {
             generation,
             worker_command,
         } => {
             broker.set_desired_generation(generation, worker_command);
         }
-        CoreCommand::RollProvider { provider } => broker.roll_provider(&provider),
+        CoreCommand::RollProvider {
+            provider,
+            account_id,
+        } => broker.roll_provider(&provider, account_id.as_ref()),
     }
 }
 
@@ -4705,6 +5297,7 @@ mod tests {
             provider: "claude-deepseek".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/work".to_owned(),
@@ -4843,6 +5436,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/tmp".to_owned(),
@@ -4921,6 +5515,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/tmp".to_owned(),
@@ -5124,6 +5719,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/tmp".to_owned(),
@@ -5271,6 +5867,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -5306,7 +5903,30 @@ mod tests {
             .snapshot
             .state = WorkerState::Running;
 
-        broker.roll_provider("codex");
+        let account =
+            crate::provider_account::ProviderAccountId::try_from(uuid::Uuid::new_v4().to_string())
+                .unwrap();
+        broker
+            .sessions
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .provider_account_id = account.clone();
+        broker.roll_provider(
+            "codex",
+            Some(&crate::provider_account::ProviderAccountId::default()),
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "legacy login must not recycle a named account"
+        );
+        let other = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        broker.roll_provider("codex", Some(&other));
+        assert!(
+            rx.try_recv().is_err(),
+            "another account must not recycle this worker"
+        );
+        broker.roll_provider("codex", Some(&account));
 
         assert!(matches!(
             rx.try_recv(),
@@ -5349,6 +5969,7 @@ mod tests {
                 provider: "claude-code".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -5387,7 +6008,7 @@ mod tests {
             .snapshot
             .state = WorkerState::Running;
 
-        broker.roll_provider("claude-code");
+        broker.roll_provider("claude-code", None);
         let peer = broker.workers.lock().remove("sess-1").expect("worker");
         broker
             .worker_disconnected("sess-1".to_owned(), peer, None)
@@ -5510,6 +6131,7 @@ mod tests {
                     provider: "codex".to_owned(),
                     provider_version: String::new(),
                     provider_generation_digest: String::new(),
+                    provider_account_id: crate::provider_account::ProviderAccountId::default(),
                     provider_auth_generation: None,
                     provider_behavior: None,
                     cwd: "/tmp".to_owned(),
@@ -5600,6 +6222,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/work".to_owned(),
@@ -5661,6 +6284,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/work".to_owned(),
@@ -5705,6 +6329,405 @@ mod tests {
             crashed.exit_detail.as_deref(),
             Some("Plugin requires install attempt reconciliation")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_quiesce_is_scoped_confirmed_and_preserves_the_session() {
+        let (mut broker, mut launch, _worker_rx) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        broker.args.provider_store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        launch.provider_account_id = account.clone();
+        launch.provider_version = "fixture-version".into();
+        launch.provider_generation_digest = "fixture-digest".into();
+        launch.provider_auth_generation = Some(1);
+        broker
+            .sessions
+            .lock()
+            .insert("sess-1".into(), launch.clone());
+        let broker = Arc::new(broker);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        while rx.try_recv().is_ok() {}
+        broker
+            .quiesce_account_session("sess-1".into(), "wrong".into(), Default::default())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(!broker.account_quiesced_sessions.lock().contains("sess-1"));
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-1".into(), u32::MAX);
+        broker
+            .quiesce_account_session("sess-1".into(), "uncertain".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert!(rx.try_recv().is_err());
+        // Even after the worker becomes idle, ordinary hibernation cannot
+        // forget its declaration or clear an account revocation fence.
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .snapshot
+            .state = WorkerState::Running;
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .snapshot
+            .current_turn_id = None;
+        broker
+            .hibernate_session("sess-1".into(), "hibernate".into())
+            .await;
+        assert!(matches!(rx.recv().await,
+            Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+                if reason.contains("account session is quiesced")));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        broker.direct_worker_pids.lock().remove("sess-1");
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .snapshot
+            .state = WorkerState::Busy;
+        // Account revocation may stop a busy worker without deleting it.
+        broker
+            .quiesce_account_session("sess-1".into(), "stop".into(), account.clone())
+            .await;
+        assert!(
+            matches!(rx.recv().await, Some(Frame::Snapshot { worker }) if worker.state == WorkerState::Exited && worker.agent_session_id.as_deref() == Some("agent-1") && worker.background_tasks.is_none())
+        );
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        // Even an unchanged Reset declaration cannot bypass the account fence.
+        broker.reset_session(launch.clone(), "reset".into()).await;
+        assert!(matches!(rx.recv().await,
+            Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+                if reason.contains("account session is quiesced")));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        broker
+            .quiesce_account_session("sess-1".into(), "retry".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(rx.try_recv().is_err());
+        let restarted = Arc::new(Broker::new(broker.args.clone()));
+        assert!(restarted.account_quiesced_sessions.lock().is_empty());
+        assert!(restarted.account_session_stopped("sess-1"));
+        assert!(restarted.spawn_and_wait_ready(&launch).await.is_err());
+        let (worker_tx, _) = mpsc::unbounded_channel();
+        assert!(
+            restarted
+                .register_worker(WorkerRegistration {
+                    session_id: "sess-1".into(),
+                    epoch: "old".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 2,
+                    tx: worker_tx,
+                })
+                .is_err()
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        restarted.install_controller(tx);
+        while rx.try_recv().is_ok() {}
+        restarted.ensure_session(launch.clone()).await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        restarted
+            .reset_session(launch, "reset-after-restart".into())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        restarted
+            .quiesce_account_session("sess-1".into(), "reconcile".into(), account)
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+                if reason.contains("ownership reconciliation")
+        ));
+    }
+
+    #[test]
+    fn exited_account_worker_cannot_register_without_a_new_launch() {
+        let (mut broker, _, _) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        broker.args.provider_store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let launch = broker
+            .args
+            .provider_store
+            .begin_account_worker("sess-1", &account)
+            .unwrap();
+        broker
+            .args
+            .provider_store
+            .record_account_worker_exit("sess-1", &account, launch)
+            .unwrap();
+        let (tx, _) = mpsc::unbounded_channel();
+        let result = broker.register_worker(WorkerRegistration {
+            session_id: "sess-1".into(),
+            epoch: "late".into(),
+            generation: "gen-1".into(),
+            executable: None,
+            fallback_for: None,
+            connection_id: 9,
+            tx,
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no live launch reservation")
+        );
+        assert_ne!(broker.workers.lock()["sess-1"].epoch, "late");
+    }
+
+    #[tokio::test]
+    async fn adoption_and_reset_cannot_replace_a_subscription() {
+        for retain_declaration in [false, true] {
+            let (broker, launch, mut worker_rx) = reconnecting_worker_fixture();
+            if retain_declaration {
+                broker
+                    .sessions
+                    .lock()
+                    .insert("sess-1".into(), launch.clone());
+                broker
+                    .workers
+                    .lock()
+                    .get_mut("sess-1")
+                    .unwrap()
+                    .snapshot
+                    .launch = None;
+            } else {
+                broker.sessions.lock().remove("sess-1");
+            }
+            let broker = Arc::new(broker);
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            broker.install_controller(tx);
+            while rx.try_recv().is_ok() {}
+            while worker_rx.try_recv().is_ok() {}
+            let mut replacement = launch.clone();
+            replacement.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+            broker.ensure_session(replacement.clone()).await;
+            assert!(matches!(rx.recv().await,
+                Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+                    if reason.contains("subscription cannot change")));
+            broker.reset_session(replacement, "reset".into()).await;
+            assert!(matches!(rx.recv().await,
+                Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+                    if reason.contains("subscription cannot change")));
+            assert!(broker.account_binding_matches(&launch));
+            assert!(broker.workers.lock().contains_key("sess-1"));
+            assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+            assert!(worker_rx.try_recv().is_err());
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_stop_recovery_retries_only_unconfirmed_stops_and_preserves_intent() {
+        let (mut broker, _, _) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        broker.args.provider_store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        broker.args.spawn_mode = SpawnMode::SystemdUser;
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        for session in ["stopped-a", "stopped-b"] {
+            broker
+                .args
+                .provider_store
+                .stop_account_session(session, &account)
+                .unwrap();
+        }
+        let broker = Arc::new(broker);
+        let stops = broker.args.provider_store.account_stops().unwrap();
+        let mut attempts = Vec::new();
+        recover_account_stops_with(Arc::clone(&broker), stops.clone(), |session| {
+            assert!(broker.cancelled_sessions.lock().contains(&session));
+            assert!(broker.account_session_stopped(&session));
+            attempts.push(session.clone());
+            std::future::ready(session != "stopped-a" || attempts.len() > 1)
+        })
+        .await;
+        assert_eq!(attempts, ["stopped-a", "stopped-b", "stopped-a"]);
+        assert_eq!(broker.args.provider_store.account_stops().unwrap(), stops);
+        // A substituted account is not authority to stop any process.
+        recover_account_stops_with(
+            Arc::clone(&broker),
+            vec![("stopped-a".into(), Default::default())],
+            |_| async {
+                panic!("invalid recovery evidence must have no process effect");
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_start_cleanup_fences_fallback_until_explicit_reconciliation() {
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-1".into(), u32::MAX);
+        assert!(!broker.force_recycle_failed_start("sess-1").await);
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        // The fallback path must fail before launching another native process,
+        // even when its caller discarded the cleanup result.
+        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        assert_eq!(
+            broker.direct_worker_pids.lock().get("sess-1"),
+            Some(&u32::MAX)
+        );
+        broker.direct_worker_pids.lock().remove("sess-1");
+        broker.direct_worker_trees.lock().insert("sess-1".into());
+        assert!(!broker.force_recycle_failed_start("sess-1").await);
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        broker.direct_worker_trees.lock().remove("sess-1");
+        assert!(broker.force_recycle_failed_start("sess-1").await);
+        assert!(!broker.workers.lock().contains_key("sess-1"));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn direct_stop_requires_durable_tree_exit_after_pid_map_loss() {
+        let (mut broker, _, _) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        broker.args.provider_store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let launch = broker
+            .args
+            .provider_store
+            .begin_account_worker("sess-1", &account)
+            .unwrap();
+        assert!(broker.direct_worker_pids.lock().is_empty());
+        assert!(broker.direct_worker_trees.lock().is_empty());
+        assert!(!broker.force_recycle_failed_start("sess-1").await);
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        broker
+            .args
+            .provider_store
+            .record_account_worker_exit("sess-1", &account, launch)
+            .unwrap();
+        assert!(broker.force_recycle_failed_start("sess-1").await);
+        assert!(!broker.workers.lock().contains_key("sess-1"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hibernation_retains_ownership_when_stop_is_unconfirmed() {
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut idle = broker.snapshots().into_iter().next().unwrap();
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+        broker.update_snapshot(idle, 1);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        while controller_rx.try_recv().is_ok() {}
+        // Outside the signed PID range: no real process can be signalled.
+        // Retain ownership to model a leader whose exit was never observed.
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-1".into(), u32::MAX);
+        broker
+            .hibernate_session("sess-1".into(), "unconfirmed".into())
+            .await;
+        let Some(Frame::CommandAck {
+            accepted, reason, ..
+        }) = controller_rx.recv().await
+        else {
+            panic!("an unconfirmed stop must not publish an Exited snapshot")
+        };
+        assert!(!accepted);
+        assert!(reason.unwrap().contains("unconfirmed"));
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(controller_rx.try_recv().is_err());
+        // Once ownership reconciliation observes exit, retry can finish.
+        broker.direct_worker_pids.lock().remove("sess-1");
+        broker
+            .hibernate_session("sess-1".into(), "retry".into())
+            .await;
+        assert!(
+            matches!(controller_rx.recv().await, Some(Frame::Snapshot { worker }) if worker.state == WorkerState::Exited)
+        );
+        assert!(matches!(
+            controller_rx.recv().await,
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
     }
 
     #[tokio::test]
@@ -6636,7 +7659,7 @@ mod tests {
 
     #[test]
     fn worker_snapshot_cannot_rewrite_declared_session_placement() {
-        for field in ["session_id", "provider", "cwd", "system"] {
+        for field in ["session_id", "provider", "account", "cwd", "system"] {
             let (broker, launch, mut rx) = reconnecting_worker_fixture();
             let original = broker.workers.lock()["sess-1"].snapshot.clone();
             let mut changed = original.clone();
@@ -6645,6 +7668,10 @@ mod tests {
             match field {
                 "session_id" => metadata.session_id = "other-session".into(),
                 "provider" => metadata.provider = "claude-code".into(),
+                "account" => {
+                    metadata.provider_account_id =
+                        uuid::Uuid::new_v4().to_string().try_into().unwrap()
+                }
                 "cwd" => metadata.cwd = "/other-worktree".into(),
                 "system" => metadata.system = true,
                 _ => unreachable!(),
@@ -6661,6 +7688,57 @@ mod tests {
                 "{field}"
             );
             assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })), "{field}");
+        }
+    }
+
+    #[test]
+    fn named_worker_snapshot_cannot_erase_or_replace_its_account() {
+        for keep_declaration in [false, true] {
+            for field in 0..6 {
+                let (broker, mut launch, mut rx) = reconnecting_worker_fixture();
+                launch.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+                broker
+                    .workers
+                    .lock()
+                    .get_mut("sess-1")
+                    .unwrap()
+                    .snapshot
+                    .launch = Some(launch.clone());
+                if keep_declaration {
+                    broker
+                        .sessions
+                        .lock()
+                        .insert("sess-1".into(), launch.clone());
+                    // Verify the declaration alone is enough too.
+                    broker
+                        .workers
+                        .lock()
+                        .get_mut("sess-1")
+                        .unwrap()
+                        .snapshot
+                        .launch = None;
+                } else {
+                    broker.sessions.lock().clear();
+                }
+                let original = broker.workers.lock()["sess-1"].snapshot.clone();
+                let mut changed = original.clone();
+                match field {
+                    0 => launch.provider_account_id = Default::default(),
+                    1 => launch.provider_version = "different".into(),
+                    2 => launch.provider_generation_digest = "different".into(),
+                    3 => launch.provider_auth_generation = Some(999),
+                    4 => launch.provider = "different".into(),
+                    _ => {}
+                }
+                changed.launch = (field != 5).then_some(launch);
+                assert!(!broker.update_snapshot(changed, 1));
+                assert_eq!(broker.workers.lock()["sess-1"].snapshot, original);
+                assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })));
+                assert_eq!(
+                    broker.sessions.lock().contains_key("sess-1"),
+                    keep_declaration
+                );
+            }
         }
     }
 
@@ -7219,6 +8297,7 @@ mod tests {
                     provider: provider.to_owned(),
                     provider_version: String::new(),
                     provider_generation_digest: String::new(),
+                    provider_account_id: crate::provider_account::ProviderAccountId::default(),
                     provider_auth_generation: None,
                     provider_behavior: None,
                     cwd: "/work".to_owned(),
@@ -7284,6 +8363,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7367,6 +8447,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7389,6 +8470,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7494,6 +8576,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/work".to_owned(),
@@ -7553,6 +8636,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7623,6 +8707,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7710,6 +8795,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7779,6 +8865,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7839,6 +8926,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: "/work".to_owned(),
@@ -7905,6 +8993,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: workspace.display().to_string(),
@@ -8069,6 +9158,60 @@ mod tests {
             .await
             .expect("broker peer task")
             .expect("broker peer result");
+    }
+
+    #[tokio::test]
+    async fn old_worker_cannot_acquire_named_subscription_session() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".into(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
+            worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
+        }));
+        let session: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "named", "provider": "claude-code", "cwd": "/work",
+            "generation": "gen-1", "provider_account_id": uuid::Uuid::new_v4().to_string()
+        }))
+        .unwrap();
+        broker.sessions.lock().insert("named".into(), session);
+        let (mut worker, peer) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(handle_peer(Arc::clone(&broker), peer));
+        write_frame(
+            &mut worker,
+            &Frame::Hello {
+                role: PeerRole::Worker,
+                min_protocol: 1,
+                max_protocol: 2,
+                build: "old-worker".into(),
+                session_id: Some("named".into()),
+                worker_epoch: Some("old".into()),
+                generation: Some("gen-1".into()),
+                executable: Some("/bin/false".into()),
+                fallback_for: None,
+            },
+        )
+        .await
+        .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(1), read_frame(&mut worker))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(response, Some(Frame::Reject { reason }) if reason.contains("launch identity"))
+        );
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(broker.workers.lock().is_empty());
+        assert!(broker.replacing.lock().is_empty());
+        assert!(broker.sessions.lock().contains_key("named"));
     }
 
     #[tokio::test]
@@ -8315,6 +9458,7 @@ mod tests {
             provider: "codex".to_owned(),
             provider_version: String::new(),
             provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
             provider_auth_generation: None,
             provider_behavior: None,
             cwd: "/tmp".to_owned(),
@@ -8481,6 +9625,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: workspace.display().to_string(),
@@ -8564,6 +9709,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: workspace.display().to_string(),
@@ -8710,6 +9856,7 @@ mod tests {
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
                 provider_generation_digest: String::new(),
+                provider_account_id: crate::provider_account::ProviderAccountId::default(),
                 provider_auth_generation: None,
                 provider_behavior: None,
                 cwd: cwd.display().to_string(),
@@ -9015,6 +10162,7 @@ mod tests {
                     provider: "codex".to_owned(),
                     provider_version: String::new(),
                     provider_generation_digest: String::new(),
+                    provider_account_id: crate::provider_account::ProviderAccountId::default(),
                     provider_auth_generation: None,
                     provider_behavior: None,
                     cwd: "/work".to_owned(),
