@@ -1101,6 +1101,10 @@ function CompactingWidget({
   );
 }
 
+function toolStatusLabel(status: string): string {
+  return status === "completed" ? "Done" : status;
+}
+
 function toolColor(
   status: string,
 ): "default" | "success" | "error" | "warning" {
@@ -1760,7 +1764,7 @@ function ToolCard({
         <Chip
           size="small"
           color={toolColor(item.status)}
-          label={item.status}
+          label={toolStatusLabel(item.status)}
           variant="outlined"
         />
         {hasDetail && (
@@ -2379,7 +2383,7 @@ export function ToolDetailsBrowser({
                           : "text.disabled",
                       }}
                     >
-                      {tool.status === "in_progress" ? "running" : tool.status}
+                      {tool.status === "in_progress" ? "running" : toolStatusLabel(tool.status)}
                     </Typography>
                   </ButtonBase>
                 );
@@ -2406,7 +2410,7 @@ export function ToolDetailsBrowser({
           <Chip
             size="small"
             color={toolColor(item.status)}
-            label={item.status}
+            label={toolStatusLabel(item.status)}
             variant="outlined"
             sx={{ flexShrink: 0 }}
           />
