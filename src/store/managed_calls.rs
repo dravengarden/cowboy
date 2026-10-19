@@ -634,6 +634,14 @@ mod tests {
                 .call_id,
             overlapping_record.call_id
         );
+        assert_clear_and_retention(store, first, overlapping_record).await;
+    }
+
+    async fn assert_clear_and_retention(
+        store: &Store,
+        first: &Record,
+        overlapping_record: &Record,
+    ) {
         let counts = store.managed_call_counts("parent-1").await.unwrap();
         let other_parent = store.managed_calls("parent-2", None).await.unwrap().len();
         store.clear_events("parent-1", 100).await.unwrap();
