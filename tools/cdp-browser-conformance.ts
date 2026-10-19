@@ -30,7 +30,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 11],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
-  "dormant-session": ["runDormantSessionBrowserConformance", 18],
+  "dormant-session": ["runDormantSessionBrowserConformance", 21],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

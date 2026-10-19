@@ -554,6 +554,22 @@ export async function runDormantSessionBrowserConformance(
           ) === "false",
       "settings can return to the compact summary after editing",
     );
+    for (const height of [800, 400, 800]) {
+      container.style.height = `${height}px`;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const empty = container.querySelector<HTMLElement>(
+        "[data-conversation-empty-state]",
+      )!;
+      const settings = empty.querySelector<HTMLElement>(
+        "[data-session-start-settings]",
+      )!;
+      check(
+        empty.getBoundingClientRect().bottom -
+            settings.getBoundingClientRect().bottom < 32,
+        `mobile start settings stay near the composer at height ${height}`,
+      );
+    }
+    container.style.height = "700px";
     desktop = true;
     flushSync(() => root.render(<Fixture key="desktop" />));
     openSessionSettings("agent", "another-session");

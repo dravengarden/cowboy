@@ -663,6 +663,7 @@ function ConversationEmptyState({
   preparing,
   sleeping = false,
   context,
+  desktop,
 }: {
   sessionId: string;
   kind: ConversationEmptyKind;
@@ -673,6 +674,7 @@ function ConversationEmptyState({
   preparing: boolean;
   sleeping?: boolean;
   context: ConversationEmptyContext;
+  desktop: boolean;
 }): React.JSX.Element {
   const agent = providerPresentation(
     context.provider,
@@ -749,14 +751,17 @@ function ConversationEmptyState({
         focusPrimaryComposer();
       }}
       sx={{
-        flex: "1 1 0 !important",
-        minHeight: 220,
+        // The reversed transcript anchors an intrinsic touch card above the
+        // composer. Filling and centering it leaves a large gap when the
+        // keyboard closes, and creates a second scroll owner on short screens.
+        flex: desktop ? "1 1 0 !important" : "0 0 auto !important",
+        minHeight: desktop ? 220 : 0,
         width: "100%",
         px: { xs: 2.5, sm: 3 },
         py: { xs: 2, sm: 3 },
         alignItems: "center",
         justifyContent: "safe center",
-        overflowY: "auto",
+        overflowY: desktop ? "auto" : "visible",
         overscrollBehavior: "contain",
         "& > *": { flexShrink: 0 },
         textAlign: "center",
@@ -5621,6 +5626,7 @@ export function Transcript({
               kind="preparing"
               preparing
               context={conversationContext}
+              desktop={desktopNavigation}
             />
           )
           : blockingTranscriptRestore
@@ -5641,6 +5647,7 @@ export function Transcript({
               preparing={emptyPresentation.preparing}
               sleeping={status === "exited"}
               context={conversationContext}
+              desktop={desktopNavigation}
             />
           )
           : (
