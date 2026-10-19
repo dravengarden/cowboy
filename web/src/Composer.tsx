@@ -55,6 +55,7 @@ import {
 } from "@mui/material";
 import {
   AlternateEmail,
+  ArrowUpward,
   AttachFile,
   Bolt,
   Check,
@@ -436,6 +437,24 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
+// A single hit target with a stable footprint in either delivery state.
+const MOBILE_SEND_BTN = {
+  ...TOOLBAR_ICON_BTN,
+  width: 48,
+  height: 40,
+  p: 0,
+  gap: "2px",
+  borderRadius: "12px",
+  "& .MuiSvgIcon-root": { fontSize: 20 },
+  "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: 14 },
+  bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.12),
+  "&:hover": {
+    bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.2),
+  },
+  "&.Mui-disabled": {
+    bgcolor: (theme: Theme) => alpha(theme.palette.action.disabled, 0.06),
+  },
+} as const;
 // Why an agent-backed toolbar action is greyed out while the session boots. The
 // button keeps its slot (no reflow on the ready edge); this explains the state
 // instead of leaving a silently dead control.
@@ -3009,7 +3028,7 @@ export function ComposerWorkspace({
                           disabled={!sendable || submitFeedback.pending}
                           aria-busy={submitFeedback.pending || undefined}
                           sx={{
-                            ...TOOLBAR_ICON_BTN,
+                            ...MOBILE_SEND_BTN,
                             transition: "transform .12s",
                             ...(holding && { transform: "scale(1.12)" }),
                           }}
@@ -3022,10 +3041,10 @@ export function ComposerWorkspace({
                         >
                           {submitFeedback.progress
                             ? <CircularProgress size={desktopSize(18)} color="inherit" />
-                            : <Box sx={{ display: "inline-flex", position: "relative" }}>
-                              <Send fontSize="small" />
-                              {busy && <ExpandMore sx={{ fontSize: 12, position: "absolute", right: -7, bottom: -3 }} />}
-                            </Box>}
+                            : <>
+                              <ArrowUpward sx={{ fontSize: 20 }} />
+                              {busy && <ExpandMore sx={{ fontSize: 14 }} />}
+                            </>}
                         </IconButton>
                         {holding && (
                           <Box
@@ -3071,7 +3090,7 @@ export function ComposerWorkspace({
                             aria-label="send"
                             disabled={!sendable || submitFeedback.pending}
                             aria-busy={submitFeedback.pending || undefined}
-                            sx={TOOLBAR_ICON_BTN}
+                            sx={MOBILE_SEND_BTN}
                             // Keep the native textarea as UIKit's first responder, and
                             // commit stationary touch on pointerup when iOS omits the
                             // trailing synthetic click after stopping scroll momentum.
@@ -3086,7 +3105,7 @@ export function ComposerWorkspace({
                           >
                             {submitFeedback.progress
                               ? <CircularProgress size={desktopSize(18)} color="inherit" />
-                              : <Send fontSize="small" />}
+                              : <ArrowUpward sx={{ fontSize: 20 }} />}
                           </IconButton>
                         </span>
                       </Tooltip>
