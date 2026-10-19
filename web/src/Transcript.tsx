@@ -1107,7 +1107,9 @@ function CompactingWidget({
 }
 
 function toolStatusLabel(status: string): string {
-  return status === "completed" ? "Done" : status;
+  if (status === "completed") return "Done";
+  if (status === "in_progress") return "Doing";
+  return status;
 }
 
 function toolColor(
@@ -2388,7 +2390,7 @@ export function ToolDetailsBrowser({
                           : "text.disabled",
                       }}
                     >
-                      {tool.status === "in_progress" ? "running" : toolStatusLabel(tool.status)}
+                      {toolStatusLabel(tool.status)}
                     </Typography>
                   </ButtonBase>
                 );
