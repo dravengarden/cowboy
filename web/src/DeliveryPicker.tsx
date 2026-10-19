@@ -167,8 +167,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             ? "Checking active turn…"
             : !target
             ? "Active turn unavailable"
-            : preferred === "checkpoint" && !checkpoint
-            ? "Default checkpoint mode unavailable · choose another mode"
+            : (preferred === "checkpoint" && !checkpoint) || (preferred === "steer" && !steer)
+            ? "Default mode unavailable · choose another mode"
             : "Choose delivery timing")}
         </Typography>
       </Box>
@@ -207,7 +207,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             primary={props.paused
               ? "Next checkpoint · once"
               : "Next checkpoint"}
-            secondary="After foreground tools finish; otherwise at turn end"
+            secondary="After foreground tools finish; otherwise after generation"
           />
         </MenuItem>
       )}

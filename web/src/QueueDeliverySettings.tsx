@@ -79,7 +79,7 @@ export function QueueDeliverySettings(
       {options?.policy.mode === "tool_boundary" && (
         <Typography variant="caption" color="text.secondary" display="block">
           {options.controls.next_checkpoint
-            ? "Consume after foreground tools finish, or at turn end if no tool boundary remains."
+            ? "Consume after foreground tools finish, or after generation if no tool boundary remains."
             : "The current worker does not expose a distinct native queue priority. Next turn remains available."}
         </Typography>
       )}
