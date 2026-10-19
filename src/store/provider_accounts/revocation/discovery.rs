@@ -3,6 +3,30 @@ use crate::store::provider_accounts::{Receipt, Registry};
 use crate::store::{StorageBackend, Store};
 use anyhow::Result;
 
+#[derive(Debug)]
+pub(crate) enum LookupError {
+    AccountNotFound,
+    AmbiguousPlan,
+    ScopeMismatch,
+}
+
+impl LookupError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::AccountNotFound => "account_not_found",
+            Self::AmbiguousPlan => "revocation_plan_ambiguous",
+            Self::ScopeMismatch => "revocation_scope_mismatch",
+        }
+    }
+}
+
+impl std::fmt::Display for LookupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+impl std::error::Error for LookupError {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Cursor {
     pub owner: String,
@@ -23,14 +47,15 @@ impl Store {
         owner: &str,
         account: &crate::provider_account::ProviderAccountId,
     ) -> Result<Option<(String, Receipt)>> {
-        anyhow::ensure!(
-            self.provider_accounts(owner)
-                .await?
-                .accounts
-                .iter()
-                .any(|a| &a.id == account),
-            "account_unavailable"
-        );
+        if !self
+            .provider_accounts(owner)
+            .await?
+            .accounts
+            .iter()
+            .any(|a| &a.id == account)
+        {
+            return Err(LookupError::AccountNotFound.into());
+        }
         macro_rules! read { ($db:expr, $scope:literal, $plan:literal) => {
             sqlx::query_as::<_, (String, String)>(concat!(
                 "SELECT operation_id,result FROM provider_account_operations WHERE owner_user_id=$1 AND ",
@@ -49,14 +74,15 @@ impl Store {
                 "json_type(result, '$.revocation') IS NOT NULL AND json_type(result, '$.revocation') <> 'null'"
             ),
         };
-        anyhow::ensure!(rows.len() <= 1, "revocation_plan_ambiguous");
+        if rows.len() > 1 {
+            return Err(LookupError::AmbiguousPlan.into());
+        }
         rows.pop()
             .map(|(operation, value)| {
                 let receipt: Receipt = serde_json::from_str(&value)?;
-                anyhow::ensure!(
-                    &receipt.account_id == account && receipt.revocation.is_some(),
-                    "revocation_scope_mismatch"
-                );
+                if &receipt.account_id != account || receipt.revocation.is_none() {
+                    return Err(LookupError::ScopeMismatch.into());
+                }
                 Ok((operation, receipt))
             })
             .transpose()

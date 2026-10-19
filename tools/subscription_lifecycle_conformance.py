@@ -19,6 +19,10 @@ def run(call, require, checks):
     account = first["account_id"]
     path = f"/api/provider-accounts/{account}/revocation"
     body = {"operation": "account-revoke", "dataset": dataset, "expected_revision": second["revision"]}
+    absent = "/api/provider-accounts/00000000-0000-0000-0000-000000000001/revocation"
+    for method, route, payload in [("GET", absent, None), ("POST", absent + "/reconcile", {"dataset": dataset})]:
+        status, result = call(method, route, payload)
+        require(status == 409 and result["error"]["code"] == "account_not_found", "missing account was treated as transient failure")
     require(call("POST", path, body, anonymous=True)[0] in (401, 403), "anonymous revocation admitted")
     require(call("POST", path, {**body, "dataset": "wrong"})[0] == 409, "wrong dataset admitted")
     require(call("POST", path, {**body, "expected_revision": 0})[0] == 409, "stale revocation admitted")
@@ -28,6 +32,7 @@ def run(call, require, checks):
         "metadata writer accepted an internal lifecycle variant")
     status, committed = call("POST", path, body)
     require(status == 200 and committed["status"] == "revoking", "revocation intent not committed")
+    require(committed["completion_state"] == "unconfirmed" and "completion" not in committed, "receipt overloaded cleanup inventory")
     require(call("POST", path, body)[1] == committed, "same operation did not replay the original receipt")
     require(call("POST", path, {**body, "operation": "duplicate", "expected_revision": committed["revision"]})[0] == 409,
         "a second operation replaced the original revocation plan")

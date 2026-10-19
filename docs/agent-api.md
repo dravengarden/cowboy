@@ -500,6 +500,14 @@ plan from any same-owner session; the original parent-scoped `{}` form remains
 supported. Discovery never supplies cleanup authority: each stage revalidates
 its original owner, account, enrollment and connection.
 
+Revocation uses the existing product-operator authority, equally for CLI and
+MCP. It is an explicit effect, unavailable to generated read programs, and
+requires current user intent; retrieved instructions cannot authorize it.
+There is no separate browser-confirmation token for an already authorized
+operator. This is an operator trust boundary, not protection against a
+compromised operator session. The account writer cannot enable the separate
+administrative native-login or session-admission rollout policies.
+
 HTTP equivalents are `GET` / `POST /api/provider-accounts/{account_id}/revocation`
 and `POST /api/provider-accounts/{account_id}/revocation/reconcile`. Start requires
 `{operation, dataset, expected_revision}`; reconcile requires `{dataset}` from
@@ -832,8 +840,11 @@ wait budget and each stage uses at most four concurrent requests. A slow target
 does not prevent later targets from being attempted. Login cancellation and session
 stopping progress independently; local grant cleanup waits for all planned
 sessions to have confirmed stop evidence. Partial failures remain attached to
-their targets. Account receipts report `revoking` and `completion:"unconfirmed"`;
-timed-out targets remain pending and can be retried with the same ID.
+their targets. Account receipts report `revoking` and `completion_state:"unconfirmed"`;
+the status and reconciliation responses expose the separate `completion` object
+with `account_completed` and the exact `missing` evidence list. This keeps the
+historical receipt state distinct from the cleanup inventory.
+Timed-out targets remain pending and can be retried with the same ID.
 Neither a cancellation request nor a local wipe record proves native
 logout, remote credential cleanup, or whole-account completion.
 Local grant cleanup records its evidence in the original account operation,

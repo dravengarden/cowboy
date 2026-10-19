@@ -634,11 +634,13 @@ mod tests {
             .unwrap();
         assert_eq!(original_operation, "revoke");
         assert_eq!(&original_receipt.registry, registry);
-        assert!(
+        assert_eq!(
             store
                 .provider_account_revocation("another-owner", id)
                 .await
-                .is_err()
+                .unwrap_err()
+                .to_string(),
+            "account_not_found"
         );
     }
 

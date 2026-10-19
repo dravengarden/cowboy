@@ -58,8 +58,14 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
   }, [key, dataset]);
   async function read() {
     const response = await fetch(path, { cache: "no-store", signal: productSessionSignal() });
-    if (!response.ok) throw new Error("Could not read cleanup status.");
-    const value = revocationProgress(await response.json(), account);
+    const body: unknown = await response.json();
+    if (!response.ok) {
+      if (current()) setProgress(undefined);
+      const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
+      throw new Error(code === "account_not_found" ? "This account is no longer available. Reopen subscriptions." :
+        code === "revocation_plan_ambiguous" ? "Cleanup has conflicting plans and requires repair." : "Could not read cleanup status.");
+    }
+    const value = revocationProgress(body, account);
     if (current()) { setProgress(value); if (value.status !== "not_started") onChange(); }
   }
   async function run(action: "read" | "start" | "resume") {
@@ -80,10 +86,13 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
         const value = await response.json() as { error?: { code?: string }; account_id?: string; status?: string };
         if (!current()) return;
         if (!response.ok) {
-          if (action === "start" && response.status === 409 && value.error?.code === "revision_conflict") {
+          if (action === "start" && response.status === 409 && ["revision_conflict", "account_revoking", "account_not_found"].includes(value.error?.code ?? "")) {
             sessionStorage.removeItem(key); setPending(undefined); onChange();
+            await read();
+            if (value.error?.code === "account_revoking") return;
             throw new Error("Subscriptions changed. Review the refreshed list and confirm again.");
           }
+          await read();
           throw new Error("Cleanup is not confirmed. Check status or retry the same operation.");
         }
         if (action === "start") {

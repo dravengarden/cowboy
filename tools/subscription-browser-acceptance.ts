@@ -98,7 +98,7 @@ try {
     }
   }
   const result = await page.report;
-  if (!result.ok || result.tests?.length !== 34) {
+  if (!result.ok || result.tests?.length !== 36) {
     throw new Error(JSON.stringify(result));
   }
   console.log(

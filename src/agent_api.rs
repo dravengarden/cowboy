@@ -109,7 +109,7 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Explicit migration: cowboy_execute({action:"accounts.transition_reconcile",operation,arguments:{}}).
 // Stops the original worker and replaces its binding; never starts a worker. Same operation on every retry.
 // Query transition_status after uncertainty. unconfirmed/not_admitted do not undo already committed stages.
-// Read: await cowboy.accounts.list() -> {registry:{revision,accounts:[{id,provider_id,label,enabled}],defaults},session_admission}.
+// Read: await cowboy.accounts.list() -> {registry:{revision,accounts:[{id,provider_id,label,enabled,revoking}],defaults},session_admission}.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
 // Readiness is a snapshot, not permission or proof of login; start rechecks admission.
@@ -138,6 +138,7 @@ export type AccountChange =
 // Fences new access and stops/cleans this account on all Machines; never cancels the vendor subscription.
 // Reuse the original operation/input after uncertainty. Metadata update cannot start revocation.
 // Read accounts.revocation_status(account_id) for durable completion and exact missing evidence.
+// Start/replay receipts expose historical completion_state; status/reconcile add the completion object.
 // Resume from any same-owner session: accounts.reconcile {account_id}; it locates the original plan.
 // Retry an existing parent-scoped revocation: cowboy_execute({action:"accounts.reconcile",operation,arguments:{}}).
 // Use its ORIGINAL operation in the SAME parent session. Each remote target has a 2s cooperative wait budget.

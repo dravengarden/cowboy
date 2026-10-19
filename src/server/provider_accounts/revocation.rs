@@ -430,7 +430,7 @@ mod tests {
             .unwrap();
         let value = super::super::receipt_value(&receipt);
         assert_eq!(value["status"], "revoking");
-        assert_eq!(value["completion"], "unconfirmed");
+        assert_eq!(value["completion_state"], "unconfirmed");
         assert!(
             pass::run(
                 &store,

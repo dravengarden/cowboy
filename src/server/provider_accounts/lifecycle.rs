@@ -3,6 +3,13 @@ use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::store::provider_accounts::Change;
 
+fn lookup_error(error: anyhow::Error) -> &'static str {
+    use crate::store::provider_accounts::revocation::discovery::LookupError;
+    error
+        .downcast_ref::<LookupError>()
+        .map_or("unavailable", LookupError::code)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct Revoke {
@@ -39,7 +46,7 @@ pub(in crate::server) async fn status(
     let Some((operation, receipt)) = store
         .provider_account_revocation(owner, account)
         .await
-        .map_err(|_| "unavailable")?
+        .map_err(lookup_error)?
     else {
         return Ok(json!({"status":"not_started", "account_id":account}));
     };
@@ -65,7 +72,7 @@ pub(in crate::server) async fn resume(
         .ok_or("unavailable")?
         .provider_account_revocation(owner, account)
         .await
-        .map_err(|_| "unavailable")?
+        .map_err(lookup_error)?
         .ok_or("revocation_operation_missing")?;
     // This locator conveys no dispatch authority. Every stage rechecks the
     // immutable plan, owner, enrollment and current connection itself.
@@ -163,4 +170,29 @@ pub(in crate::server) async fn http_resume(
         return response(Err("dataset_changed"));
     }
     response(resume(&state, &auth.principal.user_id, &account).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::provider_accounts::revocation::discovery::LookupError;
+
+    #[test]
+    fn scope_failures_are_definitive_without_exposing_database_errors() {
+        for error in [
+            LookupError::AccountNotFound,
+            LookupError::AmbiguousPlan,
+            LookupError::ScopeMismatch,
+        ] {
+            let code = error.code();
+            assert_eq!(lookup_error(error.into()), code);
+            assert_eq!(response(Err(code)).status(), StatusCode::CONFLICT);
+        }
+        let code = lookup_error(anyhow::anyhow!("private database connection details"));
+        assert_eq!(code, "unavailable");
+        assert_eq!(
+            response(Err(code)).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }

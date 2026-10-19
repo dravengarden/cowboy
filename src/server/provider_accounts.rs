@@ -42,7 +42,7 @@ pub(super) fn receipt_value(receipt: &crate::store::provider_accounts::Receipt) 
     if let Some(plan) = &receipt.revocation {
         return json!({"status":if receipt.revocation_completed { "completed" } else { "revoking" },"revision":receipt.registry.revision,"account_id":receipt.account_id,
             "planned":{"logins":plan.logins.len(),"sessions":plan.sessions.len(),"grants":plan.grants.len()},
-            "completion":if receipt.revocation_completed { "completed" } else { "unconfirmed" }});
+            "completion_state":if receipt.revocation_completed { "completed" } else { "unconfirmed" }});
     }
     json!({"status":"committed","revision":receipt.registry.revision,"account_id":receipt.account_id})
 }
@@ -237,12 +237,13 @@ mod tests {
         };
         // An empty plan or a disabled account alone does not imply completion.
         assert_eq!(receipt_value(&receipt)["status"], "revoking");
-        assert_eq!(receipt_value(&receipt)["completion"], "unconfirmed");
+        assert_eq!(receipt_value(&receipt)["completion_state"], "unconfirmed");
+        assert!(receipt_value(&receipt).get("completion").is_none());
         receipt.revocation_completed = true;
         let restored: Receipt =
             serde_json::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
         assert_eq!(receipt_value(&restored)["status"], "completed");
-        assert_eq!(receipt_value(&restored)["completion"], "completed");
+        assert_eq!(receipt_value(&restored)["completion_state"], "completed");
         assert_eq!(
             receipt_value(&restored)["planned"],
             json!({"logins":0,"sessions":0,"grants":0})

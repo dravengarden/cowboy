@@ -38,6 +38,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   const revokeKey = "cowboy:subscription-revocation:subscription-fixture:account";
   sessionStorage.removeItem(loginKey); sessionStorage.removeItem(revokeKey);
   let cleanup = false;
+  let conflict = false;
   let reject = false;
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
@@ -48,6 +49,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
           data.registry.accounts[0]!.revoking = true;
           data.registry.accounts[0]!.enabled = false;
           data.registry.revision++;
+          if (conflict) return Response.json({ error: { code: "account_revoking" } }, { status: 409 });
           throw new Error("revocation committed but reply lost");
         }
         cleanup = true;
@@ -147,6 +149,18 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => document.body.textContent!.includes("Cowboy cleanup is confirmed"));
     check(lifecycleWrites.filter((path) => path.endsWith("/revocation")).length === 1, "cleanup retry never creates another revocation plan");
     check(button("Revoked access")!.disabled, "completed revocation cannot be cleared by metadata enablement");
+    // Fresh fixture epoch: another device commits between status and start.
+    root.unmount(); root = createRoot(container);
+    sessionStorage.removeItem(revokeKey);
+    cleanup = false; conflict = true;
+    data.registry.accounts[0]!.revoking = false; data.registry.accounts[0]!.enabled = true; data.registry.revision++;
+    render();
+    await until(() => Boolean(button("Revoke access…") && !button("Revoke access…")!.disabled));
+    button("Revoke access…")!.click();
+    await until(() => Boolean(dialogButton("Revoke on all Machines") && !dialogButton("Revoke on all Machines")!.disabled));
+    dialogButton("Revoke on all Machines")!.click();
+    await until(() => document.body.textContent!.includes("offline-machine") && Boolean(dialogButton("Retry pending cleanup")));
+    check(!sessionStorage.getItem(revokeKey) && !dialogButton("Retry same revocation"), "concurrent revocation adopts the original cleanup without retrying a rejected plan");
     return tests;
   } finally { root.unmount(); container.remove(); for (const item of [key, loginKey, revokeKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
 }
