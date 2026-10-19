@@ -14,6 +14,29 @@ pub struct AccountArgs {
 enum AccountCommand {
     /// List this operator's subscriptions and registry revision.
     List,
+    /// Permanently revoke this Cowboy account on all Machines. Does not cancel billing.
+    Revoke {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        #[arg(long)]
+        operation: String,
+        #[arg(long)]
+        dataset: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Observe the original revocation, including offline targets, from any device.
+    Revocation {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+    },
+    /// Retry only missing cleanup stages from the original revocation plan.
+    Reconcile {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        #[arg(long)]
+        dataset: String,
+    },
     /// Apply one metadata change from stdin; use dataset/revision from `account list`.
     /// Reuse operation, revision, dataset and identical input after uncertainty.
     Update {
@@ -129,6 +152,50 @@ async fn execute(
     input: impl std::io::Read,
 ) -> Result<String> {
     match command {
+        AccountCommand::Revoke {
+            account,
+            operation,
+            dataset,
+            expected_revision,
+        } => {
+            ensure!(
+                crate::managed_calls::valid_id(&operation)
+                    && !matches!(operation.as_str(), "." | ".."),
+                "invalid revocation operation ID"
+            );
+            ensure!(
+                !account.is_default() && !dataset.is_empty() && expected_revision >= 0,
+                "named account, dataset and nonnegative revision are required"
+            );
+            client.expect(Method::POST, &format!("/api/provider-accounts/{}/revocation", account.as_str()),
+                Some(&json!({"operation":operation,"dataset":dataset,"expected_revision":expected_revision}))).await
+        }
+        AccountCommand::Revocation { account } => {
+            ensure!(!account.is_default(), "named account is required");
+            client
+                .expect(
+                    Method::GET,
+                    &format!("/api/provider-accounts/{}/revocation", account.as_str()),
+                    None,
+                )
+                .await
+        }
+        AccountCommand::Reconcile { account, dataset } => {
+            ensure!(
+                !account.is_default() && !dataset.is_empty(),
+                "named account and dataset are required"
+            );
+            client
+                .expect(
+                    Method::POST,
+                    &format!(
+                        "/api/provider-accounts/{}/revocation/reconcile",
+                        account.as_str()
+                    ),
+                    Some(&json!({"dataset":dataset})),
+                )
+                .await
+        }
         AccountCommand::List => {
             client
                 .expect(Method::GET, "/api/provider-accounts", None)

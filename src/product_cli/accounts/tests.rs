@@ -3,6 +3,90 @@ use clap::Parser;
 
 const ACCOUNT: &str = "11111111-1111-4111-8111-111111111111";
 
+#[tokio::test]
+async fn revocation_cli_keeps_owner_routes_and_does_not_retry_unknown_writes() {
+    use axum::{Json, Router, extract::State, routing::get};
+    use std::sync::{Arc, Mutex};
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    type Calls = Arc<Mutex<Vec<(String, Value)>>>;
+    let calls: Calls = Default::default();
+    let route = format!("/api/provider-accounts/{ACCOUNT}/revocation");
+    let app = Router::new()
+        .route(
+            &route,
+            get(|State(calls): State<Calls>| async move {
+                calls.lock().unwrap().push(("status".into(), Value::Null));
+                Json(json!({"status":"revoking"}))
+            })
+            .post(
+                |State(calls): State<Calls>, Json(body): Json<Value>| async move {
+                    calls.lock().unwrap().push(("revoke".into(), body));
+                    (StatusCode::SERVICE_UNAVAILABLE, "outcome unknown")
+                },
+            ),
+        )
+        .route(
+            &format!("{route}/reconcile"),
+            axum::routing::post(
+                |State(calls): State<Calls>, Json(body): Json<Value>| async move {
+                    calls.lock().unwrap().push(("resume".into(), body));
+                    Json(json!({"status":"revoking"}))
+                },
+            ),
+        )
+        .with_state(calls.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = Client::fixture(
+        Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap(),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    assert!(
+        execute(
+            &client,
+            AccountCommand::Revoke {
+                account: parse_account(ACCOUNT).unwrap(),
+                operation: "revoke-original".into(),
+                dataset: "dataset".into(),
+                expected_revision: 7,
+            },
+            std::io::empty()
+        )
+        .await
+        .is_err()
+    );
+    execute(
+        &client,
+        AccountCommand::Revocation {
+            account: parse_account(ACCOUNT).unwrap(),
+        },
+        std::io::empty(),
+    )
+    .await
+    .unwrap();
+    execute(
+        &client,
+        AccountCommand::Reconcile {
+            account: parse_account(ACCOUNT).unwrap(),
+            dataset: "dataset".into(),
+        },
+        std::io::empty(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            (
+                "revoke".into(),
+                json!({"operation":"revoke-original","dataset":"dataset","expected_revision":7})
+            ),
+            ("status".into(), Value::Null),
+            ("resume".into(), json!({"dataset":"dataset"})),
+        ]
+    );
+    server.abort();
+}
+
 #[test]
 fn metadata_input_cannot_set_identity_or_accept_credentials() {
     assert!(

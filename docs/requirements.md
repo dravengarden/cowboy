@@ -622,13 +622,20 @@ management or native-login UI.
 
 Remaining release acceptance is explicit: first-party native identity recipes
 and independent refresh lineage need exact-native validation; same-boot orphan
-termination needs confirmed process ownership; account revocation needs complete
-worker/grant cleanup receipts; native login UI and MCP login lifecycle parity
-remain to be completed. The shared mobile/desktop Settings panel now manages
+termination needs confirmed process ownership; account revocation needs real
+worker/grant cleanup acceptance. The shared mobile/desktop Settings panel manages
 account metadata, enablement and defaults through the DB writer. It preserves
 uncertain writes across panel remounts and tab reloads, refreshes on account
 preference notifications, and keeps named defaults unavailable while admission
-is closed. This is metadata management, not native login acceptance.
+is closed. Native sign-in now has an explicit Machine picker, official browser
+authorization, ephemeral code input, status recovery and cancellation. Only
+operation metadata is retained in tab storage; an uncertain reply never creates
+a new login automatically. CLI and MCP use the same owner-scoped lifecycle.
+Revocation has a separate explicit confirmation and typed HTTP/CLI/MCP entry;
+it cannot be invoked through the metadata writer. Its immutable plan and
+pending-target inventory can be observed and resumed from another device or
+same-owner session. A second operation cannot replace an existing plan. These
+interfaces do not establish native login or process cleanup acceptance.
 Public named-session admission
 must remain closed until those requirements pass. Synthetic tests and a passing
 repository gate alone do not authorize enabling the unfinished runtime path.

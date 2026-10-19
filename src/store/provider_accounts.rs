@@ -67,7 +67,6 @@ pub(crate) struct Mutation {
 pub(crate) enum Change {
     /// Internal lifecycle entry. Public metadata edits cannot start or clear it.
     #[serde(skip_deserializing)]
-    #[allow(dead_code, reason = "account lifecycle orchestration remains gated")]
     BeginRevocation {
         id: ProviderAccountId,
     },
@@ -396,6 +395,12 @@ impl Store {
                 .bind(owner).fetch_one(&mut *tx).await?;
             let mut registry: Registry = serde_json::from_str(&value)?;
             if registry.revision != input.expected_revision { return Ok(MutationResult::Conflict(registry)); }
+            // Replay of the original operation returned above. A new ID must
+            // not capture another plan or compete for native logout ownership.
+            if let Change::BeginRevocation { id } = &input.change
+                && registry.accounts.iter().any(|account| &account.id == id && account.revoking) {
+                return Ok(MutationResult::Invalid("account_revoking"));
+            }
             let account_id = match registry.apply(&input.change) {
                 Ok(id) => id, Err(code) => return Ok(MutationResult::Invalid(code)),
             };
@@ -573,17 +578,7 @@ mod tests {
                 .unwrap(),
             MutationResult::Invalid("account_revoking")
         );
-        let repeat = Mutation {
-            expected_revision: 3,
-            ..input
-        };
-        assert!(matches!(
-            store
-                .mutate_provider_accounts(owner, "revoke-again", &repeat)
-                .await
-                .unwrap(),
-            MutationResult::Applied(_)
-        ));
+        assert_original_revocation(store, owner, &id, &registry, input).await;
         assert_eq!(store.provider_accounts(owner).await.unwrap(), registry);
         assert_eq!(
             store
@@ -612,6 +607,39 @@ mod tests {
                 .is_err()
         );
         registry
+    }
+
+    async fn assert_original_revocation(
+        store: &Store,
+        owner: &str,
+        id: &ProviderAccountId,
+        registry: &Registry,
+        input: Mutation,
+    ) {
+        let repeat = Mutation {
+            expected_revision: 3,
+            ..input
+        };
+        assert!(matches!(
+            store
+                .mutate_provider_accounts(owner, "revoke-again", &repeat)
+                .await
+                .unwrap(),
+            MutationResult::Invalid("account_revoking")
+        ));
+        let (original_operation, original_receipt) = store
+            .provider_account_revocation(owner, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(original_operation, "revoke");
+        assert_eq!(&original_receipt.registry, registry);
+        assert!(
+            store
+                .provider_account_revocation("another-owner", id)
+                .await
+                .is_err()
+        );
     }
 
     async fn seed_deleted_revocation_session(store: &Store, account: &ProviderAccountId) {

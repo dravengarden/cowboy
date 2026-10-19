@@ -1,4 +1,4 @@
-//! Internal single-target revocation step. Account-wide logout remains gated.
+//! Scoped reconciliation of one immutable owner-authorized revocation plan.
 #![allow(dead_code)]
 use crate::{
     remote_runtime::{RemoteRuntime, account_stop::Outcome},

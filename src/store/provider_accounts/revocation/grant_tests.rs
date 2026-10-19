@@ -431,21 +431,38 @@ pub(crate) async fn contract(store: &Store) {
             ..
         })
     ));
-    discovery_contract(store, &base.account_id).await;
+    discovery_contract(store).await;
 }
 
-async fn discovery_contract(store: &Store, account: &crate::provider_account::ProviderAccountId) {
-    let registry = store.provider_accounts(OWNER).await.unwrap();
+async fn discovery_contract(store: &Store) {
     for index in 0..35 {
+        let registry = store.provider_accounts(OWNER).await.unwrap();
+        let MutationResult::Applied(created) = store
+            .mutate_provider_accounts(
+                OWNER,
+                &format!("create-{index:02}"),
+                &Mutation {
+                    expected_revision: registry.revision,
+                    change: Change::Create {
+                        provider_id: "claude-code".into(),
+                        label: format!("Account {index}"),
+                    },
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("create recovery target");
+        };
         assert!(matches!(
             store
                 .mutate_provider_accounts(
                     OWNER,
                     &format!("resume-{index:02}"),
                     &Mutation {
-                        expected_revision: registry.revision,
+                        expected_revision: created.registry.revision,
                         change: Change::BeginRevocation {
-                            id: account.clone()
+                            id: created.account_id
                         },
                     }
                 )

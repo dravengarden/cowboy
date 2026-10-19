@@ -16,6 +16,52 @@ pub(crate) struct Page {
 }
 
 impl Store {
+    /// Owner-scoped lookup for a different tab/device resuming the same cleanup.
+    /// Reject ambiguous historical plans instead of choosing another operation.
+    pub(crate) async fn provider_account_revocation(
+        &self,
+        owner: &str,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> Result<Option<(String, Receipt)>> {
+        anyhow::ensure!(
+            self.provider_accounts(owner)
+                .await?
+                .accounts
+                .iter()
+                .any(|a| &a.id == account),
+            "account_unavailable"
+        );
+        macro_rules! read { ($db:expr, $scope:literal, $plan:literal) => {
+            sqlx::query_as::<_, (String, String)>(concat!(
+                "SELECT operation_id,result FROM provider_account_operations WHERE owner_user_id=$1 AND ",
+                $scope, "=$2 AND ", $plan, " ORDER BY operation_id LIMIT 2"))
+                .bind(owner).bind(account.as_str()).fetch_all(&$db.pool).await?
+        }; }
+        let mut rows = match &self.backend {
+            StorageBackend::Postgres(db) => read!(
+                db,
+                "result::jsonb ->> 'account_id'",
+                "result::jsonb -> 'revocation' IS NOT NULL AND result::jsonb -> 'revocation' <> 'null'::jsonb"
+            ),
+            StorageBackend::Sqlite(db) => read!(
+                db,
+                "json_extract(result, '$.account_id')",
+                "json_type(result, '$.revocation') IS NOT NULL AND json_type(result, '$.revocation') <> 'null'"
+            ),
+        };
+        anyhow::ensure!(rows.len() <= 1, "revocation_plan_ambiguous");
+        rows.pop()
+            .map(|(operation, value)| {
+                let receipt: Receipt = serde_json::from_str(&value)?;
+                anyhow::ensure!(
+                    &receipt.account_id == account && receipt.revocation.is_some(),
+                    "revocation_scope_mismatch"
+                );
+                Ok((operation, receipt))
+            })
+            .transpose()
+    }
+
     /// Scan at most 32 journal rows per page. Replay locators carry no vault,
     /// process-exit or remote-dispatch authority. Each stage rechecks admission.
     pub(crate) async fn provider_account_revocations(

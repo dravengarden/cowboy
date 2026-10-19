@@ -1,0 +1,155 @@
+import { eventsFrom, type ProviderLoginEvent } from "./providerAuthenticationOwner";
+
+export interface LoginScope { owner: string; dataset: string; account: string; provider: string }
+export interface LoginOptions {
+  account_id: string; provider_id: string; machine_id: string; available: boolean; reason: string | null;
+  release: { provider_version: string; generation_digest: string } | null;
+  methods: { id: string; available: boolean; reason: string | null }[];
+  native_profile?: { generation: number } | null;
+}
+interface Pending extends LoginScope {
+  operation: string; machine: string; version: string; digest: string; method: string; cancelling: boolean;
+}
+export interface LoginObservation { status: string; request_id?: string; cancel_requested?: boolean }
+export interface LoginView {
+  pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
+}
+function object(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+const text = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 16384;
+const id = (value: unknown): value is string => text(value) && /^[A-Za-z0-9_-]+$/.test(value);
+export function loginOptions(value: unknown, scope: LoginScope, machine: string): LoginOptions {
+  if (!object(value) || value.account_id !== scope.account || value.provider_id !== scope.provider || value.machine_id !== machine ||
+    typeof value.available !== "boolean" || !(value.reason === null || text(value.reason)) ||
+    !(value.release === null || (object(value.release) && text(value.release.provider_version) && text(value.release.generation_digest))) ||
+    !(value.native_profile == null || (object(value.native_profile) && Number.isSafeInteger(value.native_profile.generation) && Number(value.native_profile.generation) > 0)) ||
+    !Array.isArray(value.methods) || !value.methods.every((method) => object(method) && id(method.id) && typeof method.available === "boolean" && (method.reason === null || text(method.reason)))) {
+    throw new Error("Invalid subscription login options.");
+  }
+  return value as unknown as LoginOptions;
+}
+export function loginLink(value: string): string | undefined {
+  try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined; }
+  catch { return undefined; }
+}
+function restore(value: unknown, scope: LoginScope): Pending {
+  if (!object(value) || Object.keys(value).some((key) => !["owner", "dataset", "account", "provider", "operation", "machine", "version", "digest", "method", "cancelling"].includes(key)) ||
+    value.owner !== scope.owner || value.dataset !== scope.dataset || value.account !== scope.account || value.provider !== scope.provider ||
+    !id(value.operation) || !id(value.machine) || !text(value.version) || !text(value.digest) || !id(value.method) || typeof value.cancelling !== "boolean") {
+    throw new Error("Saved sign-in belongs to another account or dataset, or is invalid.");
+  }
+  return value as unknown as Pending;
+}
+
+/** One persisted operation per account. Only metadata is stored, never codes or links.
+ * No mutation on mount/unmount, automatic login retry, or vendor polling. */
+export function subscriptionLogin(scope: LoginScope, ports: {
+  fetch: (path: string, init?: RequestInit) => Promise<Response>;
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem">;
+  current: () => boolean;
+  changed: (view: LoginView) => void;
+  operation: () => string;
+}) {
+  const key = `cowboy:subscription-login:${scope.owner}:${scope.account}`;
+  let state: LoginView = { events: [], busy: false, error: "" };
+  let ready = false;
+  const publish = (patch: Partial<LoginView>) => {
+    state = { ...state, ...patch };
+    if (ports.current()) ports.changed(state);
+  };
+  const save = (pending: Pending) => {
+    ports.storage.setItem(key, JSON.stringify(pending));
+    publish({ pending });
+  };
+  async function request(path: string, init?: RequestInit): Promise<unknown> {
+    if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
+    const response = await ports.fetch(path, { cache: "no-store", ...init });
+    const value: unknown = await response.json();
+    if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
+    if (!response.ok) {
+      const code = object(value) && object(value.error) && id(value.error.code) ? ` (${value.error.code})` : "";
+      throw new Error(`Sign-in is not confirmed${code}. Check status or retry the same operation.`);
+    }
+    return value;
+  }
+  function observe(value: unknown, pending: Pending): void {
+    if (!object(value) || !text(value.status) ||
+      (!["unknown", "cancellation_requested"].includes(value.status) &&
+        (value.account_id !== pending.account || value.provider_id !== pending.provider || value.machine_id !== pending.machine || !id(value.request_id))) ||
+      (value.request_id !== undefined && !id(value.request_id)) ||
+      (value.account_id !== undefined && value.account_id !== pending.account) ||
+      (value.provider_id !== undefined && value.provider_id !== pending.provider) ||
+      (value.machine_id !== undefined && value.machine_id !== pending.machine) ||
+      (state.observation?.request_id && value.request_id && state.observation.request_id !== value.request_id)) {
+      throw new Error("Sign-in response does not match this operation.");
+    }
+    publish({ observation: value as unknown as LoginObservation, events: [] });
+  }
+  async function check(pending: Pending) {
+    const value = await request(`/api/provider-accounts/login-operations/${pending.operation}`);
+    observe(value, pending);
+    const observation = state.observation;
+    if (observation?.status === "active" && observation.request_id && !observation.cancel_requested && !pending.cancelling) {
+      const events = await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`);
+      publish({ events: eventsFrom(events, scope.provider, observation.request_id) });
+    }
+  }
+  async function run(action: () => Promise<void>) {
+    if (!ready || state.busy || !ports.current()) return;
+    publish({ busy: true, error: "" });
+    try { await action(); } catch (error) {
+      publish({ error: error instanceof Error ? error.message : "Sign-in is not confirmed. Check status.", events: [], observation: undefined });
+    } finally { publish({ busy: false }); }
+  }
+  async function send(pending: Pending) {
+    if (pending.cancelling) throw new Error("Cancellation is pending. Check status to reconcile this attempt.");
+    const value = await request(`/api/provider-accounts/${scope.account}/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: pending.operation, machine_id: pending.machine, provider_version: pending.version,
+        generation_digest: pending.digest, method: pending.method }),
+    });
+    observe(value, pending);
+    await check(pending);
+  }
+  return {
+    get snapshot() { return state; },
+    restore() {
+      try {
+        const saved = ports.storage.getItem(key);
+        if (saved) publish({ pending: restore(JSON.parse(saved), scope) });
+        ready = true;
+      } catch { publish({ error: "Saved sign-in could not be read. No new login will start." }); }
+    },
+    start(options: LoginOptions, method: string) { return run(async () => {
+      if (state.pending) throw new Error("Reconcile the existing sign-in first.");
+      options = loginOptions(options, scope, options.machine_id);
+      if (!options.available || !options.release || !options.methods.some((entry) => entry.id === method && entry.available)) throw new Error("Sign-in is unavailable on this Machine.");
+      const pending: Pending = { ...scope, operation: ports.operation(), machine: options.machine_id,
+        version: options.release.provider_version, digest: options.release.generation_digest, method, cancelling: false };
+      save(restore(pending, scope)); // Durable reservation before any POST.
+      await send(pending);
+    }); },
+    retry() { return run(async () => { if (state.pending) await send(state.pending); }); },
+    check() { return run(async () => { if (state.pending) await check(state.pending); }); },
+    cancel() { return run(async () => {
+      if (!state.pending) return;
+      const pending = { ...state.pending, cancelling: true };
+      save(pending);
+      observe(await request(`/api/provider-accounts/login-operations/${pending.operation}`, { method: "DELETE" }), pending);
+    }); },
+    submit(code: string) { return run(async () => {
+      const pending = state.pending; const observation = state.observation;
+      if (!pending || pending.cancelling || observation?.status !== "active" || observation.cancel_requested || !observation.request_id) throw new Error("Sign-in is not accepting a code.");
+      code = code.trim();
+      if (!code || new TextEncoder().encode(code).length > 4096 || Array.from(code).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error("Enter one authorization code.");
+      await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+      await check(pending);
+    }); },
+    finish() {
+      if (state.busy || !ports.current() || !["completed", "not_started"].includes(state.observation?.status ?? "")) return;
+      try { ports.storage.removeItem(key); publish({ pending: undefined, observation: undefined, events: [], error: "" }); }
+      catch { publish({ error: "Could not clear the saved sign-in. It remains available for reconciliation." }); }
+    },
+  };
+}

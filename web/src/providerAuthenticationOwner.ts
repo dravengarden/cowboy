@@ -93,7 +93,7 @@ function timestamp(value: unknown): value is number {
 function text(value: unknown, maximum = 16_384): value is string {
   return typeof value === "string" && value.length <= maximum;
 }
-function eventsFrom(
+export function eventsFrom(
   value: unknown,
   provider: string,
   request: string,

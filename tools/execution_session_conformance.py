@@ -335,6 +335,9 @@ def main():
                         "cookie without device proof admitted")
                 checks.append("current_browser_device_login_and_bound_api_credentials")
             service = (root / "controller/service-id").read_text().strip()
+            if inputs.get("subscription_lifecycle"):
+                from subscription_lifecycle_conformance import run as subscriptions
+                subscriptions(call, require, checks)
             machines = {}
             for machine in ("runtime", "target"):
                 status, enrollment = call("POST", "/api/machines/enrollment", {"machine_id": machine, "display_name": machine})

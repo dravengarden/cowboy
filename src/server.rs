@@ -10468,6 +10468,8 @@ async fn serve_axum(
         .route("/api/drafts", get(draft_documents::list))
         .route("/api/preferences/{scope}", get(preferences::read))
         .route("/api/provider-accounts", get(provider_accounts::read).put(provider_accounts::update).layer(DefaultBodyLimit::max(16 * 1024)))
+        .route("/api/provider-accounts/{account_id}/revocation", get(provider_accounts::lifecycle::http_status).post(provider_accounts::lifecycle::http_start).layer(DefaultBodyLimit::max(16 * 1024)))
+        .route("/api/provider-accounts/{account_id}/revocation/reconcile", post(provider_accounts::lifecycle::http_resume).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/provider-accounts/login-operations/{operation}", get(provider_accounts::login::http_receipt).delete(provider_accounts::login::http_cancel))
         .route("/api/provider-accounts/{account_id}/login", get(provider_accounts::login::options).post(provider_accounts::login::start).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/preferences", put(preferences::update).layer(DefaultBodyLimit::max(64 * 1024)))
@@ -22416,6 +22418,14 @@ mod bootstrap_tests {
     fn preferences_routes_and_announcements_are_account_scoped() {
         use super::{RouteAuth, classify_route};
         use axum::http::Method;
+        for path in [
+            "/api/provider-accounts/account/revocation",
+            "/api/provider-accounts/account/revocation/reconcile",
+        ] {
+            for method in [Method::GET, Method::POST] {
+                assert_eq!(classify_route(&method, path), RouteAuth::ProductOperator);
+            }
+        }
         assert_eq!(
             classify_route(&Method::POST, "/api/provider-accounts/account/login"),
             RouteAuth::ProductOperator

@@ -5,8 +5,10 @@ import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
+import { SubscriptionLogin } from "./SubscriptionLogin";
+import { SubscriptionRevocation } from "./SubscriptionRevocation";
 
-interface Account { id: string; provider_id: string; label: string; enabled: boolean }
+interface Account { id: string; provider_id: string; label: string; enabled: boolean; revoking?: boolean }
 interface Snapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: Account[]; defaults: Record<string, string> };
@@ -34,7 +36,8 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
-      text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean");
+      text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
+      (account.revoking === undefined || typeof account.revoking === "boolean"));
 }
 
 export function validPendingSubscription(value: unknown): value is Pending {
@@ -68,7 +71,7 @@ export function subscriptionWriteRejected(status: number, code: string | undefin
   return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable"].includes(code ?? "");
 }
 
-/** Metadata only. Native authentication remains a distinct explicit action. */
+/** Metadata, native sign-in and revocation retain separate explicit actions. */
 export function SubscriptionManagement(): React.JSX.Element {
   const { catalog } = useProviderCatalog();
   const providers = latestProviderEntries(catalog?.providers ?? []);
@@ -180,14 +183,19 @@ export function SubscriptionManagement(): React.JSX.Element {
       <TextField label="Account label" value={label} onChange={(event) => setLabel(event.target.value)} disabled={disabled} fullWidth size="small" />
       <Button disabled={disabled || !provider || !validSubscriptionLabel(label)} onClick={() => save({ type: "create", provider_id: provider, label: label.trim() })}>Add</Button>
     </Stack>
-    {snapshot?.registry.accounts.map((account) => <Box key={account.id} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+    {snapshot?.registry.accounts.map((account) => <Box key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} sx={{ flex: 1, minWidth: 120 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
         <Button disabled={disabled || !validSubscriptionLabel(names[account.id] ?? "") || names[account.id]?.trim() === account.label} onClick={() => save({ type: "rename", id: account.id, label: names[account.id]!.trim() })}>Save name</Button>
         <Typography variant="caption" color="text.secondary">{account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{!account.enabled ? " · Disabled" : ""}</Typography>
-        <Button disabled={disabled} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.enabled ? "Disable" : "Enable"}</Button>
+        <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
         <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
         {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
+        {owner && <>
+          <SubscriptionLogin scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label} disabled={disabled || !account.enabled || Boolean(account.revoking)} />
+          <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}
+            dataset={snapshot.dataset.dataset_id} revision={snapshot.registry.revision} disabled={disabled} onChange={() => void load()} />
+        </>}
       </Stack>
     </Box>)}
   </Stack>;

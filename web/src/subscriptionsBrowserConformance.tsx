@@ -4,8 +4,23 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SubscriptionManagement } from "./SubscriptionManagement";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
+import { SurfaceContext } from "./surface/SurfaceProfile";
+import { classifySurface } from "./surface/profile";
+import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 
-export async function runSubscriptionsBrowserConformance(): Promise<string[]> {
+export async function runSubscriptionsBrowserConformance(observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
+  const checks: string[] = [];
+  for (const surface of ["mobile", "desktop"] as const) {
+    checks.push(...(await runSurface(surface, observe)).map((check) => `${surface}: ${check}`));
+  }
+  return checks;
+}
+
+async function runSurface(surface: "mobile" | "desktop", observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
+  const desktop = surface === "desktop";
+  const profile = classifySurface({ finePointer: desktop, hover: desktop, tabletWidth: false, touchCapable: !desktop, desktopHost: desktop });
+  const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
+  document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, !desktop);
   bindProductSyncPrincipal("subscription-fixture");
   const realFetch = globalThis.fetch;
   const container = document.createElement("div");
@@ -16,10 +31,40 @@ export async function runSubscriptionsBrowserConformance(): Promise<string[]> {
   let root = createRoot(container);
   const tests: string[] = [];
   const data = { dataset: { dataset_id: "fixture", user_id: "subscription-fixture" }, session_admission: "not_enabled",
-    registry: { revision: 0, accounts: [{ id: "account", provider_id: "claude-code", label: "Personal", enabled: true }], defaults: {} } };
+    registry: { revision: 0, accounts: [{ id: "account", provider_id: "claude-code", label: "Personal", enabled: true, revoking: false }], defaults: {} } };
   const writes: string[] = [];
+  const lifecycleWrites: string[] = [];
+  const loginKey = "cowboy:subscription-login:subscription-fixture:account";
+  const revokeKey = "cowboy:subscription-revocation:subscription-fixture:account";
+  sessionStorage.removeItem(loginKey); sessionStorage.removeItem(revokeKey);
+  let cleanup = false;
   let reject = false;
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(url);
+    if (path.includes("/revocation")) {
+      if (init?.method === "POST") {
+        lifecycleWrites.push(path);
+        if (!path.endsWith("/reconcile")) {
+          data.registry.accounts[0]!.revoking = true;
+          data.registry.accounts[0]!.enabled = false;
+          data.registry.revision++;
+          throw new Error("revocation committed but reply lost");
+        }
+        cleanup = true;
+      }
+      return Response.json({ account_id: "account", status: cleanup ? "completed" : data.registry.accounts[0]!.revoking ? "revoking" : "not_started",
+        completion: cleanup || data.registry.accounts[0]!.revoking ? { account_completed: cleanup, missing: cleanup ? [] : [{ kind: "session_process_tree_exit", target: "offline-machine" }] } : undefined });
+    }
+    if (path.startsWith("/api/provider-accounts/login-operations/")) {
+      if (init?.method === "DELETE") { lifecycleWrites.push(path); return Response.json({ status: "cancellation_requested", request_id: "request" }); }
+      return Response.json({ status: "active", request_id: "request", account_id: "account", provider_id: "claude-code", machine_id: "machine" });
+    }
+    if (path === "/api/providers/claude-code/auth/request") return Response.json({ request_id: "request", events: [{
+      event: "login_challenge", request_id: "request", provider: "claude-code", verification_url: "https://claude.ai/oauth/authorize?state=private",
+      expires_at_ms: Date.now() + 60_000, input_required: true,
+    }] });
+    if (path.includes("/account/login?")) return Response.json({ account_id: "account", provider_id: "claude-code", machine_id: "machine", available: true,
+      reason: null, methods: [{ id: "native", available: true, reason: null }], release: { provider_version: "1", generation_digest: "digest" } });
     if (String(url) !== "/api/provider-accounts") return new Response(null, { status: 503 });
     if (init?.method !== "PUT") return Response.json(data);
     writes.push(String(init.body));
@@ -33,11 +78,12 @@ export async function runSubscriptionsBrowserConformance(): Promise<string[]> {
   }) as typeof fetch;
   const until = async (predicate: () => boolean) => {
     const deadline = Date.now() + 5000;
-    while (!predicate()) { if (Date.now() > deadline) throw new Error("subscription fixture timeout"); await new Promise((resolve) => setTimeout(resolve, 10)); }
+    while (!predicate()) { if (Date.now() > deadline) throw new Error(`subscription fixture timeout after ${tests.length} checks: ${document.body.textContent}`); await new Promise((resolve) => setTimeout(resolve, 10)); }
   };
   const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name);
+  const dialogButton = (name: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name);
   const check = (condition: boolean, label: string) => { if (!condition) throw new Error(label); tests.push(label); };
-  const render = () => flushSync(() => root.render(<BrowserProductTheme><SubscriptionManagement /></BrowserProductTheme>));
+  const render = () => flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}><SubscriptionManagement /></SurfaceContext.Provider></BrowserProductTheme>));
   try {
     render();
     await until(() => Boolean(button("Disable") && !button("Disable")!.disabled));
@@ -64,6 +110,43 @@ export async function runSubscriptionsBrowserConformance(): Promise<string[]> {
     check(container.textContent!.includes("Change rejected"), "definitive rejection releases mutation lock without automatic retry");
     container.style.width = "1000px";
     check(container.scrollWidth <= container.clientWidth, "desktop account controls fit available width");
+    data.registry.accounts[0]!.enabled = true;
+    data.registry.revision++;
+    window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED));
+    sessionStorage.setItem(loginKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: "account", provider: "claude-code",
+      operation: "login-operation", machine: "machine", version: "1", digest: "digest", method: "native", cancelling: false }));
+    await until(() => Boolean(button("Sign in on a Machine…") && !button("Sign in on a Machine…")!.disabled));
+    button("Sign in on a Machine…")!.click();
+    await until(() => Boolean(dialogButton("Check status")));
+    check(lifecycleWrites.length === 0, "reopening native sign-in never automatically starts another login");
+    dialogButton("Check status")!.click();
+    await until(() => document.body.textContent!.includes("Open Claude sign-in"));
+    const link = document.querySelector<HTMLAnchorElement>('a[href^="https://claude.ai/oauth/"]');
+    check(Boolean(link && link.rel.includes("noopener") && link.rel.includes("noreferrer")), "native sign-in stays on the Provider page without opener access");
+    check(!sessionStorage.getItem(loginKey)!.includes("private"), "authorization link stays out of persisted recovery metadata");
+    await observe?.(surface, "login");
+    dialogButton("Cancel sign-in")!.focus();
+    check(document.activeElement === dialogButton("Cancel sign-in"), "native sign-in cancellation is keyboard focusable");
+    dialogButton("Cancel sign-in")!.click();
+    await until(() => document.body.textContent!.includes("Cancellation requested"));
+    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]'), "cancellation removes the old authorization link");
+    root.unmount(); root = createRoot(container); render();
+    await until(() => Boolean(button("Revoke access…") && !button("Revoke access…")!.disabled));
+    button("Revoke access…")!.click();
+    await until(() => Boolean(dialogButton("Revoke on all Machines") && !dialogButton("Revoke on all Machines")!.disabled));
+    await observe?.(surface, "revocation");
+    dialogButton("Revoke on all Machines")!.click();
+    await until(() => document.body.textContent!.includes("Cleanup is not confirmed"));
+    check(Boolean(sessionStorage.getItem(revokeKey)), "lost revocation reply retains its operation");
+    root.unmount(); root = createRoot(container); render();
+    await until(() => Boolean(button("Cleanup status…") && !button("Cleanup status…")!.disabled));
+    button("Cleanup status…")!.click();
+    await until(() => document.body.textContent!.includes("offline-machine"));
+    check(dialogButton("Retry pending cleanup") !== undefined, "another mount observes the original offline cleanup targets");
+    dialogButton("Retry pending cleanup")!.click();
+    await until(() => document.body.textContent!.includes("Cowboy cleanup is confirmed"));
+    check(lifecycleWrites.filter((path) => path.endsWith("/revocation")).length === 1, "cleanup retry never creates another revocation plan");
+    check(button("Revoked access")!.disabled, "completed revocation cannot be cleared by metadata enablement");
     return tests;
-  } finally { root.unmount(); container.remove(); sessionStorage.removeItem(key); globalThis.fetch = realFetch; }
+  } finally { root.unmount(); container.remove(); for (const item of [key, loginKey, revokeKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
 }

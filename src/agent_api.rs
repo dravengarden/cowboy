@@ -74,6 +74,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "preferences.get",
     "accounts.list",
     "accounts.login_options",
+    "accounts.revocation_status",
     "accounts.transition_status",
 ];
 
@@ -86,6 +87,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "documents.mutate",
     "preferences.update",
     "accounts.update",
+    "accounts.revoke",
     "accounts.login_start",
     "accounts.login_cancel",
     "accounts.reconcile",
@@ -132,7 +134,12 @@ export type AccountChange =
 // IDs are controller-issued UUIDs; "default" selects the legacy account.
 // Machine and account are independent. Defaults apply to future sessions only.
 // Disable does not log out or stop existing sessions. Change its default first.
-// Retry an existing revocation only: cowboy_execute({action:"accounts.reconcile",operation,arguments:{}}).
+// Explicit permanent Cowboy revocation: accounts.revoke {account_id,expected_revision}.
+// Fences new access and stops/cleans this account on all Machines; never cancels the vendor subscription.
+// Reuse the original operation/input after uncertainty. Metadata update cannot start revocation.
+// Read accounts.revocation_status(account_id) for durable completion and exact missing evidence.
+// Resume from any same-owner session: accounts.reconcile {account_id}; it locates the original plan.
+// Retry an existing parent-scoped revocation: cowboy_execute({action:"accounts.reconcile",operation,arguments:{}}).
 // Use its ORIGINAL operation in the SAME parent session. Each remote target has a 2s cooperative wait budget.
 // revoking/unconfirmed is not logout completion; pending targets need another same-ID retry.
 // Return: {status:"committed",revision,account_id}; revision_conflict includes current.
@@ -371,8 +378,9 @@ export interface Cowboy {
 ACCOUNTS_READ_SDK: r#"
 export interface Cowboy {
   accounts: {
+    revocation_status(account_id:string): Promise<{status:"not_started"|"revoking"|"completed";account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
     transition_status(operation:string): Promise<{operation:string;stage:"planned"|"stop_confirmed"|"binding_committed"|"completed"|"unknown";evidence:"historical";worker_state:"not_observed"}>;
-    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean}[];defaults:Record<string,string>};session_admission:string;session_providers:string[]}>;
+    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};session_admission:string;session_providers:string[]}>;
     login_options(account_id:string,machine_id:string): Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
   };
 }

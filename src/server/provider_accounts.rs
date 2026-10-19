@@ -3,6 +3,7 @@ use super::*;
 use crate::store::provider_accounts::{Mutation, MutationResult};
 use serde_json::{Value, json};
 
+pub(super) mod lifecycle;
 pub(super) mod login;
 pub(super) mod native_generation;
 pub(super) mod registration;

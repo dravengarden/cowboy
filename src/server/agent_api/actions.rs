@@ -412,10 +412,19 @@ async fn execute(
             ))
         }
         "accounts.reconcile" => {
-            if args.as_object().is_none_or(|args| !args.is_empty()) {
-                return Err("invalid_argument");
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Resume {
+                account_id: Option<crate::provider_account::ProviderAccountId>,
             }
+            let input: Resume = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
             let owner = account_owner(state, meta).await?;
+            if let Some(account) = input.account_id {
+                return Ok(success(
+                    super::super::provider_accounts::lifecycle::resume(state, &owner, &account)
+                        .await?,
+                ));
+            }
             Ok(success(
                 super::super::provider_accounts::reconcile(
                     state,
@@ -438,6 +447,22 @@ async fn execute(
                 )
                 .await?,
             ))
+        }
+        "accounts.revoke" => {
+            let input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            let owner = account_owner(state, meta).await?;
+            let value = super::super::provider_accounts::lifecycle::start(
+                state,
+                &owner,
+                &document_operation(&meta.id, operation),
+                input,
+            )
+            .await?;
+            if value.get("error").is_some() {
+                Ok(json!({"state":"error","error":value["error"],"current":value["current"]}))
+            } else {
+                Ok(success(value))
+            }
         }
         "accounts.login_start" => {
             let input = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
