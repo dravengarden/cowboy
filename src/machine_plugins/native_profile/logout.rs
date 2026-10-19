@@ -9,6 +9,8 @@ pub(super) struct Record {
     pub succeeded: Option<bool>,
     #[serde(default)]
     pub process_tree_exited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<processes::Reservation>,
 }
 
 pub(crate) enum LogoutPreparation {
@@ -33,7 +35,7 @@ impl MachinePluginStore {
         let (directory, mut profile) =
             self.read_native_profile_for_cleanup(provider, generation)?;
         ensure!(
-            profile.request == login && profile.leader_exited,
+            profile.request == login && profile.process_tree_exited,
             "native login exit or scope unconfirmed"
         );
         if let Some(record) = &profile.logout {
@@ -96,6 +98,7 @@ impl MachinePluginStore {
             request: operation.into(),
             succeeded: None,
             process_tree_exited: false,
+            process: Some(processes::Reservation::new()?),
         });
         persist(&directory, &profile)?;
         Ok(LogoutPreparation::Execute(Box::new(PreparedNativeLogin {
@@ -178,10 +181,7 @@ impl MachinePluginStore {
             .as_ref()
             .context("native logout not reserved")?;
         ensure!(record.request == operation, "native logout scope mismatch");
-        Ok(profile.leader_exited
-            && profile.process_tree_exited
-            && record.succeeded.is_some()
-            && record.process_tree_exited)
+        Ok(profile.process_tree_exited && record.process_tree_exited)
     }
 
     /// Delete only the exact logged-out generation. The retained tombstone
@@ -199,12 +199,18 @@ impl MachinePluginStore {
         let (directory, mut profile) =
             self.read_native_profile_for_cleanup(provider, generation)?;
         ensure!(
-            profile.request == login && profile.leader_exited,
+            profile.request == login && profile.process_tree_exited,
             "native login scope or exit unconfirmed"
         );
-        ensure!(profile.logout.as_ref().is_some_and(|record|
-            record.request == operation && record.succeeded == Some(true)),
-            "native logout success unconfirmed");
+        ensure!(
+            profile
+                .logout
+                .as_ref()
+                .is_some_and(|record| record.request == operation
+                    && record.succeeded == Some(true)
+                    && record.process_tree_exited),
+            "native logout success unconfirmed"
+        );
         profile.revoked = true;
         persist(&directory, &profile)?;
         remove_projection::remove(&directory.join("home"))?;
@@ -213,7 +219,7 @@ impl MachinePluginStore {
     }
 }
 
-fn persist(directory: &Path, profile: &Profile) -> Result<()> {
+pub(super) fn persist(directory: &Path, profile: &Profile) -> Result<()> {
     atomic_write(
         &directory.join("profile.json"),
         &serde_json::to_vec(profile)?,

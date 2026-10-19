@@ -20,9 +20,10 @@ pub(super) fn spawn_bound(
     command: &mut Command,
     store: &MachinePluginStore,
     session: &crate::runtime_wire::StartSession,
+    containment: Option<&crate::cgroup::ContainmentIdentity>,
 ) -> Result<(Child, Option<uuid::Uuid>)> {
     let launch = (!session.provider_account_id.is_default())
-        .then(|| store.begin_bound_account_worker(session))
+        .then(|| store.begin_contained_account_worker(session, containment))
         .transpose()?;
     spawn_reserved(
         command,

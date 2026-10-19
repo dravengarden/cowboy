@@ -10,6 +10,10 @@ pub(super) async fn run(
     login: &str,
     operation: &str,
 ) -> Result<Option<bool>, String> {
+    providers
+        .recover_native_auth_processes(provider, generation, login, operation)
+        .await
+        .map_err(|_| "native auth process recovery unconfirmed".to_owned())?;
     let prepared = providers
         .prepare_native_logout(provider, generation, login, operation)
         .map_err(|_| "native logout preparation failed".to_owned())?;
@@ -44,6 +48,9 @@ pub(super) async fn run(
         .kill_on_drop(true);
     let containment = login_process::Containment::prepare(&mut command)
         .map_err(|_| "native logout containment unavailable".to_owned())?;
+    providers
+        .bind_native_logout_process(provider, generation, operation, containment.identity())
+        .map_err(|_| "native logout process ownership persistence failed".to_owned())?;
     let child = command
         .spawn()
         .map_err(|_| "native logout spawn unconfirmed".to_owned())?;

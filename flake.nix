@@ -128,6 +128,7 @@
           ./tests/fixtures/composition-v1.json
           ./src/claude_shell.rs
           ./src/cgroup.rs
+          ./src/cgroup
           ./src/execution_environment.rs
           ./src/execution_protocol.rs
           ./src/execution_host.rs
@@ -182,6 +183,7 @@
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
+          ./src/provider_account.rs
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
@@ -229,6 +231,7 @@
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
+        ./src/cgroup
         ./src/claude_shell.rs
         ./src/first_party_sources.rs
         ./src/plugin_runtime_args.rs
@@ -237,6 +240,7 @@
         ./src/provider/managed_config.rs
         ./src/provider/mod.rs
         ./src/provider_behavior.rs
+        ./src/provider_account.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
         ./src/execution_environment.rs
@@ -246,6 +250,7 @@
         ./src/logs
         ./src/managed_calls/round.rs
         ./src/worker.rs
+        ./src/worker
         ./src/worker_execution.rs
         ./src/worker_telemetry.rs
         ./src/bin/cowboy-acp-worker.rs
@@ -749,6 +754,8 @@
         test -e ${machine-src}/build.rs
         test -e ${machine-src}/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
+        test -e ${machine-src}/src/provider_account.rs
+        test -e ${machine-src}/src/cgroup/containment/linux.rs
         test -e ${machine-src}/src/code_buffer_read/content.rs
         test -e ${machine-src}/src/code_buffer_read/text.rs
         test -e ${machine-src}/plugins/zed/adapter/fixtures/content.json
@@ -762,6 +769,7 @@
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml
+        test ! -e ${code-adapter-src}/src/provider_account.rs
         test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
         test -e ${machine-src}/src/plugin_runtime_args.rs
