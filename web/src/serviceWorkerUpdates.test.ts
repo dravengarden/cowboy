@@ -105,7 +105,7 @@ test("bundle entry probe detects a stale resumed page", async () => {
 
 test("bundle probe reports an update while service worker update remains pending", async () => {
   const pendingWorkerUpdate = deferred();
-  let reported = 0;
+  const reported: string[] = [];
   await checkForDeployedUpdate(
     "/assets/index-old.js",
     () => pendingWorkerUpdate.promise,
@@ -115,9 +115,9 @@ test("bundle probe reports an update while service worker update remains pending
           `<script type="module" src="/assets/index-new.js"></script>`,
         ),
       ),
-    () => {
-      reported++;
+    (entry) => {
+      reported.push(entry);
     },
   );
-  assertEquals(reported, 1);
+  assertEquals(reported, ["/assets/index-new.js"]);
 });

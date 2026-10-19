@@ -434,6 +434,12 @@ itself by default. Settings → Appearance → Web updates selects automatic
 countdown or click-to-update. The mode and delay are device-local persisted
 preferences shared by Desktop and Mobile; the default is automatic, 3 seconds.
 
+Worker controller changes are only a reason to check the deployed module entry,
+never proof of an update. A delayed claim can take over a page that already runs
+that build. All lifecycle signals use the same coalesced bundle probe; an
+unchanged entry or failed/offline check leaves the running page intact. Update
+telemetry records the triggering signal and both loaded and deployed entries.
+
 The download and the swap are separate. The bits are fetched the moment a
 deploy is detected, ungated — what interrupts someone is the reload, never the
 download — and the service worker reports each landed batch, so the update bar

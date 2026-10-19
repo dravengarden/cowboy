@@ -190,19 +190,23 @@ if (import.meta.env.PROD) {
   const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
     'script[type="module"][src]',
   )?.getAttribute("src") ?? undefined;
-  const reportUpdate = async (): Promise<void> => {
+  const reportUpdate = async (deployedEntry: string, trigger: string): Promise<void> => {
     if (updateReported) return;
     updateReported = true;
-    markClientReloadIntent("deployed_version_detected");
+    markClientReloadIntent("deployed_version_detected", deployedEntry.split("/").pop());
     reportClientLog("info", "client_update_available", "A new Cowboy client build is available", {
       loaded_entry: loadedEntry?.split("/").pop() ?? "unknown",
+      deployed_entry: deployedEntry.split("/").pop() ?? "unknown",
+      trigger,
     });
     const { conn } = await import("./store");
     conn.updateAvailable();
   };
   const installChecks = (updateServiceWorker: () => Promise<unknown>): void => {
-    const check = createServiceWorkerUpdateCheck(() =>
-      checkForDeployedUpdate(
+    let trigger = "startup";
+    const check = createServiceWorkerUpdateCheck(() => {
+      const signal = trigger;
+      return checkForDeployedUpdate(
         loadedEntry,
         updateServiceWorker,
         () =>
@@ -210,15 +214,25 @@ if (import.meta.env.PROD) {
             `/?cowboy-bundle-probe=${Date.now()}`,
             { cache: "no-store" },
           ),
-        reportUpdate,
-      )
-    );
-    const checkForUpdate = (): void => {
+        (entry) => reportUpdate(entry, signal),
+      );
+    });
+    const checkForUpdate = (event?: Event): void => {
       // WKWebView can remain `visible` through an app background/resume, so
       // only suppress checks when it explicitly reports `hidden`.
-      if (globalThis.document.visibilityState !== "hidden") check();
+      if (globalThis.document.visibilityState !== "hidden") {
+        trigger = event?.type ?? "periodic";
+        check();
+      }
     };
     globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+    // A worker can claim a window already running its build (or be replaced
+    // only because an imported script changed). Controller identity is not
+    // evidence that the page is stale. Verify the deployed entry on this path,
+    // exactly as on focus/resume; an offline check must leave this page up.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("controllerchange", checkForUpdate);
+    }
     globalThis.addEventListener("pageshow", checkForUpdate);
     globalThis.addEventListener("focus", checkForUpdate);
     globalThis.addEventListener("online", checkForUpdate);
@@ -234,19 +248,6 @@ if (import.meta.env.PROD) {
       installChecks(() => Promise.resolve());
       return;
     }
-    // Only surface controller changes for an update, never a first install.
-    const hadController = navigator.serviceWorker.controller != null;
-    let reportedControllerUpdate = false;
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (reportedControllerUpdate || !hadController) return;
-      reportedControllerUpdate = true;
-      void reportUpdate().catch(() => {
-        // If the old module graph is already unavailable, reload is the only
-        // recovery path. Normal updates take the visible update route above.
-        markClientReloadIntent("service_worker_controller_fallback");
-        globalThis.location.reload();
-      });
-    });
     void navigator.serviceWorker.register("/sw.js")
       .then((reg) => installChecks(() => reg.update()))
       .catch(() => {
