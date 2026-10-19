@@ -451,7 +451,7 @@ def main():
                 options_endpoint = f"/api/sessions/{dormant[0]}/delivery-options"
                 status, delivery = call("GET", options_endpoint)
                 require(status == 200 and delivery["target"] is None
-                        and delivery["policy"] == {"mode": "next_turn", "revision": 0},
+                        and delivery["policy"] == {"mode": "steer", "revision": 0},
                         "workerless delivery defaults unavailable")
                 preference = {"mode": "tool_boundary", "revision": 0}
                 require(call("PUT", delivery_endpoint, preference, anonymous=True)[0] == 401,
