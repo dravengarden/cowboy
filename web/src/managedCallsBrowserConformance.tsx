@@ -736,6 +736,12 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(callHeader.scrollWidth <= callHeader.clientWidth,
       "two-line call header must fit a narrow phone without horizontal overflow");
     const metadataRow = callHeader.querySelector<HTMLElement>("[data-call-header-metadata]")!;
+    for (const selector of ["[data-call-header-configuration]", "[data-call-header-placement]"]) {
+      const badge = callHeader.querySelector<HTMLElement>(`${selector} > span`);
+      check(badge && getComputedStyle(badge).backgroundColor !== "rgba(0, 0, 0, 0)" &&
+        parseFloat(getComputedStyle(badge).borderRadius) > 0 && !badge.closest("button"),
+        "recorded parameters and placement use filled, noninteractive badges");
+    }
     check(getComputedStyle(metadataRow).overflowX === "auto" &&
       getComputedStyle(executionHeader!).whiteSpace === "nowrap",
       "long execution metadata scrolls within the second row without wrapping or widening the header");

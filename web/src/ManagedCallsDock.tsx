@@ -697,14 +697,14 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           <Badge label={outcome} color={attention ? "warning" : "success"} />
         )}
         {configuration && (
-          <Typography data-call-header-configuration variant="caption" noWrap
+          <Box component="span" data-call-header-configuration
             title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
-            sx={{ fontSize: "0.75rem" }}>
-            {configuration}
-          </Typography>
+            sx={{ display: "inline-flex", whiteSpace: "nowrap" }}>
+            <Badge label={configuration} color="default" />
+          </Box>
         )}
-        <Box component="span" sx={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={placementLabel(call)}>
-          {placementLabel(call)}
+        <Box component="span" data-call-header-placement sx={{ display: "inline-flex", whiteSpace: "nowrap" }} title={placementLabel(call)}>
+          <Badge label={placementLabel(call)} color="default" />
         </Box>
         <Box
           component="time"
