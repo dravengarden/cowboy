@@ -25,6 +25,16 @@ session default for efficient keyboard activation without rendering it selected.
 Claude's installed adapter supports native Steer (`now`) and Next checkpoint
 (`next`); Pause is Cowboy queue scheduling, independent of provider delivery.
 
+Activated Web source `a17888c224023d77ea88703eb155f0da9abc3ebb`, service
+worker `cowboy-v2022`; the component receipt reports `succeeded`. Public
+health and service-worker responses were verified. Type checking, lint,
+2,302 frontend tests and the full Firefox/Chromium light/dark plus trusted
+Chrome keyboard gate passed. Disposable Composer touch checks confirmed
+one Steer submission and Pause-before-enqueue ordering; a withheld Pause
+acknowledgement produced zero sends and retained the draft. Evidence lives
+under `/srv/storage/fast0/agent/tmp/send-pause-*`. These browser checks do
+not establish physical iPhone IME acceptance.
+
 ## 1. User constraints and decisions
 
 The user wants technical terminology and complete mobile/desktop support. Idle +
