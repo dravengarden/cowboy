@@ -3275,11 +3275,11 @@ physical image-adjacent caret issue #69 remains open; browser coverage is not
 physical iOS acceptance.
 
 The 2026-10-19 mobile Send polish separates the paper plane and chevron inside
-one tinted, rounded button. User feedback retains the plane and requires global
-font scaling: use rem for the button, spacing, radius, glyphs and spinner, with
+one unfilled icon button. Latest user feedback removes the persistent circular
+background, including its disabled fill. Retain the plane and global font
+scaling: use rem for the button, spacing, glyphs and spinner, with
 a 40px minimum touch target. Button-scoped SvgIcon selectors must override the
-global IconButton descendant rule. Follow-up feedback keeps the button circular
-in every state, including with the inline delivery chevron. Width and height
+global IconButton descendant rule. Width and height
 remain equal, with the same minimum touch size and no state-dependent resizing.
 This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay

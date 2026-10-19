@@ -436,7 +436,7 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
-// Keep Send circular, including when the inline delivery chevron is present.
+// Unfilled Send with a font-scaled glyph and a stable minimum touch target.
 const MOBILE_SEND_BTN = {
   ...TOOLBAR_ICON_BTN,
   width: "2.5rem",
@@ -445,16 +445,8 @@ const MOBILE_SEND_BTN = {
   minHeight: 40,
   p: 0,
   gap: "0.125rem",
-  borderRadius: "999rem",
   "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
   "& .MuiSvgIcon-root + .MuiSvgIcon-root": { fontSize: "0.875rem" },
-  bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.12),
-  "&:hover": {
-    bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.2),
-  },
-  "&.Mui-disabled": {
-    bgcolor: (theme: Theme) => alpha(theme.palette.action.disabled, 0.06),
-  },
 } as const;
 // Why an agent-backed toolbar action is greyed out while the session boots. The
 // button keeps its slot (no reflow on the ready edge); this explains the state
