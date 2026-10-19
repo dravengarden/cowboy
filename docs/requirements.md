@@ -621,9 +621,8 @@ the existing `default` account or retry. This creation field is not an account
 management or native-login UI.
 
 Remaining release acceptance is explicit: first-party native identity recipes
-and independent refresh lineage need exact-native validation; same-boot orphan
-termination needs confirmed process ownership; account revocation needs real
-worker/grant cleanup acceptance. The shared mobile/desktop Settings panel manages
+and independent refresh lineage need exact-native validation; account revocation
+needs real worker/grant cleanup acceptance. The shared mobile/desktop Settings panel manages
 account metadata, enablement and defaults through the DB writer. It preserves
 uncertain writes across panel remounts and tab reloads, refreshes on account
 preference notifications, and keeps named defaults unavailable while admission
@@ -636,6 +635,14 @@ it cannot be invoked through the metadata writer. Its immutable plan and
 pending-target inventory can be observed and resumed from another device or
 same-owner session. A second operation cannot replace an existing plan. These
 interfaces do not establish native login or process cleanup acceptance.
+New Direct-worker and native-auth launches persist cgroup ownership before spawn.
+Same-boot recovery must verify the original boot/path/device/inode, terminate the
+owned subtree and remove its cgroup before confirming exit. Native-auth orphan
+recovery also checks the original Machine process incarnation; live owners and
+legacy unknown ownership remain fenced. Process termination is independent from
+native command success and cannot authorize credential deletion on an unknown
+logout result. Real-account release acceptance remains separate from isolated
+process crash tests.
 Public named-session admission
 must remain closed until those requirements pass. Synthetic tests and a passing
 repository gate alone do not authorize enabling the unfinished runtime path.

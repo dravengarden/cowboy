@@ -102,6 +102,9 @@ async fn run(
         .kill_on_drop(true);
     let containment = login_process::Containment::prepare(&mut process)
         .map_err(|_| "native login containment unavailable; profile remains reserved".to_owned())?;
+    providers
+        .bind_native_login_process(provider, spec.generation, request, containment.identity())
+        .map_err(|_| "native login process ownership persistence failed".to_owned())?;
     let child = login.spawn(request, deadline, &mut process)?;
     let _ = events.send(MachineEvent::LoginState {
         request_id: request.into(),

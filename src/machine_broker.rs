@@ -2726,6 +2726,16 @@ impl Broker {
                 command_id: format!("failed-start-stop-{session_id}"),
             },
         );
+        if let Err(error) = self
+            .args
+            .provider_store
+            .terminate_account_worker_tree(session_id)
+            .await
+        {
+            tracing::error!(session = session_id, %error, "durable worker containment stop unconfirmed");
+            self.cancelled_sessions.lock().insert(session_id.to_owned());
+            return false;
+        }
         if self.args.spawn_mode == SpawnMode::SystemdUser {
             let unit = format!(
                 "{}.service",
@@ -3635,12 +3645,18 @@ impl Broker {
         };
         // Every named launch invalidates earlier proof, including switching
         // from Direct to systemd. A failed spawn leaves no process to reap.
-        let (mut child, contained_launch) =
-            account_worker::spawn_bound(&mut command, &self.args.provider_store, session)
-                .with_context(|| match self.args.spawn_mode {
-                    SpawnMode::Direct => "spawning worker process",
-                    SpawnMode::SystemdUser => "starting transient worker unit",
-                })?;
+        let (mut child, contained_launch) = account_worker::spawn_bound(
+            &mut command,
+            &self.args.provider_store,
+            session,
+            containment
+                .as_ref()
+                .map(crate::cgroup::Containment::identity),
+        )
+        .with_context(|| match self.args.spawn_mode {
+            SpawnMode::Direct => "spawning worker process",
+            SpawnMode::SystemdUser => "starting transient worker unit",
+        })?;
         let session_id = session.session_id.clone();
         let direct_pid = if self.args.spawn_mode == SpawnMode::Direct {
             let pid = child

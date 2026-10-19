@@ -4,6 +4,7 @@ use super::*;
 use crate::provider_account::{NativeIdentity, NativeProfileReceipt, prepare_private_directory};
 use serde::{Deserialize, Serialize};
 mod logout;
+mod processes;
 pub(crate) use logout::LogoutPreparation;
 
 pub(crate) struct PreparedNativeLogin {
@@ -39,6 +40,8 @@ struct Profile {
     login_succeeded: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     logout: Option<logout::Record>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    process: Option<processes::Reservation>,
 }
 
 impl MachinePluginStore {
@@ -302,6 +305,7 @@ impl MachinePluginStore {
             process_tree_exited: false,
             login_succeeded: false,
             logout: None,
+            process: Some(processes::Reservation::new()?),
         };
         atomic_write(
             &directory.join("profile.json"),
@@ -537,6 +541,7 @@ impl MachinePluginStore {
         provider: &str,
         generation: u64,
     ) -> Result<(PathBuf, Profile)> {
+        validate_plugin_id(provider)?;
         ensure!(
             !self.account_id.is_default() && generation > 0,
             "named native profile required"
@@ -816,12 +821,9 @@ mod tests {
             request: "logout-1".into(),
             succeeded: None,
             process_tree_exited: false,
+            process: None,
         });
-        fs::write(
-            directory.join("profile.json"),
-            serde_json::to_vec(&profile).unwrap(),
-        )
-        .unwrap();
+        logout::persist(&directory, &profile).unwrap();
         assert!(
             !store
                 .native_auth_trees_exited("claude-code", 1, "login-1", "logout-1")
@@ -926,7 +928,7 @@ mod tests {
         assert!(ensure_revoked(&root, id.as_str(), "claude-code").is_ok());
     }
 
-    fn package() -> ProviderPackage {
+    pub(super) fn package() -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource =
             serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap();
         cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
@@ -992,7 +994,7 @@ mod tests {
         );
     }
 
-    fn ready(store: &MachinePluginStore, package: &ProviderPackage) -> PathBuf {
+    pub(super) fn ready(store: &MachinePluginStore, package: &ProviderPackage) -> PathBuf {
         let root = store.native_profile_root("claude-code");
         let directory = root.join("generations/1");
         fs::create_dir_all(directory.join("home")).unwrap();
@@ -1026,6 +1028,7 @@ mod tests {
             process_tree_exited: true,
             login_succeeded: true,
             logout: None,
+            process: None,
         };
         fs::write(
             directory.join("profile.json"),
@@ -1059,6 +1062,7 @@ mod tests {
                 process_tree_exited: false,
                 request: "logout-1".into(),
                 succeeded,
+                process: None,
             });
             atomic_write(
                 &directory.join("profile.json"),
@@ -1074,12 +1078,16 @@ mod tests {
             assert!(home.exists());
         }
         profile.logout.as_mut().unwrap().succeeded = Some(true);
-        atomic_write(
-            &directory.join("profile.json"),
-            &serde_json::to_vec(&profile).unwrap(),
-            0o600,
-        )
-        .unwrap();
+        // A successful leader without subtree proof must retain credentials.
+        logout::persist(&directory, &profile).unwrap();
+        assert!(
+            store
+                .cleanup_logged_out_native_profile("claude-code", 1, "login-1", "logout-1")
+                .is_err()
+        );
+        assert!(home.exists());
+        profile.logout.as_mut().unwrap().process_tree_exited = true;
+        logout::persist(&directory, &profile).unwrap();
         for (login, operation) in [("other-login", "logout-1"), ("login-1", "other-logout")] {
             assert!(
                 store
@@ -1155,6 +1163,7 @@ mod tests {
             process_tree_exited: false,
             request: "logout-1".into(),
             succeeded: None,
+            process: None,
         });
         atomic_write(
             &directory.join("profile.json"),

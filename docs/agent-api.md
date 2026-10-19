@@ -1086,7 +1086,15 @@ Broker restart can reuse the durable binding. New Linux launches record their
 kernel boot ID before spawn. Launch/stop recovery can persist exit after observing
 a distinct valid boot ID on the same Machine; it preserves both boot IDs and the
 original launch. Queries remain read-only. Old journals without a boot stamp
-and corrupt evidence remain unconfirmed. Named systemd workers use a startup pipe:
+and corrupt evidence remain unconfirmed. New Direct launches also persist the
+exclusive cgroup path, filesystem device/inode and owner process incarnation
+before spawn. Explicit stop/recycle can recover that exact tree after PID-map
+loss, including a same-boot Machine crash. Descriptor-relative traversal refuses
+links, foreign filesystems and replacement cgroups. Recovery kills the original
+subtree, removes its empty descendant groups and removes the original group
+before recording exit; this closes a delayed pre-exec membership race. Late
+recovery still cannot complete a newer launch. Named systemd workers use a
+startup pipe:
 after argument validation and before Provider initialization, the worker requires
 its exact launch token. The broker sends it only after durably binding the unit
 and checking the launch is still admitted. EOF, incomplete tokens, capture timeout
@@ -1104,8 +1112,9 @@ acceptance; revocation reports completion only when every planned proof exists.
 New native login/logout executions require delegated Linux cgroup-v2 containment
 before the Provider executable starts. Failure to join prevents execution. The
 runner kills the owned subtree and requires `cgroup.events` to report
-`populated 0` before returning a confirmed result; missing observations and
-timeouts retain an unconfirmed outcome. Future cancellation signals the subtree
+`populated 0` and the exact group to be removed before returning a confirmed
+result; missing observations and timeouts retain an unconfirmed outcome. Future
+cancellation signals the subtree
 without creating a completion receipt. This is process lifecycle containment,
 not a sandbox against root or deliberate same-user cgroup migration. Machine
 metadata persists login and logout containment outcomes separately, before
@@ -1118,6 +1127,20 @@ Native profile completion, recovery and runtime-home admission also require
 the login process-tree exit proof. A successful leader exit alone cannot make
 an old profile usable after restart; callers must reconcile the original
 operation rather than silently upgrading its evidence.
+Native reservations now retain the owning Machine process's boot ID, PID and
+kernel start time, then bind the exact cgroup before dispatch. Reconciliation of
+the original logout can recover an orphaned login or logout only after that
+owner has exited. A reservation interrupted before containment binding proves
+that it never reached spawn; legacy metadata without the reservation does not.
+This recovery records only tree termination: it cannot infer native login or
+logout success, bind an identity, or delete a home whose logout result remains
+unknown. A live owner, including another in-flight retry, is left untouched.
+Private-home cleanup requires both trees stopped and confirmed native logout
+success, including when a legacy leader-only receipt says the command succeeded.
+These additions to private profile metadata require the matching native-profile
+reader in the worker bundle. A host release retaining an older reader must keep
+named admission closed; accepting the aligned worker bundle is a separate
+maintenance gate, not a consequence of Controller/Web deployment.
 Native logout evidence does not establish exit for other commands or active
 sessions; the internal completion transaction still checks the whole plan.
 A persisted `CleanupRequired` refusal with no dispatch enrollment/revision,

@@ -25,6 +25,8 @@ pub(crate) struct WorkerExit {
     pub rebooted_into: Option<uuid::Uuid>,
     #[serde(default)]
     pub systemd: Option<SystemdWorker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub containment: Option<crate::cgroup::ContainmentIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +190,12 @@ impl MachinePluginStore {
         if let Some(binding) = &receipt.binding {
             binding.validate()?;
         }
+        if let Some(identity) = &receipt.containment {
+            ensure!(
+                receipt.systemd.is_none() && receipt.boot == Some(identity.boot()),
+                "worker containment scope mismatch"
+            );
+        }
         ensure!(
             receipt
                 .readmission
@@ -216,14 +224,24 @@ impl MachinePluginStore {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_bound_account_worker(
         &self,
         launch: &crate::runtime_wire::StartSession,
+    ) -> Result<uuid::Uuid> {
+        self.begin_contained_account_worker(launch, None)
+    }
+
+    pub(crate) fn begin_contained_account_worker(
+        &self,
+        launch: &crate::runtime_wire::StartSession,
+        containment: Option<&crate::cgroup::ContainmentIdentity>,
     ) -> Result<uuid::Uuid> {
         self.begin_account_worker_binding(
             &launch.session_id,
             &launch.provider_account_id,
             Some(WorkerBinding::from_launch(launch)?),
+            containment.cloned(),
         )
     }
 
@@ -235,7 +253,7 @@ impl MachinePluginStore {
         session: &str,
         account: &ProviderAccountId,
     ) -> Result<uuid::Uuid> {
-        self.begin_account_worker_binding(session, account, None)
+        self.begin_account_worker_binding(session, account, None, None)
     }
 
     fn begin_account_worker_binding(
@@ -243,6 +261,7 @@ impl MachinePluginStore {
         session: &str,
         account: &ProviderAccountId,
         binding: Option<WorkerBinding>,
+        containment: Option<crate::cgroup::ContainmentIdentity>,
     ) -> Result<uuid::Uuid> {
         ensure!(
             !account.is_default()
@@ -252,6 +271,13 @@ impl MachinePluginStore {
             "invalid worker exit scope"
         );
         let boot = current_boot()?;
+        if let Some(identity) = &containment {
+            ensure!(
+                Some(identity.boot()) == boot
+                    && *identity.owner() == crate::cgroup::ProcessOwner::current()?,
+                "worker containment owner mismatch"
+            );
+        }
         self.reconcile_worker_boot(session, boot)?;
         let _guard = self.auth_candidates.lock();
         ensure!(
@@ -280,6 +306,7 @@ impl MachinePluginStore {
             boot,
             rebooted_into: None,
             systemd: None,
+            containment,
         })?;
         Ok(launch)
     }
@@ -289,6 +316,23 @@ impl MachinePluginStore {
     /// between hosts is not a supported recovery mechanism.
     pub(crate) fn reconcile_account_worker_boot(&self, session: &str) -> Result<()> {
         self.reconcile_worker_boot(session, current_boot()?)
+    }
+
+    /// Explicit stop/recycle only; passive reads never kill an active worker.
+    /// Reload the exact launch after the await so a stale recovery cannot mark
+    /// a newer worker exited. Missing legacy containment remains unknown.
+    pub(crate) async fn terminate_account_worker_tree(&self, session: &str) -> Result<()> {
+        self.reconcile_account_worker_boot(session)?;
+        let Some(receipt) = self.account_worker_exit(session)? else {
+            return Ok(());
+        };
+        if !receipt.tree_exited
+            && let Some(identity) = &receipt.containment
+        {
+            identity.terminate().await?;
+            self.record_account_worker_exit(session, &receipt.account, receipt.launch)?;
+        }
+        Ok(())
     }
 
     fn reconcile_worker_boot(&self, session: &str, current: Option<uuid::Uuid>) -> Result<()> {
@@ -347,7 +391,10 @@ impl MachinePluginStore {
             receipt.account == *account && receipt.launch == launch,
             "worker binding scope mismatch"
         );
-        ensure!(!receipt.tree_exited, "worker already exited");
+        ensure!(
+            !receipt.tree_exited && receipt.containment.is_none(),
+            "worker already exited or bound to Direct containment"
+        );
         ensure!(
             !binding.boot.is_nil() && receipt.boot.is_none_or(|boot| boot == binding.boot),
             "worker binding boot mismatch"
@@ -361,13 +408,14 @@ impl MachinePluginStore {
     }
 
     pub(super) fn persist_worker_exit(&self, receipt: &WorkerExit) -> Result<()> {
+        let bytes = serde_json::to_vec(receipt)?;
+        ensure!(
+            bytes.len() <= 4096,
+            "worker exit journal exceeds read limit"
+        );
         let root = self.worker_exit_root();
         prepare_private_directory(&root)?;
-        atomic_write(
-            &root.join(marker_name(&receipt.session)),
-            &serde_json::to_vec(receipt)?,
-            0o600,
-        )?;
+        atomic_write(&root.join(marker_name(&receipt.session)), &bytes, 0o600)?;
         fs::File::open(&root)?.sync_all()?;
         fs::File::open(&self.auth_base)?.sync_all()?;
         Ok(())
