@@ -1,6 +1,6 @@
 import { desktopSize } from "../surface/desktopSize";
 import { Component, type ReactNode, useMemo, useState } from "react";
-import { Box, Skeleton, Stack, Typography } from "@mui/material";
+import { Alert, Box, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
@@ -24,6 +24,9 @@ import {
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
 import { terminalDisplaySegments } from "./terminalHighlight";
+import { toolResult } from "./result";
+import { StructuredResult } from "./StructuredResult";
+import { Collapsible } from "./Collapsible";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
@@ -52,6 +55,7 @@ export interface ToolCtx {
   rawInput: Record<string, unknown>;
   content: unknown;
   running: boolean;
+  status?: string;
 }
 
 type Renderer = (ctx: ToolCtx) => ReactNode;
@@ -235,12 +239,8 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
   );
 };
 
-const genericTool: Renderer = ({ rawInput, content, running }) => {
-  const result = <OutputBlocks content={content} />;
-  const hasResult = Boolean(
-    textOfContent(content) || hasDiff(content) ||
-      imagesOfContent(content).length,
-  );
+const genericTool: Renderer = (ctx) => {
+  const { rawInput } = ctx;
   return (
     <Stack spacing={1}>
       {Object.keys(rawInput).length > 0 && (
@@ -248,11 +248,7 @@ const genericTool: Renderer = ({ rawInput, content, running }) => {
           <KeyValues data={rawInput} />
         </Labeled>
       )}
-      {hasResult
-        ? <Labeled label="Result">{result}</Labeled>
-        : running
-        ? <RunningHint />
-        : null}
+      <ResultBody ctx={ctx} />
     </Stack>
   );
 };
@@ -329,6 +325,12 @@ const MCP_WIDGETS: Record<string, McpWidget> = {
     label: "Query",
   },
   "openaiDeveloperDocs:fetch_openai_doc": { primary: "url", label: "Document" },
+  "cowboy:cowboy_execute": { primary: "action", label: "Action", language: "text" },
+  "cowboy:cowboy_receipt": { primary: "operation", label: "Operation ID", language: "text" },
+  "matrix:memory_get": { primary: "id", label: "Memory ID", language: "text" },
+  "matrix:memory_forget": { primary: "id", label: "Memory ID", language: "text" },
+  "matrix:memory_put": { primary: "body", label: "Memory", language: "markdown" },
+  "matrix:memory_receipt": { primary: "operation", label: "Operation ID", language: "text" },
 };
 
 const mcpTool: Renderer = (ctx) => {
@@ -336,7 +338,11 @@ const mcpTool: Renderer = (ctx) => {
   if (!mcp) return genericTool(ctx);
   const args = { ...mcp.arguments };
   const widget = MCP_WIDGETS[`${mcp.server}:${mcp.tool}`] ??
-    (typeof args.function === "string"
+    (typeof args.help === "string"
+      ? { primary: "help", label: "Help topic", language: "text" }
+      : typeof args.code === "string"
+      ? { primary: "code", label: "Program", language: args.language === "js" ? "javascript" : mcp.tool === "memory_search" ? "python" : "typescript" }
+      : typeof args.function === "string"
       ? { primary: "function", label: "Script", language: "javascript" }
       : typeof args.query === "string"
       ? { primary: "query", label: "Query" }
@@ -346,11 +352,7 @@ const mcpTool: Renderer = (ctx) => {
   const primary = widget && typeof args[widget.primary] === "string"
     ? String(args[widget.primary])
     : "";
-  if (widget) delete args[widget.primary];
-  const hasResult = Boolean(
-    textOfContent(ctx.content) || hasDiff(ctx.content) ||
-      imagesOfContent(ctx.content).length,
-  );
+  if (primary && widget) delete args[widget.primary];
   return (
     <Stack spacing={1}>
       {primary && widget && (
@@ -358,14 +360,9 @@ const mcpTool: Renderer = (ctx) => {
           label={widget.label}
           action={<CopyTextButton text={primary} label={widget.label} />}
         >
-          <CodeView
-            code={primary}
-            lang={widget.language ??
-              (widget.primary === "query" ? "text" : "uri")}
-            maxHeight={260}
-            touchWrap={widget.primary !== "function"}
-            hideCopy
-          />
+          {widget.primary === "code" || widget.primary === "function"
+            ? <CodeView code={primary} lang={widget.language ?? "typescript"} maxHeight={260} touchWrap hideCopy />
+            : <Collapsible maxHeight={200}><Typography variant="body2" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: ["id", "operation", "action"].includes(widget.primary) ? "ui-monospace, monospace" : "inherit" }}>{primary}</Typography></Collapsible>}
         </Labeled>
       )}
       {Object.keys(args).length > 0 && (
@@ -373,18 +370,35 @@ const mcpTool: Renderer = (ctx) => {
           <KeyValues data={args} />
         </Labeled>
       )}
-      {hasResult
-        ? (
-          <Labeled label="Result">
-            <OutputBlocks content={ctx.content} />
-          </Labeled>
-        )
-        : ctx.running
-        ? <RunningHint />
-        : <Empty />}
+      <ResultBody ctx={ctx} />
     </Stack>
   );
 };
+
+function ResultBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
+  const result = useMemo(() => toolResult(ctx.content), [ctx.content]);
+  const failed = result.error || ctx.status === "failed";
+  const missing = ctx.running
+    ? "Waiting for tool result…"
+    : failed
+    ? "Tool failed without a recorded error message."
+    : ctx.status === "interrupted" || ctx.status === "cancelled"
+    ? "Tool stopped before a result was recorded."
+    : result.recorded
+    ? "Tool returned an empty result."
+    : "No result was recorded for this call.";
+  return (
+    <Labeled label="Result">
+      <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+        {failed && result.blocks.length > 0 && <Alert severity="error">Tool reported an error</Alert>}
+        {result.blocks.length > 0
+          ? <OutputBlocks content={ctx.content} renderData={(value) => <StructuredResult value={value} />} />
+          : <Typography role="status" variant="body2" color={failed ? "error.main" : "text.secondary"}>{missing}</Typography>}
+        {ctx.running && <RunningHint />}
+      </Stack>
+    </Labeled>
+  );
+}
 
 function Empty(): React.JSX.Element {
   return (
@@ -491,8 +505,8 @@ export function ToolBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
       : undefined) ??
     BY_KIND[ctx.kind] ?? genericTool;
   return (
-    <Box>
-      <ToolBoundary>{renderer(ctx)}</ToolBoundary>
+    <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+      <ToolBoundary key={`${ctx.toolName}:${ctx.title}`}>{renderer(ctx)}</ToolBoundary>
     </Box>
   );
 }

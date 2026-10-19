@@ -27,11 +27,11 @@ export function toolRuns(items: RenderItem[]): ToolRun[] {
       flush();
       continue;
     }
-    if (item.rawInput === undefined && item.content === undefined) {
+    const mcp = mcpIdentity(item.toolName, item.rawInput, item.title);
+    if (item.rawInput === undefined && item.content === undefined && !mcp) {
       flush();
       continue;
     }
-    const mcp = mcpIdentity(item.toolName, item.rawInput, item.title);
     if (mcp && current?.server === mcp.server) {
       current.tools.push(item);
       continue;
@@ -42,4 +42,3 @@ export function toolRuns(items: RenderItem[]): ToolRun[] {
   flush();
   return runs;
 }
-

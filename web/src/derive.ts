@@ -8,6 +8,7 @@ import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDet
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import { isTurnActivityUpdate } from "./turnWaiting";
+import { resultStatus, toolContent } from "./tools/result";
 import {
   isHumanPrompt,
   isInternalRuntimePrompt,
@@ -254,6 +255,7 @@ function pushThoughtText(item: { sections: string[] }, incoming: string): void {
 /// `_meta.claudeCode.toolName = "Bash"`). The provider key varies, so scan the
 /// one-level `_meta` object for any `{ toolName }`. "" when absent.
 function toolNameOf(update: AcpUpdate): string {
+  if (typeof update["name"] === "string") return update["name"];
   const meta = update["_meta"];
   if (meta && typeof meta === "object") {
     for (const v of Object.values(meta as Record<string, unknown>)) {
@@ -266,10 +268,8 @@ function toolNameOf(update: AcpUpdate): string {
   return "";
 }
 
-// Codex MCP read calls may expose their useful payload through the generic
-// `locations` + `rawOutput.formatted_output` fields instead of ACP's optional
-// `rawInput` + `content` pair. Normalize both shapes once so the transcript can
-// always offer the same details surface.
+// Older/uncompacted events may carry read locations or raw-only results.
+// Normalize them to the same details surface as current compact live events.
 function toolInputOf(update: AcpUpdate): unknown {
   const explicit = update["rawInput"] ?? update["input"];
   if (explicit !== undefined) return explicit;
@@ -284,13 +284,7 @@ function toolInputOf(update: AcpUpdate): unknown {
 }
 
 function toolContentOf(update: AcpUpdate): unknown {
-  if (update["content"] !== undefined) return update["content"];
-  const rawOutput = update["rawOutput"];
-  if (!rawOutput || typeof rawOutput !== "object") return undefined;
-  const formatted = (rawOutput as { formatted_output?: unknown }).formatted_output;
-  return typeof formatted === "string"
-    ? [{ type: "raw_output", text: formatted }]
-    : undefined;
+  return toolContent(update);
 }
 
 function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void {
@@ -604,6 +598,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const filtered = items.filter((it) =>
     it.kind !== "thought" || it.sections.some((section) => section.trim() !== "")
   );
+  for (const item of filtered) {
+    if (item.kind === "tool") item.status = resultStatus(item.status, item.content);
+  }
   const result = shareUnchangedRows(timeline, filtered);
   DERIVE_CACHE.set(timeline, result);
   return result;

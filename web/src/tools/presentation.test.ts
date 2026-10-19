@@ -39,6 +39,28 @@ test("MCP identity normalizes Codex fields and Claude tool names", () => {
   }), "codex · MCP · chrome-devtools");
 });
 
+test("MCP identity keeps qualified names and tools with their own server arguments", () => {
+  for (const name of ["mcp__cowboy__cowboy_read", "functions.mcp__cowboy__cowboy_read", "mcp.cowboy.cowboy_read"]) {
+    const identity = mcpIdentity(name, { server: "target", tool: "callee", arguments: { id: 1 }, code: "return 1" });
+    assertEquals(identity?.server, "cowboy");
+    assertEquals(identity?.tool, "cowboy_read");
+    assertEquals(identity?.arguments.code, "return 1");
+  }
+  assertEquals(mcpIdentity("mcp__future__name__with__separators", {})?.tool, "name__with__separators");
+  assertEquals(mcpIdentity("", { server: "matrix", tool: "memory_search", arguments: '{"query":"hello"}' })?.arguments.query, "hello");
+});
+
+test("MCP headings describe Cowboy help/actions and Matrix operations across providers", () => {
+  for (const provider of ["codex", "claude-code", "claude-deepseek", "gemini", "grok", "future-provider"]) {
+    const base = { provider, toolName: "", kind: "search", title: "" };
+    assertEquals(toolHeading({ ...base, rawInput: { server: "cowboy", tool: "cowboy_read", arguments: { help: "calls" } } }), "Cowboy help · calls");
+    assertEquals(toolHeading({ ...base, rawInput: { server: "cowboy", tool: "cowboy_execute", arguments: { action: "review.start" } } }), "Cowboy · review.start");
+    assertEquals(toolHeading({ ...base, toolName: "mcp__matrix__memory_search", rawInput: { query: "UX" } }), "Search memory");
+    assertEquals(toolUsesRawOnly({ ...base, rawInput: { server: "matrix", tool: "memory_search", arguments: {} } }), false);
+  }
+  assertEquals(toolCopyText({ title: "mcp.cowboy.cowboy_read", rawInput: { code: "return await cowboy.session.info()" }, content: { structuredContent: { status: "busy" } } }), 'return await cowboy.session.info()\n\n{\n  "status": "busy"\n}');
+});
+
 test("tool headings adapt Codex and Claude execute variants", () => {
   assertEquals(toolHeading({
     provider: "codex",

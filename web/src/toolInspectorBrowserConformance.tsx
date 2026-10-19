@@ -1,10 +1,12 @@
 /** Actual Desktop tool inspector layout and image output in a real browser. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { ToolDetailsBrowser } from "./Transcript";
-import type { RenderItem } from "./derive";
+import { derive, type RenderItem } from "./derive";
 import { toolRuns } from "./tools/runs";
+import { ToolBody } from "./tools/registry";
 
 // 1x1 opaque PNG.
 const PNG =
@@ -35,7 +37,9 @@ function readImage(key: string, image: Record<string, string>): RenderItem {
   };
 }
 
-export async function runToolInspectorBrowserConformance(): Promise<string[]> {
+export async function runToolInspectorBrowserConformance(
+  keepFixture = false,
+): Promise<string[]> {
   const items: RenderItem[] = [];
   for (let index = 0; index < 40; index++) {
     items.push({
@@ -64,19 +68,98 @@ export async function runToolInspectorBrowserConformance(): Promise<string[]> {
   }
   items.push(readImage("inline", { data: PNG }));
   items.push(readImage("missing", { url: "/api/artifacts/missing.png" }));
+  const mcp = (
+    key: string,
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    rawOutput?: unknown,
+  ): RenderItem => {
+    const item = derive([{
+      session_id: "fixture",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: key,
+        title: `mcp.${server}.${tool}`,
+        kind: "search",
+        status: "completed",
+        rawInput: { server, tool, arguments: args },
+        ...(rawOutput === undefined ? {} : { rawOutput }),
+      },
+    }])[0]!;
+    return { ...item, key };
+  };
+  items.push(mcp("help", "cowboy", "cowboy_read", { help: "calls" }, {
+    result: {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          api: "cowboy-ts-v1",
+          types: "interface Calls { list(): Promise<Call[]>; }",
+        }),
+      }],
+    },
+    error: null,
+  }));
+  items.push(
+    mcp("program", "cowboy", "cowboy_read", {
+      code: "return await cowboy.session.info();",
+      language: "ts",
+    }, { status: "busy", queued: 0 }),
+  );
+  items.push(
+    mcp("action", "cowboy", "cowboy_execute", {
+      action: "review.start",
+      arguments: { title: "Review tool UX" },
+      operation: "review-1",
+    }, { receipt: { status: "accepted", operation: "review-1" } }),
+  );
+  items.push(
+    mcp("memory", "matrix", "memory_search", { query: "tool UX" }, {
+      content: [],
+      structuredContent: {
+        hits: [{
+          title: "Tool result UX",
+          snippet: "Preserve structured results",
+          ref: { id: "memory-1", revision: 3 },
+        }],
+        truncated: false,
+      },
+    }),
+  );
+  items.push(mcp("absent", "matrix", "memory_get", { id: "historical" }));
+  items.push(mcp("record", "matrix", "memory_get", { id: "memory-1" }, {
+    structuredContent: {
+      id: "memory-1",
+      revision: 3,
+      title: "Tool result UX",
+      body: "Readable **memory body**",
+      sources: [{ quote: "Supporting evidence" }],
+    },
+  }));
+  items.push(
+    mcp("error", "other-server", "lookup", { query: "test" }, {
+      result: null,
+      error: { message: "Service unavailable" },
+    }),
+  );
+  items.push(mcp("empty", "cowboy", "cowboy_status", {}, { content: [] }));
   const runs = toolRuns(items);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const show = async (selectedKey: string): Promise<void> => {
+  const show = async (selectedKey: string, desktop = true): Promise<void> => {
     flushSync(() =>
       root.render(
         <BrowserProductTheme>
+          <CssBaseline />
           <ToolDetailsBrowser
             items={items}
             runs={runs}
             selectedKey={selectedKey}
-            desktop
+            desktop={desktop}
             provider="claude"
             onSelect={() => {}}
             onClose={() => {}}
@@ -125,13 +208,155 @@ export async function runToolInspectorBrowserConformance(): Promise<string[]> {
       document.body.textContent?.includes("No output"),
       "an unloadable image lost the text fallback",
     );
+    await show("help");
+    check(
+      document.body.textContent?.includes("API reference"),
+      "MCP help lost its typed reference",
+    );
+    check(
+      document.body.textContent?.includes("Calls"),
+      "MCP opaque help result disappeared",
+    );
+    check(
+      document.querySelector("[aria-label='Tool detail view']"),
+      "MCP search kind incorrectly forced Raw",
+    );
+    const raw = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Raw");
+    check(raw, "missing raw escape hatch");
+    raw.click();
+    await wait(150);
+    check(
+      document.body.textContent?.includes("tool_result"),
+      "Raw omitted original opaque envelope",
+    );
+    const formatted = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Formatted");
+    formatted?.click();
+    await wait(150);
+    check(
+      document.body.textContent?.includes("API reference"),
+      "Formatted result did not return",
+    );
+
+    await show("program");
+    check(
+      document.body.textContent?.includes("Program") &&
+        document.body.textContent.includes("cowboy.session.info"),
+      "CodeAct program not exposed",
+    );
+    await show("action");
+    check(
+      document.body.textContent?.includes("review.start") &&
+        document.body.textContent.includes("accepted"),
+      "operation/receipt missing",
+    );
+    await show("memory");
+    check(
+      document.querySelector("[data-memory-results]")?.textContent?.includes(
+        "Preserve structured results",
+      ),
+      "structured-only memory results missing",
+    );
+    await show("record");
+    check(
+      document.querySelector("[data-memory-record] strong")?.textContent ===
+        "memory body",
+      "memory body lost Markdown rendering",
+    );
+    const evidence = document.querySelector<HTMLDetailsElement>(
+      "[data-memory-record] details",
+    );
+    check(
+      evidence && !evidence.open &&
+        evidence.textContent?.includes("Supporting evidence"),
+      "memory evidence not inspectable",
+    );
+    await show("absent");
+    check(
+      document.body.textContent?.includes(
+        "No result was recorded for this call.",
+      ),
+      "missing history result conflated with empty return",
+    );
+    await show("empty");
+    check(
+      document.body.textContent?.includes("Tool returned an empty result."),
+      "explicit empty result not explained",
+    );
+    await show("error");
+    check(
+      document.body.textContent?.includes("Service unavailable") &&
+        document.body.textContent.includes("Tool reported an error"),
+      "transport error hidden",
+    );
+
+    // Exercise the shared result/argument frame at phone, tablet and desktop
+    // pane widths, including long operation IDs and structured values. The
+    // actual product theme owns typography, touch targets and code wrapping.
+    for (const width of [320, 390, 768, 1100]) {
+      const fixture = document.createElement("div");
+      fixture.style.width = `${width}px`;
+      container.append(fixture);
+      const fixtureRoot = createRoot(fixture);
+      flushSync(() =>
+        fixtureRoot.render(
+          <BrowserProductTheme>
+            <ToolBody
+              ctx={{
+                provider: "future-provider",
+                toolName: "mcp__cowboy__cowboy_execute",
+                kind: "execute",
+                title: "MCP",
+                rawInput: {
+                  action: "preferences.update",
+                  operation: "x".repeat(200),
+                  arguments: { description: "long field ".repeat(30) },
+                },
+                content: {
+                  structuredContent: { value: "multilingual 中文 ".repeat(40) },
+                },
+                running: false,
+                status: "completed",
+              }}
+            />
+          </BrowserProductTheme>,
+        )
+      );
+      await wait(200);
+      const overflow = [...fixture.querySelectorAll<HTMLElement>("*")].filter((
+        node,
+      ) =>
+        node.getBoundingClientRect().right >
+          fixture.getBoundingClientRect().right + 1
+      ).slice(0, 4).map((node) =>
+        `${node.tagName}.${node.className}:${node.getBoundingClientRect().width}`
+      ).join("; ");
+      check(
+        fixture.scrollWidth <= width + 1,
+        `MCP frame overflows ${width}px: ${fixture.scrollWidth}; ${overflow}`,
+      );
+      flushSync(() => fixtureRoot.unmount());
+      fixture.remove();
+    }
+    if (keepFixture) await show("memory", window.innerWidth >= 1000);
     return [
       "long history descriptions ellipsize without panning the rail",
       "an image Read shows its image",
       "an unloadable image Read falls back to the text presentation",
+      "MCP help and typed results retain Formatted and Raw views",
+      "CodeAct programs and action receipts are readable",
+      "structured-only memory hits render as cards",
+      "memory bodies and evidence retain readable and inspectable views",
+      "historical missing and explicit empty results are distinct",
+      "transport errors remain visible",
+      "phone, tablet and desktop MCP frames stay within their pane",
     ];
   } finally {
-    flushSync(() => root.unmount());
-    container.remove();
+    if (!keepFixture) {
+      flushSync(() => root.unmount());
+      container.remove();
+    }
   }
 }

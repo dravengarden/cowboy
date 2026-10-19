@@ -68,9 +68,9 @@ impl EventReducer {
     /// canonical form. A returned envelope may reuse an earlier seq, causing an
     /// UPSERT or in-memory replacement.
     pub(crate) fn reduce(&mut self, mut env: Envelope) -> Option<Envelope> {
-        if let Event::Update { update } = &mut env.event {
-            crate::managed_calls::media::compact_metadata(update);
-        }
+        // Also normalize replayed/raw completions before merging them. Otherwise
+        // the merge would discard a raw-only result before it can be projected.
+        compact_inbound_event(&mut env.event);
         let sid = env.session_id.clone();
         let Event::Update { update } = &env.event else {
             self.text.remove(&sid);
@@ -157,31 +157,10 @@ impl EventReducer {
                             && let (Some(base_object), Some(delta)) =
                                 (base_update.as_object_mut(), delta.as_object())
                         {
-                            let formatted_fallback = if !base_object.contains_key("content")
-                                && !delta.contains_key("content")
-                            {
-                                delta
-                                    .get("rawOutput")
-                                    .and_then(serde_json::Value::as_object)
-                                    .and_then(|raw| raw.get("formatted_output"))
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::to_owned)
-                            } else {
-                                None
-                            };
                             for (name, value) in delta {
                                 if name != "sessionUpdate" && name != "rawOutput" {
                                     base_object.insert(name.clone(), value.clone());
                                 }
-                            }
-                            if let Some(formatted) = formatted_fallback {
-                                base_object.insert(
-                                    "content".to_owned(),
-                                    serde_json::json!([{
-                                        "type": "raw_output",
-                                        "text": formatted,
-                                    }]),
-                                );
                             }
                             base_object.insert(
                                 "sessionUpdate".to_owned(),
@@ -255,11 +234,9 @@ pub(crate) fn compact_inbound_event(event: &mut Event) {
 /// Durable history and the Hub hot tail only need the fields the Cowboy client
 /// can render. ACP adapters commonly duplicate multi-megabyte command/image
 /// results in `rawOutput` even when `content` already carries the presentation.
-/// Codex MCP reads are the one supported fallback: when they only expose
-/// `rawOutput.formatted_output`, project it into the same `content` shape the
-/// frontend already derives for a live frame before dropping it. Live
-/// subscribers now receive this compact form too — `derive.ts` already prefers
-/// `content` and only reads `formatted_output` as a fallback.
+/// A raw-only result is not a duplicate. Preserve it once in `content` for both
+/// live subscribers and history. In particular Codex MCP reports the complete
+/// `{result, error}` envelope only in `rawOutput`, without any ACP content.
 pub(crate) fn compact_canonical_tool_output(envelope: &mut Envelope) {
     compact_inbound_event(&mut envelope.event);
 }
@@ -277,18 +254,30 @@ pub(crate) fn compact_tool_update(update: &mut serde_json::Value) {
     ) {
         return;
     }
-    let raw_output = update.remove("rawOutput");
-    if !update.contains_key("content")
-        && let Some(serde_json::Value::String(formatted)) = raw_output.and_then(|raw| match raw {
-            serde_json::Value::Object(mut raw) => raw.remove("formatted_output"),
-            _ => None,
-        })
-    {
-        update.insert(
-            "content".to_owned(),
-            serde_json::json!([{ "type": "raw_output", "text": formatted }]),
-        );
+    let Some(raw_output) = update.remove("rawOutput") else {
+        return;
+    };
+    let has_content = update.get("content").is_some_and(|content| match content {
+        serde_json::Value::Null => false,
+        serde_json::Value::Array(blocks) => !blocks.is_empty(),
+        _ => true,
+    });
+    if has_content {
+        return;
     }
+    let content = match raw_output {
+        serde_json::Value::Object(mut raw)
+            if raw
+                .get("formatted_output")
+                .is_some_and(serde_json::Value::is_string) =>
+        {
+            serde_json::json!([{
+                "type": "raw_output", "text": raw.remove("formatted_output"),
+            }])
+        }
+        raw => serde_json::json!([{ "type": "tool_result", "value": raw }]),
+    };
+    update.insert("content".to_owned(), content);
 }
 
 fn is_pure_terminal_output_delta(update: &serde_json::Value) -> bool {
@@ -489,6 +478,69 @@ mod tests {
                 .pointer("/content/0/text")
                 .and_then(serde_json::Value::as_str),
             Some("file bytes")
+        );
+    }
+
+    #[test]
+    fn mcp_results_survive_ingest_reduction_and_replay_once() {
+        // The pinned Codex ACP reports MCP completions only as rawOutput.
+        // Other adapters use plain text, arrays, structured values or errors.
+        for raw in [
+            serde_json::json!({"result":{"content":[{"type":"text","text":"help calls"}],
+                "structuredContent":{"api":"cowboy-ts-v1"}},"error":null}),
+            serde_json::json!({"result":null,"error":{"message":"unavailable","code":42}}),
+            serde_json::json!({"content":[],"structuredContent":{"hits":[]}}),
+            serde_json::json!("plain result"),
+            serde_json::json!([]),
+            serde_json::json!(false),
+            serde_json::json!(0),
+            serde_json::Value::Null,
+        ] {
+            for already_compacted in [false, true] {
+                let mut reducer = EventReducer::default();
+                reducer.reduce(update(1, "tool_call", "mcp"));
+                let mut completion = update(2, "tool_call_update", "mcp");
+                let Event::Update { update } = &mut completion.event else {
+                    unreachable!();
+                };
+                update["status"] = serde_json::json!("completed");
+                update["content"] = serde_json::json!([]);
+                update["rawOutput"] = raw.clone();
+                if already_compacted {
+                    compact_inbound_event(&mut completion.event);
+                }
+                let canonical = reducer.reduce(completion).expect("completion");
+                assert_eq!(canonical.seq, 1, "keep one canonical tool row");
+                let Event::Update { update } = &canonical.event else {
+                    unreachable!();
+                };
+                assert!(update.get("rawOutput").is_none());
+                assert_eq!(update["content"][0]["value"], raw);
+                assert!(reducer.tools.is_empty());
+                let encoded = serde_json::to_vec(&canonical).expect("serialize");
+                let replay: Envelope = serde_json::from_slice(&encoded).expect("replay");
+                let replay = EventReducer::default()
+                    .reduce(replay)
+                    .expect("reduce replay");
+                assert_eq!(serde_json::to_vec(&replay).unwrap(), encoded);
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_image_results_remain_available_for_artifact_externalization() {
+        let mut event = Event::Update {
+            update: serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"image",
+                "rawOutput":{"result":{"content":[{"type":"image","mimeType":"image/png",
+                    "data":"image-bytes"}]},"error":null}}),
+        };
+        compact_inbound_event(&mut event);
+        let Event::Update { update } = event else {
+            unreachable!()
+        };
+        assert_eq!(
+            update["content"][0]["value"]["result"]["content"][0]["data"],
+            "image-bytes"
         );
     }
 }

@@ -1,35 +1,7 @@
 import { providerName } from "../providerPresentation";
+import { record, resultText } from "./result";
 
 export { providerName } from "../providerPresentation";
-
-function contentText(content: unknown): string {
-  const blocks = Array.isArray(content)
-    ? content
-    : content == null
-    ? []
-    : [content];
-  return blocks.map((block) => {
-    if (!block || typeof block !== "object") {
-      return typeof block === "string" ? block : "";
-    }
-    const value = block as Record<string, unknown>;
-    if (typeof value.text === "string") return value.text;
-    const nested = value.content;
-    if (
-      nested && typeof nested === "object" &&
-      typeof (nested as Record<string, unknown>).text === "string"
-    ) {
-      return String((nested as Record<string, unknown>).text);
-    }
-    if (value.type === "diff") {
-      const before = typeof value.oldText === "string" ? value.oldText : "";
-      const after = typeof value.newText === "string" ? value.newText : "";
-      return [before && `--- before\n${before}`, after && `+++ after\n${after}`]
-        .filter(Boolean).join("\n");
-    }
-    return "";
-  }).filter(Boolean).join("\n");
-}
 
 export interface McpIdentity {
   server: string;
@@ -42,23 +14,41 @@ export function mcpIdentity(
   rawInput?: unknown,
   title = "",
 ): McpIdentity | null {
-  const input = rawInput && typeof rawInput === "object"
-    ? rawInput as Record<string, unknown>
-    : {};
+  const input = record(rawInput) ?? {};
   const explicitServer = typeof input.server === "string" ? input.server : "";
   const explicitTool = typeof input.tool === "string" ? input.tool : "";
-  const encoded = toolName.startsWith("mcp__") ? toolName.split("__") : [];
-  const dotted = title.startsWith("mcp.") ? title.split(".") : [];
-  const server = explicitServer || encoded[1] || dotted[1] || "";
-  const tool = explicitTool || encoded[2] || dotted[2] || "";
+  const encoded = /^(?:functions\.)?mcp__(.+?)__(.+)$/u.exec(toolName);
+  const dotted = /^mcp\.([^.]+)\.(.+)$/u.exec(toolName) ?? /^mcp\.([^.]+)\.(.+)$/u.exec(title);
+  const server = encoded?.[1] || dotted?.[1] || explicitServer;
+  const tool = encoded?.[2] || dotted?.[2] || explicitTool;
   if (!server || !tool) return null;
-  const args = input.arguments && typeof input.arguments === "object" &&
-      !Array.isArray(input.arguments)
-    ? input.arguments as Record<string, unknown>
-    : explicitServer || explicitTool
-    ? {}
-    : input;
+  // A qualified tool's own fields may be named `server`, `tool` or
+  // `arguments`. Only unwrap the explicit ACP transport envelope.
+  const envelope = explicitServer === server && explicitTool === tool;
+  let args = envelope ? record(input.arguments) ?? {} : input;
+  if (envelope && typeof input.arguments === "string") {
+    try { args = record(JSON.parse(input.arguments)) ?? { arguments: input.arguments }; }
+    catch { args = { arguments: input.arguments }; }
+  }
   return { server, tool, arguments: args };
+}
+
+export function mcpHeading(mcp: McpIdentity): string {
+  const args = mcp.arguments;
+  if (mcp.server === "cowboy") {
+    if (mcp.tool === "cowboy_read" && typeof args.help === "string") return `Cowboy help · ${args.help}`;
+    if (mcp.tool === "cowboy_execute" && typeof args.action === "string") return `Cowboy · ${args.action}`;
+  }
+  if (mcp.server === "matrix") {
+    if (mcp.tool === "memory_read" && typeof args.help === "string") return `Matrix help · ${args.help}`;
+    const titles: Record<string, string> = {
+      memory_search: "Search memory", memory_get: "Read memory", memory_put: "Save memory",
+      memory_forget: "Forget memory", memory_read: "Read memory", memory_execute: "Update memory",
+      memory_receipt: "Memory receipt",
+    };
+    if (titles[mcp.tool]) return titles[mcp.tool]!;
+  }
+  return humanize(mcp.tool);
 }
 
 function humanize(value: string): string {
@@ -78,11 +68,13 @@ export function toolTypeName(
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Tool";
 }
 
-export function toolUsesRawOnly({ kind, toolName = "", title = "" }: {
+export function toolUsesRawOnly({ kind, toolName = "", title = "", rawInput }: {
   kind: string;
   toolName?: string;
   title?: string;
+  rawInput?: unknown;
 }): boolean {
+  if (mcpIdentity(toolName, rawInput, title)) return false;
   const compact = (value: string): string =>
     value.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const normalizedKind = compact(kind);
@@ -105,7 +97,7 @@ export function toolHeading({ provider, toolName, kind, title, rawInput }: {
     ? rawInput as Record<string, unknown>
     : {};
   const mcp = mcpIdentity(toolName, rawInput, title);
-  if (mcp) return humanize(mcp.tool);
+  if (mcp) return mcpHeading(mcp);
   if (kind === "search") return "Web search";
   if (kind === "execute") {
     if (typeof input.description === "string" && input.description.trim()) {
@@ -147,7 +139,8 @@ export function toolCopyText({ title, toolName = "", rawInput, content }: {
   const command = input.command ?? input.cmd;
   const mcp = mcpIdentity(toolName, rawInput, title);
   const mcpPrimary = mcp &&
-    [mcp.arguments.function, mcp.arguments.query, mcp.arguments.url]
+    [mcp.arguments.code, mcp.arguments.function, mcp.arguments.query, mcp.arguments.url,
+      mcp.arguments.action, mcp.arguments.help, mcp.arguments.title, mcp.arguments.id, mcp.arguments.operation]
       .find((value) => typeof value === "string");
   const primary = typeof command === "string"
     ? command
@@ -155,6 +148,6 @@ export function toolCopyText({ title, toolName = "", rawInput, content }: {
     ? command.map(String).join(" ")
     : typeof mcpPrimary === "string"
     ? mcpPrimary
-    : title;
-  return [primary, contentText(content)].filter(Boolean).join("\n\n");
+    : mcp ? mcpHeading(mcp) : title;
+  return [primary, resultText(content)].filter(Boolean).join("\n\n");
 }

@@ -19,6 +19,7 @@ import {
   shouldUseLightweightCode,
 } from "../codeRendering";
 import { HintTooltip } from "../HintTooltip";
+import { jsonTextValue, record, resultText, toolResult } from "./result";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -71,7 +72,7 @@ export function CopyTextButton({ text, label }: { text: string; label: string })
       <IconButton
         aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
         onClick={onCopy}
-        sx={{ width: desktopSize(44), height: desktopSize(36), mr: -0.75 }}
+        sx={{ width: desktopSize(44), height: desktopSize(36), "@media (pointer: coarse)": { width: 44, height: 44 } }}
       >
         {copied
           ? <CheckRounded color="success" sx={{ fontSize: desktopSize(18) }} />
@@ -602,10 +603,10 @@ export function KeyValues({ data }: { data: Record<string, unknown> }): React.JS
         const str = structured ? JSON.stringify(v, null, 2) ?? String(v) : v;
         const multiline = str.includes("\n") || str.length > 80;
         return (
-          <Box key={k} sx={multiline ? {} : { display: "flex", gap: 1, alignItems: "baseline", minWidth: 0 }}>
+          <Box key={k} sx={multiline ? { minWidth: 0 } : { display: "flex", flexWrap: "wrap", gap: 1, alignItems: "baseline", minWidth: 0 }}>
             <Typography
               variant="caption"
-              sx={{ color: "text.secondary", fontWeight: 600, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}
+              sx={{ color: "text.secondary", fontWeight: 600, fontFamily: "ui-monospace, monospace", overflowWrap: "anywhere", minWidth: 0 }}
             >
               {k}
             </Typography>
@@ -630,26 +631,11 @@ export function KeyValues({ data }: { data: Record<string, unknown> }): React.JS
 
 // --- ACP content-block plumbing ---------------------------------------------
 
-interface TextBlock { type: "content"; content?: { type?: string; text?: string } }
 interface DiffBlock { type: "diff"; path?: string; oldText?: string; newText?: string }
-type AnyBlock = TextBlock | DiffBlock | { type?: string; text?: string; [k: string]: unknown };
-
-function asBlocks(content: unknown): AnyBlock[] {
-  if (Array.isArray(content)) return content as AnyBlock[];
-  if (content && typeof content === "object") return [content as AnyBlock];
-  return [];
-}
 
 /** Concatenated plain text from a tool's content blocks (for output rendering). */
 export function textOfContent(content: unknown): string {
-  return asBlocks(content)
-    .map((b) => {
-      if (b.type === "content") return (b as TextBlock).content?.text ?? "";
-      if (typeof (b as { text?: string }).text === "string") return (b as { text: string }).text;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
+  return resultText(content);
 }
 
 /** Displayable images in a tool's content blocks (a Read of a PNG, an MCP
@@ -657,11 +643,9 @@ export function textOfContent(content: unknown): string {
  *  a block with neither loadable bytes nor a URL is skipped. */
 export function imagesOfContent(content: unknown): string[] {
   const sources: string[] = [];
-  for (const b of asBlocks(content)) {
-    const block = b.type === "content" ? (b as { content?: unknown }).content : b;
-    if (!block || typeof block !== "object") continue;
-    const image = block as ContentBlock;
-    if (image.type !== "image") continue;
+  for (const block of toolResult(content).blocks) {
+    if (block.kind !== "image") continue;
+    const image = block.value as ContentBlock;
     const mimeType = typeof image.mimeType === "string" ? image.mimeType : "image/png";
     const src = imageBlockPreviewUrl(image, mimeType);
     if (src) sources.push(src);
@@ -707,7 +691,7 @@ export function OutputImages({
 
 /** Does this content carry a structured diff block? (edit/write/apply_patch) */
 export function hasDiff(content: unknown): boolean {
-  return asBlocks(content).some((b) => b.type === "diff");
+  return toolResult(content).blocks.some((block) => block.kind === "diff");
 }
 
 // A tool's text content is ALREADY markdown as the agent sent it — a Read result
@@ -723,23 +707,48 @@ function withFenceLang(text: string, lang?: string): string {
   return text.replace(/^```[ \t]*(\r?\n)/, "```" + lang + "$1");
 }
 
-/** Render a tool's `content` array. Diff blocks → DiffView; text blocks → the
- *  agent's markdown (verbatim, lang injected for a bare code fence); anything else
- *  is skipped (the Raw escape hatch in the shell still shows it verbatim). */
+/** Render ACP/MCP results: prose, code, data, diffs and media. Unknown blocks
+ * retain a JSON fallback; Raw in the inspector keeps the original envelope. */
 export function OutputBlocks({
   content,
   lang,
   fallbackPath,
+  renderData,
 }: {
   content: unknown;
   lang?: string;
   fallbackPath?: string;
+  renderData?: (value: unknown) => ReactNode;
 }): React.JSX.Element | null {
-  const blocks = asBlocks(content);
+  const blocks = toolResult(content).blocks;
   const rendered: ReactNode[] = [];
+  const dataView = (value: unknown): ReactNode => renderData
+    ? renderData(value)
+    : <CodeView code={JSON.stringify(value, null, 2) ?? String(value)} lang="json" maxHeight={360} touchWrap />;
   blocks.forEach((b, i) => {
-    if (b.type === "diff") {
-      const d = b as DiffBlock;
+    if (b.kind === "data") {
+      rendered.push(<Box key={i} sx={{ minWidth: 0 }}>{dataView(b.value)}</Box>);
+      return;
+    }
+    if (b.kind === "resource") {
+      const resource = record(b.value.resource) ?? b.value;
+      const text = typeof resource.text === "string" ? resource.text : "";
+      const metadata = Object.fromEntries(Object.entries(resource).filter(([key]) => !["data", "blob", "text"].includes(key)));
+      rendered.push(
+        <Stack key={i} spacing={0.5}>
+          <KeyValues data={metadata} />
+          {text && <Collapsible maxHeight={300}><Markdown text={text} /></Collapsible>}
+          {b.value.type === "audio" && typeof resource.data === "string" &&
+            typeof resource.mimeType === "string" && /^audio\/[\w.+-]+$/u.test(resource.mimeType) && (
+            <Box component="audio" controls preload="none" src={`data:${resource.mimeType};base64,${resource.data}`} sx={{ maxWidth: "100%" }} />
+          )}
+          {typeof resource.blob === "string" && <Typography variant="caption" color="text.secondary">Binary resource · inspect Raw for encoded content</Typography>}
+        </Stack>,
+      );
+      return;
+    }
+    if (b.kind === "diff") {
+      const d = b.value as unknown as DiffBlock;
       rendered.push(
         <DiffView
           key={i}
@@ -750,8 +759,9 @@ export function OutputBlocks({
       );
       return;
     }
-    if (b.type === "raw_output") {
-      const text = typeof b.text === "string" ? b.text : "";
+    if (b.kind !== "text") return;
+    if (b.literal) {
+      const text = b.text;
       if (text) {
         // Codex Read events expose file bytes as rawOutput.formatted_output,
         // which derive normalizes to raw_output. "Raw" describes the ACP
@@ -765,8 +775,13 @@ export function OutputBlocks({
       }
       return;
     }
-    const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";
+    const text = b.text;
     if (text) {
+      const json = !lang ? jsonTextValue(text) : undefined;
+      if (json !== undefined) {
+        rendered.push(<Box key={i} sx={{ minWidth: 0 }}>{dataView(json)}</Box>);
+        return;
+      }
       // Markdown files are documents, not source-code samples. Feed them to
       // the existing GFM renderer directly; Raw mode remains the exact-source
       // escape hatch in Tool details. Other known file languages stay fenced
@@ -788,7 +803,9 @@ export function OutputBlocks({
     }
   });
   const images = imagesOfContent(content);
-  if (images.length > 0) rendered.push(<OutputImages key="images" sources={images} />);
+  if (blocks.some((block) => block.kind === "image")) {
+    rendered.push(<OutputImages key="images" sources={images} fallback={<Typography variant="body2" color="text.secondary">Image preview unavailable. Inspect Raw for the recorded result.</Typography>} />);
+  }
   if (rendered.length === 0) return null;
   return <Stack spacing={1}>{rendered}</Stack>;
 }

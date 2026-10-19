@@ -246,6 +246,26 @@ test("derive exposes Codex read locations and formatted raw output", () => {
   }
 });
 
+test("MCP completion preserves opaque results, input identity and truthful failure state", () => {
+  const rawOutput = { result: { content: [{ type: "text", text: "permission denied" }], isError: true }, error: null };
+  for (const completion of [{ rawOutput }, { content: [{ type: "tool_result", value: rawOutput }] }]) {
+    const items = derive([
+      { session_id: "s1", seq: 1, kind: "update", update: {
+        sessionUpdate: "tool_call", toolCallId: "mcp", name: "mcp__cowboy__cowboy_read", status: "in_progress",
+        rawInput: { help: "calls" },
+      } },
+      { session_id: "s1", seq: 2, kind: "update", update: {
+        sessionUpdate: "tool_call_update", toolCallId: "mcp", status: "completed", ...completion,
+      } },
+    ]);
+    const item = items[0];
+    if (items.length !== 1 || item?.kind !== "tool") throw new Error("expected one tool");
+    if (item.status !== "failed" || item.toolName !== "mcp__cowboy__cowboy_read") throw new Error("lost MCP error/identity");
+    if (JSON.stringify(item.content) !== JSON.stringify([{ type: "tool_result", value: rawOutput }])) throw new Error("lost result");
+    if (JSON.stringify(item.rawInput) !== '{"help":"calls"}') throw new Error("lost arguments");
+  }
+});
+
 test("derive turns empty Codex HTML separators into thought sections only", () => {
   const timeline: Envelope[] = [
     {
