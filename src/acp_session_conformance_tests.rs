@@ -451,7 +451,10 @@ async fn exercise_managed_read_only(provider: &str) {
             .wait_for(|phase| *phase == StartupPhase::Ready)
             .await
             .unwrap();
-        assert_eq!(sink.hub.persisted_config_options(SESSION), Some(json!([])));
+        assert_eq!(
+            sink.hub.persisted_config_options(SESSION),
+            Some(json!([options[1].clone()]))
+        );
         send_json(&mut write, json!({"jsonrpc":"2.0","method":"session/update","params":{
             "sessionId":NATIVE,"update":{"sessionUpdate":"config_option_update","configOptions":options}
         }})).await;
@@ -499,7 +502,10 @@ async fn exercise_managed_read_only(provider: &str) {
         )
         .await;
         assert!(completed.await.unwrap().is_ok());
-        assert_eq!(sink.hub.persisted_config_options(SESSION), Some(json!([])));
+        assert_eq!(
+            sink.hub.persisted_config_options(SESSION),
+            Some(json!([confirmed[1].clone()]))
+        );
         drop(command_tx);
         assert!(lines.next_line().await.unwrap().is_none());
     };

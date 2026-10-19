@@ -91,8 +91,12 @@ impl Ledger {
             );
             return Ok(original);
         }
-        let child = match &request.conversation {
-            Conversation::Fresh {} => fresh_child_id,
+        let (child, preset, selection) = match &request.conversation {
+            Conversation::Fresh {} => (
+                fresh_child_id,
+                choice.preset.clone(),
+                Some(choice.selection.to_owned()),
+            ),
             Conversation::Continue { child_session_id } => {
                 let previous = self
                     .store
@@ -107,7 +111,13 @@ impl Ledger {
                         && previous.purpose.profile() == request.purpose.profile(),
                     "managed child unavailable or incompatible"
                 );
-                child_session_id
+                // A new Tools default must not replace the original model on
+                // continuation, including recovery after an unconfirmed start.
+                (
+                    child_session_id.as_str(),
+                    previous.preset,
+                    previous.selection,
+                )
             }
         };
         let now = chrono::Utc::now().timestamp_millis();
@@ -138,8 +148,8 @@ impl Ledger {
             child_cursor: None,
             cancel_requested_at_ms: None,
             error: None,
-            preset: choice.preset.clone(),
-            selection: Some(choice.selection.to_owned()),
+            preset,
+            selection,
         };
         self.store.admit_managed_call(&record, request).await
     }
@@ -348,7 +358,16 @@ mod tests {
         let ledger = Ledger::for_parent(store, "service-test", &parent).unwrap();
         let request = Request::parse(br#"{"schema":1,"request_id":"review-1","purpose":"review","instruction":"Review this round","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
         let first = ledger
-            .admit("codex", &request, "call-1", "child-1", &Choice::explicit())
+            .admit(
+                "codex",
+                &request,
+                "call-1",
+                "child-1",
+                &Choice {
+                    preset: Some("astra-max".into()),
+                    selection: "explicit",
+                },
+            )
             .await
             .unwrap();
         let (a, b) = tokio::join!(
@@ -385,6 +404,35 @@ mod tests {
                 .admit("codex", &followup, "call-2", "unused", &Choice::explicit())
                 .await
                 .is_err()
+        );
+        let mut failed = observed.clone();
+        failed.state = State::Failed;
+        failed.error = Some(super::super::lifecycle::CallError::new(
+            "configuration_unconfirmed",
+            None,
+        ));
+        failed.revision += 1;
+        failed.updated_at_ms += 1;
+        failed.finished_at_ms = Some(failed.updated_at_ms);
+        assert!(ledger.advance(&observed, &failed).await.unwrap());
+        let continued = ledger
+            .admit(
+                "codex",
+                &followup,
+                "call-2",
+                "unused",
+                &Choice {
+                    preset: Some("weaker-default".into()),
+                    selection: "auto",
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(continued.preset.as_deref(), Some("astra-max"));
+        assert_eq!(continued.selection.as_deref(), Some("explicit"));
+        assert_eq!(
+            ledger.observe("review-2").await.unwrap().unwrap().preset,
+            continued.preset
         );
         drop(ledger);
         let _ = std::fs::remove_dir_all(root);

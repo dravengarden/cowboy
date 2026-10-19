@@ -351,6 +351,16 @@ presets declare and never persists them as the user's preferences; mode and
 every other option remain refused. A preset missing from the exact admitted
 Provider generation fails the call with `preset_unavailable`.
 
+The Controller waits for the connected worker's actual model/effort values
+before sending the prompt. The worker exposes only signed preset options;
+permission and mode controls remain hidden and refused. The Hub's optimistic
+UI selection, a saved preference and a retained disconnected snapshot are not
+confirmation. An older worker that hides these options cannot silently run an
+explicit preset on its default model: the call ends as
+`configuration_unconfirmed` without sending a prompt. Each call records the
+observed configuration, and continuation/recovery retains the original preset
+even after the parent's Tools defaults change.
+
 The Matrix switches are stored and displayed now; Provider adapters enforce
 them in a later phase. Managed children have no Tools section; their policy is
 fixed by the managed profile.

@@ -709,11 +709,10 @@ async fn run_config_queue(
                                         && option.get("currentValue") == Some(&value)
                                 })
                             });
-                            // A managed child's options stay hidden, as from its
-                            // notifications; its call record names the preset.
-                            if !state.sink.session_is_managed_read_only(&state.session_id) {
-                                state.sink.set_config_options(&state.session_id, options);
-                            }
+                            state.sink.set_config_options(
+                                &state.session_id,
+                                visible_config_options(&state, options),
+                            );
                             if !confirmed {
                                 completion
                                     .finish(Err(format!("provider did not confirm {config_id}")));
@@ -3018,6 +3017,26 @@ fn handle_native_background_tasks(state: &ClientState, notif: &ClaudeSdkMessageN
     state.sink.set_background_tasks(&state.session_id, count);
 }
 
+fn visible_config_options(
+    state: &ClientState,
+    mut options: serde_json::Value,
+) -> serde_json::Value {
+    if state.sink.session_is_managed_read_only(&state.session_id) {
+        if let Some(options) = options.as_array_mut() {
+            options.retain(|option| {
+                option["id"].as_str().is_some_and(|id| {
+                    state
+                        .sink
+                        .managed_config_option_allowed(&state.session_id, id)
+                })
+            });
+        } else {
+            return serde_json::json!([]);
+        }
+    }
+    options
+}
+
 fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
     // During a `session/load` resume the agent replays prior turns; drop them
     // — cowboy already has this history persisted (see field docs).
@@ -3025,14 +3044,9 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         return;
     }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
-        if state.sink.session_is_managed_read_only(&state.session_id) {
-            state
-                .sink
-                .set_config_options(&state.session_id, serde_json::json!([]));
-            return;
-        }
         match serde_json::to_value(&update.config_options) {
             Ok(opts) => {
+                let opts = visible_config_options(state, opts);
                 if let Some(label) = current_model_label(&opts) {
                     *state.model_label.lock() = Some(label);
                 }
@@ -3463,11 +3477,10 @@ async fn run_session(
     // An empty list is authoritative too: a replacement may remove all the
     // old release's options. Publish this before Running so the Controller can
     // reconcile persisted preferences before draining any queued prompt.
-    if state.sink.session_is_managed_read_only(&session_id) {
-        surfaced_options.clear();
-    }
     match serde_json::to_value(&surfaced_options) {
-        Ok(v) => state.sink.set_config_options(&session_id, v),
+        Ok(v) => state
+            .sink
+            .set_config_options(&session_id, visible_config_options(state, v)),
         Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
     }
     state.set_status(Status::Running, None);
