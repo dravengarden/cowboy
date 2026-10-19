@@ -230,6 +230,39 @@ fn empty(directory: &Path) -> Result<()> {
     Ok(())
 }
 
+fn collected(text: &str, unit: &str) -> Result<()> {
+    let fields = fields(text)?;
+    ensure!(
+        fields.get("Id") == Some(&unit)
+            && fields.get("LoadState") == Some(&"not-found")
+            && fields.get("ActiveState") == Some(&"inactive")
+            && ["Job", "InvocationID", "ControlGroup", "Environment"]
+                .iter()
+                .all(|key| fields.get(key) == Some(&"")),
+        "legacy worker unit absence unconfirmed"
+    );
+    Ok(())
+}
+
+/// Default workers predate the account exit journal. A collected unit is an
+/// observed legacy stop, never a substitute for a named worker's tree proof.
+pub(super) async fn confirm_recycled(
+    store: &MachinePluginStore,
+    session: &str,
+    unit: &str,
+) -> Result<()> {
+    store.reconcile_account_worker_boot(session)?;
+    if store.account_worker_exit(session)?.is_some() {
+        return confirm(store, session).await;
+    }
+    collected(&show(unit).await?, unit)?;
+    ensure!(
+        store.account_worker_exit(session)?.is_none(),
+        "worker launch appeared during stop observation"
+    );
+    collected(&show(unit).await?, unit)
+}
+
 pub(super) async fn confirm(store: &MachinePluginStore, session: &str) -> Result<()> {
     store.reconcile_account_worker_boot(session)?;
     let receipt = store
@@ -255,6 +288,26 @@ pub(super) async fn confirm(store: &MachinePluginStore, session: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collected_legacy_unit_requires_positive_absence() {
+        let text = "Id=worker.service\nLoadState=not-found\nActiveState=inactive\nJob=\nInvocationID=\nControlGroup=\nEnvironment=\n";
+        assert!(collected(text, "worker.service").is_ok());
+        assert!(collected(text, "another.service").is_err());
+        for (from, to) in [
+            ("LoadState=not-found", "LoadState=loaded"),
+            ("LoadState=not-found", "LoadState=error"),
+            ("ActiveState=inactive", "ActiveState=activating"),
+            ("Job=", "Job=1 start"),
+            ("InvocationID=", "InvocationID=another"),
+            ("ControlGroup=", "ControlGroup=/still-owned"),
+            ("Environment=", "Environment=launch=other"),
+        ] {
+            assert!(collected(&text.replace(from, to), "worker.service").is_err());
+        }
+        assert!(collected(&text.replace("Job=\n", ""), "worker.service").is_err());
+        assert!(collected(&format!("{text}Job=\n"), "worker.service").is_err());
+    }
 
     #[tokio::test]
     #[ignore = "requires user systemd and cgroup v2"]

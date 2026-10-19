@@ -2754,11 +2754,13 @@ impl Broker {
             ]);
             let stopped = !stop_allowed
                 || matches!(tokio::time::timeout(Duration::from_secs(30), command.status()).await, Ok(Ok(status)) if status.success());
-            // A collected unit makes stop fail even when its recorded tree
-            // has exited. Only scoped evidence may recover that case.
-            let confirmed = systemd_exit::confirm(&self.args.provider_store, session_id)
-                .await
-                .is_ok();
+            // Collected default workers have no account journal. Their exact
+            // unit's observed absence can recover a failed stop; named workers
+            // still require their durable, incarnation-scoped tree proof.
+            let confirmed =
+                systemd_exit::confirm_recycled(&self.args.provider_store, session_id, &unit)
+                    .await
+                    .is_ok();
             if !stopped && !confirmed {
                 tracing::error!(
                     session = session_id,
@@ -6650,6 +6652,134 @@ mod tests {
         assert!(!broker.workers.lock().contains_key("sess-1"));
         assert!(broker.cancelled_sessions.lock().contains("sess-1"));
         assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires user systemd"]
+    async fn collected_default_systemd_worker_can_be_recycled() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let (mut broker, mut launch, _worker_rx) = reconnecting_worker_fixture();
+        broker.args.socket = temp.path().join("broker.sock");
+        broker.args.spawn_mode = SpawnMode::SystemdUser;
+        broker.args.desired_generation = "gen-1".into();
+        broker.args.worker_ready_timeout = Duration::from_secs(2);
+        let unit = worker_unit_name(&broker.args.socket, "sess-1");
+        let status = Command::new("systemd-run")
+            .args([
+                "--user",
+                "--quiet",
+                "--wait",
+                "--collect",
+                "--unit",
+                &unit,
+                "sh",
+                "-c",
+                "exit 0",
+            ])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        let observed = Command::new("systemctl")
+            .args(["--user", "show", &unit, "--property=LoadState", "--value"])
+            .output()
+            .await
+            .unwrap();
+        assert!(observed.status.success());
+        assert_eq!(
+            String::from_utf8(observed.stdout).unwrap().trim(),
+            "not-found"
+        );
+        assert!(broker.force_recycle_failed_start("sess-1").await);
+        assert!(!broker.workers.lock().contains_key("sess-1"));
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+
+        // Exercise Reset and the subsequent Ensure through real transient
+        // launches. The fixture exits before readiness without any Provider.
+        let marker = temp.path().join("launches");
+        let worker = temp.path().join("worker");
+        std::fs::write(
+            &worker,
+            "#!/bin/sh\nprintf 'launched\\n' >> \"$COWBOY_TEST_RESET_MARKER\"\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
+        broker
+            .generation_commands
+            .lock()
+            .insert("gen-1".into(), worker.clone());
+        broker.args.worker_command = worker;
+        broker.args.worker_environment.insert(
+            "COWBOY_TEST_RESET_MARKER".into(),
+            marker.to_string_lossy().into_owned(),
+        );
+        launch.cwd = temp.path().to_string_lossy().into_owned();
+        let broker = Arc::new(broker);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        broker
+            .reset_session(launch.clone(), "reset-collected".into())
+            .await;
+        for attempt in 1..=2 {
+            if attempt == 2 {
+                broker.ensure_session(launch.clone()).await;
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while broker.launching.lock().contains("sess-1") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+            assert!(broker.sessions.lock().contains_key("sess-1"));
+            assert_eq!(
+                std::fs::read_to_string(&marker).unwrap().lines().count(),
+                attempt
+            );
+        }
+        let mut reset_accepted = false;
+        while let Ok(frame) = rx.try_recv() {
+            if let Frame::CommandAck {
+                command_id,
+                accepted,
+                ..
+            } = frame
+                && command_id == "reset-collected"
+            {
+                assert!(accepted);
+                reset_accepted = true;
+            }
+        }
+        assert!(reset_accepted);
+
+        // Absence alone still cannot retire an uncertain named launch.
+        let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        broker
+            .args
+            .provider_store
+            .begin_account_worker("named", &account)
+            .unwrap();
+        assert!(
+            systemd_exit::confirm_recycled(
+                &broker.args.provider_store,
+                "named",
+                &format!("{unit}.service")
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !broker
+                .args
+                .provider_store
+                .account_worker_exit("named")
+                .unwrap()
+                .unwrap()
+                .tree_exited
+        );
     }
 
     #[tokio::test]
