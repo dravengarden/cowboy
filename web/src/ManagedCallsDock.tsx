@@ -664,12 +664,6 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           {displayTitle(call)}
         </Box>
       </Box>
-      {configuration && (
-        <Typography data-call-header-configuration variant="caption"
-          sx={{ minWidth: 0, overflowWrap: "anywhere", fontSize: "0.75rem" }}>
-          {parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
-        </Typography>
-      )}
       <Box
         data-call-header-metadata
         sx={{
@@ -679,6 +673,9 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           columnGap: 0.75,
           rowGap: 0.5,
           minWidth: 0,
+          overflowX: "auto",
+          scrollbarWidth: "none",
+          "& > *": { flexShrink: 0 },
         }}
       >
         {/* A finished review's findings already say it completed. */}
@@ -699,8 +696,15 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
         {outcome && (
           <Badge label={outcome} color={attention ? "warning" : "success"} />
         )}
-        <Box component="span" sx={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={placementLabel(call)}>
-          {placementLabel(call)}
+        {configuration && (
+          <Box component="span" data-call-header-configuration
+            title={parameters.map(({ label, value }) => `${label}: ${value}`).join(" · ")}
+            sx={{ display: "inline-flex", whiteSpace: "nowrap" }}>
+            <Badge label={configuration} color="default" />
+          </Box>
+        )}
+        <Box component="span" data-call-header-placement sx={{ display: "inline-flex", whiteSpace: "nowrap" }} title={placementLabel(call)}>
+          <Badge label={placementLabel(call)} color="default" />
         </Box>
         <Box
           component="time"

@@ -723,18 +723,28 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     const executionHeader = document.querySelector<HTMLElement>("[data-call-header-configuration]");
     const callHeader = document.querySelector<HTMLElement>("[data-call-header]")!;
-    check(executionHeader?.textContent?.includes("Model: gpt-6-astra · Reasoning: max") &&
+    check(executionHeader?.textContent?.includes("gpt-6-astra · max") &&
       !callHeader.textContent?.includes("Not recorded") &&
       !executionHeader.textContent.includes("astra-max"),
       "mobile transcript header shows recorded parameters without missing-value or redundant preset labels");
-    check(callHeader.children.length === 3 && executionHeader!.parentElement === callHeader,
-      "mobile transcript header gives execution parameters their own wrapping row below the title");
+    check(callHeader.children.length === 2 && executionHeader!.parentElement === callHeader.querySelector("[data-call-header-metadata]"),
+      "mobile transcript header has a title row and a separate row containing execution parameters and status metadata");
     const headerAge = callHeader.querySelector<HTMLElement>("[data-call-header-age]")!;
     check(headerAge.textContent?.endsWith("ago") || headerAge.textContent?.endsWith("now"),
       "mobile transcript header uses the same relative time format as previews");
     callHeader.style.width = "320px";
     check(callHeader.scrollWidth <= callHeader.clientWidth,
       "two-line call header must fit a narrow phone without horizontal overflow");
+    const metadataRow = callHeader.querySelector<HTMLElement>("[data-call-header-metadata]")!;
+    for (const selector of ["[data-call-header-configuration]", "[data-call-header-placement]"]) {
+      const badge = callHeader.querySelector<HTMLElement>(`${selector} > span`);
+      check(badge && getComputedStyle(badge).backgroundColor !== "rgba(0, 0, 0, 0)" &&
+        parseFloat(getComputedStyle(badge).borderRadius) > 0 && !badge.closest("button"),
+        "recorded parameters and placement use filled, noninteractive badges");
+    }
+    check(getComputedStyle(metadataRow).overflowX === "auto" &&
+      getComputedStyle(executionHeader!).whiteSpace === "nowrap",
+      "long execution metadata scrolls within the second row without wrapping or widening the header");
     callHeader.style.width = "";
     const backButton = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(
