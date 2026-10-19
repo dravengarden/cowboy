@@ -6,6 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { ManagedCallsDock, ManagedChildNotice } from "./ManagedCallsDock";
+import { CallTranscript } from "./CallTranscript";
 import { getActiveSessionId, setActiveSessionId } from "./controlPlane";
 import { composerStackExpandedStore } from "./composerStackAccordion";
 import { managementEntryFixture } from "./providerManagement.fixture";
@@ -212,6 +213,10 @@ const findingsResult = {
 export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const originalFetch = globalThis.fetch;
   const tests: string[] = [];
+  let recoveryText = "Checking current keyboard and queue behavior.";
+  let recoveryReads = 0;
+  let delayedRecovery: (() => void) | undefined;
+  let delayRecovery = false;
   let calls: ManagedCallSummary[] = [];
   const dismissed = new Set<string>();
   const cancels: string[] = [];
@@ -234,6 +239,31 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/sessions/child-recovery/bootstrap") {
+      recoveryReads += 1;
+      const response = Response.json({ messages: [{
+        type: "snapshot",
+        session_id: "child-recovery",
+        reached_start: true,
+        events: [{
+          session_id: "child-recovery",
+          seq: 78,
+          kind: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "review-answer",
+            content: { type: "text", text: recoveryText },
+          },
+        }],
+      }] });
+      if (delayRecovery) {
+        delayRecovery = false;
+        return new Promise<Response>((resolve) => {
+          delayedRecovery = () => resolve(response);
+        });
+      }
+      return Promise.resolve(response);
+    }
     const bootstrap = childBootstrap(url);
     if (bootstrap) return Promise.resolve(bootstrap);
     if (url === "/api/plugins") {
@@ -343,6 +373,30 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       node.textContent?.trim() === label
     );
   try {
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" />);
+    await until(() => text().includes(recoveryText), "initial review progress");
+    render(<></>);
+    // Reopening must refresh even an already-hydrated conversation. Keep this
+    // old response in flight while completion arrives through call metadata.
+    delayRecovery = true;
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" />);
+    await until(() => delayedRecovery, "cached review was not refreshed on reopen");
+    recoveryText = "Final review: not ready to implement; nine blocking issues.";
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled />);
+    await until(() => text().includes(recoveryText), "completion did not recover final review");
+    delayedRecovery!();
+    await wait(100);
+    check(text().includes(recoveryText), "stale in-flight tail replaced the final review");
+    check(recoveryReads === 3, "recovery should fetch on open, reopen and completion only");
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled desktop />);
+    await wait(100);
+    check(recoveryReads === 3, "ordinary rerenders must not refetch the transcript");
+    render(<></>);
+    recoveryText = "Reopened review includes the complete final conclusion.";
+    render(<CallTranscript sessionId="child-recovery" provider="claude-code" settled />);
+    await until(() => text().includes(recoveryText), "settled review remained stale on reopen");
+    render(<></>);
+    tests.push("review-recovers-final-output-on-completion-and-reopen-without-stale-overwrite");
     composerStackExpandedStore().set(null);
     render(<ManagedCallsDock sessionId="parent" desktop />);
     await wait(150);
