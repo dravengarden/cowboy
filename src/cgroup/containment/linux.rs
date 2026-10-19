@@ -38,12 +38,32 @@ fn process(pid: u32) -> io::Result<(u64, bool)> {
     Ok((start, matches!(fields.first(), Some(&"Z" | &"X"))))
 }
 
+fn process_namespace() -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+    // /proc may still expose a parent PID namespace after unshare. Refuse
+    // numeric-PID observations unless procfs agrees with our execution view.
+    let stat = std::fs::read_to_string("/proc/self/stat")?;
+    if stat
+        .split_whitespace()
+        .next()
+        .and_then(|id| id.parse::<u32>().ok())
+        != Some(std::process::id())
+    {
+        return Err(io::Error::other(
+            "process filesystem view differs from PID namespace",
+        ));
+    }
+    Ok(std::fs::metadata("/proc/self/ns/pid")?.ino())
+}
+
 pub(super) fn owner() -> io::Result<ProcessOwner> {
     let pid = std::process::id();
+    let pid_namespace = Some(process_namespace()?);
     Ok(ProcessOwner {
         boot: boot()?,
         pid,
         start: process(pid)?.0,
+        pid_namespace,
     })
 }
 
@@ -53,6 +73,11 @@ pub(super) fn owner_exited(owner: &ProcessOwner) -> io::Result<bool> {
     }
     if boot()? != owner.boot {
         return Ok(true);
+    }
+    if owner.pid_namespace != Some(process_namespace()?) {
+        return Err(io::Error::other(
+            "process ownership namespace changed or unknown",
+        ));
     }
     match process(owner.pid) {
         Ok((start, dead)) => Ok(start != owner.start || dead),
@@ -87,10 +112,21 @@ fn checked_path(identity: &ContainmentIdentity) -> io::Result<&Path> {
     Ok(relative)
 }
 
-fn open_directory(relative: &Path) -> io::Result<File> {
+fn open_root() -> io::Result<File> {
     let root = open(crate::cgroup::CGROUP_ROOT, DIRECTORY, Mode::empty())?;
+    if fstatfs(&root)?.f_type != libc::CGROUP2_SUPER_MAGIC {
+        return Err(io::Error::other("containment is not cgroup v2"));
+    }
+    Ok(root.into())
+}
+
+fn open_beneath(root: &File, relative: &Path) -> io::Result<File> {
+    // A leaf directly under the cgroup namespace root has an empty parent.
+    if relative.as_os_str().is_empty() {
+        return root.try_clone();
+    }
     let fd = openat2(
-        &root,
+        root,
         relative,
         DIRECTORY,
         Mode::empty(),
@@ -100,6 +136,25 @@ fn open_directory(relative: &Path) -> io::Result<File> {
         return Err(io::Error::other("containment is not cgroup v2"));
     }
     Ok(fd.into())
+}
+
+fn recovery_parent(identity: &ContainmentIdentity) -> io::Result<File> {
+    let relative = checked_path(identity)?;
+    let root = open_root()?;
+    let stat = fstat(&root)?;
+    if stat.st_dev != identity.device || identity.root_inode != Some(stat.st_ino) {
+        return Err(io::Error::other(
+            "containment filesystem view changed or unknown",
+        ));
+    }
+    // Missing ancestors are not an exit proof: the original view may no longer
+    // be exposed. Only absence of the leaf beneath this verified view counts.
+    open_beneath(
+        &root,
+        relative
+            .parent()
+            .ok_or_else(|| io::Error::other("missing cgroup parent"))?,
+    )
 }
 
 fn matches(identity: &ContainmentIdentity, directory: &File) -> io::Result<()> {
@@ -155,8 +210,11 @@ pub(super) fn prepare(command: &mut tokio::process::Command) -> io::Result<Conta
     let directory = crate::cgroup::agent_dir(&format!("contained-{}", uuid::Uuid::new_v4()))
         .ok_or_else(|| io::Error::other("cgroup v2 unavailable"))?;
     let owner = owner()?;
+    let root = open_root()?;
+    let root_stat = fstat(&root)?;
     std::fs::create_dir(&directory)?;
-    let opened = open_directory(
+    let opened = open_beneath(
+        &root,
         directory
             .strip_prefix(crate::cgroup::CGROUP_ROOT)
             .map_err(io::Error::other)?,
@@ -168,6 +226,7 @@ pub(super) fn prepare(command: &mut tokio::process::Command) -> io::Result<Conta
             directory,
             device: stat.st_dev,
             inode: stat.st_ino,
+            root_inode: Some(root_stat.st_ino),
         },
         directory: opened,
     };
@@ -188,20 +247,13 @@ pub(super) fn remove(identity: &ContainmentIdentity, directory: &File) -> io::Re
         return Ok(());
     }
     remove_empty_children(directory, 0, &mut 4096)?;
-    let parent = open_directory(
-        relative
-            .parent()
-            .ok_or_else(|| io::Error::other("missing cgroup parent"))?,
-    )?;
-    let current = open_directory(relative)?;
+    let parent = recovery_parent(identity)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| io::Error::other("missing cgroup name"))?;
+    let current = open_beneath(&parent, Path::new(name))?;
     matches(identity, &current)?;
-    unlinkat(
-        parent,
-        relative
-            .file_name()
-            .ok_or_else(|| io::Error::other("missing cgroup name"))?,
-        AtFlags::REMOVEDIR,
-    )?;
+    unlinkat(parent, name, AtFlags::REMOVEDIR)?;
     if !removed(directory)? {
         return Err(io::Error::other("containment removal unconfirmed"));
     }
@@ -244,7 +296,11 @@ pub(super) async fn terminate(identity: &ContainmentIdentity) -> io::Result<()> 
     if boot()? != identity.owner.boot {
         return Ok(()); // Old-boot processes cannot survive; never touch the new path.
     }
-    let directory = match open_directory(relative) {
+    let parent = recovery_parent(identity)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| io::Error::other("missing cgroup name"))?;
+    let directory = match open_beneath(&parent, Path::new(name)) {
         Ok(directory) => directory,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),

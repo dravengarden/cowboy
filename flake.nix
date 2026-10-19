@@ -231,7 +231,7 @@
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
-        ./src/cgroup
+        # src/cgroup/containment is gated by machine-host and is not worker code.
         ./src/claude_shell.rs
         ./src/first_party_sources.rs
         ./src/plugin_runtime_args.rs

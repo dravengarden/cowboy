@@ -1089,8 +1089,13 @@ original launch. Queries remain read-only. Old journals without a boot stamp
 and corrupt evidence remain unconfirmed. New Direct launches also persist the
 exclusive cgroup path, filesystem device/inode and owner process incarnation
 before spawn. Explicit stop/recycle can recover that exact tree after PID-map
-loss, including a same-boot Machine crash. Descriptor-relative traversal refuses
-links, foreign filesystems and replacement cgroups. Recovery kills the original
+loss, including a same-boot Machine crash. Direct account-stop commands and
+startup reconciliation use that journal when the session declaration is absent;
+live workers retain their graceful Stop/TERM/KILL sequence. Descriptor-relative
+traversal refuses links, foreign filesystems and replacement cgroups. Same-boot
+path-absence evidence also requires the recorded cgroupfs root identity and a
+visible parent; a changed namespace view or missing ancestor stays unconfirmed.
+Recovery kills the original
 subtree, removes its empty descendant groups and removes the original group
 before recording exit; this closes a delayed pre-exec membership race. Late
 recovery still cannot complete a newer launch. Named systemd workers use a
@@ -1127,8 +1132,10 @@ Native profile completion, recovery and runtime-home admission also require
 the login process-tree exit proof. A successful leader exit alone cannot make
 an old profile usable after restart; callers must reconcile the original
 operation rather than silently upgrading its evidence.
-Native reservations now retain the owning Machine process's boot ID, PID and
-kernel start time, then bind the exact cgroup before dispatch. Reconciliation of
+Native reservations now retain the owning Machine process's boot ID, PID,
+PID namespace and kernel start time, then bind the exact cgroup before dispatch.
+Changed or unknown PID views cannot prove that a same-boot owner exited.
+Reconciliation of
 the original logout can recover an orphaned login or logout only after that
 owner has exited. A reservation interrupted before containment binding proves
 that it never reached spawn; legacy metadata without the reservation does not.

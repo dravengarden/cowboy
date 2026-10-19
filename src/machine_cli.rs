@@ -3089,14 +3089,15 @@ fn handle_machine_command(
                     .ok()
                     .map(|succeeded| {
                         crate::provider_account::NativeLogoutObservation {
-                            process_trees_exited: store
-                                .native_auth_trees_exited(
-                                    &logout.provider_id,
-                                    logout.generation,
-                                    &logout.login_request_id,
-                                    &logout.operation_id,
-                                )
-                                .unwrap_or(false),
+                            process_trees_exited: succeeded.is_some()
+                                && store
+                                    .native_auth_trees_exited(
+                                        &logout.provider_id,
+                                        logout.generation,
+                                        &logout.login_request_id,
+                                        &logout.operation_id,
+                                    )
+                                    .unwrap_or(false),
                             request: logout,
                             succeeded,
                             profile_cleaned: succeeded == Some(true),
