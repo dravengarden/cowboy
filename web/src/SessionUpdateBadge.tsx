@@ -22,7 +22,7 @@ export function SessionUpdateBadge({ session }: { session: SessionMeta }) {
         data-session-update-badge
         data-session-update-queued={queued || undefined}
         size="small"
-        variant="outlined"
+        variant="filled"
         color="info"
         label={waiting ? (offer ? `Waiting · ${offer.version}` : "Waiting") : offer?.version}
         aria-label={description}
@@ -32,8 +32,10 @@ export function SessionUpdateBadge({ session }: { session: SessionMeta }) {
           flexShrink: 0,
           fontSize: "0.6875rem",
           fontVariantNumeric: "tabular-nums",
-          bgcolor: (theme) => alpha(theme.palette.info.main, 0.08),
-          "& .MuiChip-icon": { fontSize: "0.8125rem", ml: "0.3rem", mr: "-0.2rem" },
+          border: "1px solid transparent",
+          color: "info.main",
+          bgcolor: (theme) => alpha(theme.palette.info.main, theme.palette.mode === "dark" ? 0.22 : 0.14),
+          "& .MuiChip-icon": { fontSize: "0.8125rem", ml: "0.3rem", mr: "-0.2rem", color: "inherit" },
           // A version is short and meaningless when cut; never ellipsize it.
           maxWidth: "none",
           "& .MuiChip-label": { px: "0.45rem", overflow: "visible" },

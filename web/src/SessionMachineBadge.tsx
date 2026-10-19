@@ -22,11 +22,9 @@ export function SessionMachineBadge({ session, onInfo, compact = false }: {
         size="small"
         label={machine.label}
         aria-label={machine.description}
-        variant="outlined"
+        variant="filled"
         color={machine.unavailable
           ? "warning"
-          : machine.remote
-          ? "primary"
           : "default"}
         icon={machine.unavailable ? <WarningAmberOutlined /> : undefined}
         {...(onInfo && {
@@ -46,17 +44,23 @@ export function SessionMachineBadge({ session, onInfo, compact = false }: {
           maxWidth: machine.remote ? "12rem" : "8rem",
           fontSize: compact ? "0.6875rem" : "0.75rem",
           boxShadow: "none",
+          // Keep the former outline's box metrics while painting the same
+          // quiet filled material as Calls placement badges.
+          border: "1px solid transparent",
+          color: machine.unavailable ? "warning.main" : "text.secondary",
+          bgcolor: (theme) => alpha(
+            machine.unavailable ? theme.palette.warning.main : theme.palette.text.secondary,
+            theme.palette.mode === "dark" ? 0.22 : 0.14,
+          ),
           "& .MuiChip-icon": {
             fontSize: compact ? "0.8125rem" : "1rem",
             width: "1em",
             height: "1em",
             ml: "0.3rem",
             mr: "-0.2rem",
+            color: "inherit",
           },
           "&:active, &.Mui-focusVisible": { boxShadow: "none" },
-          ...(machine.remote
-            ? { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) }
-            : {}),
           "& .MuiChip-label": {
             px: compact ? "0.5rem" : "0.625rem",
             overflow: "hidden",
