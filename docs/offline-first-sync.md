@@ -440,6 +440,27 @@ that build. All lifecycle signals use the same coalesced bundle probe; an
 unchanged entry or failed/offline check leaves the running page intact. Update
 telemetry records the triggering signal and both loaded and deployed entries.
 
+Connection open/close and foreground probes now use that same module-entry
+authority through `clientConnection.ts`; `/version` sampled after boot cannot
+stand in for the bundle a cached page actually loaded. Concurrent probes are
+coalesced, identical update hints preserve one download, and a newer target
+invalidates an older in-flight download before it may trigger navigation.
+Reload telemetry is written at the actual navigation, rather than detection.
+A tab records its last attempted source/target pair in `sessionStorage`: if
+the next document still runs that source and sees that target, automatic
+application stops at the existing retry control. A user retry or a different
+target can proceed. Native clients without a controlling worker navigate to a
+fresh `cowboy-update` URL instead of replaying `location.reload()`; after the
+module starts the transient parameter is removed for future cache-first boots.
+
+The 2026-10-19 incident contained six recorded macOS updates that returned to
+the same bundle in a 36-hour query window (including two at 18:44:43 and
+18:44:47 +08:00). Worker takeover previously announced an update without
+comparing bundle identities; `70146d1f` closed that initial trigger. The shared
+connection path and navigation guard close the remaining bypass and repeat
+paths. These are reload findings; they do not prove the exact WebKit callsite
+that retained IOSurfaces during the separate WindowServer crash.
+
 The download and the swap are separate. The bits are fetched the moment a
 deploy is detected, ungated — what interrupts someone is the reload, never the
 download — and the service worker reports each landed batch, so the update bar

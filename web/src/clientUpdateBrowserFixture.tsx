@@ -1,11 +1,11 @@
 // Real update hook; a controlled download and reload sink avoid navigation.
-import { createElement } from "react";
+import { createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { type ConnectionStore, useAutoUpdate } from "@cowboy/app-shell";
+import { type ConnectionStore, createConnectionStore, useAutoUpdate } from "@cowboy/app-shell";
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 export async function runClientUpdateFixture() {
-  const host = document.getElementById("root")!;
+  const host = document.getElementById("root") ?? document.body.appendChild(document.createElement("div"));
   const results: string[] = [];
   for (const scenario of ["manual", "zero", "three", "change-delay", "rejected-zero", "switch-manual"] as const) {
     let finish!: () => void;
@@ -63,5 +63,51 @@ export async function runClientUpdateFixture() {
       results.push(scenario);
     } finally { root.unmount(); }
   }
+  results.push(...await connectionUpdateSignals(host));
   return results;
+}
+
+async function connectionUpdateSignals(host: HTMLElement): Promise<string[]> {
+  let available: string | undefined;
+  let reloads = 0;
+  const downloads: (() => void)[] = [];
+  const store = createConnectionStore({
+    versionUrl: "/unused-version",
+    updateProbe: async () => ({ current: "loaded", available }),
+  });
+  store.downloadUpdate = () => new Promise((resolve) => downloads.push(() => resolve("ready")));
+  store.reloadIntoUpdate = async () => { reloads++; };
+  function Probe() {
+    const update = useAutoUpdate(store, { countdownSecs: 0 });
+    return createElement("div", null, `${update.pending}:${update.phase}`);
+  }
+  const root = createRoot(host);
+  try {
+    root.render(createElement(StrictMode, null, createElement(Probe)));
+    await wait(100);
+    store.connectionReady();
+    store.connectionLost();
+    store.updateAvailable();
+    await store.checkForUpdate("focus");
+    await wait(100);
+    if (downloads.length || reloads) throw new Error("same-build signals triggered an update");
+    available = "next";
+    await store.checkForUpdate();
+    await wait(100);
+    if (downloads.length !== 1) throw new Error("new build was not downloaded");
+    available = "newer";
+    await store.checkForUpdate();
+    await wait(100);
+    downloads[0]!();
+    await wait(100);
+    if (reloads) throw new Error("superseded download triggered a reload");
+    if (Number(downloads.length) !== 2) throw new Error("newer build did not replace pending download");
+    downloads[1]!();
+    await wait(100);
+    store.updateAvailable();
+    store.connectionReady();
+    await wait(100);
+    if (reloads !== 1) throw new Error("confirmed build must reload exactly once");
+    return ["same-build-signals", "superseded-download"];
+  } finally { root.unmount(); }
 }

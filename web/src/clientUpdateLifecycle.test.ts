@@ -1,31 +1,23 @@
 import { readFileSync } from "node:fs";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
-import {
-  checkForDeployedUpdate,
-  createServiceWorkerUpdateCheck,
-} from "./serviceWorkerUpdates";
+import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates";
 
-// Exercise the actual production lifecycle wiring without mounting the app,
-// connecting a session, or navigating the test runner.
+// Exercise the production lifecycle wiring without mounting the app or
+// navigating the test runner. The connection authority has its own tests.
 const source = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 const lifecycle = new Bun.Transpiler({ loader: "ts" }).transformSync(
   source.slice(source.indexOf("  const installChecks ="), source.lastIndexOf("\n}")),
 );
 
-test("worker claims verify the deployed build before announcing any reload", async () => {
-  const worker = new EventTarget() as EventTarget & {
-    controller: object;
-    register: () => Promise<{ update: () => Promise<void> }>;
-  };
-  worker.controller = {};
-  worker.register = async () => ({ update: async () => {} });
+test("lifecycle signals use one authority without waiting for worker updates", async () => {
+  const worker = Object.assign(new EventTarget(), {
+    controller: {},
+    register: async () => ({ update: () => new Promise<void>(() => {}) }),
+  });
   const window = new EventTarget();
-  const document = new EventTarget() as EventTarget & { visibilityState: string };
-  document.visibilityState = "visible";
-  let entry = "/assets/current.js";
-  let offline = false;
-  let reports = 0;
+  const document = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  const signals: string[] = [];
   let forcedReloads = 0;
   let now = 10_000;
   let interval!: () => void;
@@ -33,46 +25,38 @@ test("worker claims verify the deployed build before announcing any reload", asy
     document,
     addEventListener: window.addEventListener.bind(window),
     location: { reload: () => forcedReloads++ },
-    fetch: async () => {
-      if (offline) throw new Error("offline");
-      return new Response(`<script type="module" src="${entry}"></script>`);
-    },
   };
   new Function(
-    "globalThis", "window", "navigator", "loadedEntry", "reportUpdate",
-    "createServiceWorkerUpdateCheck", "checkForDeployedUpdate",
-    "lowPriorityInterval", "markClientReloadIntent", lifecycle,
+    "globalThis", "window", "navigator", "conn",
+    "createServiceWorkerUpdateCheck", "lowPriorityInterval", lifecycle,
   )(
-    global, window, { serviceWorker: worker }, "/assets/current.js",
-    async () => { reports++; },
+    global, window, { serviceWorker: worker }, {
+      checkForUpdate: async (trigger: string) => { signals.push(trigger); },
+    },
     (update: () => Promise<unknown>) => createServiceWorkerUpdateCheck(update, () => now),
-    checkForDeployedUpdate,
     (check: () => void) => { interval = check; },
-    () => {},
   );
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   window.dispatchEvent(new Event("load"));
   await settle();
-  assertEquals(reports, 0);
-  // A delayed claim can occur after an already-current page starts, and again
-  // after an imported worker dependency changes without a new app build.
-  for (let index = 0; index < 2; index++) {
+  assertEquals(signals, ["periodic"]);
+  for (const [target, event] of [
+    [worker, "controllerchange"], [window, "focus"], [window, "online"],
+    [window, "pageshow"], [window, "cowboy:native-resume"], [document, "visibilitychange"],
+  ] as const) {
     now += 6_000;
-    worker.dispatchEvent(new Event("controllerchange"));
+    target.dispatchEvent(new Event(event));
     await settle();
-    assertEquals(reports, 0);
-    assertEquals(forcedReloads, 0);
+    assertEquals(signals.at(-1), event);
   }
-  offline = true;
+  now += 6_000;
+  interval();
+  await settle();
+  assertEquals(signals.length, 8);
+  document.visibilityState = "hidden";
   now += 6_000;
   worker.dispatchEvent(new Event("controllerchange"));
   await settle();
+  assertEquals(signals.length, 8);
   assertEquals(forcedReloads, 0);
-  // A failed check stays retryable: the periodic check still discovers a real
-  // deployment as soon as the network comes back.
-  offline = false;
-  entry = "/assets/next.js";
-  interval();
-  await settle();
-  assertEquals(reports, 1);
 });

@@ -13,47 +13,6 @@ export function moduleEntryFromHtml(html: string): string | undefined {
   return undefined;
 }
 
-/**
- * Detect a resumed stale page by comparing its loaded entry bundle with the
- * current network index. This is independent of Service Worker controller
- * lifecycle events, which iOS can omit or turn into a first-time claim.
- */
-async function changedBundleEntry(
-  loadedEntry: string | undefined,
-  fetchIndex: () => Promise<Response>,
-): Promise<string | undefined> {
-  if (!loadedEntry) return undefined;
-  const response = await fetchIndex();
-  if (!response.ok) return undefined;
-  const currentEntry = moduleEntryFromHtml(await response.text());
-  return currentEntry !== loadedEntry ? currentEntry : undefined;
-}
-
-export async function bundleEntryChanged(
-  loadedEntry: string | undefined,
-  fetchIndex: () => Promise<Response>,
-): Promise<boolean> {
-  return await changedBundleEntry(loadedEntry, fetchIndex) !== undefined;
-}
-
-/**
- * Probe the deployed bundle without waiting for the browser's Service Worker
- * updater. WebKit can leave `registration.update()` pending while backgrounded;
- * a conclusive bundle probe must still surface the update immediately.
- */
-export async function checkForDeployedUpdate(
-  loadedEntry: string | undefined,
-  updateServiceWorker: () => Promise<unknown>,
-  fetchIndex: () => Promise<Response>,
-  onUpdate: (entry: string) => void | Promise<void>,
-): Promise<void> {
-  void updateServiceWorker().catch(() => {
-    // The independent bundle probe below remains authoritative for this check.
-  });
-  const entry = await changedBundleEntry(loadedEntry, fetchIndex);
-  if (entry !== undefined) await onUpdate(entry);
-}
-
 /** Coalesce the burst of lifecycle signals emitted while a window resumes. */
 export function createServiceWorkerUpdateCheck(
   update: () => Promise<unknown>,

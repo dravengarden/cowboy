@@ -54,11 +54,18 @@ import {
 export type BannerKind = "down" | "reconnected" | "update";
 export interface Banner {
   readonly kind: BannerKind;
+  readonly version?: string;
 }
 
 export interface ConnectionStoreOptions {
   /** Build-id probe endpoint. liveview "/api/version", cowboy "/version". */
   readonly versionUrl: string;
+  /** A cache-first client must compare the build it actually loaded, not a
+   *  network version sampled after boot. All update hints use this authority. */
+  readonly updateProbe?: (trigger: string) => Promise<{
+    current: string;
+    available?: string | undefined;
+  }>;
   /** Surface the red banner once this many consecutive (re)connect cycles fail.
    *  Default 2 — a single dropped frame that recovers on the first retry stays
    *  silent; only a real outage raises the banner. */
@@ -79,9 +86,10 @@ export interface ConnectionStore {
    *  have failed past the threshold and returns the backoff delay (ms) the app
    *  should wait before its next attempt. */
   connectionLost(): number;
-  /** A Service Worker with a fresh shell took control. Surface the same visible
-   *  countdown used by build-id probes instead of reloading immediately. */
+  /** An update hint. A configured updateProbe verifies it before surfacing the
+   *  same visible countdown used by the other lifecycle checks. */
   updateAvailable(): void;
+  checkForUpdate(trigger?: string): Promise<void>;
   /** Have the service worker cache the deployed shell and its boot assets,
    *  reporting each landed batch. The running build is untouched, so this may
    *  start the moment a deploy is detected. */
@@ -225,9 +233,10 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   // blip.
   let outageSurfaced = false;
   let reconnectedTimer: ReturnType<typeof setTimeout> | undefined = undefined;
-  // The build id this tab loaded against; re-probed after each reconnect and on
-  // foreground. A change means the server was redeployed under a now-stale tab.
+  // A custom probe supplies the loaded build identity. Legacy consumers sample
+  // their version endpoint at startup and compare subsequent responses to it.
   let knownVersion: string | undefined = undefined;
+  let versionProbe: Promise<void> | undefined;
 
   function emit(): void {
     for (const l of listeners) {
@@ -236,11 +245,23 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   }
 
   function setBanner(next: Banner | undefined): void {
+    if (banner?.kind === next?.kind && banner?.version === next?.version) return;
     banner = next;
     emit();
   }
 
-  async function probeVersion(): Promise<void> {
+  async function readVersion(trigger: string): Promise<void> {
+    if (opts.updateProbe) {
+      try {
+        const result = await opts.updateProbe(trigger);
+        knownVersion = result.current;
+        if (result.available) setBanner({ kind: "update", version: result.available });
+        else if (banner?.kind === "update") setBanner(undefined);
+      } catch {
+        // A failed/offline probe says nothing about the running build.
+      }
+      return;
+    }
     let probed: string | undefined = undefined;
     try {
       const res = await globalThis.fetch(versionUrl, { cache: "no-store" });
@@ -248,6 +269,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
         return;
       }
       ({ version: probed } = (await res.json()) as { version: string });
+      if (typeof probed !== "string" || !probed) return;
     } catch {
       return; // network hiccup mid-probe; try again on the next trigger
     }
@@ -256,8 +278,12 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
       return;
     }
     if (probed !== knownVersion) {
-      setBanner({ kind: "update" });
+      setBanner({ kind: "update", version: probed });
     }
+  }
+
+  function probeVersion(trigger = "explicit"): Promise<void> {
+    return versionProbe ??= readVersion(trigger).finally(() => { versionProbe = undefined; });
   }
 
   // Called by the app on a successful (re)open. Clears the failure count,
@@ -283,7 +309,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
         }
       }, reconnectedDismissMs);
     }
-    void probeVersion();
+    void probeVersion("connection_ready");
   }
 
   // Called by the app on close. Raises the red banner once retries have failed
@@ -303,12 +329,13 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
     // server is back as a new build, the next drop detects it → update banner →
     // auto-reload onto the fresh bundle. The fetch just fails (no-op) while the
     // server is still down mid-restart.
-    void probeVersion();
+    void probeVersion("connection_lost");
     return Math.min(reconnectBackoffMaxMs, 1000 * 2 ** Math.max(0, attempts - 1));
   }
 
   function updateAvailable(): void {
-    setBanner({ kind: "update" });
+    if (opts.updateProbe) void probeVersion("update_hint");
+    else setBanner({ kind: "update" });
   }
 
   // Probe for a new build whenever the tab returns to the foreground. An installed
@@ -320,7 +347,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   function watchForegroundVersion(): () => void {
     const onVisible = (): void => {
       if (globalThis.document.visibilityState === "visible") {
-        void probeVersion();
+        void probeVersion("visibilitychange");
       }
     };
     globalThis.document.addEventListener("visibilitychange", onVisible);
@@ -346,18 +373,15 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
     return knownVersion;
   }
 
-  // Capture knownVersion NOW, at store creation = page load. The bundle we're
-  // running was just served by the current server, so /version at this instant
-  // matches it. Capturing here (instead of waiting for the first WS connect, which
-  // can land AFTER a redeploy — the tab then records the NEW build id while running
-  // the OLD bundle and never detects a change → "reconnected but didn't reload")
-  // closes that race: any later /version change is a genuine redeploy → reload.
-  void probeVersion();
+  // Start without waiting for a socket connection. Cache-first clients provide
+  // updateProbe so an old cached page can detect an already-deployed update.
+  void probeVersion("startup");
 
   return {
     connectionReady,
     connectionLost,
     updateAvailable,
+    checkForUpdate: probeVersion,
     downloadUpdate,
     reloadIntoUpdate,
     watchForegroundVersion,
@@ -416,6 +440,7 @@ export interface AutoUpdateState {
 
 /** What the download has produced so far. */
 interface DownloadState {
+  readonly version?: string | undefined;
   /** Set once the download settles. */
   readonly result: UpdateDownload | undefined;
   readonly done: number;
@@ -456,7 +481,8 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
   // never change, the next timer is never scheduled, and the update stalls for the
   // rest of the page's life.
   const [recheck, setRecheck] = useState(0);
-  const downloaded = download.result === "ready" || download.result === "unsupported";
+  const downloaded = download.version === banner?.version &&
+    (download.result === "ready" || download.result === "unsupported");
   // Set by a press, read once by the download it starts. A ref, not state: the
   // effect must see the press that scheduled it, not the value it was rendered
   // with, and re-running on every press is exactly what we do not want.
@@ -486,6 +512,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
     let alive = true;
     const retry = retryRef.current;
     retryRef.current = false;
+    setReloading(false);
     setDownload(IDLE_DOWNLOAD);
     void store.downloadUpdate((done, total) => {
       if (!alive) return;
@@ -500,12 +527,12 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
           : current
       );
     }, retry).then((result) => {
-      if (alive) setDownload((current) => ({ ...current, result }));
+      if (alive) setDownload((current) => ({ ...current, result, version: banner?.version }));
     });
     return () => {
       alive = false;
     };
-  }, [pending, attempt, store]);
+  }, [pending, banner?.version, attempt, store]);
 
   // An unfinished download keeps this build running and tries again later. The
   // control offers that retry immediately; this is for the page nobody is

@@ -131,7 +131,7 @@ test("the download starts on detection, not on the idle gate", () => {
   // leave the control unable to promise an instant swap.
   const effect = bannerSource.slice(
     bannerSource.indexOf("void store.downloadUpdate("),
-    bannerSource.indexOf("}, [pending, attempt, store]);"),
+    bannerSource.indexOf("}, [pending, banner?.version, attempt, store]);"),
   );
   assert(effect.length > 0);
   assert(!effect.includes("canApplyUpdate"));

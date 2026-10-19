@@ -12,7 +12,6 @@ import { createAuthoredSendGate } from "./authoredSendGate";
 // over HTTP. We dedup by (session_id, seq), so HTTP/live overlap is harmless.
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { createConnectionStore } from "@cowboy/app-shell";
 import {
   type ArgsOf,
   type Mutators,
@@ -186,14 +185,11 @@ export interface ErrorNotice {
   severity?: "error" | "warning" | "info";
 }
 
-/// Top-of-app connection / version banner — the app-shell component instance
-/// (see @cowboy/app-shell/connection-banner.tsx). Cowboy keeps its
-/// canonical behavior: red "down" past the threshold, green "reconnected" flash,
-/// blue "update" that counts 3→0 and clears caches + reloads on its own. The
-/// store reports socket open/close into `conn` and reads back the backoff delay;
-/// the banner state lives entirely in `conn` (App renders <ConnectionBanner>).
-/// `versionUrl: "/version"` is cowboy's build-id endpoint.
-export const conn = createConnectionStore({ versionUrl: "/version" });
+/// Shared connection banner and client update authority. Socket events report
+/// into `conn` and read back its reconnect delay; bundle checks, downloads and
+/// guarded navigation live in clientConnection, independently of this store.
+export { conn } from "./clientConnection";
+import { conn } from "./clientConnection";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so

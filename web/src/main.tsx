@@ -19,10 +19,8 @@ import {
   markClientReloadIntent,
   reportClientLog,
 } from "./observability";
-import {
-  checkForDeployedUpdate,
-  createServiceWorkerUpdateCheck,
-} from "./serviceWorkerUpdates";
+import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates";
+import { conn } from "./clientConnection";
 import { isBundleRecoveryUrl } from "./moduleRecovery";
 import {
   clearUpdateAttempt,
@@ -186,36 +184,19 @@ if (el) {
 // update state; the shared countdown policy decides when the page may replace
 // itself, so a deploy never lands while the user is reading or composing.
 if (import.meta.env.PROD) {
-  let updateReported = false;
-  const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
-    'script[type="module"][src]',
-  )?.getAttribute("src") ?? undefined;
-  const reportUpdate = async (deployedEntry: string, trigger: string): Promise<void> => {
-    if (updateReported) return;
-    updateReported = true;
-    markClientReloadIntent("deployed_version_detected", deployedEntry.split("/").pop());
-    reportClientLog("info", "client_update_available", "A new Cowboy client build is available", {
-      loaded_entry: loadedEntry?.split("/").pop() ?? "unknown",
-      deployed_entry: deployedEntry.split("/").pop() ?? "unknown",
-      trigger,
-    });
-    const { conn } = await import("./store");
-    conn.updateAvailable();
-  };
+  // The cache-first navigation has finished. Do not make a later offline
+  // launch network-first merely because this one used a native update URL.
+  const updateUrl = new URL(globalThis.location.href);
+  if (updateUrl.searchParams.has("cowboy-update")) {
+    updateUrl.searchParams.delete("cowboy-update");
+    globalThis.history.replaceState(globalThis.history.state, "", updateUrl);
+  }
   const installChecks = (updateServiceWorker: () => Promise<unknown>): void => {
     let trigger = "startup";
     const check = createServiceWorkerUpdateCheck(() => {
-      const signal = trigger;
-      return checkForDeployedUpdate(
-        loadedEntry,
-        updateServiceWorker,
-        () =>
-          globalThis.fetch(
-            `/?cowboy-bundle-probe=${Date.now()}`,
-            { cache: "no-store" },
-          ),
-        (entry) => reportUpdate(entry, signal),
-      );
+      // A pending WebKit worker update must not block the bundle authority.
+      void updateServiceWorker().catch(() => {});
+      return conn.checkForUpdate(trigger);
     });
     const checkForUpdate = (event?: Event): void => {
       // WKWebView can remain `visible` through an app background/resume, so

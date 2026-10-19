@@ -1,8 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
-  bundleEntryChanged,
-  checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
   moduleEntryFromHtml,
 } from "./serviceWorkerUpdates.ts";
@@ -74,50 +72,4 @@ test("module entry extraction tolerates generated attribute order", () => {
     ),
     "./assets/index-other.js",
   );
-});
-
-test("bundle entry probe detects a stale resumed page", async () => {
-  assertEquals(
-    await bundleEntryChanged(
-      "/assets/index-old.js",
-      () =>
-        Promise.resolve(
-          new Response(
-            `<script type="module" src="/assets/index-new.js"></script>`,
-          ),
-        ),
-    ),
-    true,
-  );
-  assertEquals(
-    await bundleEntryChanged(
-      "/assets/index-new.js",
-      () =>
-        Promise.resolve(
-          new Response(
-            `<script type="module" src="/assets/index-new.js"></script>`,
-          ),
-        ),
-    ),
-    false,
-  );
-});
-
-test("bundle probe reports an update while service worker update remains pending", async () => {
-  const pendingWorkerUpdate = deferred();
-  const reported: string[] = [];
-  await checkForDeployedUpdate(
-    "/assets/index-old.js",
-    () => pendingWorkerUpdate.promise,
-    () =>
-      Promise.resolve(
-        new Response(
-          `<script type="module" src="/assets/index-new.js"></script>`,
-        ),
-      ),
-    (entry) => {
-      reported.push(entry);
-    },
-  );
-  assertEquals(reported, ["/assets/index-new.js"]);
 });
