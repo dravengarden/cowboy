@@ -5059,12 +5059,19 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub(super) async fn clear_events(&self, session_id: &str) -> Result<()> {
+    pub(super) async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM events WHERE session_id = ?1")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
+        sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = ?1 AND json_extract(document, '$.created_at_ms') < ?2")
+            .bind(session_id)
+            .bind(calls_before_ms)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 

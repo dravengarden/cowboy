@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionMeta } from "./protocol";
+import { useStoreSelector } from "./store";
 
 /** A parent-scoped managed call summary. Execution state, a structured review
  * result and the calling workflow's disposition of findings are separate
@@ -419,6 +420,16 @@ export function useManagedCalls(parent: string | null): {
   error: string | null;
   refresh: () => void;
 } {
+  const clearedAt = useStoreSelector((snapshot) => {
+    const timeline = parent ? snapshot.timelines.get(parent) : undefined;
+    for (let index = (timeline?.length ?? 0) - 1; index >= 0; index -= 1) {
+      const event = timeline?.[index];
+      if (event?.kind === "update" && event.update.sessionUpdate === "context_cleared") {
+        return typeof event.update.at === "number" ? event.update.at : 0;
+      }
+    }
+    return 0;
+  });
   const [calls, setCalls] = useState<ManagedCallSummary[]>([]);
   const [observedAt, setObservedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -466,9 +477,11 @@ export function useManagedCalls(parent: string | null): {
       controller.abort();
       if (timer !== undefined) globalThis.clearTimeout(timer);
     };
-  }, [parent, tick]);
+  }, [parent, tick, clearedAt]);
   return {
-    calls,
+    // Clear is visible before the durable writer and an older HTTP poll settle.
+    // Neither a stale response nor a finishing old child may repaint this rail.
+    calls: clearedAt ? calls.filter((call) => call.created_at_ms >= clearedAt) : calls,
     observedAt,
     error,
     refresh: (): void => setTick((value) => value + 1),

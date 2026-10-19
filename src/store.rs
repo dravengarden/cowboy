@@ -1663,8 +1663,8 @@ impl Store {
         dispatch_storage!(self, upsert_event_batch(events, highwaters))
     }
 
-    pub async fn clear_events(&self, session_id: &str) -> Result<()> {
-        dispatch_storage!(self, clear_events(session_id))
+    pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
+        dispatch_storage!(self, clear_events(session_id, calls_before_ms))
     }
 
     pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
@@ -5917,12 +5917,21 @@ impl PostgresStorage {
 
     /// Delete one session's durable transcript while preserving its metadata
     /// and monotonic `next_seq` watermark.
-    pub async fn clear_events(&self, session_id: &str) -> Result<()> {
+    pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM events WHERE session_id = $1")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE events for {session_id}"))?;
+        // Archive the old conversation's Calls without changing child execution,
+        // results, admission receipts or budgets. Future calls start visible.
+        sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = $1 AND (document::jsonb->>'created_at_ms')::bigint < $2")
+            .bind(session_id)
+            .bind(calls_before_ms)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -10773,7 +10782,7 @@ mod storage_contract_tests {
 
         let (_, event_count, _) = store.storage_metrics().await?;
         assert!(event_count >= 2);
-        store.clear_events(&companion_id).await?;
+        store.clear_events(&companion_id, i64::MAX).await?;
         assert!(
             store
                 .history_page(&companion_id, 1, 200)

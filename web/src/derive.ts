@@ -637,7 +637,10 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
   let entries: PlanEntry[] | null = null;
   let superseded = false;
   for (const env of timeline) {
-    if (env.kind === "update" && env.update.sessionUpdate === "plan") {
+    if (env.kind === "update" && env.update.sessionUpdate === "context_cleared") {
+      entries = null;
+      superseded = false;
+    } else if (env.kind === "update" && env.update.sessionUpdate === "plan") {
       entries = env.update.entries ?? [];
       superseded = false; // a fresh plan: reset the "new turn after it" flag
     } else if (
