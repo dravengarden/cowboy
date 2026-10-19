@@ -447,6 +447,24 @@ def main():
                     require(not session_info(identifier).get("agent_session_id"), "creation started a native worker")
                 require(maintenance()["machine"]["active_sessions"] == 1, "dormant records consumed capacity")
                 checks.append("more_session_records_than_worker_limit_without_native_start")
+                delivery_endpoint = f"/api/sessions/{dormant[0]}/delivery-policy"
+                options_endpoint = f"/api/sessions/{dormant[0]}/delivery-options"
+                status, delivery = call("GET", options_endpoint)
+                require(status == 200 and delivery["target"] is None
+                        and delivery["policy"] == {"mode": "next_turn", "revision": 0},
+                        "workerless delivery defaults unavailable")
+                preference = {"mode": "tool_boundary", "revision": 0}
+                require(call("PUT", delivery_endpoint, preference, anonymous=True)[0] == 401,
+                        "anonymous delivery policy admitted")
+                require(call("PUT", delivery_endpoint, preference) ==
+                        (200, {"mode": "tool_boundary", "revision": 1}), "delivery policy CAS failed")
+                require(call("PUT", delivery_endpoint, {"mode": "steer", "revision": 0})[0] == 409,
+                        "stale delivery policy overwrote a newer preference")
+                require(call("GET", options_endpoint)[1]["policy"] ==
+                        {"mode": "tool_boundary", "revision": 1}, "policy read lost committed value")
+                require(maintenance()["machine"]["active_sessions"] == 1
+                        and session_info(dormant[0])["status"] == "exited",
+                        "delivery configuration activated a worker")
                 def selected_model(identifier):
                     status, value = call("GET", f"/api/sessions/{identifier}/bootstrap")
                     require(status == 200, "dormant bootstrap failed")
@@ -487,6 +505,9 @@ def main():
                 wait(lambda: (row := maintenance())["machine"]["connected"]
                      and row["machine"]["active_sessions"] == 1, "prelaunch runtime ownership restored")
                 require(selected_model(dormant[0]) == "large", "restart lost prelaunch preference")
+                require(call("GET", options_endpoint)[1]["policy"] ==
+                        {"mode": "tool_boundary", "revision": 1}, "restart lost delivery preference")
+                checks.append("workerless_delivery_policy_auth_cas_and_restart")
                 require(session_info(dormant[0])["status"] == "exited"
                         and not session_info(dormant[0]).get("agent_session_id"), "restart woke prelaunch session")
                 checks.append("prelaunch_preferences_survive_restart_without_an_agent_snapshot")

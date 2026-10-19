@@ -1,4 +1,5 @@
 import { agentCallsPrompt } from "./agent-calls.mjs";
+import { installSteeringPriority } from "./steering.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -76,11 +77,13 @@ export function toolStreamingEnvironment(environment) {
 // ACP 0.93 implements promptRequired but only advertises generic steering.
 // Advertise the pinned adapter's explicit no-new-turn contract to Cowboy.
 export function advertiseCurrentTurn(Agent) {
+  const prioritySupported = installSteeringPriority(Agent);
   const initialize = Agent.prototype.initialize;
   Agent.prototype.initialize = async function (...args) {
     const result = await initialize.apply(this, args);
     if (result._meta?.steering?.supported === true) {
       result._meta.steering.idleBehavior = "promptRequired";
+      if (prioritySupported) result._meta.steering.priorities = ["now", "next"];
     }
     return result;
   };

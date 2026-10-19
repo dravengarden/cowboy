@@ -165,8 +165,8 @@ export function DesktopComposerCommandBindings({
     },
     {
       id: "composer.forcePush",
-      title: "Interrupt and send prompt",
-      description: "Interrupt the current turn and run this prompt now",
+      title: "Choose delivery mode",
+      description: "Open Steer, Next turn and Interrupt & send choices",
       group: "Prompt actions",
       shortcut: "Alt+Enter",
       consumeWhenDisabled: true,
@@ -174,14 +174,14 @@ export function DesktopComposerCommandBindings({
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.sendable && state.current.canForce,
-      disabledReason: "Force push is only available during an active turn",
+      disabledReason: "Delivery choices are available during an active turn",
       run: () => state.current.onForce(),
     },
     {
       id: "composer.currentTurn",
-      title: "Add prompt to current turn",
+      title: "Choose current-turn delivery",
       description:
-        "Native delivery into the active turn; never starts another turn",
+        "Open the delivery picker for the captured active turn",
       group: "Prompt actions",
       allowInEditor: true,
       contexts: ["prompt"],

@@ -352,6 +352,16 @@ through the workspace prefix preserves Insert/Visual mode, selection, and caret.
 
 ### Key ownership and input methods
 
+The send delivery picker owns a scoped command registry shared with mobile
+hardware keyboards. Mod+Enter opens it while busy; arrows or J/K navigate,
+Enter or fresh Mod+Enter activates, Alt+Enter opens Interrupt confirmation,
+Mod+. opens Stop, and Escape restores the captured editor selection. A disabled
+focused mode cannot fall through to another action. Interrupt confirmation
+requires fresh Mod+Enter or a pointer action; bare/repeated Enter is consumed.
+On non-editable picker rows, composition Enter is intercepted at capture solely
+to prevent MUI MenuItem's implicit click. This does not prevent native editor
+composition or change the editable-field IME contract below.
+
 New Desktop key handlers classify a keydown through `desktopKeyIntent`
 (`commands/keyIntent.ts`) before binding anything. It returns exactly one owner:
 
@@ -863,8 +873,9 @@ focus halo or outer reading-width gutter. The pane header and status line own
 focus indication. Its bottom editing and delivery groups stay outside the
 editor scrollport. Container queries use the Prompt's actual width and the root
 font size to disclose quick formatting and labels; the formatting menu retains
-all commands. Send/Queue stays labelled at the right edge, while Draft,
-Schedule, Run next and Force push remain direct controls and may wrap when
+all commands. Send stays labelled at the right edge and becomes Send… while
+busy, opening the unified picker. Steer and Interrupt are picker choices;
+Draft, Schedule and Run next remain direct controls and may wrap when
 space is limited. Empty, preparing, busy, paused, disconnected, pending-submit
 and resumed states change labels/availability without replacing the editor.
 Quota exhaustion is an inline notice across the Desktop pane; Mobile keeps its

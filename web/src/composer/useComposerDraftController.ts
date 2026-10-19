@@ -66,7 +66,11 @@ export interface ComposerDraftController {
   submitTracked: () => Promise<void> | null;
   force: () => boolean;
   forceTracked: () => Promise<void> | null;
-  currentTurnTracked: () => Promise<void> | null;
+  currentTurnTracked: (
+    target?: import("../currentTurnDelivery").DeliveryTarget,
+    nextCheckpoint?: boolean,
+    interrupt?: boolean,
+  ) => Promise<void> | null;
   jumpToFront: (queueLength: number) => boolean;
   jumpToFrontTracked: (queueLength: number) => Promise<void> | null;
   saveAsDraft: () => boolean;
@@ -394,9 +398,16 @@ export function useComposerDraftController(
       commit(() => forcePrompt(sessionId, preparedText(), attachments)),
     forceTracked: () =>
       commitTracked(() => forcePrompt(sessionId, preparedText(), attachments)),
-    currentTurnTracked: () =>
+    currentTurnTracked: (target, nextCheckpoint, interrupt) =>
       commitTracked(() =>
-        currentTurnPrompt(sessionId, preparedText(), attachments)
+        currentTurnPrompt(
+          sessionId,
+          preparedText(),
+          attachments,
+          target,
+          nextCheckpoint,
+          interrupt,
+        )
       ),
     jumpToFront: (queueLength) =>
       queueLength > 0 &&

@@ -1,4 +1,5 @@
 import { checkInputVim } from "./desktop/inputVimBrowserConformance";
+import { checkDeliveryPicker } from "./deliveryPickerBrowserConformance";
 import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
 import { checkDraftKeyboard } from "./desktop/draftKeyboardBrowserConformance";
 import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
@@ -251,8 +252,6 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             "draft",
             "schedule",
             "next",
-            "force",
-            "current-turn",
             "send",
             "source",
             "more",
@@ -392,7 +391,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "Space leader arms only on Cowboy-owned focus (not text, IME or repeat), swallows its keyup, lights ␣ slots, runs ␣A and closes on Esc/pointer",
       );
     }
-    for (const id of ["attach", "draft", "schedule", "next", "force", "current-turn", "send"]) {
+    for (const id of ["attach", "draft", "schedule", "next", "send"]) {
       click(id);
       check(calls.at(-1) === id, `${id} click shares action`);
     }
@@ -462,8 +461,6 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         "draft",
         "schedule",
         "next",
-        "force",
-        "current-turn",
         "send",
       ]
     ) check(button(id).disabled, `${id} disabled truthfully`);
@@ -619,6 +616,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkPendingPreviewTouchDisclosure());
     results.push(await checkDraftDestinationDialog());
     flushSync(() => root.render(null));
+    results.push(await checkDeliveryPicker());
     results.push(await checkDraftKeyboard());
     results.push(await checkInputVim());
     return results;

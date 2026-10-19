@@ -1368,6 +1368,79 @@ PHASES = ["agents", "permissions", "shell", "notifications", "lifecycle", "conte
           "mcp", "agent_background", "hooks"]
 
 
+def checkpoint_acp_phase(client, api, target, session_id, checks):
+    """Exercise the packaged priority extension and upstream turn settlement."""
+    for phase in ["foreground", "generation", "cancel"]:
+        entered = threading.Event()
+        release = threading.Event()
+        marker = "CHECKPOINT_INPUT_" + phase
+        errors = []
+        consumed = []
+        def initial(_):
+            entered.set()
+            if phase == "generation":
+                require(release.wait(20), "checkpoint generation barrier timed out")
+                return [{"type": "text", "text": "GENERATION_FINISHED"}]
+            return tool("Bash", {"command": f"printf ready > checkpoint-{phase}-ready; while [ ! -f checkpoint-{phase}-release ]; do sleep 0.05; done; printf done > checkpoint-{phase}-done", "timeout": 30000})
+        def following(requests):
+            if marker in json.dumps(requests[-1].get("messages", [])):
+                require(phase == "generation" or (target / f"checkpoint-{phase}-done").exists(),
+                        "next priority consumed before foreground completion")
+                consumed.append(True)
+            return [{"type": "text", "text": "CHECKPOINT_FINISHED"}]
+        while len(api.steps) < len(api.requests):
+            api.steps.append([])
+        start = len(api.requests)
+        api.steps.extend([initial, following, following])
+        def submit_checkpoint():
+            try:
+                deadline = time.monotonic() + 20
+                while not (entered.is_set() if phase == "generation" else (target / f"checkpoint-{phase}-ready").exists()):
+                    require(time.monotonic() < deadline, "checkpoint admission barrier timed out")
+                    time.sleep(0.02)
+                client.send({"id": 10002, "method": "_session/steering", "params": {
+                    "sessionId": session_id, "prompt": [{"type": "text", "text": marker}],
+                    "_meta": {"steering": {"idleBehavior": "promptRequired", "priority": "next"}}}})
+                if phase == "cancel":
+                    client.send({"method": "session/cancel", "params": {"sessionId": session_id}})
+            except Exception as error:
+                errors.append(str(error))
+            finally:
+                release.set()
+                if phase != "cancel":
+                    (target / f"checkpoint-{phase}-release").write_text("release")
+        client.send({"id": 10001, "method": "session/prompt", "params": {
+            "sessionId": session_id, "prompt": [{"type": "text", "text": "Run checkpoint fixture " + phase}]}})
+        sender = threading.Thread(target=submit_checkpoint, daemon=True)
+        sender.start()
+        responses = {}
+        deadline = time.monotonic() + 60
+        while len(responses) < 2:
+            frame = client.frame(deadline)
+            if frame.get("id") in [10001, 10002]:
+                responses[frame["id"]] = frame
+        sender.join(timeout=2)
+        require(not errors, "checkpoint sender failed: " + str(errors))
+        require(all("error" not in frame for frame in responses.values()), "packaged checkpoint rejected")
+        if phase == "cancel":
+            require(not consumed and not (target / "checkpoint-cancel-done").exists(),
+                    "cancelled checkpoint resumed model or foreground work")
+            # ACP acknowledges admission immediately, before SDK consumption.
+            # Cancellation abandons the admitted UUID; it cannot retroactively
+            # turn the already returned admission receipt into a refusal.
+            require(responses[10002]["result"].get("outcome") == "injected",
+                    "checkpoint admission receipt changed after cancellation")
+            require(responses[10001]["result"].get("stopReason") == "cancelled",
+                    "cancelled checkpoint did not cancel its owning prompt")
+        else:
+            require(responses[10002]["result"].get("outcome") == "injected" and consumed,
+                    "checkpoint was not consumed before ACP settlement")
+        # Unused scripted slots must not shift the next fixture's API sequence.
+        del api.steps[len(api.requests):]
+        require(len(api.requests) - start <= 3, "checkpoint introduced unbounded native rounds")
+        checks.append("packaged_checkpoint_" + phase + "_settles_original_acp_prompt")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -1834,8 +1907,9 @@ def main():
         client.request("session/prompt", prompt)
         context_checked(api.requests)
         require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP did not execute on target")
+        checkpoint_acp_phase(client, api, args.target, acp_session, checks)
         client.close(); client = None
-        api.steps.extend([[], tool("Bash", {"command": "cat acp-once.txt"})])
+        api.steps.append(tool("Bash", {"command": "cat acp-once.txt"}))
         client = acp()
         client.request("session/load", {"sessionId": acp_session, "cwd": str(args.runtime), "mcpServers": []})
         client.request("session/set_mode", {"sessionId": acp_session, "modeId": "bypassPermissions"})
@@ -1853,7 +1927,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs", "managed.mjs", "agent-calls.mjs"]:
+        for name in ["cowboy-launch.mjs", "steering.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs", "managed.mjs", "agent-calls.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:

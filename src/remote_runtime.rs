@@ -79,6 +79,7 @@ struct Shared {
     pending: Mutex<HashMap<String, CoreCommand>>,
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
     current_turn_protocol: bool,
+    delivery_controls_protocol: bool,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
     /// registry claims, not pending commands: absence never authorizes Machine broker
@@ -201,6 +202,8 @@ impl RemoteRuntime {
                 steering: Mutex::new(HashMap::new()),
                 current_turn_protocol: machine_protocol
                     >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
+                delivery_controls_protocol: machine_protocol
+                    >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
@@ -249,6 +252,7 @@ impl RemoteRuntime {
                 pending: Mutex::new(HashMap::new()),
                 steering: Mutex::new(HashMap::new()),
                 current_turn_protocol: true,
+                delivery_controls_protocol: true,
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
                 workers: Mutex::new(
@@ -723,13 +727,58 @@ impl RemoteRuntime {
         command_id
     }
 
+    pub(crate) fn delivery_controls(
+        &self,
+        session_id: &str,
+    ) -> crate::runtime_wire::DeliveryControls {
+        if !self.shared.delivery_controls_protocol || !self.connected() {
+            return crate::runtime_wire::DeliveryControls::default();
+        }
+        self.shared
+            .workers
+            .lock()
+            .get(session_id)
+            .map(|worker| worker.delivery_controls.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn delivery_target(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::send_delivery::DeliveryTarget> {
+        if !self.shared.current_turn_protocol || !self.connected() {
+            return None;
+        }
+        let workers = self.shared.workers.lock();
+        let worker = workers.get(session_id)?;
+        if worker.drain_requested {
+            return None;
+        }
+        Some(crate::send_delivery::DeliveryTarget {
+            worker_epoch: worker.worker_epoch.clone(),
+            turn_id: worker.current_turn_id.clone()?,
+        })
+    }
+
     /// Requires durable caller admission before entry. A timeout never admits
     /// a replacement prompt; its original receipt remains uncertain.
+    #[cfg(test)]
     pub(crate) fn start_steer(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
         cmid: String,
+    ) -> Result<SteeringDelivery, String> {
+        self.start_steer_targeted(session_id, content, cmid, None, false)
+    }
+
+    pub(crate) fn start_steer_targeted(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+        target: Option<&crate::send_delivery::DeliveryTarget>,
+        next_checkpoint: bool,
     ) -> Result<SteeringDelivery, String> {
         if !self.shared.current_turn_protocol {
             return Err("the connected Machine does not support current-turn delivery".into());
@@ -747,9 +796,21 @@ impl RemoteRuntime {
         if !worker.supports_current_turn || worker.drain_requested {
             return Err("current-turn delivery is unavailable in this running worker".into());
         }
+        if next_checkpoint
+            && (!self.shared.delivery_controls_protocol
+                || worker.delivery_controls.version == 0
+                || !worker.delivery_controls.next_checkpoint)
+        {
+            return Err("next checkpoint is unavailable in this running worker".into());
+        }
         let turn_id = worker
             .current_turn_id
             .ok_or("session has no current turn")?;
+        if target.is_some_and(|expected| {
+            expected.worker_epoch != worker.worker_epoch || expected.turn_id != turn_id
+        }) {
+            return Err("delivery target expired; choose a mode for the current turn".into());
+        }
         let key = (session_id.to_owned(), cmid.clone());
         let (tx, rx) = oneshot::channel();
         {
@@ -769,6 +830,7 @@ impl RemoteRuntime {
                 turn_id,
                 content,
                 cmid,
+                next_checkpoint,
             },
         );
         Ok(SteeringDelivery {
@@ -777,6 +839,63 @@ impl RemoteRuntime {
             command_id,
             receiver: Some(rx),
         })
+    }
+
+    pub(crate) fn start_cancel_turn(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+        cmid: String,
+    ) -> Result<SteeringDelivery, String> {
+        let controls = self.delivery_controls(session_id);
+        if controls.version == 0 || self.delivery_target(session_id).as_ref() != Some(target) {
+            return Err("cancellation target is unavailable".into());
+        }
+        let key = (session_id.to_owned(), cmid.clone());
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.shared.steering.lock();
+            if pending.keys().any(|(session, _)| session == session_id) {
+                return Err("a delivery is already pending".into());
+            }
+            pending.insert(key.clone(), tx);
+        }
+        let command_id = self.next_id("cancel-turn");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::CancelTurn {
+                session_id: session_id.to_owned(),
+                command_id: command_id.clone(),
+                target: target.clone(),
+                cmid,
+            },
+        );
+        Ok(SteeringDelivery {
+            shared: Arc::clone(&self.shared),
+            key,
+            command_id,
+            receiver: Some(rx),
+        })
+    }
+
+    pub(crate) fn delivery_turn_finished(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+    ) -> Result<bool, String> {
+        if !self.connected() {
+            return Err("runtime disconnected".into());
+        }
+        let workers = self.shared.workers.lock();
+        let worker = workers.get(session_id).ok_or("worker unavailable")?;
+        if worker.worker_epoch != target.worker_epoch || worker.drain_requested {
+            return Err("worker changed".into());
+        }
+        match worker.current_turn_id.as_deref() {
+            Some(turn) if turn != target.turn_id => Err("turn changed".into()),
+            None if worker.state == WorkerState::Running => Ok(true),
+            Some(_) | None => Ok(false),
+        }
     }
 
     pub fn cancel(&self, session_id: &str) {
@@ -1615,7 +1734,8 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         } => {
             let command = shared.pending.lock().remove(&command_id);
             if !accepted
-                && let Some(CoreCommand::Steer { cmid, .. }) = &command
+                && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
+                    &command
                 && let Some(waiter) = shared
                     .steering
                     .lock()
@@ -2309,6 +2429,10 @@ fn update_snapshot_from_event(
         {
             worker.supports_current_turn =
                 crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+            worker.delivery_controls.next_checkpoint = update
+                .get("nextCheckpoint")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
         }
         RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::background_tasks_count(update).is_some() =>
@@ -2859,11 +2983,32 @@ mod tests {
             .workers
             .lock()
             .insert("steering".into(), worker.clone());
+        let original = runtime.delivery_target("steering").unwrap();
+        for target in [
+            crate::send_delivery::DeliveryTarget {
+                worker_epoch: "replaced-worker".into(),
+                ..original.clone()
+            },
+            crate::send_delivery::DeliveryTarget {
+                turn_id: "expired-turn".into(),
+                ..original.clone()
+            },
+        ] {
+            assert!(
+                runtime
+                    .start_steer_targeted("steering", vec![], "stale".into(), Some(&target), false,)
+                    .is_err()
+            );
+            assert!(runtime.pending_for_test().is_empty());
+            assert!(runtime.shared.steering.lock().is_empty());
+        }
         let effect = runtime
-            .start_steer(
+            .start_steer_targeted(
                 "steering",
                 vec![serde_json::json!({"type":"text","text":"correction"})],
                 "one".into(),
+                Some(&original),
+                false,
             )
             .unwrap();
         assert!(runtime.pending_for_test().iter().any(|command| matches!(command,
@@ -3303,6 +3448,7 @@ mod tests {
             native_thread_materialized: None,
             current_turn_id: Some("turn-1".to_owned()),
             supports_current_turn: false,
+            delivery_controls: crate::runtime_wire::DeliveryControls::default(),
             last_runtime_seq: 4,
             pending_permissions: Vec::new(),
             config_options: None,

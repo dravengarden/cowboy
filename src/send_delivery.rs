@@ -2,6 +2,26 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::runtime_wire::DeliveryTarget;
+
+/// Session preference, distinct from one-shot Interrupt and scheduler Pause.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum DeliveryMode {
+    Steer,
+    ToolBoundary,
+    #[default]
+    NextTurn,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryPolicy {
+    pub mode: DeliveryMode,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
@@ -9,6 +29,7 @@ pub enum SendDelivery {
     #[default]
     NextTurn,
     CurrentTurn,
+    NextCheckpoint,
     Interrupt,
 }
 
@@ -24,7 +45,7 @@ impl SendDelivery {
         if force && resolved != Self::Interrupt {
             return Err("delivery conflicts with force");
         }
-        if front && resolved == Self::CurrentTurn {
+        if front && matches!(resolved, Self::CurrentTurn | Self::NextCheckpoint) {
             return Err("current_turn has no queue position");
         }
         Ok(resolved)
@@ -59,6 +80,7 @@ mod tests {
         for (name, delivery) in [
             ("next_turn", NextTurn),
             ("current_turn", CurrentTurn),
+            ("next_checkpoint", NextCheckpoint),
             ("interrupt", Interrupt),
         ] {
             assert_eq!(serde_json::to_value(delivery).unwrap(), name);

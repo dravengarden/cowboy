@@ -64,12 +64,15 @@ operations! {
     "sessions.calls_dismiss", true, "{session_id:string,body:{call_ids:string[],dismissed:boolean}}; hide at most 100 ended calls; false restores them; keeps results and admission receipts";
     "sessions.rename", true, "{session_id:string,title:string}";
     "sessions.pause", true, "{session_id:string,paused:boolean}";
+    "queue.options", false, "{session_id:string}; delivery target, queue pause and versioned policy; does not wake a worker";
+    "queue.policy_set", true, "{session_id:string,mode:'steer'|'tool_boundary'|'next_turn',revision:number}; CAS session preference, including empty or dormant sessions; affects future choices only";
+    "queue.release_hold", true, "{session_id:string,operation:string}; explicitly release the matching interrupt hold only on an idle worker after inspecting transcript/receipt; never resends the replacement; preserves Pause";
     "sessions.configure", true, "{session_id:string,config_id:string,value:string|boolean}; configuration.read('session') discovers Provider choices";
     "sessions.cancel", true, "{session_id:string}; accepted means cancellation requested, not confirmed stopped";
     "sessions.retry", true, "{session_id:string}; explicitly repeats the last failed prompt";
     "sessions.reset", true, "{session_id:string}; destructive: clears conversation context";
     "sessions.delete", true, "{session_id:string}; accepted means close/delete requested; observe session absence before assuming deletion";
-    "queue.submit", true, "{session_id:string,text:string,content?:unknown[],delivery?:'next_turn'|'current_turn'|'interrupt',front?:boolean,force?:boolean}; default next_turn queues while busy; front prioritizes without interrupting; current_turn requires running worker support and never starts a new turn; interrupt cancels current work. force is the legacy interrupt alias. Observe pending/unknown receipts; never retry with a new operation";
+    "queue.submit", true, "{session_id:string,text:string,content?:unknown[],delivery?:'next_turn'|'current_turn'|'next_checkpoint'|'interrupt'|'session_default',target?:{worker_epoch:string,turn_id:string},front?:boolean,force?:boolean}; omitted delivery is next_turn. Read queue.options for exact target and native controls. next_checkpoint consumes after foreground tools or at turn end. interrupt requires target, cancels that turn and sends once while preserving Pause/other rows. session_default resolves before self-steer checks. Observe pending/unknown receipts; never retry with a new operation";
     "queue.edit", true, "{session_id:string,id:string,text:string,content:unknown[]}; explicit complete replacement; preserve existing attachment blocks";
     "queue.delivery_receipt", false, "{session_id:string,operation:string}; observe an HTTP/CLI current-turn delivery without resending; MCP control.apply uses its existing control receipt";
     "queue.remove", true, "{session_id:string,id:string}";

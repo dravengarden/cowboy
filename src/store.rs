@@ -1568,6 +1568,15 @@ impl Store {
         dispatch_storage!(self, put_setting(key, value))
     }
 
+    pub async fn compare_and_put_setting(
+        &self,
+        key: &str,
+        expected: Option<&serde_json::Value>,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(self, compare_and_put_setting(key, expected, value))
+    }
+
     pub async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
         dispatch_storage!(self, update_status(session_id, status))
     }
@@ -5731,6 +5740,25 @@ impl PostgresStorage {
         Ok(())
     }
 
+    pub async fn compare_and_put_setting(
+        &self,
+        key: &str,
+        expected: Option<&serde_json::Value>,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            crate::core::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
+        );
+        let result = sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) \
+             SELECT $1, $2, now() WHERE $3::jsonb IS NULL OR EXISTS (SELECT 1 FROM settings WHERE key = $1) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at \
+             WHERE settings.value = $3",
+        ).bind(key).bind(value).bind(expected).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Update only `status` and bump `updated_at`. Used when `Hub::set_status`
     /// fires; the event itself goes through `append_event` separately.
     ///
@@ -9240,6 +9268,52 @@ mod storage_contract_tests {
                 "{key}"
             );
         }
+        let key = format!(
+            "{}cas-session",
+            crate::core::settings_keys::SESSION_DELIVERY_POLICY_PREFIX
+        );
+        let first = serde_json::json!({"mode":"next_turn","revision":1});
+        let second = serde_json::json!({"mode":"steer","revision":2});
+        assert!(
+            !store
+                .compare_and_put_setting(&key, Some(&first), &second)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .compare_and_put_setting(&key, None, &first)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !reopened
+                .compare_and_put_setting(&key, None, &second)
+                .await
+                .unwrap()
+        );
+        let (left, right) = tokio::join!(
+            store.compare_and_put_setting(&key, Some(&first), &second),
+            reopened.compare_and_put_setting(&key, Some(&first), &second),
+        );
+        assert_ne!(
+            left.unwrap(),
+            right.unwrap(),
+            "only one concurrent policy edit may commit"
+        );
+        assert!(
+            !store
+                .compare_and_put_setting(&key, Some(&first), &second)
+                .await
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .load_settings()
+                .await
+                .unwrap()
+                .contains(&(key, second))
+        );
     }
 
     #[tokio::test]

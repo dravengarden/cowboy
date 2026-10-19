@@ -21,6 +21,16 @@ struct HubSink {
 }
 
 impl AgentSink for HubSink {
+    fn delivery_target_is_current(
+        &self,
+        session: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+    ) -> bool {
+        session == SESSION
+            && target.worker_epoch == "fixture-worker"
+            && target.turn_id == "fixture-turn"
+            && self.hub.status(session) == Some(Status::Busy)
+    }
     fn session_is_managed_read_only(&self, _: &str) -> bool {
         self.managed_read_only.load(Ordering::SeqCst)
     }
@@ -1128,7 +1138,7 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
         let initialize: Value =
             serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
         send_json(&mut writer, json!({"jsonrpc":"2.0","id":initialize["id"],"result":{
-            "protocolVersion":1,"agentCapabilities":{},"_meta":{"steering":{"supported":true,"idleBehavior":"promptRequired"}}
+            "protocolVersion":1,"agentCapabilities":{},"_meta":{"steering":{"supported":true,"idleBehavior":"promptRequired","priorities":["now","next"]}}
         }})).await;
         let new: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
         send_json(
@@ -1155,6 +1165,8 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
             .send(AgentCommand::Steer {
                 blocks: blocks(),
                 cmid: "steered".into(),
+                next_checkpoint: false,
+                target: None,
             })
             .unwrap();
         let steer: Value =
@@ -1176,6 +1188,58 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
         }
         assert_eq!(sink.prompt_starts.lock().len(), 1);
         assert!(sink.prompt_completions.lock().is_empty());
+        command_tx
+            .send(AgentCommand::Steer {
+                blocks: blocks(),
+                cmid: "checkpoint".into(),
+                next_checkpoint: true,
+                target: None,
+            })
+            .unwrap();
+        let checkpoint: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(checkpoint["method"], "_session/steering");
+        assert_eq!(
+            checkpoint["params"]["_meta"]["steering"]["priority"],
+            "next"
+        );
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":checkpoint["id"],"result":{"outcome":"injected"}}),
+        )
+        .await;
+        command_tx
+            .send(AgentCommand::CancelTurn {
+                target: crate::send_delivery::DeliveryTarget {
+                    worker_epoch: "stale-worker".into(),
+                    turn_id: "stale-turn".into(),
+                },
+                cmid: "stale-cancel".into(),
+            })
+            .unwrap();
+        loop {
+            let events = sink.hub.snapshot(SESSION).unwrap().0;
+            if events.iter().any(|entry| matches!(&entry.event, Event::Update { update } if update["cmid"] == "stale-cancel" && update["outcome"] == "not_delivered")) { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), lines.next_line())
+                .await
+                .is_err()
+        );
+        command_tx
+            .send(AgentCommand::CancelTurn {
+                target: crate::send_delivery::DeliveryTarget {
+                    worker_epoch: "fixture-worker".into(),
+                    turn_id: "fixture-turn".into(),
+                },
+                cmid: "matching-cancel".into(),
+            })
+            .unwrap();
+        let cancellation: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(cancellation["method"], "session/cancel");
+        assert_eq!(cancellation["params"]["sessionId"], NATIVE);
         send_json(
             &mut writer,
             json!({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}}),
@@ -1188,6 +1252,8 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
             .send(AgentCommand::Steer {
                 blocks: blocks(),
                 cmid: "idle".into(),
+                next_checkpoint: false,
+                target: None,
             })
             .unwrap();
         loop {
@@ -1195,11 +1261,15 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
             if events.iter().any(|entry| matches!(&entry.event, Event::Update { update } if update["cmid"] == "idle" && update["outcome"] == "not_delivered")) { break; }
             tokio::task::yield_now().await;
         }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), lines.next_line())
-                .await
-                .is_err()
-        );
+        // The prompt watchdog may repeat the same cancellation when its watch
+        // wakes. Idle steering must never emit another prompt or steering RPC.
+        while let Ok(line) =
+            tokio::time::timeout(Duration::from_millis(20), lines.next_line()).await
+        {
+            let frame: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
+            assert_eq!(frame["method"], "session/cancel");
+            assert_eq!(frame["params"]["sessionId"], NATIVE);
+        }
         assert_eq!(sink.prompt_starts.lock().len(), 1);
         drop(command_tx);
         phase.wait_for(|_| false).await.unwrap_err();

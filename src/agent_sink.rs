@@ -6,6 +6,13 @@
 use crate::agent_model::{Event, SessionUsage, Status};
 
 pub trait AgentSink: Send + Sync + 'static {
+    fn delivery_target_is_current(
+        &self,
+        _session_id: &str,
+        _target: &crate::send_delivery::DeliveryTarget,
+    ) -> bool {
+        false
+    }
     /// Explicit execution hooks carry only local correlation, never prompt
     /// content or a Provider credential/environment binding.
     fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}

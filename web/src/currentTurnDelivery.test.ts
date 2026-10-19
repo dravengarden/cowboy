@@ -10,7 +10,7 @@ test("a restored current-turn message only observes its exact receipt", async ()
   }) as typeof fetch;
   assertEquals(
     await deliverCurrentTurn("session", "original", null, request),
-    "not_delivered",
+    "unknown",
   );
   assertEquals(calls, [{
     url: "/api/sessions/session/delivery/original",
@@ -46,7 +46,11 @@ test("native injection uses explicit delivery and stable identity", async () => 
     await deliverCurrentTurn(
       "s",
       "same",
-      { text: "correction", content: [] },
+      {
+        text: "correction",
+        content: [],
+        target: { worker_epoch: "worker-a", turn_id: "turn-a" },
+      },
       request,
     ),
     "injected",
@@ -56,5 +60,6 @@ test("native injection uses explicit delivery and stable identity", async () => 
     content: [],
     delivery: "current_turn",
     operation: "same",
+    target: { worker_epoch: "worker-a", turn_id: "turn-a" },
   });
 });

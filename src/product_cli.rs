@@ -209,6 +209,16 @@ enum SessionCommand {
     Cancel { session: String },
     /// Read an original current-turn delivery receipt without sending again.
     Delivery { session: String, operation: String },
+    /// Inspect delivery capabilities or CAS the default mode without waking a worker.
+    QueuePolicy {
+        session: String,
+        #[arg(long, value_enum, requires = "revision")]
+        mode: Option<crate::send_delivery::DeliveryMode>,
+        #[arg(long, requires = "mode")]
+        revision: Option<u64>,
+    },
+    /// Release an unresolved interrupt hold on an idle worker; never resend.
+    ReleaseDeliveryHold { session: String, operation: String },
     /// Clear the conversation context (destructive, like the Web UI).
     Clear {
         session: String,
@@ -602,11 +612,28 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
                 .map_err(anyhow::Error::msg)?;
             let operation = operation.unwrap_or_else(|| format!("cli:{}", uuid::Uuid::new_v4()));
             eprintln!("operation: {operation}");
+            let target = if delivery != crate::send_delivery::SendDelivery::NextTurn {
+                let options = client
+                    .expect(
+                        Method::GET,
+                        &format!("/api/sessions/{session}/delivery-options"),
+                        None,
+                    )
+                    .await?;
+                let options: serde_json::Value = serde_json::from_str(&options)?;
+                ensure!(
+                    !options["target"].is_null(),
+                    "No active delivery target; choose next_turn"
+                );
+                options["target"].clone()
+            } else {
+                serde_json::Value::Null
+            };
             let receipt = client
                 .expect(
                     Method::POST,
                     &format!("/api/sessions/{session}/prompt"),
-                    Some(&json!({ "text": text, "delivery": delivery, "front": front, "operation": operation })),
+                    Some(&json!({ "text": text, "delivery": delivery, "front": front, "operation": operation, "target": target })),
                 )
                 .await?;
             println!("{session}\t{}", receipt.trim());
@@ -628,6 +655,39 @@ pub async fn run_session(args: SessionArgs) -> Result<()> {
                 )
                 .await?;
             println!("{}", receipt.trim());
+        }
+        SessionCommand::QueuePolicy {
+            session,
+            mode,
+            revision,
+        } => {
+            let (method, suffix, body) = if let Some(mode) = mode {
+                (
+                    Method::PUT,
+                    "delivery-policy",
+                    Some(json!({"mode":mode,"revision":revision.expect("clap requires revision")})),
+                )
+            } else {
+                (Method::GET, "delivery-options", None)
+            };
+            let response = client
+                .expect(
+                    method,
+                    &format!("/api/sessions/{session}/{suffix}"),
+                    body.as_ref(),
+                )
+                .await?;
+            println!("{}", response.trim());
+        }
+        SessionCommand::ReleaseDeliveryHold { session, operation } => {
+            client
+                .expect(
+                    Method::POST,
+                    &format!("/api/sessions/{session}/delivery-hold/release"),
+                    Some(&json!({"operation":operation})),
+                )
+                .await?;
+            println!("{session}\thold released; replacement not resent");
         }
         SessionCommand::Clear { session, yes } => {
             ensure!(

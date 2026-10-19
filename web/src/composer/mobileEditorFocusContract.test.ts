@@ -803,16 +803,16 @@ test("expanded mobile rails align while compact overlay stays undivided", () => 
   );
 });
 
-test("fullscreen delivery closes only after authoritative success", () => {
+test("fullscreen delivery uses the shared picker and closes after durable ownership", () => {
   assertEquals(
     composerSource.includes(
-      "submitWithFeedback(() => setComposeFs(false))",
+      "requestDelivery(() => setComposeFs(false))",
     ),
     true,
   );
   assertEquals(
     composerSource.includes(
-      "dismissAfterMobileDelivery();\n    setComposeFs(false);",
+      "await confirmation;\n      setForceAnchor(null);",
     ),
     true,
   );
@@ -1084,39 +1084,17 @@ test("pending Force push confirmation keeps the native editor and anchor mounted
   );
 });
 
-test("main Force push confirmation preserves native keyboard focus", () => {
-  const confirmationStart = composerSource.indexOf(
-    "/* Force-push confirm — opened by a completed long-press on Queue.",
+test("delivery picker dismisses mobile keyboard and restores the captured selection on cancel", () => {
+  assertEquals(composerSource.includes("<InterruptDeliveryConfirm"), true);
+  assertEquals(composerSource.includes("if (!desktop) dismissMobileSoftwareKeyboard();"), true);
+  assertEquals(composerSource.includes("selection: editorRef.current?.getSelection()"), true);
+  const close = composerSource.slice(
+    composerSource.indexOf("const closeDeliveryPicker ="),
+    composerSource.indexOf("const deliverySourceCurrent ="),
   );
-  const confirmationEnd = composerSource.indexOf(
-    "/* Inline-image actions are deliberately non-modal.",
-    confirmationStart,
-  );
-  const confirmation = composerSource.slice(confirmationStart, confirmationEnd);
-  const triggerStart = composerSource.lastIndexOf(
-    'aria-label="force push"',
-    confirmationStart,
-  );
-  const triggerEnd = composerSource.indexOf("</IconButton>", triggerStart);
-  const trigger = composerSource.slice(triggerStart, triggerEnd);
-
-  assertEquals(
-    confirmationStart >= 0 && confirmationEnd > confirmationStart,
-    true,
-  );
-  assertEquals(confirmation.includes("<Popper"), true);
-  assertEquals(confirmation.includes("<Popover"), false);
-  assertEquals(confirmation.includes("<ClickAwayListener"), true);
-  assertEquals(confirmation.includes('aria-modal="false"'), true);
-  assertEquals(confirmation.includes('borderRadius: "12px"'), true);
-  assertEquals(
-    confirmation.match(
-      /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
-    )?.length,
-    2,
-  );
-  assertEquals(triggerStart >= 0 && triggerEnd > triggerStart, true);
-  assertEquals(trigger.includes("event.preventDefault()"), true);
+  assertEquals(close.includes("flushSync("), true);
+  assertEquals(close.includes("focusSelection(source.selection)"), true);
+  assertEquals(close.indexOf("setForceAnchor(null)") < close.indexOf("focusSelection"), true);
 });
 
 test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {

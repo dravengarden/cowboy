@@ -206,6 +206,7 @@ export const conn = createConnectionStore({ versionUrl: "/version" });
 export interface QueuedMessage {
   /** Local-only native delivery intent; restored outboxes only read its receipt. */
   currentTurn?: boolean;
+  nativeDelivery?: "current_turn" | "next_checkpoint" | "interrupt";
   id: string;
   text: string;
   /** Staged image / file attachments (reconstructed from the message's ACP
@@ -4547,6 +4548,7 @@ async function qAdd(
     cmid?: string;
     sourceCmid?: string;
     currentTurn?: boolean;
+    nativeDelivery?: QueuedMessage["nativeDelivery"];
   } = {},
 ): Promise<void> {
   const mode = opts.mode ?? "back";
@@ -4569,6 +4571,7 @@ async function qAdd(
     cmid,
     origin,
     ...(opts.currentTurn ? { currentTurn: true } : {}),
+    ...(opts.nativeDelivery ? { nativeDelivery: opts.nativeDelivery } : {}),
     ...(opts.schedule !== undefined ? { schedule: opts.schedule } : {}),
   };
   // Set status BEFORE mutating: the local apply fires `onChange` → commitQueue,
@@ -4666,6 +4669,12 @@ export function retryQueued(sessionId: string, cmid: string): void {
   if (c === undefined) return;
   const pending = c.pending().find((mutation) => mutation.id === cmid);
   if (pending !== undefined) {
+    const nativeRow = (pending.args as { row?: QueuedMessage }).row;
+    if (nativeRow?.currentTurn) {
+      // Receipt observation only, including after reload; never bump or replay.
+      void transmitCurrentTurn(sessionId, cmid, nativeRow);
+      return;
+    }
     c.bump(cmid);
     forgetDeliveryFailure(cmid, (pending.args as { row?: QueuedMessage }).row?.cmid);
     if (pending.name === "activateDraft") {
@@ -5107,14 +5116,34 @@ export function markSessionHydrated(id: string): void {
 // dispatches it immediately when idle, else queues it. A prompt with at least
 // one attachment is valid even with empty text; otherwise empty text is ignored.
 const freshCurrentTurns = new Set<string>();
+const currentTurnTargets = new Map<
+  string,
+  import("./currentTurnDelivery").DeliveryTarget
+>();
+const checkpointDeliveries = new Set<string>();
+const interruptDeliveries = new Set<string>();
 const currentTurnRequests = new Set<string>();
-const currentTurnCompletions = new Map<string, (outcome: string) => void>();
+const currentTurnChains = new Map<string, Promise<void>>();
 
-async function transmitCurrentTurn(
+function transmitCurrentTurn(
+  sessionId: string, id: string, row: QueuedMessage,
+): Promise<void> {
+  const prior = currentTurnChains.get(sessionId) ?? Promise.resolve();
+  const next = prior.catch(() => undefined).then(() => performCurrentTurn(sessionId, id, row));
+  currentTurnChains.set(sessionId, next);
+  const cleanup = () => {
+    if (currentTurnChains.get(sessionId) === next) currentTurnChains.delete(sessionId);
+  };
+  void next.then(cleanup, cleanup);
+  return next;
+}
+
+async function performCurrentTurn(
   sessionId: string,
   id: string,
   row: QueuedMessage,
 ): Promise<void> {
+  if (!qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)) return;
   if (currentTurnRequests.has(id)) return;
   currentTurnRequests.add(id);
   const fresh = freshCurrentTurns.delete(id);
@@ -5122,18 +5151,24 @@ async function transmitCurrentTurn(
   commitQueue(sessionId);
   try {
     const { deliverCurrentTurn } = await import("./currentTurnDelivery");
+    const target = currentTurnTargets.get(id);
     const outcome = await deliverCurrentTurn(
       sessionId,
       id,
-      fresh && isConnected()
-        ? { text: row.text, content: contentOf(row.text, row.attachments) }
+      fresh && isConnected() && target
+        ? {
+          text: row.text,
+          content: contentOf(row.text, row.attachments),
+          target,
+          nextCheckpoint: checkpointDeliveries.has(id),
+          interrupt: interruptDeliveries.has(id),
+        }
         : null,
     );
-    currentTurnCompletions.get(id)?.(outcome);
     if (
       !qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)
     ) return;
-    if (outcome === "injected") {
+    if (outcome === "injected" || outcome === "submitted") {
       qClients.get(sessionId)?.confirm([id]);
       qStatus.delete(id);
       forgetDeliveryFailure(id);
@@ -5158,9 +5193,10 @@ async function transmitCurrentTurn(
     );
     failDelivery(sessionId, [id]);
   } finally {
-    currentTurnCompletions.get(id)?.("unknown");
-    currentTurnCompletions.delete(id);
     currentTurnRequests.delete(id);
+    currentTurnTargets.delete(id);
+    checkpointDeliveries.delete(id);
+    interruptDeliveries.delete(id);
     commitQueue(sessionId);
   }
 }
@@ -5169,37 +5205,39 @@ export async function currentTurnPrompt(
   sessionId: string,
   text: string,
   attachments: Attachment[] = [],
+  target?: import("./currentTurnDelivery").DeliveryTarget,
+  nextCheckpoint = false,
+  interrupt = false,
 ): Promise<void> {
   const session = state.sessions.find((entry) => entry.id === sessionId);
   if (
     !isConnected() || session?.status !== "busy" ||
-    !session.supports_current_turn
+    (!interrupt && !session.supports_current_turn)
   ) {
     throw new Error(
       "The current turn is unavailable. Queue this message instead.",
     );
   }
+  const { captureDeliveryTarget } = await import("./currentTurnDelivery");
+  const captured = target ?? await captureDeliveryTarget(sessionId);
   const cmid = newCmid();
+  currentTurnTargets.set(cmid, captured);
+  if (nextCheckpoint) checkpointDeliveries.add(cmid);
+  if (interrupt) interruptDeliveries.add(cmid);
   freshCurrentTurns.add(cmid);
-  const completed = new Promise<string>((resolve) =>
-    currentTurnCompletions.set(cmid, resolve)
-  );
   try {
-    await qAdd("transcript", sessionId, text.trimEnd(), attachments, {
+    // qAdd acknowledges the durable local outbox. Its retained row owns receipt
+    // observation, so later native acknowledgement cannot clear a newer draft.
+    await qAdd("queue", sessionId, text.trimEnd(), attachments, {
       cmid,
       currentTurn: true,
+      nativeDelivery: interrupt ? "interrupt" : nextCheckpoint ? "next_checkpoint" : "current_turn",
     });
-    const outcome = await completed;
-    if (outcome !== "injected") {
-      throw new Error(
-        outcome === "not_delivered"
-          ? "Not delivered to the current turn. The draft is retained."
-          : "Delivery is unknown. Check the original message receipt before sending again.",
-      );
-    }
   } catch (error) {
     freshCurrentTurns.delete(cmid);
-    currentTurnCompletions.delete(cmid);
+    currentTurnTargets.delete(cmid);
+    checkpointDeliveries.delete(cmid);
+    interruptDeliveries.delete(cmid);
     throw error;
   }
 }
@@ -5218,6 +5256,7 @@ export function submitPrompt(
   // cmid lands server-side (queue broadcast OR chat echo).
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
+    && !sess.paused
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   // state.queues already includes optimistic queue rows (merged by commitQueue),
   // so this covers both server + local pending.

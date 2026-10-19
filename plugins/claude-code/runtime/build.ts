@@ -72,6 +72,7 @@ try {
     await run("tar", ["-xzf", archive, "-C", destination]);
     const sources = [
       "launch.mjs",
+      "steering.mjs",
       "connection.mjs",
       "mod-bridge.mjs",
       "tools.mjs",

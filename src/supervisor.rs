@@ -428,13 +428,63 @@ impl Supervisor {
         session_id: &str,
         content: Vec<serde_json::Value>,
         cmid: String,
+        target: Option<&crate::send_delivery::DeliveryTarget>,
+        next_checkpoint: bool,
     ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
         if self.hub.is_managed_child(session_id) {
             return Err("managed child conversations do not accept steering".into());
         }
         // Do not prepare, wake or replace a worker for this operation.
+        self.runtime_for_session(session_id)?.start_steer_targeted(
+            session_id,
+            content,
+            cmid,
+            target,
+            next_checkpoint,
+        )
+    }
+
+    pub(crate) fn start_cancel_turn(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+        cmid: String,
+    ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+        if self.hub.is_managed_child(session_id) {
+            return Err("managed child is read-only".into());
+        }
         self.runtime_for_session(session_id)?
-            .start_steer(session_id, content, cmid)
+            .start_cancel_turn(session_id, target, cmid)
+    }
+
+    pub(crate) fn delivery_turn_finished(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+    ) -> Result<bool, String> {
+        self.runtime_for_session(session_id)?
+            .delivery_turn_finished(session_id, target)
+    }
+
+    pub(crate) fn delivery_controls(
+        &self,
+        session_id: &str,
+    ) -> crate::runtime_wire::DeliveryControls {
+        self.runtime_for_session(session_id)
+            .map(|runtime| runtime.delivery_controls(session_id))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn delivery_target(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::send_delivery::DeliveryTarget> {
+        if self.hub.is_managed_child(session_id) {
+            return None;
+        }
+        self.runtime_for_session(session_id)
+            .ok()?
+            .delivery_target(session_id)
     }
 
     pub(crate) fn send_traced(
@@ -475,7 +525,10 @@ impl Supervisor {
         if recovery.is_some() && !matches!(command, AgentCommand::Prompt(..)) {
             return Err("execution recovery requires prompt delivery".into());
         }
-        if matches!(command, AgentCommand::Steer { .. }) {
+        if matches!(
+            command,
+            AgentCommand::Steer { .. } | AgentCommand::CancelTurn { .. }
+        ) {
             return Err("current-turn delivery requires durable asynchronous admission".into());
         }
         if matches!(command, AgentCommand::Cancel) {
@@ -509,12 +562,7 @@ impl Supervisor {
             && !cmid
                 .as_deref()
                 .is_some_and(|cmid| cmid.starts_with(crate::core::MANAGED_CALL_CMID_PREFIX))
-            && self.hub.session_info(session_id).is_some_and(|info| {
-                info.meta
-                    .execution_binding
-                    .as_ref()
-                    .is_some_and(|binding| binding.managed().is_some())
-            })
+            && self.hub.is_managed_child(session_id)
         {
             // Only the parent's managed call controls a child conversation.
             return Err(
@@ -561,7 +609,9 @@ impl Supervisor {
                 }
                 runtime.prompt_traced(session_id, content, cmid, trace);
             }
-            AgentCommand::Steer { .. } => unreachable!("steering has separate admission"),
+            AgentCommand::Steer { .. } | AgentCommand::CancelTurn { .. } => {
+                unreachable!("steering has separate admission")
+            }
             AgentCommand::Cancel => runtime.cancel(session_id),
             AgentCommand::Permission {
                 request_id,
@@ -1264,6 +1314,7 @@ mod tests {
             native_thread_materialized: None,
             current_turn_id: None,
             supports_current_turn: false,
+            delivery_controls: crate::runtime_wire::DeliveryControls::default(),
             last_runtime_seq: 1,
             pending_permissions: Vec::new(),
             config_options: None,

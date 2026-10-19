@@ -580,12 +580,39 @@ delivery requires an operation ID. Its receipt is available at
 `GET /api/sessions/{id}/delivery/{operation}` or MCP `queue.delivery_receipt`.
 Reusing a current-turn operation with different content is rejected.
 
-Web retains its durable outbox and the original message identity. Add to turn
-is a separate, non-sticky action; the main Send/Queue remains predictable.
-The editor clears and fullscreen closes only after native acceptance. Rejected
-or unknown delivery retains the draft and its receipt. Reload, reconnect and
-Retry only observe that receipt: an old current-turn message cannot be injected
-into a future turn. The command palette exposes the same Desktop action.
+Web's busy Send opens a scoped delivery picker; idle, unpaused, empty Queue sends
+directly. Queue and Session Settings share `queue.policy_set` with a required
+revision (compare-and-swap); `queue.options` reads that preference, Pause, hold,
+exact target and live capabilities without waking a worker. The preference
+preselects a mode and never skips the busy picker. Existing queued messages keep
+their Next turn scheduling. MCP may explicitly request `session_default`;
+resolution precedes the prohibition on steering the caller itself.
+
+`next_checkpoint` requires Machine protocol 35 and a worker advertising that
+native control. Claude 3.20.0 extends ACP's existing priority selection: consume
+after foreground tools finish, or at turn end if there is no further tool
+boundary. This is deliberately not named "Next tool call". Codex exposes Steer
+without an artificial second checkpoint mode. Preferences store this mode as
+`tool_boundary` for compatibility with the initial policy schema.
+
+For target-bound Interrupt, supply `target:{worker_epoch,turn_id}` from
+`queue.options`. The captured turn is cancelled and one replacement is admitted;
+Pause and other rows are preserved. `submitted` means dispatch admission, not
+completion. Uncertain cancellation or settlement leaves a durable queue hold.
+After inspecting the transcript and original receipt, `queue.release_hold`
+accepts the matching operation on an idle worker. It never resends the message.
+Legacy `force` keeps its old semantics. CLI captures the exact target for native
+delivery; `cowboy session queue-policy SESSION` reads options and accepts
+`--mode MODE --revision N` to update them. `release-delivery-hold` is the same
+explicit recovery action.
+
+Web persists identity and payload in the local outbox before clearing only the
+matching draft revision. The Current turn Queue lane owns pending/unknown
+delivery; late native acknowledgement cannot clear a newer draft. Reload,
+reconnect and Check receipt only observe the original identity, never POST into
+a later turn. Current-turn sends serialize per session; Next turn retains the
+server queue's ordering. Interrupt confirmation uses fresh Mod+Enter or an
+explicit pointer action, excluding bare/repeated Enter and IME composition.
 
 This extension owns cross-session authorization, queue intent, worker/turn
 fencing and durable receipts. Native runtimes continue to own turn execution.

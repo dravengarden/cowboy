@@ -179,6 +179,10 @@ impl Shared {
             {
                 snapshot.supports_current_turn =
                     crate::runtime_wire::current_turn_support(update).unwrap_or(false);
+                snapshot.delivery_controls.next_checkpoint = update
+                    .get("nextCheckpoint")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
             }
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::background_tasks_count(update).is_some() =>
@@ -296,6 +300,17 @@ impl RemoteSink {
 }
 
 impl AgentSink for RemoteSink {
+    fn delivery_target_is_current(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+    ) -> bool {
+        let snapshot = self.shared.snapshot.lock();
+        session_id == self.shared.session_id
+            && snapshot.worker_epoch == target.worker_epoch
+            && snapshot.current_turn_id.as_deref() == Some(&target.turn_id)
+            && !snapshot.drain_requested
+    }
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
         session_id == self.shared.session_id && self.shared.managed_read_only()
     }
@@ -606,6 +621,10 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             native_thread_materialized: Some(args.resume.is_some()),
             current_turn_id: None,
             supports_current_turn: false,
+            delivery_controls: crate::runtime_wire::DeliveryControls {
+                version: 1,
+                next_checkpoint: false,
+            },
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -910,16 +929,46 @@ fn handle_command(
 ) -> Frame {
     let (command_id, agent_command, turn): (String, Option<AgentCommand>, Option<String>) =
         match command {
+            WorkerCommand::CancelTurn {
+                command_id,
+                target,
+                cmid,
+            } => {
+                let snapshot = shared.snapshot();
+                if snapshot.worker_epoch != target.worker_epoch
+                    || snapshot.current_turn_id.as_deref() != Some(&target.turn_id)
+                    || snapshot.drain_requested
+                    || shared.managed_read_only()
+                    || !shared.workspace_is_current()
+                {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("cancellation target expired".into()),
+                    );
+                }
+                if !shared.mark_command(&command_id) {
+                    return command_ack(shared, command_id, true, Some("duplicate".into()));
+                }
+                (
+                    command_id,
+                    Some(AgentCommand::CancelTurn { target, cmid }),
+                    None,
+                )
+            }
             WorkerCommand::Steer {
                 command_id,
                 worker_epoch,
                 turn_id,
                 content,
                 cmid,
+                next_checkpoint,
             } => {
                 // This command must never wait for a future worker or turn.
                 let snapshot = shared.snapshot();
                 if !snapshot.supports_current_turn
+                    || (next_checkpoint && !snapshot.delivery_controls.next_checkpoint)
                     || !shared.workspace_is_current()
                     || shared.managed_read_only()
                     || snapshot.worker_epoch != worker_epoch
@@ -956,7 +1005,19 @@ fn handle_command(
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".into()));
                 }
-                (command_id, Some(AgentCommand::Steer { blocks, cmid }), None)
+                (
+                    command_id,
+                    Some(AgentCommand::Steer {
+                        blocks,
+                        cmid,
+                        next_checkpoint,
+                        target: Some(crate::send_delivery::DeliveryTarget {
+                            worker_epoch,
+                            turn_id,
+                        }),
+                    }),
+                    None,
+                )
             }
             WorkerCommand::Prompt {
                 command_id,
@@ -1448,6 +1509,7 @@ mod tests {
                     native_thread_materialized: None,
                     current_turn_id: None,
                     supports_current_turn: false,
+                    delivery_controls: crate::runtime_wire::DeliveryControls::default(),
                     last_runtime_seq: 0,
                     pending_permissions: vec![],
                     config_options: None,

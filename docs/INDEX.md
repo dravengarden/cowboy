@@ -91,7 +91,7 @@ primary phone/desktop product path.
 
 ### Core documents
 
-- [`queue-delivery-design-2026-10-19.md`](queue-delivery-design-2026-10-19.md) — Proposed Queue delivery modes, busy-send picker, desktop keyboard and mobile focus contract; design review and acceptance gates
+- [`queue-delivery-design-2026-10-19.md`](queue-delivery-design-2026-10-19.md) — Queue delivery design and implementation evidence: busy-send picker, desktop keyboard, mobile focus, native checkpoints and durable interrupt holds
 - [`requirements.md`](requirements.md) — Cowboy core requirements, state ownership, and context-preserving Provider reload
 - [`device-transport-security.md`](device-transport-security.md) — Implemented mandatory HTTPS/device binding, proxy boundary and enrollment
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Current security baseline, acceptance priorities and WireGuard roadmap

@@ -1999,6 +1999,8 @@ pub enum AgentCommand {
     Steer {
         blocks: Vec<ContentBlock>,
         cmid: String,
+        next_checkpoint: bool,
+        target: Option<crate::send_delivery::DeliveryTarget>,
     },
     /// Send a user turn. The full ACP content array is forwarded to the
     /// upstream agent verbatim — image / audio / resource blocks make it
@@ -2012,6 +2014,10 @@ pub enum AgentCommand {
     ),
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
+    CancelTurn {
+        target: crate::send_delivery::DeliveryTarget,
+        cmid: String,
+    },
     /// Answer a pending permission request (`None` = cancelled / no choice).
     Permission {
         request_id: String,
@@ -3188,9 +3194,17 @@ async fn run_session(
                     .and_then(serde_json::Value::as_str)
                     == Some("promptRequired")
         });
+    let supports_next_checkpoint = supports_current_turn
+        && initialize_meta
+            .as_ref()
+            .and_then(|meta| meta.get("steering"))
+            .and_then(|steering| steering.get("priorities"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|priorities| priorities.iter().any(|priority| priority == "next"));
     state.sink.push(&session_id, Event::Update { update: serde_json::json!({
         "sessionUpdate": crate::runtime_wire::CURRENT_TURN_CAPABILITIES_UPDATE,
         "currentTurn": supports_current_turn && !state.sink.session_is_managed_read_only(&session_id),
+        "nextCheckpoint": supports_next_checkpoint && !state.sink.session_is_managed_read_only(&session_id),
     }) });
     let agent_can_load = init.agent_capabilities.load_session;
     let agent_can_resume = init
@@ -3552,7 +3566,12 @@ async fn run_session(
                 (None, None)
             };
         match cmd {
-            AgentCommand::Steer { blocks, cmid } => {
+            AgentCommand::Steer {
+                blocks,
+                cmid,
+                next_checkpoint,
+                target,
+            } => {
                 let expected_prompt = state.current_prompt();
                 let connection = cx.clone();
                 let state = Arc::clone(state);
@@ -3562,16 +3581,16 @@ async fn run_session(
                     let _gate = state.steering_gate.lock().await;
                     let same_prompt = expected_prompt.as_ref().zip(state.current_prompt().as_ref())
                         .is_some_and(|(expected, active)| Arc::ptr_eq(expected, active));
-                    let outcome = if !supports_current_turn || state.sink.session_is_managed_read_only(&session_id) {
+                    let outcome = if !supports_current_turn || (next_checkpoint && !supports_next_checkpoint) || state.sink.session_is_managed_read_only(&session_id) {
                         "unsupported"
-                    } else if !same_prompt {
+                    } else if !same_prompt || target.as_ref().is_some_and(|target| !state.sink.delivery_target_is_current(&session_id, target)) {
                         "not_delivered"
                     } else {
                         state.last_echoed_user_contents.lock().extend(blocks.iter().map(|block| serde_json::to_value(block).unwrap_or_default()));
                         match tokio::time::timeout(Duration::from_secs(25), connection.send_request(SteeringRequest {
                             session_id: acp_id,
                             prompt: blocks.clone(),
-                            meta: serde_json::json!({"steering":{"idleBehavior":"promptRequired"}}),
+                            meta: serde_json::json!({"steering":{"idleBehavior":"promptRequired", "priority":if next_checkpoint { "next" } else { "now" }}}),
                         }).block_task()).await {
                             Ok(Ok(response)) if response.outcome == "injected" => "injected",
                             Ok(Ok(response)) if response.outcome == "promptRequired" => "not_delivered",
@@ -3932,6 +3951,48 @@ async fn run_session(
                             );
                         }
                     }
+                    Ok(())
+                })?;
+            }
+            AgentCommand::CancelTurn { target, cmid } => {
+                let expected_prompt = state.current_prompt();
+                let connection = cx.clone();
+                let state = Arc::clone(state);
+                let acp_id = acp_id.clone();
+                let session_id = session_id.clone();
+                cx.clone().spawn(async move {
+                    let _gate = state.steering_gate.lock().await;
+                    let same_prompt = expected_prompt
+                        .as_ref()
+                        .zip(state.current_prompt().as_ref())
+                        .is_some_and(|(expected, active)| Arc::ptr_eq(expected, active));
+                    let outcome = if same_prompt
+                        && state.sink.delivery_target_is_current(&session_id, &target)
+                        && !state.sink.session_is_managed_read_only(&session_id)
+                    {
+                        state
+                            .prompt_cancellation
+                            .send_modify(|generation| *generation = generation.wrapping_add(1));
+                        if connection
+                            .send_notification(CancelNotification::new(acp_id))
+                            .is_ok()
+                        {
+                            "cancel_requested"
+                        } else {
+                            "unknown"
+                        }
+                    } else {
+                        "not_delivered"
+                    };
+                    state.sink.push(
+                        &session_id,
+                        Event::Update {
+                            update: serde_json::json!({
+                                "sessionUpdate":crate::runtime_wire::STEERING_RESULT_UPDATE,
+                                "cmid":cmid, "outcome":outcome,
+                            }),
+                        },
+                    );
                     Ok(())
                 })?;
             }

@@ -10664,6 +10664,9 @@ async fn serve_axum(
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
+        .route("/api/sessions/{id}/delivery-options", get(send_delivery::options))
+        .route("/api/sessions/{id}/delivery-policy", put(send_delivery::set_policy))
+        .route("/api/sessions/{id}/delivery-hold/release", post(send_delivery::release))
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
         .route(
@@ -15994,6 +15997,8 @@ struct SessionPromptRequest {
     force: bool,
     #[serde(default)]
     operation: Option<String>,
+    #[serde(default)]
+    target: Option<crate::send_delivery::DeliveryTarget>,
 }
 
 /// Inject a prompt into a session FROM THE BACKEND (machine-driven). The
@@ -16009,7 +16014,13 @@ async fn api_session_prompt(
         Ok(delivery) => delivery,
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
-    if delivery == SendDelivery::CurrentTurn {
+    if matches!(
+        delivery,
+        SendDelivery::CurrentTurn | SendDelivery::NextCheckpoint
+    ) {
+        return send_delivery::submit(state, session_id, req).await;
+    }
+    if delivery == SendDelivery::Interrupt && req.target.is_some() {
         return send_delivery::submit(state, session_id, req).await;
     }
     // Keep the read guard through dispatch. Provider uninstall acquires the

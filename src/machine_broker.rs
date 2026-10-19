@@ -662,6 +662,7 @@ impl Broker {
                 native_thread_materialized: None,
                 current_turn_id: None,
                 supports_current_turn: false,
+                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
                 last_runtime_seq: 0,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -1269,6 +1270,7 @@ impl Broker {
                     native_thread_materialized: None,
                     current_turn_id: None,
                     supports_current_turn: false,
+                    delivery_controls: crate::runtime_wire::DeliveryControls::default(),
                     last_runtime_seq: 0,
                     pending_permissions: Vec::new(),
                     config_options: None,
@@ -3433,7 +3435,8 @@ fn worker_unit_name(socket: &Path, session_id: &str) -> String {
 
 fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
     match command {
-        WorkerCommand::Steer { command_id, .. }
+        WorkerCommand::CancelTurn { command_id, .. }
+        | WorkerCommand::Steer { command_id, .. }
         | WorkerCommand::Prompt { command_id, .. }
         | WorkerCommand::Cancel { command_id }
         | WorkerCommand::Permission { command_id, .. }
@@ -3837,7 +3840,12 @@ fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
             session_id,
             command_id,
         } if command_id.starts_with("reset-") => Some((session_id.clone(), command_id.clone())),
-        CoreCommand::Steer {
+        CoreCommand::CancelTurn {
+            session_id,
+            command_id,
+            ..
+        }
+        | CoreCommand::Steer {
             session_id,
             command_id,
             ..
@@ -4091,6 +4099,43 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 echo_artifacts,
             },
         ),
+        CoreCommand::CancelTurn {
+            session_id,
+            command_id,
+            target,
+            cmid,
+        } => {
+            let tx = broker
+                .workers
+                .lock()
+                .get(&session_id)
+                .filter(|worker| {
+                    worker.snapshot.delivery_controls.version > 0
+                        && worker.snapshot.worker_epoch == target.worker_epoch
+                        && worker.snapshot.current_turn_id.as_deref() == Some(&target.turn_id)
+                        && !worker.snapshot.drain_requested
+                })
+                .map(|worker| worker.tx.clone());
+            let sent = tx.is_some_and(|tx| {
+                tx.send(Frame::WorkerCommand {
+                    session_id: session_id.clone(),
+                    command: WorkerCommand::CancelTurn {
+                        command_id: command_id.clone(),
+                        target,
+                        cmid,
+                    },
+                })
+                .is_ok()
+            });
+            if !sent {
+                broker.send_controller(Frame::CommandAck {
+                    session_id,
+                    command_id,
+                    accepted: false,
+                    reason: Some("cancellation target expired".into()),
+                });
+            }
+        }
         CoreCommand::Steer {
             session_id,
             command_id,
@@ -4098,6 +4143,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             turn_id,
             content,
             cmid,
+            next_checkpoint,
         } => {
             let tx = broker
                 .workers
@@ -4107,6 +4153,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                     worker.snapshot.worker_epoch == worker_epoch
                         && worker.snapshot.current_turn_id.as_deref() == Some(&turn_id)
                         && worker.snapshot.supports_current_turn
+                        && (!next_checkpoint || worker.snapshot.delivery_controls.next_checkpoint)
                         && !worker.snapshot.drain_requested
                 })
                 .map(|worker| worker.tx.clone());
@@ -4119,6 +4166,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                         turn_id,
                         content,
                         cmid,
+                        next_checkpoint,
                     },
                 })
                 .is_ok()
@@ -5578,6 +5626,7 @@ mod tests {
                 native_thread_materialized: None,
                 current_turn_id: Some("turn-1".to_owned()),
                 supports_current_turn: false,
+                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
                 last_runtime_seq: 10,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -9069,6 +9118,7 @@ mod tests {
                     native_thread_materialized: None,
                     current_turn_id: Some("turn-1".to_owned()),
                     supports_current_turn: false,
+                    delivery_controls: crate::runtime_wire::DeliveryControls::default(),
                     last_runtime_seq: 1,
                     pending_permissions: Vec::new(),
                     config_options: None,

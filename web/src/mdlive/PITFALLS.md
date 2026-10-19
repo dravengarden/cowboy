@@ -3255,14 +3255,21 @@ unrelated automatic zoom (observed scale 1.6 for 10px text).
 ### 2026-10-18 Explicit current-turn delivery
 
 Add to turn uses the existing draft controller and durable outbox. Persist its
-identity and payload before transport; clear the editor and close fullscreen
-only after the native `injected` receipt. Unknown/rejected delivery retains the
-draft and original receipt. A restored outbox and explicit Retry only observe
+identity and payload before transport. As of 2026-10-19, clear only the matching
+editor revision after local durable admission; the Current turn Queue row owns
+the payload and pending/unknown receipt, so late native acknowledgement cannot
+clear a newer draft. A restored outbox and explicit Retry only observe
 that receipt, never POST an old current-turn message into a later turn. The
-default Send/Queue and confirmation-gated interruption remain separate actions.
+busy Send opens the delivery picker, including confirmation-gated interruption.
 
-Desktop exposes a toolbar action and command-palette entry. Touch reuses the
-existing accessory button and its stationary-touch/compatibility-click rules.
+Desktop and touch use the shared send action. The picker deliberately yields the
+software keyboard; cancellation restores the saved logical selection in the
+user gesture. While open, visual-viewport resize/scroll repositions the popup
+against the send anchor without changing focus; iOS keyboard dismissal need not
+emit a window resize. MUI MenuItem's own Enter handling must also be suppressed during
+IME composition, otherwise ignoring the custom command still activates a row.
+Held Return never selects or confirms. Interrupt requires fresh Mod+Enter or an
+explicit pointer confirmation. Touch retains stationary-tap/click suppression.
 No editor extension, native input, selection, IME or caret logic changes. The
 physical image-adjacent caret issue #69 remains open; browser coverage is not
 physical iOS acceptance.

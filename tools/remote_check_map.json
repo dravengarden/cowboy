@@ -243,6 +243,7 @@
       "entry": "tools/execution_claude_worker_conformance.py",
       "paths": [
         "plugins/claude-code/runtime/launch.mjs",
+        "plugins/claude-code/runtime/steering.mjs",
         "plugins/claude-code/runtime/context-mod.js",
         "plugins/claude-code/runtime/tools.mjs",
         "plugins/claude-code/runtime/connection.mjs",

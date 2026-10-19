@@ -4880,6 +4880,25 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn compare_and_put_setting(
+        &self,
+        key: &str,
+        expected: Option<&serde_json::Value>,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            crate::core::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
+        );
+        let result = sqlx::query(
+            "INSERT INTO settings(key, value, updated_at_ms) \
+             SELECT ?1, ?2, ?3 WHERE ?4 IS NULL OR EXISTS (SELECT 1 FROM settings WHERE key = ?1) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms \
+             WHERE settings.value = ?4",
+        ).bind(key).bind(value).bind(now_ms()).bind(expected).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub(super) async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
         sqlx::query(
             "UPDATE sessions SET provider_version = ?1, provider_generation_digest = ?2, provider_behavior = ?3, status = ?6, updated_at_ms = ?4 WHERE id = ?5",

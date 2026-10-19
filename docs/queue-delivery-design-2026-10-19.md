@@ -1,9 +1,10 @@
 # Queue delivery and send interaction — design proposal
 
-Status: design only, 2026-10-19. No implementation or runtime acceptance claimed.
+Status: implementation candidate, 2026-10-19. Release acceptance is pending.
 Scope: Cowboy Composer, Queue, Session Settings, shared scheduling/API contract.
 Revision: revised after the requested Claude Fable Max review; see section 11.
-This is a design proposal with unrun native/mobile acceptance gates. It is an
+Sections 1–11 retain the reviewed proposal; section 12 records implementation
+decisions and the exact native evidence. This is an
 external Cowboy product design, not a Columbus execution-kernel addition.
 
 ## 1. User constraints and decisions
@@ -422,5 +423,78 @@ Design verification: changed local links, index entry, whitespace and index
 coverage nonregression pass. The broader Columbus docs-index-check stops on
 pre-existing data-transfer-toolkit front matter; the Cowboy base itself has
 190 pre-existing unindexed Markdown pages. Neither baseline was modified.
-There is no product-code diff and no product-test or physical-device pass
-claimed. Native boundary probes remain the next implementation gate.
+That checkpoint contained no product-code diff. Implementation evidence follows.
+
+## 12. Implementation and native findings
+
+The candidate uses one busy-state picker and one versioned, DB-backed default
+shared by Queue and Session Settings. Idle unpaused sends remain direct. Pause
+is independent from the delivery preference, and Interrupt is an explicit
+one-shot confirmation. Current-turn outbox rows have a separate Queue lane;
+ordinary server queue rows retain Next turn. A default edit does not rewrite
+previously admitted messages or implicitly batch-release them.
+
+Native experiments on the exact pinned CLIs refined the proposed label:
+Claude 2.1.302 `next` consumes after foreground tools, but also consumes after
+generation ends when no tool checkpoint remains. The public label is therefore
+**Next checkpoint**, with the fallback stated in the picker. The persisted
+preference remains `tool_boundary`; send intent is `next_checkpoint`.
+Codex 0.160.1 `turn/steer` consumed the marker in the same captured turn in both
+tool and generation fixtures, rejecting an incorrect or idle expected turn.
+It does not expose a distinct checkpoint priority, so only Steer is offered.
+
+Claude's extension delegates admission, UUID tracking and settlement to ACP
+0.93.0. It changes only the queued SDK user-message priority from `now` to `next`,
+retaining upstream permission/elicitation `later` protection and restoring the
+input method on failure. Delete this adapter when upstream accepts the priority
+directly. Native CLI probes alone do not establish packaged ACP acceptance;
+the worker fixture additionally checks the actual built launcher.
+
+ACP `injected` acknowledges runtime admission, not model consumption. Stop may
+discard an admitted checkpoint before consumption without rewriting that receipt.
+The packaged cancellation fixture checks both the original prompt's cancelled
+result and the absence of subsequent tool effects/model consumption. The UI
+retires the local outbox after admission; it does not claim execution completion.
+
+Native-only evidence lives in the append-only receipts
+`/srv/storage/fast0/agent/tmp/queue-claude-delivery-20261019-03.json` and
+`/srv/storage/fast0/agent/tmp/queue-codex-delivery-20261019-01.json`.
+The Claude `now` generation case observed a connection reset from preemption;
+it is not an all-cases-clean acceptance result. The tool batch could serialize
+Bash calls, so these measurements do not claim parallel-tool scheduling.
+
+Target-bound Interrupt uses durable admission and a persistent drain hold,
+checks the worker epoch and active turn at the runtime boundary, observes turn
+settlement, and submits exactly one replacement while preserving manual Pause
+and other queued messages. Unknown acknowledgement/settlement retains the hold
+across restart. Explicit hold release requires the matching operation and a
+connected idle worker; release never replays the replacement. Protocol 35 and
+worker delivery-controls version 1 gate the new control against older peers.
+After target-bound Interrupt has been admitted, a Controller rollback must
+retain the persistent delivery-hold reader and dispatch guard. An older binary
+that ignores this setting cannot safely reconcile an unknown interrupt. Use a
+descendant revert retaining that compatibility bridge, as required by the
+component activation contract; never clear holds to make rollback proceed.
+
+The local outbox now owns pending content after durable save. Only the captured
+draft revision may clear; native acknowledgement cannot erase later typing.
+Reload/reconnect/Check receipt are observation-only. A missing receipt remains
+unknown rather than proving that the message was never consumed.
+
+Firefox and Chromium light/dark suites and Chrome trusted-keyboard acceptance
+passed under `/srv/storage/fast0/agent/tmp/queue-send-desktop-acceptance4`.
+IME and held-Return browser tests found and fixed MUI's implicit Enter click:
+the picker must intercept at capture before MenuItem handles the event.
+These are browser results, not physical iPhone third-party keyboard acceptance;
+the independent image-adjacent caret issue remains open in PITFALLS.md.
+
+The packaged Claude candidate passed 89 isolated worker checks (receipt
+`queue-send-runtime-20261019/claude-receipt-03.json`), and the unchanged Codex
+candidate passed 25 native worker checks. Managed Claude read-only execution
+also passed. The real HTTP session-maintenance fixture passed 18 checks,
+including anonymous policy refusal, stale-revision conflict, workerless
+configuration, and persistence across Controller restart. Its second receipt
+uses a short temporary root because the Nix shell's nested temporary directory
+exceeded the Unix socket pathname limit; that environment failure did not
+exercise product admission. All receipt paths here are below
+`/srv/storage/fast0/agent/tmp/`.

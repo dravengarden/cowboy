@@ -1,6 +1,9 @@
 {
   "http": {
     "send_delivery::receipt": "queue.delivery_receipt",
+    "send_delivery::options": "queue.options",
+    "send_delivery::set_policy": "queue.policy_set",
+    "send_delivery::release": "queue.release_hold",
     "agent_tools::configure_agent": "tools.defaults_set",
     "agent_tools::configure_session": "tools.session_set",
     "agent_tools::list": "tools.defaults",

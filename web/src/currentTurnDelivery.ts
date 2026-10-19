@@ -1,11 +1,44 @@
-export type CurrentTurnOutcome = "injected" | "not_delivered" | "unknown";
+export type CurrentTurnOutcome =
+  | "injected"
+  | "submitted"
+  | "not_delivered"
+  | "unknown";
+
+export interface DeliveryTarget {
+  worker_epoch: string;
+  turn_id: string;
+}
+
+export async function captureDeliveryTarget(
+  session: string,
+): Promise<DeliveryTarget> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(session)}/delivery-options`,
+    {
+      signal: AbortSignal.timeout(5000),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw new Error("Delivery options are unavailable.");
+  const options = await response.json() as { target?: DeliveryTarget | null };
+  if (!options.target) {
+    throw new Error("The active turn is no longer available.");
+  }
+  return options.target;
+}
 
 /** Only the originating gesture may POST. Reload/reconnect and explicit Retry
  * observe the original receipt; they cannot inject into a later turn. */
 export async function deliverCurrentTurn(
   session: string,
   operation: string,
-  payload: { text: string; content: unknown[] } | null,
+  payload: {
+    text: string;
+    content: unknown[];
+    target?: DeliveryTarget;
+    nextCheckpoint?: boolean;
+    interrupt?: boolean;
+  } | null,
   request: typeof fetch = fetch,
 ): Promise<CurrentTurnOutcome> {
   const root = `/api/sessions/${encodeURIComponent(session)}`;
@@ -19,19 +52,28 @@ export async function deliverCurrentTurn(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...payload,
-          delivery: "current_turn",
+          text: payload.text,
+          content: payload.content,
+          target: payload.target,
+          delivery: payload.interrupt
+            ? "interrupt"
+            : payload.nextCheckpoint
+            ? "next_checkpoint"
+            : "current_turn",
           operation,
         }),
         signal: AbortSignal.timeout(5000),
       });
     // Absence after a restored outbox means no delivery is confirmed. Do not
     // POST it now: that would target a different turn after a reload.
-    if (payload === null && response.status === 404) return "not_delivered";
+    if (payload === null && response.status === 404) return "unknown";
     for (let attempt = 0; attempt < 32 && Date.now() < deadline; attempt++) {
       if (!response.ok) return "unknown";
       const receipt = await response.json() as { status?: string };
-      if (receipt.status === "injected" || receipt.status === "not_delivered") {
+      if (
+        receipt.status === "injected" || receipt.status === "submitted" ||
+        receipt.status === "not_delivered"
+      ) {
         return receipt.status;
       }
       if (receipt.status !== "pending") {

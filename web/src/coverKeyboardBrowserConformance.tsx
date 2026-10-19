@@ -128,7 +128,11 @@ export async function runCoverKeyboardBrowserConformance(keepFixture = false): P
     check(getComputedStyle(button, "::after").transitionProperty === "opacity", "decision feedback must use the shared state layer");
     const beforePress = button.getBoundingClientRect();
     button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 91 }));
-    await new Promise((resolve) => setTimeout(resolve, 90));
+    // React's event update and the CSS transition need a painted frame; under
+    // concurrent builds, a fixed delay can expire before the first paint.
+    for (let attempt = 0; attempt < 50 && Number(getComputedStyle(button, "::after").opacity) < 0.1; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     check(Number(getComputedStyle(button, "::after").opacity) >= 0.1, "touch press feedback must survive focus-preserving pointer-down");
     check(button.getBoundingClientRect().y === beforePress.y, "press must not displace the target");
     document.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 91 }));

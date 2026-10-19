@@ -20,10 +20,8 @@ import {
 import {
   AlternateEmail,
   AttachFile,
-  Bolt,
   EditNoteOutlined,
   MoreHoriz,
-  PostAdd,
   RawOn,
   Schedule,
   Send,
@@ -69,7 +67,7 @@ export interface DesktopComposerToolbarProps {
   onCurrentTurn?: () => void;
   pending: boolean;
   progress: boolean;
-  sendLabel: "Send" | "Queue";
+  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue";
   sendDescription: string;
   unavailableReason: string;
   overlayOpen: boolean;
@@ -416,29 +414,6 @@ export function DesktopComposerToolbar(
               ? deliveryReason
               : "There are no queued messages to move ahead of",
             onClick: props.onJumpFront,
-          })}
-          {action({
-            id: "force",
-            icon: <Bolt />,
-            label: "Interrupt…",
-            title: "Interrupt current work and send",
-            shortcut: "Alt+Enter",
-            disabled: !ready || !props.canForce,
-            reason: !ready
-              ? deliveryReason
-              : "Available during an active turn or a paused queue",
-            onClick: props.onForce,
-          })}
-          {action({
-            id: "current-turn",
-            icon: <PostAdd />,
-            label: "Add to turn",
-            title: "Add to the current turn",
-            disabled: !ready || !props.canCurrentTurn,
-            reason: !ready
-              ? deliveryReason
-              : "Requires a connected, active turn with native delivery support",
-            onClick: props.onCurrentTurn ?? (() => {}),
           })}
         </Box>
         <Tooltip title={ready ? props.sendDescription : deliveryReason}>

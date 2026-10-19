@@ -66,6 +66,7 @@ import {
   topmostModal,
 } from "./hintTargets";
 import { handleDesktopModalKey } from "./modalNavigation";
+import { handleDeliveryPickerKey } from "../../deliveryPickerCommands";
 import {
   lockEditableForLeader,
   unlockEditableForLeader,
@@ -547,6 +548,13 @@ export function DesktopCommandProvider(
       // stale Ctrl-W / gg chord move focus while marked text exists. The sole
       // exception is the non-editable Vim Normal sink when no real shared
       // composition exists; it deliberately receives physical Vim commands.
+      if (
+        desktopKeyIntent(event).owner !== "ime" &&
+        handleDeliveryPickerKey(event)
+      ) {
+        clearPendingJumpChord();
+        return;
+      }
       // The modal grammar (FOCUS.md "Modals"): Insert/Normal, hjkl, digits
       // for tabs. It resolves keys with desktopKeyIntent, so an idle CJK
       // input source on dialog chrome still moves by physical key while a

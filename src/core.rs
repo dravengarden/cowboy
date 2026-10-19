@@ -930,6 +930,9 @@ struct Session {
     /// reconciliation captures this before applying an idle lifecycle edge so
     /// it cannot clear a newer guard created while that edge drains the queue.
     in_flight_epoch: u64,
+    /// A durable interrupt/send admission owns automatic queue dispatch until
+    /// its outcome is known. Unknown effects survive restart without replay.
+    delivery_hold: Option<String>,
     /// A channel/preflight-owned prompt has not reached its runtime yet.
     dispatch_pending: Option<u64>,
     /// Client message ids of prompts this Hub recently handed to a worker. A
@@ -2527,6 +2530,12 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         in_flight_epoch: 0,
+                        delivery_hold: self
+                            .setting(&format!(
+                                "{}{id}",
+                                settings_keys::SESSION_DELIVERY_HOLD_PREFIX
+                            ))
+                            .and_then(|value| value.as_str().map(str::to_owned)),
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
@@ -3305,6 +3314,7 @@ impl Hub {
                     editing_epoch: 0,
                     in_flight: false,
                     in_flight_epoch: 0,
+                    delivery_hold: None,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
                     turn_completion_latched: false,
@@ -3372,6 +3382,8 @@ impl Hub {
             for prefix in [
                 settings_keys::SESSION_RESOURCE_WAIT_PREFIX,
                 settings_keys::SESSION_QUEUE_PAUSED_PREFIX,
+                settings_keys::SESSION_DELIVERY_POLICY_PREFIX,
+                settings_keys::SESSION_DELIVERY_HOLD_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -5526,6 +5538,80 @@ impl Hub {
     ///   deliberately reviving an exited/crashed session via `session/load`.
     ///
     /// Both require that nothing of ours is already in flight.
+    pub(crate) fn delivery_hold(&self, session_id: &str) -> Option<String> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|s| s.delivery_hold.clone())
+    }
+
+    /// Caller must commit the corresponding setting first. This method only
+    /// publishes already-durable state, never sends a second write-behind.
+    pub(crate) fn publish_delivery_hold(&self, session_id: &str, operation: Option<String>) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.delivery_hold.clone_from(&operation);
+        }
+        self.load_settings(vec![(
+            format!(
+                "{}{session_id}",
+                settings_keys::SESSION_DELIVERY_HOLD_PREFIX
+            ),
+            serde_json::json!(operation),
+        )]);
+        self.broadcast_sessions();
+        if operation.is_none() {
+            self.try_drain(session_id);
+        }
+    }
+
+    /// Run exactly the replacement message after its original turn has ended.
+    /// Other queued items and the user's Pause remain unchanged.
+    pub(crate) fn dispatch_interrupt_once(
+        &self,
+        session_id: &str,
+        operation: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+    ) -> bool {
+        if self.inner.dispatch_tx.lock().is_none() {
+            return false;
+        }
+        let req = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            if s.delivery_hold.as_deref() != Some(operation)
+                || s.meta.status != Status::Running
+                || s.in_flight
+                || s.dispatch_pending.is_some()
+            {
+                return false;
+            }
+            if Self::prompt_already_accepted(s, operation) {
+                return true;
+            }
+            s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
+            s.in_flight = true;
+            s.dispatch_pending = Some(s.in_flight_epoch);
+            Self::note_dispatched(s, Some(operation));
+            DispatchReq {
+                ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
+                session_id: session_id.to_owned(),
+                text,
+                content,
+                cmid: Some(operation.to_owned()),
+            }
+        };
+        self.send_dispatch(req);
+        true
+    }
+
     fn ready(s: &Session, allow_revive: bool) -> bool {
         let can = if allow_revive {
             matches!(
@@ -5535,7 +5621,7 @@ impl Hub {
         } else {
             s.meta.status == Status::Running
         };
-        can && !s.in_flight && s.dispatch_pending.is_none()
+        can && !s.in_flight && s.dispatch_pending.is_none() && s.delivery_hold.is_none()
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head
@@ -5791,7 +5877,7 @@ impl Hub {
                 .map(str::to_owned);
             if duplicate.is_some() {
                 // fall through to the addressed confirmation below
-            } else if wired && Self::ready(s, true) && s.queue.is_empty() {
+            } else if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
@@ -7661,6 +7747,7 @@ mod runtime_reconciliation_tests {
             native_thread_materialized: None,
             current_turn_id: Some("turn-1".to_owned()),
             supports_current_turn: false,
+            delivery_controls: crate::runtime_wire::DeliveryControls::default(),
             last_runtime_seq: 7,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -8466,6 +8553,24 @@ mod core_tests {
         assert_eq!(restored.setting("session_queue_paused:paused"), None);
     }
 
+    #[tokio::test]
+    async fn paused_empty_queue_holds_submit_but_explicit_send_once_does_not_resume() {
+        let hub = hub_with_session("paused");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("paused", Status::Running, None);
+        hub.set_paused("paused", true);
+        hub.submit("paused", "first".into(), vec![], Some("one".into()));
+        hub.submit("paused", "second".into(), vec![], Some("two".into()));
+        assert!(rx.try_recv().is_err());
+        assert_eq!(queue_texts(&hub, "paused"), vec!["first", "second"]);
+        hub.drain_now("paused");
+        assert_eq!(rx.try_recv().unwrap().cmid.as_deref(), Some("one"));
+        assert!(hub.session_info("paused").unwrap().meta.paused);
+        assert_eq!(queue_texts(&hub, "paused"), vec!["second"]);
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn copy_undo_requires_the_original_unsent_row() {
         let hub = hub_with_session("undo-copy");
@@ -8501,6 +8606,46 @@ mod core_tests {
             delivery: Delivery::default(),
         });
         assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-2", "original", &content));
+    }
+
+    #[tokio::test]
+    async fn interrupt_hold_blocks_drain_and_only_its_owner_can_replace_once() {
+        let hub = hub_with_session("held");
+        let (tx, mut rx) = mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("held", Status::Running, None);
+        hub.publish_delivery_hold("held", Some("interrupt-a".into()));
+        hub.submit("held", "queued".into(), vec![], Some("queued-a".into()));
+        hub.drain_now("held");
+        assert!(rx.try_recv().is_err());
+        assert!(!hub.dispatch_interrupt_once("held", "wrong-owner", "wrong".into(), vec![]));
+        hub.set_paused("held", true);
+        assert!(hub.dispatch_interrupt_once("held", "interrupt-a", "replacement".into(), vec![]));
+        let request = rx.try_recv().unwrap();
+        assert_eq!(request.text, "replacement");
+        assert_eq!(request.cmid.as_deref(), Some("interrupt-a"));
+        assert!(!hub.dispatch_interrupt_once("held", "interrupt-a", "duplicate".into(), vec![]));
+        hub.publish_delivery_hold("held", None);
+        assert!(hub.session_info("held").unwrap().meta.paused);
+        assert_eq!(queue_texts(&hub, "held"), vec!["queued"]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn interrupt_hold_survives_restore_and_session_deletion_removes_it() {
+        let hub = hub_with_session("held");
+        hub.publish_delivery_hold("held", Some("unresolved".into()));
+        let restored = Hub::new();
+        restored.load_settings(hub.settings_snapshot().into_iter().collect());
+        let mut session = super::runtime_reconciliation_tests::restored_busy("held");
+        session.meta.status = Status::Exited;
+        restored.restore_with_workers(vec![session], &[]);
+        assert_eq!(
+            restored.delivery_hold("held").as_deref(),
+            Some("unresolved")
+        );
+        restored.delete_session("held");
+        assert!(restored.setting("session_delivery_hold:held").is_none());
     }
 
     #[tokio::test]

@@ -12,9 +12,17 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
+/// Exact worker/turn identity captured before a user chooses delivery timing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryTarget {
+    pub worker_epoch: String,
+    pub turn_id: String,
+}
+
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 /// Oldest runtime protocol this build accepts during a mixed-generation roll.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 /// Upper bound for a single IPC frame. Large binary artifacts are referenced by
@@ -71,6 +79,8 @@ pub struct WorkerSnapshot {
     #[serde(default)]
     pub supports_current_turn: bool,
     #[serde(default)]
+    pub delivery_controls: DeliveryControls,
+    #[serde(default)]
     pub last_runtime_seq: u64,
     #[serde(default)]
     pub pending_permissions: Vec<String>,
@@ -114,6 +124,13 @@ pub struct WorkerSnapshot {
 pub const BACKGROUND_TASKS_UPDATE: &str = "cowboy_background_tasks";
 
 pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryControls {
+    #[serde(default)]
+    pub version: u16,
+    #[serde(default)]
+    pub next_checkpoint: bool,
+}
 pub const STEERING_RESULT_UPDATE: &str = "cowboy_steering_result";
 
 #[must_use]
@@ -287,6 +304,12 @@ pub struct SessionExtensions {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum CoreCommand {
+    CancelTurn {
+        session_id: String,
+        command_id: String,
+        target: DeliveryTarget,
+        cmid: String,
+    },
     Steer {
         session_id: String,
         command_id: String,
@@ -294,6 +317,8 @@ pub enum CoreCommand {
         turn_id: String,
         content: Vec<serde_json::Value>,
         cmid: String,
+        #[serde(default)]
+        next_checkpoint: bool,
     },
     /// Protocol-27 host-authorized replacement of a remote execution binding.
     /// Ordinary `EnsureSession` must never perform this transition.
@@ -377,7 +402,8 @@ impl CoreCommand {
         match self {
             Self::EnsureSession { session } => Some(&session.session_id),
             Self::RecoverExecutionSession { session, .. } => Some(&session.session_id),
-            Self::Steer { session_id, .. }
+            Self::CancelTurn { session_id, .. }
+            | Self::Steer { session_id, .. }
             | Self::Prompt { session_id, .. }
             | Self::Cancel { session_id, .. }
             | Self::Permission { session_id, .. }
@@ -393,12 +419,19 @@ impl CoreCommand {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WorkerCommand {
+    CancelTurn {
+        command_id: String,
+        target: DeliveryTarget,
+        cmid: String,
+    },
     Steer {
         command_id: String,
         worker_epoch: String,
         turn_id: String,
         content: Vec<serde_json::Value>,
         cmid: String,
+        #[serde(default)]
+        next_checkpoint: bool,
     },
     Prompt {
         command_id: String,
@@ -745,6 +778,7 @@ mod tests {
             native_thread_materialized: materialized,
             current_turn_id: None,
             supports_current_turn: false,
+            delivery_controls: DeliveryControls::default(),
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,

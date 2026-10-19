@@ -266,6 +266,21 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/draft-copies/{cmid}",
             delete(web::draft_documents::undo_copy),
         ),
+        "queue.options" => (
+            "GET",
+            "/api/sessions/{session_id}/delivery-options",
+            get(web::send_delivery::options),
+        ),
+        "queue.policy_set" => (
+            "PUT",
+            "/api/sessions/{session_id}/delivery-policy",
+            put(web::send_delivery::set_policy),
+        ),
+        "queue.release_hold" => (
+            "POST",
+            "/api/sessions/{session_id}/delivery-hold/release",
+            post(web::send_delivery::release),
+        ),
         "plugins.catalog" => ("GET", "/api/plugins", get(web::api_plugins)),
         "plugins.call" => (
             "POST",
@@ -488,7 +503,11 @@ fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'
             input["force"].as_bool().unwrap_or(false),
             input["front"].as_bool().unwrap_or(false),
         )?;
-        if delivery == crate::send_delivery::SendDelivery::CurrentTurn {
+        if matches!(
+            delivery,
+            crate::send_delivery::SendDelivery::CurrentTurn
+                | crate::send_delivery::SendDelivery::NextCheckpoint
+        ) {
             return Err("invalid_argument");
         }
         fields_value.insert(
@@ -728,12 +747,23 @@ async fn dispatch(
         };
         return response_value(response, true).await;
     }
+    if name == "queue.submit" && input["delivery"] == "session_default" {
+        let session = arg_str(&input, "session_id")?;
+        if state.hub.session_info(session).is_none() {
+            return Err("session_not_found".into());
+        }
+        input["delivery"] = json!(match web::send_delivery::policy(&state.hub, session).mode {
+            crate::send_delivery::DeliveryMode::Steer => "current_turn",
+            crate::send_delivery::DeliveryMode::ToolBoundary => "next_checkpoint",
+            crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
+        });
+    }
     if input["session_id"] == parent.id
         && ((name == "queue.submit"
             && (input["force"] == true
                 || matches!(
                     input["delivery"].as_str(),
-                    Some("interrupt" | "current_turn")
+                    Some("interrupt" | "current_turn" | "next_checkpoint")
                 )))
             || matches!(
                 name,
@@ -748,7 +778,12 @@ async fn dispatch(
     {
         return Err("would_interrupt_caller".into());
     }
-    if name == "queue.submit" && input["delivery"] == "current_turn" {
+    if name == "queue.submit"
+        && matches!(
+            input["delivery"].as_str(),
+            Some("current_turn" | "next_checkpoint" | "interrupt")
+        )
+    {
         only_keys(
             &input,
             &[
@@ -758,6 +793,7 @@ async fn dispatch(
                 "front",
                 "force",
                 "delivery",
+                "target",
             ],
         )?;
         let session = arg_str(&input, "session_id")?;
@@ -765,21 +801,36 @@ async fn dispatch(
         body.as_object_mut()
             .ok_or("invalid_argument")?
             .remove("session_id");
-        let request: web::SessionPromptRequest =
+        let mut request: web::SessionPromptRequest =
             serde_json::from_value(body).map_err(|_| "invalid_argument")?;
         crate::send_delivery::SendDelivery::resolve(
             request.delivery,
             request.force,
             request.front,
         )?;
+        if request.delivery == Some(crate::send_delivery::SendDelivery::Interrupt) {
+            if request.target.is_none() {
+                return Err("interrupt_requires_target_from_queue_options".into());
+            }
+            request.operation = Some(operation.ok_or("invalid_operation")?.to_owned());
+            return response_value(
+                web::send_delivery::submit(Arc::clone(state), session.to_owned(), request).await,
+                true,
+            )
+            .await;
+        }
         let effect = web::send_delivery::begin(
             state,
             session,
             &request.text,
             &request.content,
             operation.ok_or("invalid_operation")?.to_owned(),
+            request.target.as_ref(),
+            request.delivery == Some(crate::send_delivery::SendDelivery::NextCheckpoint),
         )?;
-        return Ok(web::send_delivery::result(&effect.outcome().await));
+        let mut receipt = web::send_delivery::result(&effect.outcome().await);
+        receipt["delivery"] = json!(request.delivery);
+        return Ok(receipt);
     }
     if name == "usage.refresh" {
         only_keys(&input, &["account"])?;
