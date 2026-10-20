@@ -15,6 +15,12 @@ fn external_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https" | "mailto" | "tel") && !trusted_document(url)
 }
 
+fn shell_navigation(url: &Url) -> bool {
+    // WebKit also consults this callback for the editor's opaque sandbox frame.
+    // Inert frame documents may load, but must never count as trusted IPC sources.
+    trusted_document(url) || (url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc"))
+}
+
 fn open_from_main(app: &AppHandle, url: &Url) {
     // Native menu/window requests bypass the page's click handlers and IPC ACL.
     // Keep the same source-origin and protocol boundary as the remote capability.
@@ -45,7 +51,7 @@ pub fn configure(
                 open_from_main(&navigation, url);
                 false
             } else {
-                trusted_document(url)
+                shell_navigation(url)
             }
         })
 }
@@ -89,5 +95,11 @@ mod tests {
         assert!(!trusted_document(
             &Url::parse("https://cowboy.stormbird.xyz.attacker.example/").unwrap()
         ));
+        for address in ["about:blank", "about:srcdoc"] {
+            let url = Url::parse(address).unwrap();
+            assert!(shell_navigation(&url));
+            assert!(!trusted_document(&url));
+            assert!(!external_url(&url));
+        }
     }
 }
