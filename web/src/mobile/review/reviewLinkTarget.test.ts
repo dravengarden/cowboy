@@ -192,7 +192,9 @@ test("a Review render never remounts the rendered Markdown under a finger", () =
     reviewApp.includes("followMarkdownLinkRef.current = followMarkdownLinkNow"),
   );
   assert(markdownImpl.includes("const components = useMemo((): Components => ({"));
-  assert(markdownImpl.includes("}), [centerCopy, codeTheme, dark, invert, touchWrap]);"));
+  // Native shell capability is stable during a render/gesture; menu state and
+  // the host callback must still stay out of the renderer identity.
+  assert(markdownImpl.includes("}), [centerCopy, codeTheme, dark, invert, touchWrap, nativeLinkMenu]);"));
   assert(markdownImpl.includes("onLinkClickRef.current?.(href, event) === true"));
   assertEquals(markdownImpl.includes("const components: Components = {"), false);
 });
