@@ -364,6 +364,7 @@ impl Host for FakeHost {
                 Ok(json!({"operation":args["operation"],"stage":"completed",
                     "evidence":"historical","worker_state":"not_observed"}))
             }
+            "accounts.logins" | "accounts.login_status" => Ok(json!({"op":op,"args":args})),
             "accounts.login_options" => {
                 only_keys(&args, &["account_id", "machine_id"])?;
                 Ok(
@@ -400,6 +401,22 @@ async fn login_discovery_keeps_account_and_machine_independent_in_one_program() 
         json!([
             {"account":"account-1","machine":"machine-a","reason":"machine_account_protocol_required"},
             {"account":"account-1","machine":"machine-b","reason":"machine_account_protocol_required"},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn account_login_discovery_and_reference_status_share_the_read_program() {
+    let Some(value) = run(
+        "return [await cowboy.accounts.logins('account-1', {after_machine:'a',limit:2}), await cowboy.accounts.login_status('account-1','request-2')];",
+        true, 10_000,
+    ).await else { return; };
+    assert_eq!(value["state"], "ok");
+    assert_eq!(
+        value["value"],
+        json!([
+            {"op":"accounts.logins","args":{"account_id":"account-1","after_machine":"a","limit":2}},
+            {"op":"accounts.login_status","args":{"account_id":"account-1","request_id":"request-2"}}
         ])
     );
 }

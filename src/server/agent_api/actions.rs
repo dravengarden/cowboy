@@ -434,6 +434,26 @@ async fn execute(
                 .await?,
             ))
         }
+        "accounts.login_cancel_request" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Reference {
+                account_id: crate::provider_account::ProviderAccountId,
+                request_id: String,
+            }
+            let input: Reference = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::login::continue_request(
+                    state,
+                    &owner,
+                    &input.account_id,
+                    &input.request_id,
+                    true,
+                )
+                .await?,
+            ))
+        }
         "accounts.login_cancel" => {
             if args.as_object().is_none_or(|args| !args.is_empty()) {
                 return Err("invalid_argument");

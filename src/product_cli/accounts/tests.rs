@@ -4,6 +4,89 @@ use clap::Parser;
 const ACCOUNT: &str = "11111111-1111-4111-8111-111111111111";
 
 #[tokio::test]
+async fn discovery_cli_uses_existing_owner_login_without_dispatch_or_automatic_retry() {
+    use axum::{
+        Json, Router,
+        extract::{OriginalUri, State},
+        routing::get,
+    };
+    use std::sync::{Arc, Mutex};
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    type Calls = Arc<Mutex<Vec<String>>>;
+    let calls: Calls = Default::default();
+    let route = format!("/api/provider-accounts/{ACCOUNT}/logins");
+    let app = Router::new()
+        .route(
+            &route,
+            get(
+                |State(calls): State<Calls>, OriginalUri(uri): OriginalUri| async move {
+                    calls.lock().unwrap().push(format!("GET {uri}"));
+                    Json(json!({"logins":[]}))
+                },
+            ),
+        )
+        .route(
+            &format!("{route}/original"),
+            get(|State(calls): State<Calls>| async move {
+                calls.lock().unwrap().push("status".into());
+                Json(json!({"status":"active"}))
+            })
+            .delete(|State(calls): State<Calls>| async move {
+                calls.lock().unwrap().push("cancel".into());
+                (StatusCode::SERVICE_UNAVAILABLE, "unknown")
+            }),
+        )
+        .with_state(calls.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = Client::fixture(
+        Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap(),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    execute(
+        &client,
+        AccountCommand::Logins {
+            account: parse_account(ACCOUNT).unwrap(),
+            after_machine: Some("a&b".into()),
+            limit: 2,
+        },
+        std::io::empty(),
+    )
+    .await
+    .unwrap();
+    execute(
+        &client,
+        AccountCommand::LoginStatus {
+            account: parse_account(ACCOUNT).unwrap(),
+            request: "original".into(),
+        },
+        std::io::empty(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        execute(
+            &client,
+            AccountCommand::CancelRequest {
+                account: parse_account(ACCOUNT).unwrap(),
+                request: "original".into()
+            },
+            std::io::empty()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            format!("GET {route}?limit=2&after_machine=a%26b"),
+            "status".into(),
+            "cancel".into()
+        ]
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn revocation_cli_keeps_owner_routes_and_does_not_retry_unknown_writes() {
     use axum::{Json, Router, extract::State, routing::get};
     use std::sync::{Arc, Mutex};

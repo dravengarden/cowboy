@@ -142,11 +142,31 @@ test("continuation preserves another pending sign-in and refuses mixed dispatch 
   const f = fixture();
   const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
   const before = [...f.values.entries()]; const calls = f.calls.length;
-  await owner.resume("request");
+  await owner.resume("other-request");
   assertEquals([...f.values.entries()], before); assertEquals(f.calls.length, calls);
   f.values.set(before[0]![0], JSON.stringify({ ...JSON.parse(before[0]![1]), request: "request" }));
   const invalid = subscriptionLogin(scope, f.ports); invalid.restore(); await invalid.resume("request");
   assert(invalid.snapshot.error); assertEquals(f.calls.length, calls);
+});
+
+test("a GUI operation can reopen its discovered request without redispatch", async () => {
+  const f = fixture();
+  const first = subscriptionLogin(scope, f.ports); first.restore(); await first.start(options, "native");
+  const saved = [...f.values.entries()]; const writes = f.calls.filter((call) => call.init?.method === "POST").length;
+  const next = subscriptionLogin(scope, f.ports); next.restore(); await next.resume("request");
+  assertEquals(next.snapshot.error, ""); assertEquals(next.snapshot.observation?.request_id, "request");
+  assertEquals([...f.values.entries()], saved);
+  assertEquals(f.calls.filter((call) => call.init?.method === "POST").length, writes);
+});
+
+test("closing a durably cancelled attempt clears only the tab pointer and never retries", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
+  f.setFetch(async () => { throw new Error("cancellation uncertain"); });
+  await owner.cancel(); owner.finish(); assert(owner.snapshot.pending);
+  f.setFetch(async () => Response.json({ status: "cancellation_requested", cancel_requested: true, request_id: "request" }));
+  await owner.check(); const count = f.calls.length;
+  owner.finish(); assertEquals(f.values.size, 0); assertEquals(owner.snapshot.pending, undefined); assertEquals(f.calls.length, count);
 });
 
 test("sign-in links contain only strict account and request references", () => {

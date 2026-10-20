@@ -16,7 +16,7 @@ import {
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
 import { ProviderAccountSwitch } from "./ProviderAccountSwitch";
-import { SubscriptionManagement } from "./SubscriptionManagement";
+import { SubscriptionManagement, type SubscriptionCards } from "./SubscriptionManagement";
 import { alpha } from "@mui/material/styles";
 import {
   useCallback,
@@ -24,6 +24,7 @@ import {
   useMemo,
   useRef,
   useState,
+  Fragment,
 } from "react";
 import type { ReactNode } from "react";
 import {
@@ -113,6 +114,7 @@ const SERVICE_MANAGED_EFFECTS: ReadonlySet<EffectCapability> = new Set([
 type ProviderManagementProps =
   | {
     scope: "service";
+    accounts?: SubscriptionCards;
     machine?: never;
     focusProviderId?: string | undefined;
     autoBeginAuthentication?: boolean;
@@ -121,6 +123,7 @@ type ProviderManagementProps =
   }
   | {
     scope: "machine";
+    accounts?: never;
     machine: ProviderMachine;
     focusProviderId?: string | undefined;
     autoBeginAuthentication?: boolean;
@@ -138,15 +141,13 @@ export function ProviderAuthenticationManagement({
   authenticationRequestId?: number | undefined;
 } = {}): React.JSX.Element {
   return (
-    <Stack spacing={2}>
-      <SubscriptionManagement />
-      <ProviderManagement
+    <SubscriptionManagement renderAccounts={(accounts) => <ProviderManagement
         scope="service"
+        accounts={accounts}
         focusProviderId={focusProviderId}
         autoBeginAuthentication={autoBeginAuthentication}
         authenticationRequestId={authenticationRequestId}
-      />
-    </Stack>
+      />} />
   );
 }
 
@@ -450,6 +451,7 @@ function ProviderManagement(
     autoBeginAuthentication = false,
     authenticationRequestId,
     embedded = false,
+    accounts,
   }: ProviderManagementProps,
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
@@ -803,7 +805,7 @@ function ProviderManagement(
         },
       })}
     >
-      {!embedded && (
+      {!embedded && !accounts && (
         <Stack
           direction="row"
           spacing={1}
@@ -877,7 +879,7 @@ function ProviderManagement(
           display: "grid",
           gridTemplateColumns: embedded
             ? "1fr"
-            : { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+            : "repeat(auto-fit, minmax(min(100%, 20rem), 1fr))",
           gap: 1,
         }}
       >
@@ -1062,7 +1064,7 @@ function ProviderManagement(
           const readyCredential = scope === "service" &&
             entry.manifest.authentication.required &&
             auth?.authentication_state === "ready";
-          const credentialManagementOpen = readyCredential &&
+          const credentialManagementOpen = (readyCredential || Boolean(accounts)) &&
             expandedCredentialScopes.has(entry.authentication_scope);
           const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
             scope === "machine" && machine?.plugin_lifecycle === "managed"
@@ -1142,11 +1144,11 @@ function ProviderManagement(
                   run(operationEntry, installed, effect, observation)}
               />
             );
-          const identityActions = readyCredential
+          const identityActions = readyCredential || accounts
             ? (
               <Button
                 size="small"
-                variant={credentialManagementOpen ? "text" : "outlined"}
+                variant={credentialManagementOpen || accounts ? "text" : "outlined"}
                 aria-expanded={credentialManagementOpen}
                 aria-controls={`provider-credential-management-${entry.authentication_scope}`}
                 onClick={() =>
@@ -1165,6 +1167,7 @@ function ProviderManagement(
             )
             : lifecycleSurface;
           return (
+            <Fragment key={`${entry.provider_id}:${entry.provider_version}:${entry.artifact_digest ?? entry.package_digest}`}>
             <ProviderManagementCard
               key={`${entry.provider_id}:${entry.provider_version}:${
                 entry.artifact_digest ?? entry.package_digest
@@ -1182,6 +1185,7 @@ function ProviderManagement(
                   minWidth: 0,
                   borderRadius: 1.25,
                   border: embedded ? 0 : 1,
+                  borderColor: "divider",
                   bgcolor: "transparent",
                   boxShadow: "none",
                 }}
@@ -1229,20 +1233,23 @@ function ProviderManagement(
                           statusLabel={managementStatus}
                           statusTone={managementStatusTone}
                           actions={identityActions}
-                          title={credentialGroup
+                          title={(!sharedCredential && accounts?.legacy(entry.provider_id).title) || (credentialGroup
                             ? providerCredentialTitle(credentialGroup.entries)
-                            : entry.manifest.display.name}
-                          summary={entry.manifest.display.summary}
+                            : entry.manifest.display.name)}
+                          summary={accounts ? `${entry.manifest.display.name} · Service account` : entry.manifest.display.summary}
                           consumers={sharedCredential ? credentialEntries : []}
                         />
-                        {readyCredential && credentialManagementOpen
+                        {credentialManagementOpen
                           ? (
                             <Box
                               id={`provider-credential-management-${entry.authentication_scope}`}
                               data-provider-credential-management
                               sx={{ pl: { xs: 0, sm: 5.25 } }}
                             >
-                              {lifecycleSurface}
+                              <Stack spacing={1}>
+                                {accounts && credentialEntries.map((provider) => <Box key={provider.provider_id}>{accounts.legacy(provider.provider_id).controls}</Box>)}
+                                {lifecycleSurface}
+                              </Stack>
                             </Box>
                           )
                           : null}
@@ -1289,8 +1296,11 @@ function ProviderManagement(
                 </Stack>
               </Paper>
             </ProviderManagementCard>
+            {accounts?.named.filter((card) => credentialEntries.some((provider) => provider.provider_id === card.provider)).map((card) => card.content)}
+            </Fragment>
           );
         })}
+        {accounts?.named.filter((card) => !serviceCredentialGroups.some((group) => group.entries.some((provider) => provider.provider_id === card.provider))).map((card) => card.content)}
       </Box>
 
       <ConfirmSheet

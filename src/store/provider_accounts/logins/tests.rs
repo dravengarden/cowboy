@@ -3,6 +3,99 @@ use crate::store::provider_accounts::{Change, Mutation, MutationResult};
 mod native_revision_tests;
 
 #[tokio::test]
+async fn login_discovery_is_owner_scoped_paged_and_never_falls_back_to_old_generations() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("discovery.sqlite").display()
+    );
+    login_discovery_contract(&url, &dir.path().join("artifacts")).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture; just test-postgres"]
+async fn postgres_login_discovery_contract() {
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated database URL");
+    let dir = tempfile::tempdir().unwrap();
+    login_discovery_contract(&url, &dir.path().join("artifacts")).await;
+}
+
+async fn login_discovery_contract(url: &str, artifacts: &std::path::Path) {
+    let store = Store::connect(url, artifacts.to_path_buf()).await.unwrap();
+    store.migrate().await.unwrap();
+    let account = create_account(&store).await.account_id;
+    let mut input = Request {
+        account_id: account.clone(),
+        machine_id: "a".into(),
+        provider_version: "1".into(),
+        generation_digest: "digest".into(),
+        method: "native".into(),
+    };
+    let old = store
+        .claim_provider_login("login-owner", "old", &input)
+        .await
+        .unwrap()
+        .receipt;
+    store
+        .cancel_provider_login("login-owner", "old")
+        .await
+        .unwrap();
+    let new = store
+        .claim_provider_login("login-owner", "new", &input)
+        .await
+        .unwrap()
+        .receipt;
+    input.machine_id = "b".into();
+    let other_machine = store
+        .claim_provider_login("login-owner", "second", &input)
+        .await
+        .unwrap()
+        .receipt;
+    assert_ne!(new.native_generation, old.native_generation);
+    drop(store);
+    let store = Store::connect(url, artifacts.to_path_buf()).await.unwrap();
+    let first = store
+        .native_login_receipts("login-owner", &account, "", 1)
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].request_id, new.request_id);
+    let second = store
+        .native_login_receipts("login-owner", &account, "a", 1)
+        .await
+        .unwrap();
+    assert_eq!(second[0].request_id, other_machine.request_id);
+    assert!(
+        store
+            .native_login_receipts("login-owner", &account, "b", 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .native_login_receipts("other-owner", &account, "", 20)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let other_account = uuid::Uuid::new_v4().to_string().parse().unwrap();
+    assert!(
+        store
+            .native_login_receipts("login-owner", &other_account, "", 20)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .native_login_receipts("login-owner", &account, "", 0)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn native_logout_receipt_is_scoped_idempotent_and_survives_restart() {
     let dir = tempfile::tempdir().unwrap();
     let url = format!(

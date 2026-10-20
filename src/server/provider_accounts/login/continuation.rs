@@ -47,7 +47,7 @@ pub(in crate::server) async fn http_continue_cancel(
     )
 }
 
-async fn continue_request(
+pub(in crate::server) async fn continue_request(
     state: &Arc<AppState>,
     owner: &str,
     account: &ProviderAccountId,

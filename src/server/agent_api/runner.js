@@ -100,6 +100,8 @@ const cowboy = Object.freeze({
     transition_status: (operation) => ({ operation }),
     list: none,
     login_options: (account_id, machine_id) => ({ account_id, machine_id }),
+    logins: (account_id, q) => ({ ...q, account_id }),
+    login_status: (account_id, request_id) => ({ account_id, request_id }),
   }),
   session: namespace("session", {
     info: none,

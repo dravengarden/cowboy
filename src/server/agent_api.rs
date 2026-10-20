@@ -315,6 +315,42 @@ impl Host for SessionHost<'_> {
                     .await
                     .map_err(str::to_owned)
             }
+            "accounts.logins" | "accounts.login_status" => {
+                only_keys(
+                    &args,
+                    if op == "accounts.logins" {
+                        &["account_id", "after_machine", "limit"]
+                    } else {
+                        &["account_id", "request_id"]
+                    },
+                )?;
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                let account = crate::provider_account::ProviderAccountId::try_from(
+                    arg_str(&args, "account_id")?.to_owned(),
+                )
+                .map_err(|_| "invalid_argument".to_owned())?;
+                if op == "accounts.login_status" {
+                    return super::provider_accounts::login::continue_request(
+                        self.state,
+                        &owner,
+                        &account,
+                        arg_str(&args, "request_id")?,
+                        false,
+                    )
+                    .await
+                    .map_err(str::to_owned);
+                }
+                let mut query = args;
+                query
+                    .as_object_mut()
+                    .ok_or("invalid_argument")?
+                    .remove("account_id");
+                let query =
+                    serde_json::from_value(query).map_err(|_| "invalid_argument".to_owned())?;
+                super::provider_accounts::login::logins_value(self.state, &owner, &account, query)
+                    .await
+                    .map_err(str::to_owned)
+            }
             "accounts.login_options" => {
                 only_keys(&args, &["account_id", "machine_id"])?;
                 let owner = actions::account_owner(self.state, self.meta).await?;

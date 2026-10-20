@@ -108,9 +108,9 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
   const completed = progress?.status === "completed";
   return <>
     <Button color={revoking ? "inherit" : "error"} disabled={disabled || (!ready && !error)} onClick={() => { setOpen(true); void run("read"); }}>
-      {revoking ? "Cleanup status…" : pending ? "Resume revocation…" : "Revoke access…"}
+      {revoking ? "Cleanup status…" : pending ? "Resume removal…" : "Remove account…"}
     </Button>
-    <ConfirmSheet open={open} onClose={() => setOpen(false)} title={`${label} · ${started ? "Cleanup" : "Revoke access?"}`}
+    <ConfirmSheet open={open} onClose={() => setOpen(false)} title={`${label} · ${started ? "Cleanup" : "Remove account?"}`}
       actions={<Stack direction="row" spacing={1}>
         <Button onClick={() => setOpen(false)}>Close</Button>
         {started ? <>
@@ -119,7 +119,7 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
         </> : <Button color="error" variant="contained" disabled={busy || !ready || !progress} onClick={() => void run("start")}>{pending ? "Retry same revocation" : "Revoke on all Machines"}</Button>}
       </Stack>}>
       <Stack spacing={1.5}>
-        <Typography variant="body2">This permanently disables this Cowboy account, stops its sessions and removes its native logins on every Machine, including Machines that reconnect later. Other subscriptions are unaffected. Your Provider subscription and billing continue.</Typography>
+        <Typography variant="body2">This permanently disables this Cowboy account, stops its sessions and removes its native logins on every Machine, including Machines that reconnect later. The disabled account stays in history so cleanup can be tracked. Other subscriptions are unaffected. Your Provider subscription and billing continue.</Typography>
         {error && <Alert severity="warning">{error}</Alert>}
         {completed && <Alert severity="success">Cowboy cleanup is confirmed for every target. This account remains disabled.</Alert>}
         {started && !completed && <Typography role="status">Cleanup is pending. Offline Machines and unconfirmed process exits stay in the list until confirmed.</Typography>}

@@ -12,9 +12,11 @@ mod native_status;
 pub(in crate::server) use native::accept_native_completion;
 pub(in crate::server) use native_events::poll as native_events;
 mod continuation;
+mod discovery;
 mod operations;
 mod options;
-pub(in crate::server) use continuation::{http_continue, http_continue_cancel};
+pub(in crate::server) use continuation::{continue_request, http_continue, http_continue_cancel};
+pub(in crate::server) use discovery::{http_logins, logins_value};
 pub(in crate::server) use operations::{cancel_operation, operation_receipt, start_operation};
 pub(in crate::server) use options::{options, options_value};
 #[cfg(test)]

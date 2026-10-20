@@ -874,6 +874,46 @@ Metadata input uses the same `AccountChange` union as MCP (`create`, `rename`,
 `set_enabled`, `set_default`), rejects credentials and internal identity binding,
 and is bounded to 16 KiB. Disabling an account is not credential revocation.
 
+The Accounts & sign-in page presents existing Service credentials and additional
+accounts together. Existing display aliases (for example `Claude · Lynx`) label
+their credential card; additional accounts have their own Machine sign-in rows.
+`Manage` exposes rename, default, enable/disable and removal. Removal uses the
+durable account revocation workflow: it retains the disabled record and cleanup
+history, and does not cancel the Provider subscription or billing. Login methods
+come from the selected Machine's trusted installed release and readiness checks;
+unavailable methods remain visible with their reason. Adding metadata does not
+make an unsupported Provider login or gated session runtime available.
+
+`GET /api/provider-accounts/{account_id}/logins` and
+`cowboy.accounts.logins(account_id,{after_machine?,limit?})` discover the latest
+native login reservation on each Machine, including attempts started by another
+device, CLI or MCP session. Pages are ordered by Machine ID (default 20, maximum
+50); pass `next_after_machine` as `after_machine` for the next page. Discovery
+reads local metadata only, never probes a Provider, starts recovery or falls back
+to an older completed generation while a replacement is pending. Results contain
+no credentials, native identity, authorization code or OAuth challenge URL.
+
+`cowboy.accounts.login_status(account_id,request_id)` uses the same owner-checked
+continuation as the GUI and may reconcile the existing completion. An agent can
+cancel a discovered attempt with `accounts.login_cancel_request` and arguments
+`{account_id,request_id}`; this resolves and cancels the original operation, even
+when it originated in another parent session. Observe the original reference
+with `login_status` after uncertainty; no new login is dispatched. CLI equivalents
+are `cowboy account logins ACCOUNT [--after-machine ID] [--limit N]`,
+`cowboy account login-status ACCOUNT REQUEST` and
+`cowboy account cancel-request ACCOUNT REQUEST`. Existing metadata, preferences,
+login-start, revocation and reconciliation commands remain the write surfaces.
+OAuth challenges and secret submission continue through the authenticated UI or
+bounded CLI stdin; raw secrets are not added to MCP arguments or receipts.
+Legacy Service authentication retains its signed Provider UI and authenticated
+`cowboy api` routes; the named-account MCP commands do not change those shared
+credentials. These are on-demand account helpers within the existing four tools.
+
+After a durable cancellation acknowledgement the UI may discard its local tab
+pointer. The cancelled receipt stays discoverable, and Machine cleanup fences
+remain authoritative. Closing that view neither asserts process exit nor starts
+another attempt automatically.
+
 For an already recorded revocation intent, MCP can explicitly retry
 `cowboy_execute({action:"accounts.reconcile",arguments:{},operation:ORIGINAL_ID})`
 from the same parent session. This does not create a revocation intent or enable

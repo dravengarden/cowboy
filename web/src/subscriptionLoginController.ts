@@ -4,7 +4,7 @@ export interface LoginScope { owner: string; dataset: string; account: string; p
 export interface LoginOptions {
   account_id: string; provider_id: string; machine_id: string; available: boolean; reason: string | null;
   release: { provider_version: string; generation_digest: string } | null;
-  methods: { id: string; available: boolean; reason: string | null }[];
+  methods: { id: string; label?: string; available: boolean; reason: string | null }[];
   native_profile?: { generation: number } | null;
 }
 type Pending = LoginScope & { machine: string; cancelling: boolean } & (
@@ -25,7 +25,7 @@ export function loginOptions(value: unknown, scope: LoginScope, machine: string)
     typeof value.available !== "boolean" || !(value.reason === null || text(value.reason)) ||
     !(value.release === null || (object(value.release) && text(value.release.provider_version) && text(value.release.generation_digest))) ||
     !(value.native_profile == null || (object(value.native_profile) && Number.isSafeInteger(value.native_profile.generation) && Number(value.native_profile.generation) > 0)) ||
-    !Array.isArray(value.methods) || !value.methods.every((method) => object(method) && id(method.id) && typeof method.available === "boolean" && (method.reason === null || text(method.reason)))) {
+    !Array.isArray(value.methods) || !value.methods.every((method) => object(method) && id(method.id) && (method.label === undefined || text(method.label)) && typeof method.available === "boolean" && (method.reason === null || text(method.reason)))) {
     throw new Error("Invalid subscription login options.");
   }
   return value as unknown as LoginOptions;
@@ -79,6 +79,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
   }
   function observe(value: unknown, pending: Pending): void {
     if (!object(value) || !text(value.status) ||
+      (value.cancel_requested !== undefined && typeof value.cancel_requested !== "boolean") ||
       (!["unknown", "cancellation_requested"].includes(value.status) &&
         (value.account_id !== pending.account || value.provider_id !== pending.provider || value.machine_id !== pending.machine || !id(value.request_id))) ||
       (value.request_id !== undefined && !id(value.request_id)) ||
@@ -136,8 +137,12 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     resume(reference: string) { return run(async () => {
       if (!id(reference)) throw new Error("Invalid sign-in reference.");
       if (state.pending) {
-        if (state.pending.request !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
-        await check(state.pending);
+        if (state.observation?.request_id && state.observation.request_id !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        if (state.pending.request && state.pending.request !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        const value = await request(receiptPath(state.pending));
+        if (!object(value) || value.request_id !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        observe(value, state.pending);
+        await readEvents(state.pending);
         return;
       }
       const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
@@ -173,7 +178,10 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       await check(pending);
     }); },
     finish() {
-      if (state.busy || !ports.current() || !["completed", "not_started"].includes(state.observation?.status ?? "")) return;
+      // Only forget the tab pointer after completion or a durable cancellation
+      // acknowledgement. The server retains cancellation and all cleanup fences;
+      // this does not assert that the native process exited or dispatch a retry.
+      if (state.busy || !ports.current() || (!state.observation?.cancel_requested && !["completed", "not_started"].includes(state.observation?.status ?? ""))) return;
       try { ports.storage.removeItem(key); publish({ pending: undefined, observation: undefined, events: [], error: "" }); }
       catch { publish({ error: "Could not clear the saved sign-in. It remains available for reconciliation." }); }
     },

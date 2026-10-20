@@ -6,12 +6,13 @@ import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
 import { loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
-export function SubscriptionLogin({ scope, label, disabled }: { scope: LoginScope; label: string; disabled: boolean }): React.JSX.Element {
+export function SubscriptionLogin({ scope, label, disabled, request, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; onChange?: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const close = () => { setOpen(false); onChange?.(); };
   return <>
-    <Button disabled={disabled} onClick={() => setOpen(true)}>Sign in on a Machine…</Button>
-    <ConfirmSheet open={open} onClose={() => setOpen(false)} title={`${label} · Sign in`} wide>
-      {open && <SubscriptionLoginForm scope={scope} onClose={() => setOpen(false)} />}
+    <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? "Open sign-in" : "Sign in…"}</Button>
+    <ConfirmSheet open={open} onClose={close} title={`${label} · Sign in`} wide>
+      {open && <SubscriptionLoginForm scope={scope} onClose={close} {...(request ? { request } : {})} />}
     </ConfirmSheet>
   </>;
 }
@@ -24,7 +25,7 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
   const [error, setError] = useState("");
   const [code, setCode] = useState("");
   const [view, setView] = useState<LoginView>({ events: [], busy: false, error: "" });
-  const requestMismatch = Boolean(request && view.pending && view.pending.request !== request);
+  const requestMismatch = Boolean(request && view.pending && (view.pending.request ?? view.observation?.request_id) !== request);
   const alive = useRef(false);
   const pollingUntil = useRef(Date.now() + 5 * 60_000);
   const owner = useMemo(() => subscriptionLogin(scope, {
@@ -81,7 +82,7 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
     cancelled: "Cancelled; cleanup is not confirmed", not_started: "Sign-in did not start",
   };
   return <Stack spacing={1.5}>
-    <Typography variant="body2">{request ? "Continue signing in with this subscription’s Claude account." : "Choose where Claude Code stores this subscription’s native login. You can sign in separately on more Machines; session placement stays independent."}</Typography>
+    <Typography variant="body2">{request ? "Continue this account’s existing sign-in." : "Choose a Machine to see supported sign-in methods. You can sign in separately on more Machines; session placement stays independent."}</Typography>
     {request && view.pending && <TextField size="small" fullWidth label="Machine" value={view.pending.machine} slotProps={{ input: { readOnly: true } }} />}
     {!request && <TextField select size="small" fullWidth label="Machine" value={view.pending?.machine ?? machine}
       disabled={view.busy || Boolean(view.pending)} onChange={(event) => setMachine(event.target.value)}>
@@ -93,8 +94,9 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
     {options?.native_profile && !view.pending && <Alert severity="success">A verified native login is available on this Machine.</Alert>}
     {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
     {!request && !view.pending && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
-      {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available}>{entry.id}</MenuItem>)}
+      {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${entry.reason ?? "Unavailable"}` : ""}</MenuItem>)}
     </TextField>}
+    {!request && !view.pending && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
     {view.pending && <Typography role="status" variant="body2">{stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}</Typography>}
     {link && !view.pending?.cancelling && !done && <>
       <Button component="a" href={link} target="_blank" rel="noopener noreferrer" variant="contained">Open Claude sign-in</Button>
@@ -113,7 +115,7 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
       {view.pending && !view.pending.request && !view.pending.cancelling && view.error && <Button disabled={view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
       {request && !view.pending && <Button disabled={view.busy} onClick={() => void owner.resume(request)}>Check status</Button>}
       {view.pending && !done && <Button disabled={view.busy} onClick={() => void owner.cancel()}>{view.pending.cancelling ? "Retry cancellation" : "Cancel sign-in"}</Button>}
-      {(done || view.observation?.status === "not_started") && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
+      {(done || view.observation?.status === "not_started" || view.observation?.cancel_requested) && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
     </Stack>
   </Stack>;
 }

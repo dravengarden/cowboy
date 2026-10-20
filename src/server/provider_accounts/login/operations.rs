@@ -41,7 +41,9 @@ pub(in crate::server) async fn cancel_operation(
         )
         .await?
         {
-            return Ok(json!({"status":"cancellation_requested", "request_id":receipt.request_id}));
+            return Ok(
+                json!({"status":"cancellation_requested", "request_id":receipt.request_id,"cancel_requested":true}),
+            );
         }
         return observation(state, owner, &receipt).await;
     };
@@ -56,7 +58,9 @@ pub(in crate::server) async fn cancel_operation(
     )
     .await
     .map_err(|_| "authentication_cleanup_required")?;
-    Ok(json!({"status":"cancellation_requested", "request_id":receipt.request_id}))
+    Ok(
+        json!({"status":"cancellation_requested", "request_id":receipt.request_id,"cancel_requested":true}),
+    )
 }
 
 fn grant_phase(
@@ -78,7 +82,7 @@ fn grant_phase(
     serde_json::to_value(&grant.phase).map_err(|_| "unavailable")
 }
 
-async fn observation(
+pub(super) async fn observation(
     state: &AppState,
     owner: &str,
     receipt: &Receipt,

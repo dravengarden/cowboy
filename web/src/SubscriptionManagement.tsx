@@ -1,11 +1,12 @@
-import { Alert, Box, Button, MenuItem, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, MenuItem, Paper, Stack, TextField, Typography } from "@mui/material";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { latestProviderEntries, useProviderCatalog } from "./providerCatalog";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
-import { SubscriptionLogin } from "./SubscriptionLogin";
+import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { legacySubscriptionLabel, type SubscriptionDisplay, validLegacyLabels, validSubscriptionDisplay, validSubscriptionLabel } from "./subscriptionDisplay";
 export { validSubscriptionLabel } from "./subscriptionDisplay";
@@ -70,8 +71,13 @@ export function subscriptionWriteRejected(status: number, code: string | undefin
   return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences"].includes(code ?? "");
 }
 
-/** Metadata, native sign-in and revocation retain separate explicit actions. */
-export function SubscriptionManagement(): React.JSX.Element {
+export interface SubscriptionCards {
+  legacy: (provider: string) => { title: string | undefined; controls: ReactNode };
+  named: { id: string; provider: string; content: ReactNode }[];
+}
+
+/** One account surface; signed Provider UI continues to own credential actions. */
+export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (cards: SubscriptionCards) => ReactNode } = {}): React.JSX.Element {
   const { catalog } = useProviderCatalog();
   const providers = latestProviderEntries(catalog?.providers ?? []);
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -82,6 +88,8 @@ export function SubscriptionManagement(): React.JSX.Element {
   const [names, setNames] = useState<Record<string, string>>({});
   const [provider, setProvider] = useState("");
   const [label, setLabel] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<string[]>([]);
   const lock = useRef(false);
   const alive = useRef(false);
   const loading = useRef(0);
@@ -151,6 +159,7 @@ export function SubscriptionManagement(): React.JSX.Element {
       if (response.ok && result.status === "committed") {
         sessionStorage.removeItem(journalKey);
         setPending(undefined); setError(""); setLabel("");
+        if (input.change.type === "create") setAdding(false);
         if (input.change.type === "rename") {
           const id = input.change.id;
           setNames((old) => { const next = { ...old }; delete next[id]; return next; });
@@ -187,45 +196,68 @@ export function SubscriptionManagement(): React.JSX.Element {
     ...Object.keys(snapshot.display_preferences.values.legacy_labels),
   ])] : [];
   const disabled = busy || Boolean(pending) || !snapshot || !journalReady;
+  const legacy: SubscriptionCards["legacy"] = (id) => {
+    const current = legacySubscriptionLabel(snapshot?.display_preferences, id);
+    const draft = names[`legacy:${id}`];
+    return { title: snapshot?.display_preferences?.values.legacy_labels[id], controls: <Stack spacing={1}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled || !snapshot?.display_preferences} fullWidth
+          onChange={(event) => setNames((old) => ({ ...old, [`legacy:${id}`]: event.target.value }))} />
+        <Button disabled={disabled || !snapshot?.display_preferences || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
+          onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save</Button>
+      </Stack>
+      <Typography variant="caption" color="text.secondary">{id} · Service account{!snapshot?.registry.defaults[id] ? " · Default" : ""}</Typography>
+      {snapshot?.registry.defaults[id] && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
+    </Stack> };
+  };
+  const named: SubscriptionCards["named"] = snapshot?.registry.accounts.map((account) => ({ id: account.id, provider: account.provider_id,
+    content: <Paper key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} variant="outlined" sx={{ p: 1.5, minWidth: 0, bgcolor: "transparent", borderColor: "divider", borderRadius: 1.25, boxShadow: "none" }} data-subscription-account={account.id}>
+      <Stack spacing={1}>
+        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="subtitle2" fontWeight={700} sx={{ overflowWrap: "anywhere" }}>{account.label}</Typography>
+            <Typography variant="caption" color="text.secondary">{providers.find((entry) => entry.provider_id === account.provider_id)?.manifest.display.name ?? account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}</Typography>
+          </Box>
+          <Button aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>
+        </Stack>
+        {owner && <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label} disabled={disabled || !account.enabled || Boolean(account.revoking)} />}
+        {editing.includes(account.id) && <Stack spacing={1}>
+          <Stack direction="row" spacing={1}>
+            <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} fullWidth onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
+            <Button disabled={disabled || !validSubscriptionLabel(names[account.id] ?? "") || names[account.id]?.trim() === account.label} onClick={() => save({ type: "rename", id: account.id, label: names[account.id]!.trim() })}>Save</Button>
+          </Stack>
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+            <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
+            <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
+            {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
+            {owner && <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}
+              dataset={snapshot.dataset.dataset_id} revision={snapshot.registry.revision} disabled={disabled} onChange={() => void load()} />}
+          </Stack>
+          <Typography variant="caption" color="text.secondary">Disabling blocks access in Cowboy but does not stop running processes or sign out. Re-enabling requires a new login.</Typography>
+        </Stack>}
+      </Stack>
+    </Paper>,
+  })) ?? [];
   return <Stack spacing={1.5}>
-    <Typography variant="subtitle1">Subscriptions</Typography>
-    <Typography variant="body2" color="text.secondary">Manage subscriptions independently of Machines. Disabling blocks account access in Cowboy, including existing session bindings, but does not stop running processes or sign out. Re-enabling requires a new login.</Typography>
-    {snapshot?.session_admission !== "enabled" && <Alert severity="info">Additional subscriptions cannot create sessions in this release. Account records can be prepared here.</Alert>}
+    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+      <Typography variant="subtitle1" color="text.primary">Accounts</Typography>
+      <Button aria-expanded={adding} onClick={() => setAdding((old) => !old)}>{adding ? "Close add account" : "Add account"}</Button>
+    </Stack>
     {error && <Alert severity="warning" action={<Button disabled={busy || (Boolean(pending) && (!snapshot || !journalReady))} onClick={() => pending ? void commit(pending) : void load()}>Retry</Button>}>{error}</Alert>}
-    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+    {adding && <Stack spacing={1}>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
       <TextField select label="Provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled} fullWidth size="small">
         {providers.map((entry) => <MenuItem key={entry.provider_id} value={entry.provider_id}>{entry.manifest.display.name}</MenuItem>)}
       </TextField>
       <TextField label="Account label" value={label} onChange={(event) => setLabel(event.target.value)} disabled={disabled} fullWidth size="small" />
       <Button disabled={disabled || !provider || !validSubscriptionLabel(label)} onClick={() => save({ type: "create", provider_id: provider, label: label.trim() })}>Add</Button>
-    </Stack>
-    {legacyProviders.map((id) => {
-      const current = legacySubscriptionLabel(snapshot!.display_preferences, id);
-      const draft = names[`legacy:${id}`];
-      return <Box key={`legacy:${id}`} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled} sx={{ flex: 1, minWidth: 120 }}
-            onChange={(event) => setNames((old) => ({ ...old, [`legacy:${id}`]: event.target.value }))} />
-          <Button disabled={disabled || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
-            onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save name</Button>
-          <Typography variant="caption" color="text.secondary">{id} · Existing account{!snapshot!.registry.defaults[id] ? " · Default" : ""}</Typography>
-        </Stack>
-      </Box>;
-    })}
-    {snapshot?.registry.accounts.map((account) => <Box key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-        <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} sx={{ flex: 1, minWidth: 120 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
-        <Button disabled={disabled || !validSubscriptionLabel(names[account.id] ?? "") || names[account.id]?.trim() === account.label} onClick={() => save({ type: "rename", id: account.id, label: names[account.id]!.trim() })}>Save name</Button>
-        <Typography variant="caption" color="text.secondary">{account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{!account.enabled ? " · Disabled" : ""}</Typography>
-        <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
-        <Button disabled={disabled || !account.enabled || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
-        {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
-        {owner && <>
-          <SubscriptionLogin scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label} disabled={disabled || !account.enabled || Boolean(account.revoking)} />
-          <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}
-            dataset={snapshot.dataset.dataset_id} revision={snapshot.registry.revision} disabled={disabled} onChange={() => void load()} />
-        </>}
       </Stack>
-    </Box>)}
+      <Typography variant="caption" color="text.secondary">Add an account, then choose a Machine to see its supported sign-in methods.</Typography>
+    </Stack>}
+    {snapshot?.session_admission !== "enabled" && <Typography variant="caption" color="text.secondary">Additional accounts support sign-in setup. Creating sessions with them is not enabled yet.</Typography>}
+    {renderAccounts ? renderAccounts({ legacy, named }) : <>
+      {legacyProviders.map((id) => <Box key={`legacy:${id}`}>{legacy(id).controls}</Box>)}
+      {named.map((card) => card.content)}
+    </>}
   </Stack>;
 }

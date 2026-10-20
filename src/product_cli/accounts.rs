@@ -14,6 +14,28 @@ pub struct AccountArgs {
 enum AccountCommand {
     /// List this operator's subscriptions and registry revision.
     List,
+    /// Latest login on each Machine, including logins started by the UI or MCP.
+    Logins {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        #[arg(long)]
+        after_machine: Option<String>,
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=50))]
+        limit: u32,
+    },
+    /// Observe an existing owner login and print its safe Cowboy continuation URL.
+    LoginStatus {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        request: String,
+    },
+    /// Cancel an owner login discovered through `account logins`.
+    /// Observe the original request with login-status after uncertainty.
+    CancelRequest {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        request: String,
+    },
     /// Permanently revoke this Cowboy account on all Machines. Does not cancel billing.
     Revoke {
         #[arg(value_parser = parse_account)]
@@ -152,6 +174,44 @@ async fn execute(
     input: impl std::io::Read,
 ) -> Result<String> {
     match command {
+        AccountCommand::Logins {
+            account,
+            after_machine,
+            limit,
+        } => {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query.append_pair("limit", &limit.to_string());
+            if let Some(after) = after_machine {
+                query.append_pair("after_machine", &after);
+            }
+            client
+                .expect(
+                    Method::GET,
+                    &format!("{}s?{}", login_path(&account)?, query.finish()),
+                    None,
+                )
+                .await
+        }
+        AccountCommand::LoginStatus { account, request } => {
+            request_path("native", &request)?;
+            client
+                .expect(
+                    Method::GET,
+                    &format!("{}s/{request}", login_path(&account)?),
+                    None,
+                )
+                .await
+        }
+        AccountCommand::CancelRequest { account, request } => {
+            request_path("native", &request)?;
+            client
+                .expect(
+                    Method::DELETE,
+                    &format!("{}s/{request}", login_path(&account)?),
+                    None,
+                )
+                .await
+        }
         AccountCommand::Revoke {
             account,
             operation,

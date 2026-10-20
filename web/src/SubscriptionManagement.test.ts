@@ -1,7 +1,20 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
+import { subscriptionLoginsPage } from "./SubscriptionLogins";
 import { subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
 import { legacySubscriptionLabel, validLegacyLabels } from "./subscriptionDisplay";
+
+test("login discovery rejects mixed accounts, duplicate Machines and nonadvancing cursors", () => {
+  const scope = { owner: "owner", dataset: "dataset", account: "account", provider: "claude-code" };
+  const login = { account_id: "account", provider_id: "claude-code", machine_id: "b", request_id: "request", status: "active", cancel_requested: false };
+  const page = { account_id: "account", provider_id: "claude-code", logins: [login], next_after_machine: "b" };
+  assertEquals(subscriptionLoginsPage(page, scope, "a").logins[0], login);
+  for (const invalid of [{ ...page, account_id: "other" }, { ...page, logins: [{ ...login, account_id: "other" }] },
+    { ...page, logins: [login, login] }, { ...page, next_after_machine: "a" }, { ...page, logins: [] }]) {
+    assertThrows(() => subscriptionLoginsPage(invalid, scope, "a"));
+  }
+  assertThrows(() => subscriptionLoginsPage(page, scope, "b"));
+});
 
 test("subscription labels obey UTF-8 byte limits and reject control characters", () => {
   for (const label of ["Personal Max", " 个 人 ", "界".repeat(42)]) assertEquals(validSubscriptionLabel(label), true);

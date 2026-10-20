@@ -74,6 +74,8 @@ pub const READ_OPERATIONS: &[&str] = &[
     "preferences.get",
     "accounts.list",
     "accounts.login_options",
+    "accounts.logins",
+    "accounts.login_status",
     "accounts.revocation_status",
     "accounts.transition_status",
 ];
@@ -90,6 +92,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.revoke",
     "accounts.login_start",
     "accounts.login_cancel",
+    "accounts.login_cancel_request",
     "accounts.reconcile",
     "accounts.transition_plan",
     "accounts.transition_reconcile",
@@ -113,6 +116,12 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
 // Readiness is a snapshot, not permission or proof of login; start rechecks admission.
+// Read: accounts.logins(account_id,{after_machine?,limit?}) -> latest login per Machine,
+// ordered by machine_id; default20/max50, next_after_machine continues. Local metadata only.
+// Read: accounts.login_status(account_id,request_id) observes an existing owner-scoped login,
+// including UI/CLI/other-session logins; may reconcile its pending native completion.
+// Cancel any discovered owner login: accounts.login_cancel_request {account_id,request_id}.
+// It cancels the ORIGINAL request, never dispatches a new login. Reconcile through login_status.
 // Explicit login: cowboy_execute({action:"accounts.login_start",operation,arguments:{
 // account_id,machine_id,provider_version,generation_digest,method}}).
 // Discover the exact installed release/method first. Native login needs current user intent.
@@ -279,13 +288,11 @@ macro_rules! sdk {
 }
 
 sdk! {
-SDK_HEADER: r#"// Cowboy agent API cowboy-ts-v1. cowboy_read runs CODE as
-// `async ({cowboy}) => { CODE }` (format "module": export default async function({cowboy})).
-// Return JSON (<=16 KiB). Each await is one of <=16 API calls; no network or files.
-// A failed call throws Error with .code (not_found, permission_denied, unavailable, ...).
+SDK_HEADER: r#"// cowboy-ts-v1. CODE: async ({cowboy})=>{ CODE }; module: export default async function({cowboy}).
+// Return JSON <=16KiB; <=16 API calls; no network/files. Failures throw Error.code.
 export interface Cowboy {
   api: {
-    help(topic: string): Promise<unknown>; // live Controller discovery; revision identifies the SDK
+    help(topic: string): Promise<unknown>; // live discovery
   };
 }
 "#,
@@ -386,8 +393,11 @@ export interface Cowboy {
 }
 "#,
 ACCOUNTS_READ_SDK: r#"
+export interface AccountLogin {status:string;request_id:string;account_id:string;provider_id:string;machine_id:string;cancel_requested:boolean;native_generation:number|null;continue_url:string}
 export interface Cowboy {
   accounts: {
+    logins(account_id:string,q?:{after_machine?:string;limit?:number}): Promise<{account_id:string;provider_id:string;logins:AccountLogin[];next_after_machine:string|null}>;
+    login_status(account_id:string,request_id:string): Promise<AccountLogin>;
     revocation_status(account_id:string): Promise<{status:"not_started"|"revoking"|"completed";account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
     transition_status(operation:string): Promise<{operation:string;stage:"planned"|"stop_confirmed"|"binding_committed"|"completed"|"unknown";evidence:"historical";worker_state:"not_observed"}>;
     list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}>;

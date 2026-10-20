@@ -99,7 +99,7 @@ pub(in crate::server) async fn options_value(
                     .is_none()
                     .then_some("native_identity_verification_unavailable")
             });
-            json!({"id":method.id,"available":reason.is_none(),"reason":reason})
+            json!({"id":method.id,"label":method.label,"available":reason.is_none(),"reason":reason})
         })
         .collect();
     let available = methods.iter().any(|method| method["available"] == true);
