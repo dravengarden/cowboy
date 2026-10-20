@@ -133,6 +133,17 @@ sliding thumb, it does not belong in the peek. The Review Git/files header
 control is a two-icon fill for this reason — a Switch thumb nested in the
 peek paid an extra tile assemble on every wrap-on source swipe.
 
+### 2.2 Review loading
+
+The Review page owns a local Suspense boundary inside its existing pager tile.
+Its repository/file modules load independently from the Agent shell and warm
+while the offscreen page is mounted. During a cold load, keep a full-height
+Review surface with a visible opening status and a bottom Agent action. A
+Review import must never suspend the product pager or replace the Agent editor.
+The fallback adds no extra transformed, shadowed, or filtered layer. Browser
+`review-context` conformance holds the module promise open and checks visible
+loading, bottom navigation, and preservation of the sibling Agent editor.
+
 ## 3. Drawer motion
 
 ### Finger tracking

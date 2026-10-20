@@ -9,6 +9,9 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { getActiveSessionId, setActiveSessionId } from "./controlPlane";
 import type { SessionMeta } from "./protocol";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
+import { Suspense, use } from "react";
+import { MobileReviewBoundary } from "./mobile/review/MobileReviewPage";
+import { MOBILE_OPEN_PRODUCT_EVENT } from "./mobile/appPagerMotion";
 
 const wait = (ms = 50) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -334,9 +337,61 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false)
   };
 }
 
+async function checkReviewLoading(): Promise<string> {
+  const container = document.createElement("div");
+  container.style.cssText = "height:740px;width:390px";
+  document.body.append(container);
+  const root = createRoot(container);
+  let resolve!: () => void;
+  const pending = { promise: new Promise<void>((done) => { resolve = done; }), resolve: () => resolve() };
+  const navigation: string[] = [];
+  const onNavigate = (event: Event) => navigation.push((event as CustomEvent).detail.product);
+  globalThis.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, onNavigate);
+  function SlowReview() {
+    use(pending.promise);
+    return <div data-review-ready>Ready</div>;
+  }
+  try {
+    flushSync(() => root.render(
+      <BrowserProductTheme>
+        <CssBaseline />
+        <Suspense fallback={<div data-whole-app-loading />}>
+          <input aria-label="Agent draft" defaultValue="Keep this draft" />
+          <div style={{ height: 680 }}>
+            <MobileReviewBoundary><SlowReview /></MobileReviewBoundary>
+          </div>
+        </Suspense>
+      </BrowserProductTheme>,
+    ));
+    await wait();
+    const input = container.querySelector("input")!;
+    const loading = container.querySelector<HTMLElement>("[data-mobile-review-loading]");
+    check(loading && loading.getBoundingClientRect().height > 600, "Review loading must paint a full-height surface");
+    check(!container.querySelector("[data-whole-app-loading]"), "Review loading hid Agent and the pager");
+    check(loading.querySelector('[role="status"]')?.textContent?.includes("Opening review"), "Slow Review has no visible loading status");
+    const back = loading.querySelector("button")!;
+    const rect = back.getBoundingClientRect();
+    check(rect.height >= 44 && rect.top > loading.getBoundingClientRect().top + 500, "Loading Review lost its bottom navigation");
+    back.click();
+    check(navigation[0] === "agent", "A slow Review cannot return to Agent");
+    input.value = "Draft typed while Review loads";
+    pending.resolve();
+    await until(() => !!container.querySelector("[data-review-ready]"), "Review did not replace its loading surface");
+    check(!container.querySelector("[data-mobile-review-loading]"), "Loading surface remained over Review");
+    check(container.querySelector("input") === input && input.value === "Draft typed while Review loads", "Loading Review replaced the Agent editor");
+    return "slow Review modules keep a visible loading surface and bottom escape without hiding or replacing Agent";
+  } finally {
+    pending.resolve();
+    globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onNavigate);
+    root.unmount();
+    container.remove();
+  }
+}
+
 export async function runReviewContextBrowserConformance(): Promise<string[]> {
+  const loadingResult = await checkReviewLoading();
   const fixture = renderReviewContextPreview(true, true);
-  const tests: string[] = [];
+  const tests: string[] = [loadingResult];
   const overview = () =>
     fixture.container.querySelector<HTMLElement>(
       '[aria-label="Repository overview"]',
