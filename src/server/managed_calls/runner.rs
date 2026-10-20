@@ -315,11 +315,41 @@ async fn quiesce(state: &AppState, child: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Only a persisted selection of another call exempts a launch from its
+/// deadline. Check this before any input read, snapshot RPC or child creation.
+async fn launch_source(
+    store: &Store,
+    record: &Record,
+    now: i64,
+) -> Result<Option<Record>, &'static str> {
+    let source = store
+        .review_input_source(&record.placement.parent_session_id, &record.call_id)
+        .await;
+    if let Ok(Some(original)) = &source
+        && original.call_id != record.call_id
+    {
+        return Ok(Some(original.clone()));
+    }
+    if now - record.created_at_ms > LAUNCH_DEADLINE_MS {
+        return Err("launch_timeout");
+    }
+    source.map(|_| None).map_err(|_| RETRY)
+}
+
 async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     if record.cancel_requested_at_ms.is_some() {
         // The launch outcome may already exist; observe it while stopping.
         advance(state, store, record, |next| next.state = State::Stopping).await;
         return Step::Again;
+    }
+    match launch_source(store, record, now_ms()).await {
+        Ok(Some(original)) => return reuse_source(state, store, record, &original).await,
+        Ok(None) => {}
+        Err(RETRY) => return Step::Wait(POLL),
+        Err(code) => {
+            advance(state, store, record, fail(code, None)).await;
+            return Step::Again;
+        }
     }
     let request = match store
         .managed_call_input(&record.placement.parent_session_id, &record.call_id)
@@ -417,10 +447,6 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     {
         return step;
     }
-    if now_ms() - record.created_at_ms > LAUNCH_DEADLINE_MS {
-        advance(state, store, record, fail("launch_timeout", None)).await;
-        return Step::Again;
-    }
     if let Err(code) = configuration::ready(state, store, record).await {
         if code == RETRY {
             return Step::Wait(POLL);
@@ -475,16 +501,38 @@ async fn reuse_review(
     if original.call_id == record.call_id {
         return None;
     }
+    Some(reuse_source(state, store, record, &original).await)
+}
+
+fn source_failure(original: &Record) -> CallError {
+    original.error.clone().unwrap_or_else(|| {
+        let code = if original.state == State::Cancelled {
+            "review_source_cancelled"
+        } else if original
+            .result
+            .as_ref()
+            .and_then(|result| result.get("truncated"))
+            == Some(&Value::Bool(true))
+        {
+            "review_source_truncated"
+        } else {
+            "review_source_not_reusable"
+        };
+        CallError::new(code, Some(original.call_id.clone()))
+    })
+}
+
+async fn reuse_source(state: &AppState, store: &Store, record: &Record, original: &Record) -> Step {
     if !original.state.terminal() {
-        return Some(Step::Wait(Duration::from_secs(2)));
+        return Step::Wait(Duration::from_secs(2));
     }
-    let complete = crate::managed_calls::review::complete(&original);
+    let complete = crate::managed_calls::review::complete(original);
     let mut result = original.result.clone().unwrap_or_else(|| json!({}));
     // Attribution belongs to the original call. Copying token counters into a
     // reuse receipt would make task totals charge the same inference twice.
     let Some(object) = result.as_object_mut() else {
         advance(state, store, record, fail("review_source_invalid", None)).await;
-        return Some(Step::Again);
+        return Step::Again;
     };
     object.remove("usage");
     result["reused_from"] = json!({
@@ -501,10 +549,10 @@ async fn reuse_review(
             fail("review_source_too_large", Some(original.call_id.clone())),
         )
         .await;
-        return Some(Step::Again);
+        return Step::Again;
     }
     advance(state, store, record, |next| {
-        next.input_revision = Some(revision.to_owned());
+        next.input_revision.clone_from(&original.input_revision);
         next.result = Some(result);
         next.configuration.clone_from(&original.configuration);
         next.provider_account_id
@@ -515,16 +563,11 @@ async fn reuse_review(
             State::Failed
         };
         if !complete {
-            next.error = Some(
-                original
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| CallError::new("review_incomplete", None)),
-            );
+            next.error = Some(source_failure(original));
         }
     })
     .await;
-    Some(Step::Again)
+    Step::Again
 }
 
 /// Record the policy's preset as the child's configuration preferences.
@@ -790,12 +833,25 @@ fn result_value(text: &str, stop_reason: &str, structured: Option<&Value>) -> Va
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    json!({
+    let mut result = json!({
         "text": &text[..end],
         "truncated": truncated,
         "structured": structured,
         "stop_reason": stop_reason,
-    })
+    });
+    // JSON escaping and the parsed copy can exceed the durable result limit
+    // even when text fits. Leave room for usage, input and reuse attribution.
+    if !serde_json::to_vec(&result).is_ok_and(|bytes| bytes.len() <= MAX_RESULT_TEXT) {
+        result["truncated"] = Value::Bool(true);
+        result["structured"] = Value::Null;
+        // Six bytes is JSON's maximum expansion per UTF-8 byte.
+        end = end.min((MAX_RESULT_TEXT - 1024) / 6);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        result["text"] = json!(&text[..end]);
+    }
+    result
 }
 
 async fn deliver_images(
@@ -901,19 +957,21 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         let parsed = (wants_schema && code == "completed")
             .then(|| serde_json::from_str::<Value>(turn.final_text.trim()).ok())
             .flatten();
-        let incomplete_review = request.as_ref().is_some_and(|request| {
+        let scoped_review = request.as_ref().is_some_and(|request| {
             request
                 .labels
                 .contains_key(crate::managed_calls::review::BASE)
-                && parsed.as_ref().is_some_and(|value| {
-                    value.get("review_complete") != Some(&Value::Bool(true))
-                        || !matches!(
-                            value["verdict"].as_str(),
-                            Some("approve" | "needs-attention")
-                        )
-                })
         });
+        let incomplete_review = scoped_review
+            && parsed.as_ref().is_none_or(|value| {
+                value.get("review_complete") != Some(&Value::Bool(true))
+                    || !matches!(
+                        value["verdict"].as_str(),
+                        Some("approve" | "needs-attention")
+                    )
+            });
         let mut result = result_value(&turn.final_text, stop_reason, parsed.as_ref());
+        let truncated_review = scoped_review && result["truncated"] == true;
         if let Some(usage) = turn.usage {
             result["usage"] = json!(usage);
         }
@@ -950,6 +1008,10 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         advance(state, store, record, move |next| {
             next.result = Some(result);
             match code {
+                "completed" if truncated_review => {
+                    next.state = State::Failed;
+                    next.error = Some(CallError::new("review_output_truncated", None));
+                }
                 "completed" if image_error.is_some() => {
                     next.state = State::Failed;
                     next.error = image_error.map(|code| CallError::new(code, None));
@@ -1044,6 +1106,161 @@ fn settle(state: &AppState, record: &Record) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One durable timeline covers timeout, recovery and continuation.
+    async fn review_waiters_recover_without_machine_access_and_keep_the_source_conversation() {
+        use crate::managed_calls::service::{Choice, Ledger};
+        let root =
+            std::env::temp_dir().join(format!("cw-review-recovery-{}", rand::random::<u64>()));
+        let store = Store::connect("sqlite::memory:", root.clone())
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let parent = serde_json::from_value(json!({
+            "id":"parent","provider":"codex","machine_id":"hawk","workspace_id":"project",
+            "cwd":"/workspace","title":"Review","status":"running"
+        }))
+        .unwrap();
+        store.insert_session(&parent).await.unwrap();
+        let ledger = Ledger::for_parent(store.clone(), "service", &parent).unwrap();
+        let mut request = Request::parse(
+            br#"{"schema":1,"request_id":"original","purpose":"review",
+            "instruction":"Check persistence","context":{"scope":"current-worktree"},
+            "access":"read-only","conversation":{"mode":"fresh"}}"#,
+        )
+        .unwrap();
+        let original = ledger
+            .admit(
+                "codex",
+                &request,
+                "original",
+                "source-child",
+                &Choice::explicit(),
+            )
+            .await
+            .unwrap();
+        let (original, _) = ledger
+            .claim(&original.call_id, "hawk", "1.0.0", "generation")
+            .await
+            .unwrap()
+            .unwrap();
+        let expired = original.created_at_ms + LAUNCH_DEADLINE_MS + 1000;
+        assert_eq!(
+            launch_source(&store, &original, expired)
+                .await
+                .err()
+                .unwrap(),
+            "launch_timeout"
+        );
+        assert!(
+            launch_source(&store, &original, original.created_at_ms)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        store
+            .reserve_review_input(&original, "snapshot")
+            .await
+            .unwrap();
+        assert_eq!(
+            launch_source(&store, &original, expired)
+                .await
+                .err()
+                .unwrap(),
+            "launch_timeout"
+        );
+        request.request_id = "duplicate".into();
+        let duplicate = ledger
+            .admit(
+                "codex",
+                &request,
+                "duplicate",
+                "unused-child",
+                &Choice::explicit(),
+            )
+            .await
+            .unwrap();
+        let (duplicate, _) = ledger
+            .claim(&duplicate.call_id, "hawk", "1.0.0", "generation")
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .reserve_review_input(&duplicate, "snapshot")
+            .await
+            .unwrap();
+        let recovered = launch_source(&store, &duplicate, expired)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.call_id, original.call_id);
+        let mut completed = duplicate.clone();
+        completed.state = State::Completed;
+        completed.revision += 1;
+        completed.finished_at_ms = Some(completed.updated_at_ms);
+        completed.input_revision = Some(crate::managed_calls::canonical_digest(&json!("snapshot")));
+        completed.result = Some(json!({
+            "reused_from":{"call_id":"original","child_session_id":"source-child"},
+            "structured":{"review_complete":true,"verdict":"approve"}
+        }));
+        assert!(ledger.advance(&duplicate, &completed).await.unwrap());
+        assert_eq!(
+            super::super::coordinator::envelope(&completed)["resolved"]["child_session_id"],
+            "source-child"
+        );
+        request.request_id = "followup".into();
+        request.conversation = Conversation::Continue {
+            child_session_id: "unused-child".into(),
+        };
+        assert!(
+            ledger
+                .admit("codex", &request, "followup", "unused", &Choice::explicit())
+                .await
+                .is_err()
+        );
+        let mut failed = original.clone();
+        failed.state = State::Failed;
+        failed.revision += 1;
+        failed.finished_at_ms = Some(failed.updated_at_ms);
+        failed.error = Some(CallError::new("launch_timeout", None));
+        assert!(ledger.advance(&original, &failed).await.unwrap());
+        assert_eq!(source_failure(&failed).code, "launch_timeout");
+        failed.state = State::Cancelled;
+        failed.error = None;
+        assert_eq!(source_failure(&failed).code, "review_source_cancelled");
+        failed.state = State::Completed;
+        failed.result = Some(json!({"truncated":true}));
+        assert_eq!(source_failure(&failed).code, "review_source_truncated");
+        request.conversation = Conversation::Continue {
+            child_session_id: "source-child".into(),
+        };
+        assert!(
+            ledger
+                .admit("codex", &request, "followup", "unused", &Choice::explicit())
+                .await
+                .is_ok()
+        );
+        drop(ledger);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn oversized_review_results_fit_the_ledger_and_cannot_certify_completion() {
+        for payload in [
+            "x".repeat(600_000),
+            "\0".repeat(200_000),
+            "中文".repeat(200_000),
+        ] {
+            let structured = json!({"review_complete":true,"verdict":"approve","summary":payload});
+            let text = serde_json::to_string(&structured).unwrap();
+            let result = result_value(&text, "end_turn", Some(&structured));
+            assert_eq!(result["truncated"], true);
+            assert!(result["structured"].is_null());
+            assert!(serde_json::to_vec(&result).unwrap().len() <= MAX_RESULT_TEXT);
+        }
+    }
 
     #[test]
     fn account_observation_survives_child_release_updates_but_not_other_placements() {

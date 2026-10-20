@@ -24,6 +24,7 @@ pub fn validate(request: &Request) -> bool {
     }
     matches!(request.purpose, Purpose::Review | Purpose::DesignReview)
         && request.context.root.is_some()
+        && matches!(&request.output, super::OutputFormat::JsonSchema { schema } if *schema == output_schema())
         && labels.get(TASK).is_some_and(|task| super::valid_id(task))
         && labels.get(BASE).is_some_and(|base| valid_base(base))
         && labels
@@ -135,8 +136,21 @@ mod tests {
             "schema":1,"request_id":"op","purpose":"review","instruction":"Check the ownership invariant.",
             "context":{"scope":"current-worktree","root":"/tasks/project"},
             "access":"read-only","conversation":{"mode":"fresh"},
+            "output":{"format":"json_schema","schema":output_schema()},
             "labels":{"review_task":"task-1","review_base":"a".repeat(40),"review_reuse":"true"}
         })).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn scoped_review_cannot_bypass_completeness_schema() {
+        let mut request = request();
+        assert!(request.validate().is_ok());
+        request.output = super::super::OutputFormat::Text {};
+        assert!(request.validate().is_err());
+        request.output = super::super::OutputFormat::JsonSchema {
+            schema: json!({"type":"object"}),
+        };
+        assert!(request.validate().is_err());
     }
 
     fn record() -> Record {

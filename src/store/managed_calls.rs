@@ -79,6 +79,11 @@ impl Store {
         dispatch!(self, reserve_review_input(record, identity))
     }
 
+    /// Recover an immutable attempt selection without re-reading its inputs.
+    pub async fn review_input_source(&self, parent: &str, call: &str) -> Result<Option<Record>> {
+        dispatch!(self, review_input_source(parent, call))
+    }
+
     /// Hide/restore settled rows without deleting idempotency receipts, child
     /// ownership or budget accounting. The terminal predicate wins cancel races.
     pub async fn dismiss_managed_call(
@@ -148,8 +153,21 @@ impl Store {
 macro_rules! implementation {
     ($backend:ty) => {
         impl $backend {
+            async fn review_input_source(&self, parent: &str, call: &str) -> Result<Option<Record>> {
+                let owner: Option<(String,)> = sqlx::query_as("SELECT source_call_id FROM managed_review_sources WHERE parent_session_id = $1 AND call_id = $2")
+                    .bind(parent).bind(call).fetch_optional(&self.pool).await?;
+                match owner {
+                    Some((owner,)) => Ok(Some(self.managed_call(parent, &owner).await?
+                        .ok_or_else(|| anyhow::anyhow!("review source missing"))?)),
+                    None => Ok(None),
+                }
+            }
+
             async fn reserve_review_input(&self, record: &Record, identity: &str) -> Result<Record> {
                 let parent = &record.placement.parent_session_id;
+                if let Some(original) = self.review_input_source(parent, &record.call_id).await? {
+                    return Ok(original);
+                }
                 let mut identity = identity.to_owned();
                 // Retain failed owners too. Replacing their reservation would
                 // silently redirect existing waiters to a later retry.
@@ -165,7 +183,10 @@ macro_rules! implementation {
                         || crate::managed_calls::review::complete(&original)
                         || original.finished_at_ms.is_none_or(|finished| record.created_at_ms <= finished)
                     {
-                        return Ok(original);
+                        sqlx::query("INSERT INTO managed_review_sources (parent_session_id, call_id, source_call_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+                            .bind(parent).bind(&record.call_id).bind(&owner).execute(&self.pool).await?;
+                        return self.review_input_source(parent, &record.call_id).await?
+                            .ok_or_else(|| anyhow::anyhow!("review source missing"));
                     }
                     identity = crate::managed_calls::canonical_digest(&serde_json::json!({
                         "input": identity, "after": owner
@@ -342,7 +363,7 @@ mod tests {
         .unwrap();
         store.insert_session(&parent).await.unwrap();
         let mut records = Vec::new();
-        for index in 0..4 {
+        for index in 0..6 {
             let mut request = input.clone();
             request.request_id = format!("reservation-{index}");
             let mut record = template.clone();
@@ -351,7 +372,7 @@ mod tests {
             record.child_session_id = format!("reservation-child-{index}");
             record.request_id.clone_from(&request.request_id);
             record.request_digest = request.digest();
-            record.created_at_ms = 100 + index * 100;
+            record.created_at_ms = if index == 5 { 225 } else { 100 + index * 100 };
             record.updated_at_ms = record.created_at_ms;
             store.admit_managed_call(&record, &request).await.unwrap();
             let mut starting = record.clone();
@@ -386,6 +407,30 @@ mod tests {
                 .advance_managed_call(&original, &failed)
                 .await
                 .unwrap()
+        );
+        // A request queued before failure shares that attempt even when its
+        // first lookup happens after failure. It must not implicitly retry.
+        assert_eq!(
+            store
+                .reserve_review_input(&records[5], "same-input")
+                .await
+                .unwrap()
+                .call_id,
+            original.call_id
+        );
+        let recovered = store
+            .review_input_source("review-reservations", &waiter.call_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.call_id, original.call_id);
+        assert_eq!(recovered.state, State::Failed);
+        assert!(
+            store
+                .review_input_source("another-parent", &waiter.call_id)
+                .await
+                .unwrap()
+                .is_none()
         );
         let retry = store
             .reserve_review_input(&records[2], "same-input")
@@ -429,11 +474,11 @@ mod tests {
         );
         assert_eq!(
             store
-                .reserve_review_input(&records[3], "changed-input")
+                .reserve_review_input(&records[4], "changed-input")
                 .await
                 .unwrap()
                 .call_id,
-            records[3].call_id
+            records[4].call_id
         );
     }
 

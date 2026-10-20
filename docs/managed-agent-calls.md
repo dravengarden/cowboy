@@ -341,7 +341,9 @@ existing behavior.
 
 The compatible request encoding uses reserved labels `review_task`,
 `review_base` and `review_reuse` (`"true"` or `"false"`). They define review
-meaning, never permission or account selection. The exact identity includes
+meaning, never permission or account selection. This encoding requires the
+standard completeness JSON schema, including when reuse is disabled.
+The exact identity includes
 parent placement/authority, task, root, base, captured HEAD/index/worktree,
 instruction, output schema, Provider generation, runtime, account, authentication
 generation and preset.
@@ -356,7 +358,13 @@ model request. Only a successful result explicitly reporting
 `review_complete:true` and `approve` or `needs-attention` can be reused by later
 requests. Completeness does not mean approval. Failed, cancelled, incomplete or
 truncated results are not reusable completion evidence; a later explicit retry
-gets a new reservation while existing waiters retain their original outcome.
+submitted after that attempt finishes gets a new reservation. Requests submitted
+before it finishes share its outcome, even if they were still queued and first
+look up the reservation after failure. This prevents implicit retry storms.
+The selected source is persisted per call, so waiting survives controller recovery
+and an unavailable execution Machine. Unreserved launches keep their timeout.
+API `resolved.child_session_id` and UI navigation point to the original conversation;
+continuing the duplicate receipt's unused child is refused.
 
 Final output follows native message IDs, so commentary immediately before the
 final message cannot corrupt structured output. ID-less Providers retain the

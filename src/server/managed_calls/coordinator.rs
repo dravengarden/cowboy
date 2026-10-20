@@ -299,7 +299,7 @@ pub(super) fn envelope(record: &Record) -> Value {
             "runtime_machine_id": record.runtime_machine_id,
             "machine_id": record.placement.machine_id,
             "workspace_id": record.placement.workspace_id,
-            "child_session_id": record.child_session_id,
+            "child_session_id": record.summary().reused_child_session_id.unwrap_or(&record.child_session_id),
             "input_revision": record.input_revision,
             "preset": record.preset,
             "configuration": record.configuration,

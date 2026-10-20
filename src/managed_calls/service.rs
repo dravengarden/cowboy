@@ -105,6 +105,7 @@ impl Ledger {
                     .ok_or_else(|| anyhow::anyhow!("managed child not owned by parent"))?;
                 ensure!(
                     previous.state.terminal()
+                        && previous.summary().reused_from.is_none()
                         && previous.provider == provider
                         && previous.placement.same_location(&self.placement)
                         && previous.access == request.access
