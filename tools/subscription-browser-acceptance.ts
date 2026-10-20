@@ -60,6 +60,7 @@ try {
     for (
       const stage of [
         "accounts",
+        "connected-account",
         "login",
         "cancelled",
         "revocation",
@@ -68,6 +69,7 @@ try {
         "signed-in",
         "expired",
         "restart",
+        "already-signed-in",
       ]
     ) {
       await until(
@@ -114,7 +116,7 @@ try {
     }
   }
   const result = await page.report;
-  if (!result.ok || result.tests?.length !== 108) {
+  if (!result.ok || result.tests?.length !== 116) {
     throw new Error(JSON.stringify(result));
   }
   console.log(

@@ -8,6 +8,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
+import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, type SubscriptionDisplay, validLegacyLabels, validSubscriptionDisplay, validSubscriptionLabel } from "./subscriptionDisplay";
 export { validSubscriptionLabel } from "./subscriptionDisplay";
 
@@ -210,17 +211,17 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       {snapshot?.registry.defaults[id] && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
     </Stack> };
   };
-  const named: SubscriptionCards["named"] = snapshot?.registry.accounts.map((account) => ({ id: account.id, provider: account.provider_id,
-    content: <Paper key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} variant="outlined" sx={{ p: 1.5, minWidth: 0, bgcolor: "transparent", borderColor: "divider", borderRadius: 1.25, boxShadow: "none" }} data-subscription-account={account.id}>
+  const named: SubscriptionCards["named"] = snapshot?.registry.accounts.map((account) => {
+    const entry = providers.find((entry) => entry.provider_id === account.provider_id);
+    return { id: account.id, provider: account.provider_id,
+    content: <Paper key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} variant="outlined" sx={providerAccountCardSx} data-subscription-account={account.id}>
       <Stack spacing={1}>
-        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="subtitle2" fontWeight={700} sx={{ overflowWrap: "anywhere" }}>{account.label}</Typography>
-            <Typography variant="caption" color="text.secondary">{providers.find((entry) => entry.provider_id === account.provider_id)?.manifest.display.name ?? account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}</Typography>
-          </Box>
-          <Button sx={{ flexShrink: 0 }} aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>
-        </Stack>
-        {owner && <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label} disabled={disabled || !account.enabled || Boolean(account.revoking)} />}
+        <ProviderAccountIdentity manifests={entry ? [entry.manifest] : []} title={account.label}
+          summary={`${entry?.manifest.display.name ?? account.provider_id}${snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}${account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}`}
+          actions={<Button size="small" aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>}>
+          {owner && <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label}
+            expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} />}
+        </ProviderAccountIdentity>
         {editing.includes(account.id) && <Stack spacing={1}>
           <Stack direction="row" spacing={1}>
             <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} fullWidth sx={{ minWidth: 0 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
@@ -237,7 +238,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         </Stack>}
       </Stack>
     </Paper>,
-  })) ?? [];
+  }; }) ?? [];
   return <Stack spacing={1.5}>
     <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
       <Typography variant="subtitle1" color="text.primary">Accounts</Typography>

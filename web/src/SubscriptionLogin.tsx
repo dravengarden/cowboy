@@ -7,12 +7,12 @@ import { useStoreSelector } from "./store";
 import { SubscriptionAuthorization } from "./SubscriptionAuthorization";
 import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
-export function SubscriptionLogin({ scope, label, disabled, request, status, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; status?: string; onChange?: () => void }): React.JSX.Element {
+export function SubscriptionLogin({ scope, label, disabled, request, status, startLabel = "Sign in…", onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; status?: string; startLabel?: string; onChange?: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const close = () => { setOpen(false); onChange?.(); };
   return <>
-    <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? status === "completed" ? "Details" : "Continue sign-in" : "Sign in…"}</Button>
-    <ConfirmSheet open={open} onClose={close} title={`${label} · Sign in`} wide>
+    <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? status === "completed" ? "Details" : "Continue sign-in" : startLabel}</Button>
+    <ConfirmSheet open={open} onClose={close} title={label} wide>
       {open && <SubscriptionLoginForm scope={scope} label={label} onClose={close} {...(request ? { request } : {})} />}
     </ConfirmSheet>
   </>;
@@ -34,6 +34,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
   const [error, setError] = useState("");
   const [view, setView] = useState<LoginView>({ events: [], busy: false, error: "" });
   const [newSignIn, setNewSignIn] = useState(false);
+  const [renewing, setRenewing] = useState(false);
   const [readinessRevision, setReadinessRevision] = useState(0);
   const reference = newSignIn ? undefined : request;
   const knownRequest = view.pending?.request ?? view.observation?.request_id;
@@ -56,7 +57,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
     return () => { alive.current = false; };
   }, [owner, request]);
   useEffect(() => {
-    setOptions(undefined); setMethod(""); setError("");
+    setOptions(undefined); setMethod(""); setError(""); setRenewing(false);
     if (!machine || reference) return;
     const abort = new AbortController();
     void (async () => {
@@ -123,6 +124,8 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
   const link = !failure && !view.pending?.codeState && view.observation?.status === "active" && !view.observation.cancel_requested && !view.pending?.cancelling &&
     challenge && challenge.expires_at_ms > Math.max(clock, Date.now()) ? loginLink(challenge.verification_url) : undefined;
   const done = loginCompleted(view);
+  const alreadySignedIn = !reference && !view.pending && Boolean(options?.native_profile);
+  const showLoginSetup = !alreadySignedIn || renewing;
   const cancelling = view.pending?.cancelling || view.observation?.cancel_requested;
   const cancellationAcknowledged = view.observation?.cancel_requested === true;
   const codeState = view.pending?.codeState;
@@ -139,7 +142,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
   return <Stack spacing={1.5}>
     {view.pending
       ? <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{label} · {machineName}</Typography>
-      : <Typography variant="body2">Choose where to sign in. Each Machine has its own login.</Typography>}
+      : <Typography variant="body2">Choose a Machine to view or set up this account’s sign-in.</Typography>}
     {!reference && !view.pending && <TextField select size="small" fullWidth label="Machine" value={machine}
       disabled={view.busy} onChange={(event) => setMachine(event.target.value)}>
       <MenuItem value="" disabled>Select a Machine</MenuItem>
@@ -150,12 +153,12 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
     {view.submissionError && !done && !cancelling && !failure && <Alert severity="warning">{view.submissionError}</Alert>}
     {failure && <Alert severity="error">{failure}</Alert>}
-    {options?.native_profile && !view.pending && <Alert severity="success">Already signed in on this Machine. Sign in again only to renew this account’s login.</Alert>}
+    {alreadySignedIn && <Alert severity="success" role="status">Signed in on this Machine. No further action is needed.</Alert>}
     {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
-    {!reference && !view.pending && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
+    {!reference && !view.pending && showLoginSetup && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
       {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${entry.reason ?? "Unavailable"}` : ""}</MenuItem>)}
     </TextField>}
-    {!reference && !view.pending && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
+    {!reference && !view.pending && showLoginSetup && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
     {done && <Alert severity="success" role="status">Signed in on this Machine</Alert>}
     {view.pending && !failure && !done && <Stack direction="row" alignItems="center" spacing={1} role="status">
       {verifying && !checksPaused && <CircularProgress size={16} aria-label="Checking sign-in" />}
@@ -180,11 +183,16 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
       key={JSON.stringify([challenge.request_id, link, challenge.expires_at_ms])}
       label={label} link={link} challenge={challenge} busy={view.busy} checking={view.checking === true} submit={(code) => owner.submit(code)} />}
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-      {!reference && !view.pending && <Button variant="contained" disabled={view.busy || !options?.available || !method}
+      {alreadySignedIn && !renewing && <>
+        <Button variant="contained" onClick={onClose}>Close</Button>
+        <Button disabled={view.busy || !options?.available} onClick={() => setRenewing(true)}>Sign in again…</Button>
+      </>}
+      {!reference && !view.pending && showLoginSetup && <Button variant="contained" disabled={view.busy || !options?.available || !method}
         onClick={() => { if (options) void (async () => {
           resetChecks();
           await owner.start(options, method);
         })(); }}>{options?.native_profile ? "Sign in again" : "Start sign-in"}</Button>}
+      {alreadySignedIn && renewing && <Button onClick={() => setRenewing(false)}>Back</Button>}
       {canReplaceLogin(view) && <Button variant="contained" disabled={view.busy} onClick={() => void (async () => {
         const previousMachine = owner.snapshot.pending?.machine;
         await owner.prepareNew();

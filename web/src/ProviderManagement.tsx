@@ -17,6 +17,7 @@ import {
 import { ArrowBackRounded } from "@mui/icons-material";
 import { ProviderAccountSwitch } from "./ProviderAccountSwitch";
 import { SubscriptionManagement, type SubscriptionCards } from "./SubscriptionManagement";
+import { ProviderAccountIdentity, ProviderAccountStatus, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { alpha } from "@mui/material/styles";
 import {
   useCallback,
@@ -55,7 +56,6 @@ import {
 } from "./providerAuthenticationFlow.ts";
 import {
   ProviderMark,
-  ProviderMarkStack,
   ProviderSurface,
 } from "./ProviderSurface";
 import { PluginSlot } from "./pluginHost";
@@ -176,8 +176,7 @@ export function MachineProviderManagement(
 
 type ProviderManagementStatusTone = "default" | "success" | "warning";
 
-/** Every card is title + a wrapping row of identity items + facts.
- * One Provider is one item; more Providers append items horizontally. */
+/** Project Service and installation facts into the shared account layout. */
 function ProviderManagementIdentity({
   manifest,
   version,
@@ -188,6 +187,8 @@ function ProviderManagementIdentity({
   summary = manifest.display.summary,
   consumers = [],
   providerId,
+  accountSurface = false,
+  expanded = false,
 }: {
   manifest: ProviderUiManifest;
   version: string;
@@ -198,6 +199,8 @@ function ProviderManagementIdentity({
   summary?: string;
   consumers?: readonly ProviderCatalogEntry[];
   providerId: string;
+  accountSurface?: boolean;
+  expanded?: boolean;
 }): React.JSX.Element {
   const items = consumers.length > 0 ? consumers : [{
     manifest,
@@ -205,151 +208,15 @@ function ProviderManagementIdentity({
   }];
   const shared = items.length > 1;
   return (
-    <Stack
-      data-provider-management-identity
-      data-provider-shared-identity={shared ? "true" : undefined}
-      spacing={0.75}
-      sx={{ minWidth: 0 }}
+    <ProviderAccountIdentity
+      manifests={items.map((item) => item.manifest)}
+      title={title}
+      summary={shared ? "Shared Cowboy Service credential" : summary}
+      actions={actions}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ minWidth: 0 }}
-      >
-        {!shared
-          ? (
-            <Box
-              data-provider-management-mark
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: 32,
-                minHeight: 32,
-                flexShrink: 0,
-                color: "text.primary",
-              }}
-            >
-              <ProviderMarkStack
-                manifests={[manifest]}
-                size={26}
-                monochromeColor="inherit"
-              />
-            </Box>
-          )
-          : null}
-        <Typography
-          variant="body2"
-          fontWeight={650}
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            lineHeight: 1.3,
-            overflowWrap: "anywhere",
-          }}
-        >
-          {title}
-        </Typography>
-        <Box
-          data-provider-management-actions
-          sx={{
-            ml: "auto",
-            flex: "0 0 auto",
-            display: "flex",
-            justifyContent: "flex-end",
-            minWidth: 0,
-            "& > .MuiStack-root": {
-              alignItems: "center",
-              justifyContent: "flex-end",
-              flexDirection: "row",
-              flexWrap: "wrap",
-              gap: 0.75,
-              width: "auto",
-            },
-            "& .MuiButton-root": {
-              minHeight: 32,
-              px: 1.25,
-              flex: "0 0 auto",
-              fontWeight: 650,
-              letterSpacing: 0,
-              textTransform: "none",
-              boxShadow: "none",
-            },
-            "& .MuiButton-contained": {
-              bgcolor: "transparent",
-              color: "primary.main",
-              border: "1px solid",
-              borderColor: "divider",
-              "&:hover": { bgcolor: "action.hover" },
-            },
-          }}
-        >
-          {actions}
-        </Box>
-      </Stack>
-      {shared
-        ? (
-          <Box
-            data-provider-management-mark
-            data-provider-credential-consumers
-            sx={{ minWidth: 0 }}
-          >
-            <ProviderMarkStack
-              manifests={items.map((item) => item.manifest)}
-              labeled
-              size={20}
-            />
-          </Box>
-        )
-        : null}
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{
-          lineHeight: 1.35,
-          overflow: "hidden",
-          display: "-webkit-box",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: 2,
-        }}
-      >
-        {shared ? "Shared Cowboy Service credential" : summary}
-      </Typography>
-      <Stack
-        data-provider-management-footer
-        direction="row"
-        spacing={0.75}
-        alignItems="center"
-        flexWrap="wrap"
-        useFlexGap
-        sx={{ minWidth: 0 }}
-      >
-        <Typography
-          data-provider-management-status
-          variant="caption"
-          color={statusTone === "warning"
-            ? "warning.main"
-            : statusTone === "success"
-            ? "success.main"
-            : "text.secondary"}
-          sx={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {statusLabel}
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ flexShrink: 0 }}
-        >
-          v{version}
-        </Typography>
-      </Stack>
-    </Stack>
+      <ProviderAccountStatus label={statusLabel} tone={statusTone}
+        detail={[...(accountSurface && !shared ? ["Service"] : []), ...(!accountSurface || expanded ? [`v${version}`] : [])].join(" · ")} />
+    </ProviderAccountIdentity>
   );
 }
 
@@ -1175,15 +1042,7 @@ function ProviderManagement(
             >
               <Paper
                 variant="outlined"
-                sx={{
-                  p: embedded ? 0 : 1,
-                  minWidth: 0,
-                  borderRadius: 1.25,
-                  border: embedded ? 0 : 1,
-                  borderColor: "divider",
-                  bgcolor: "transparent",
-                  boxShadow: "none",
-                }}
+                sx={embedded ? { ...providerAccountCardSx, p: 0, border: 0 } : providerAccountCardSx}
                 data-provider-management-card
                 data-provider-credential-card={scope === "service"
                   ? "true"
@@ -1231,7 +1090,9 @@ function ProviderManagement(
                           title={(!sharedCredential && accounts?.legacy(entry.provider_id).title) || (credentialGroup
                             ? providerCredentialTitle(credentialGroup.entries)
                             : entry.manifest.display.name)}
-                          summary={accounts ? `${entry.manifest.display.name} · Service account` : entry.manifest.display.summary}
+                          summary={accounts ? entry.manifest.display.name : entry.manifest.display.summary}
+                          accountSurface={Boolean(accounts)}
+                          expanded={credentialManagementOpen}
                           consumers={sharedCredential ? credentialEntries : []}
                         />
                         {credentialManagementOpen

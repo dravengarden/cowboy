@@ -11,7 +11,7 @@ import { classifySurface } from "./surface/profile";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
-import { SubscriptionLoginForm } from "./SubscriptionLogin";
+import { SubscriptionLogin, SubscriptionLoginForm } from "./SubscriptionLogin";
 import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationBrowser";
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
@@ -38,6 +38,11 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   resetProviderCatalog();
   const entry = managementEntryFixture("claude-code");
   entry.manifest.display.name = "Claude Code";
+  entry.manifest.authentication.methods = [{ id: "native", label: "Personal subscription", flow: "browser_code" }];
+  // A visible fake mark exercises identical icon geometry in both account cards.
+  entry.manifest.ui.assets = entry.manifest.ui.assets.map((asset) => ({ ...asset,
+    content: { kind: "vector_path", view_box: "0 0 24 24", path: "M12 2 22 12 12 22 2 12Z" },
+  }));
   entry.publisher = entry.manifest.publisher;
   const unpublished = { ...entry, manifest: { ...entry.manifest, version: "999.0.0" }, provider_version: "999.0.0",
     package_digest: `sha256:${"4".repeat(64)}`, release_state: "unbound" as const, artifact_digest: null };
@@ -64,6 +69,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   let cleanup = false;
   let conflict = false;
   let reject = false;
+  let listedLoginStatus = "active";
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/plugins") return Response.json({ providers: [entry, unpublished], authentication_executors: [], authentications: [{
@@ -103,7 +109,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       expires_at_ms: Date.now() + 60_000, input_required: true,
     }] });
     if (path.startsWith("/api/provider-accounts/account/logins?")) return Response.json({ account_id: "account", provider_id: "claude-code", logins: [{
-      account_id: "account", provider_id: "claude-code", machine_id: "ovh", request_id: "agent-request", status: "active", cancel_requested: false,
+      account_id: "account", provider_id: "claude-code", machine_id: "ovh", request_id: "agent-request", status: listedLoginStatus, cancel_requested: false,
     }], next_after_machine: null });
     if (path.includes("/account/login?")) return Response.json({ account_id: "account", provider_id: "claude-code", machine_id: "machine", available: true,
       reason: null, methods: [{ id: "native", available: true, reason: null }], release: { provider_version: "1", generation_digest: "digest" } });
@@ -150,12 +156,36 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       "desktop cards share columns only when each has enough room");
     }
     await until(() => Boolean(button("Continue sign-in")));
-    check(container.querySelector("[data-subscription-account]")!.textContent!.includes("ovh · Waiting for sign-in") && lifecycleWrites.length === 0,
+    check(namedCard.textContent!.includes("Waiting for sign-in · ovh") && lifecycleWrites.length === 0,
       "the account card discovers an agent-started Machine sign-in without dispatching or probing a Provider");
     for (const node of container.querySelectorAll<HTMLButtonElement>("button")) if (node.textContent === "Done") node.click();
     await until(() => !button("Disable"));
     await observe?.(surface, "accounts");
+    listedLoginStatus = "completed";
+    namedCard.querySelector<HTMLButtonElement>("button")!.click();
+    await until(() => Boolean(button("Refresh status")));
+    button("Refresh status")!.click();
+    await until(() => Boolean(button("Details") && button("Sign in on another Machine…")));
+    namedCard.querySelector<HTMLButtonElement>("button")!.click();
+    await until(() => !button("Details"));
+    const identity = (card: HTMLElement) => card.querySelector<HTMLElement>("[data-provider-management-identity]")!;
+    check(namedCard.querySelectorAll("button").length === 1 && legacyCard.querySelectorAll("button").length === 1 &&
+      namedCard.querySelector("button")?.textContent === "Manage" &&
+      Boolean(namedCard.querySelector("[data-provider-management-mark]")) &&
+      namedCard.textContent!.includes("Signed in · ovh") &&
+      legacyCard.textContent!.includes("Signed in · Service") &&
+      Math.abs(identity(namedCard).getBoundingClientRect().height - identity(legacyCard).getBoundingClientRect().height) < 2 &&
+      getComputedStyle(namedCard).borderColor === getComputedStyle(legacyCard).borderColor &&
+      getComputedStyle(namedCard.querySelector("[data-provider-management-status]")!).color ===
+        getComputedStyle(legacyCard.querySelector("[data-provider-management-status]")!).color &&
+      lifecycleWrites.length === 0,
+    "signed-in Service and Machine accounts share identity, status and resting geometry with one Manage action");
+    await observe?.(surface, "connected-account");
     for (const node of container.querySelectorAll<HTMLButtonElement>("button")) if (node.textContent === "Manage") node.click();
+    await until(() => Boolean(button("Refresh status")));
+    listedLoginStatus = "active";
+    button("Refresh status")!.click();
+    await until(() => Boolean(button("Continue sign-in")));
     await until(() => Boolean(button("Disable")));
     const labelInput = [...container.querySelectorAll("input")].find((node) => node.value === "Existing account")!;
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(labelInput, "Claude · Lynx");
@@ -308,6 +338,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     const continueFetch = globalThis.fetch;
     const restartEffects: string[] = [];
     let readinessReads = 0;
+    let nativeProfile = false;
     const nextRequest = "provider-login-11111111-2222-4333-8444-555555555555";
     const nextReceipt = { status: "active", request_id: nextRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh" };
     globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -321,7 +352,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         readinessReads++;
         return Response.json({
           account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh", available: true, reason: null,
-          release: { provider_version: "1", generation_digest: "digest" }, methods: [{ id: "native", label: "Personal Claude subscription", available: true, reason: null }],
+          release: { provider_version: "1", generation_digest: "digest" }, native_profile: nativeProfile ? { generation: 4 } : null,
+          methods: [{ id: "native", label: "Personal Claude subscription", available: true, reason: null },
+            ...(nativeProfile ? [{ id: "api-key", label: "API key", available: false, reason: "not_supported" }] : [])],
         });
       }
       if (path === `/api/provider-accounts/${handoffAccount}/login` && init?.method === "POST") {
@@ -368,6 +401,34 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => Boolean(button("Start sign-in") && !button("Start sign-in")!.disabled));
     check(readinessReads > readsBeforeRestart && restartEffects.filter((effect) => effect === "POST").length === 1,
       "restored sign-in refreshes readiness on the same Machine before an explicit restart");
+    root.unmount(); root = createRoot(container);
+    nativeProfile = true;
+    sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
+      provider: "claude-code", request: handoffRequest, machine: "ovh", cancelling: false }));
+    let closed = 0;
+    flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}>
+      <SubscriptionLogin scope={{ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount, provider: "claude-code" }}
+        label="Claude · Otter" disabled={false} onChange={() => { closed++; }} />
+    </SurfaceContext.Provider></BrowserProductTheme>));
+    button("Sign in…")!.click();
+    await until(() => Boolean(dialogButton("Start again") && !dialogButton("Start again")!.disabled));
+    dialogButton("Start again")!.click();
+    await until(() => document.body.textContent!.includes("No further action is needed."));
+    const methodPicker = () => [...document.querySelectorAll("label")].some((node) => node.textContent === "Sign-in method");
+    check(Boolean(dialogButton("Close")?.className.includes("MuiButton-contained")) && !methodPicker() && !dialogButton("Sign in again") &&
+      Boolean(dialogButton("Sign in again…")) && restartEffects.filter((effect) => effect === "POST").length === 1,
+      "an already signed-in Machine defaults to closing without offering a primary renewal or method form");
+    await observe?.(surface, "already-signed-in");
+    dialogButton("Sign in again…")!.click();
+    await until(() => methodPicker() && Boolean(dialogButton("Sign in again")));
+    check(restartEffects.filter((effect) => effect === "POST").length === 1 && Boolean(dialogButton("Back")),
+      "renewal setup opens only by explicit choice and does not start authorization");
+    dialogButton("Back")!.click();
+    await until(() => Boolean(dialogButton("Close")) && !methodPicker());
+    dialogButton("Close")!.click();
+    await until(() => closed === 1);
+    check(!sessionStorage.getItem(handoffKey) && restartEffects.filter((effect) => effect === "POST").length === 1,
+      "back and close preserve the successful native profile without creating another login");
     globalThis.fetch = continueFetch;
     root.unmount(); root = createRoot(container);
     sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,

@@ -5,6 +5,7 @@ import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
 import { SubscriptionLogin } from "./SubscriptionLogin";
 import type { LoginScope } from "./subscriptionLoginController";
+import { ProviderAccountStatus } from "./ProviderAccountIdentity";
 
 interface Login { request_id: string; account_id: string; provider_id: string; machine_id: string; status: string; cancel_requested: boolean }
 interface Page { logins: Login[]; next_after_machine: string | null }
@@ -29,7 +30,7 @@ const status: Record<string, string> = {
 };
 
 /** Local DB metadata only. No polling, native login or Provider probe on mount. */
-export function SubscriptionLogins({ scope, label, disabled }: { scope: LoginScope; label: string; disabled: boolean }): React.JSX.Element {
+export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope: LoginScope; label: string; disabled: boolean; expanded: boolean }): React.JSX.Element {
   const machines = useStoreSelector((state) => state.machines);
   const [page, setPage] = useState<Page>();
   const [error, setError] = useState("");
@@ -52,17 +53,17 @@ export function SubscriptionLogins({ scope, label, disabled }: { scope: LoginSco
   return <Stack spacing={0.5}>
     {error && <Alert severity="warning">{error}</Alert>}
     {!page && !error && <Typography variant="body2" color="text.secondary">Loading sign-ins…</Typography>}
-    {page?.logins.length === 0 && <Typography variant="body2" color="text.secondary">Not signed in on any Machine</Typography>}
+    {page?.logins.length === 0 && <ProviderAccountStatus label="Not signed in" tone="warning" detail="No Machine" />}
     {page?.logins.map((login) => <Stack key={login.machine_id} direction="row" spacing={1} alignItems="center" justifyContent="space-between" flexWrap="wrap" useFlexGap>
-      <Typography variant="body2" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
-        {machines.find((machine) => machine.id === login.machine_id)?.display_name || login.machine_id} · {status[login.status] ?? "Sign-in needs attention"}
-      </Typography>
-      <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} onChange={() => void load()} />
+      <ProviderAccountStatus label={status[login.status] ?? "Sign-in needs attention"} tone={login.status === "completed" ? "success" : "warning"}
+        detail={machines.find((machine) => machine.id === login.machine_id)?.display_name || login.machine_id} />
+      {expanded && <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} onChange={() => void load()} />}
     </Stack>)}
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-      <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy} onChange={() => void load()} />
+    {expanded && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+      <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy}
+        startLabel={page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />
       <Button disabled={busy} onClick={() => void load()}>Refresh status</Button>
       {page?.next_after_machine && <Button disabled={busy} onClick={() => void load(page.next_after_machine!)}>More Machines</Button>}
-    </Stack>
+    </Stack>}
   </Stack>;
 }

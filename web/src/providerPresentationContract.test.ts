@@ -5,6 +5,12 @@ import { assertEquals } from "@std/assert";
 const managementSource = await readFile(
   new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
 );
+const identitySource = await readFile(
+  new URL("./ProviderAccountIdentity.tsx", import.meta.url), "utf8",
+);
+const subscriptionSource = await readFile(
+  new URL("./SubscriptionManagement.tsx", import.meta.url), "utf8",
+);
 const authenticationOwnerSource = await readFile(
   new URL("./providerAuthenticationOwner.ts", import.meta.url), "utf8",
 );
@@ -91,8 +97,12 @@ test("Machine compatibility renders once in the Cowboy warning shell", () => {
 });
 
 test("Provider management cards keep geometry in the Cowboy component library", () => {
+  for (const source of [managementSource, subscriptionSource]) {
+    assertEquals(source.includes("<ProviderAccountIdentity"), true);
+    assertEquals(source.includes("providerAccountCardSx"), true);
+  }
   assertEquals(
-    managementSource.includes("data-provider-management-identity"),
+    identitySource.includes("data-provider-management-identity"),
     true,
   );
   assertEquals(
@@ -121,14 +131,14 @@ test("Provider management cards keep geometry in the Cowboy component library", 
     true,
   );
   assertEquals(
-    managementSource.includes("data-provider-management-actions"),
+    identitySource.includes("data-provider-management-actions"),
     true,
   );
   assertEquals(
-    managementSource.includes("data-provider-management-footer"),
+    identitySource.includes("data-provider-management-footer"),
     true,
   );
-  assertEquals(managementSource.includes('whiteSpace: "nowrap"'), true);
+  assertEquals(identitySource.includes('overflowWrap: "anywhere"'), true);
   assertEquals(
     managementSource.includes("data-provider-session-actions"),
     true,
@@ -267,7 +277,7 @@ test("Service credential management renders one card per typed authentication sc
     true,
   );
   assertEquals(
-    managementSource.includes("data-provider-credential-consumers"),
+    identitySource.includes("data-provider-credential-consumers"),
     true,
   );
   assertEquals(
@@ -276,7 +286,7 @@ test("Service credential management renders one card per typed authentication sc
   );
   assertEquals(managementSource.includes("Used by ${"), false);
   assertEquals(
-    managementSource.includes("labeled"),
+    identitySource.includes("labeled"),
     true,
   );
   assertEquals(
@@ -289,12 +299,12 @@ test("Service credential management renders one card per typed authentication sc
     ),
     false,
   );
-  assertEquals(managementSource.includes("<ProviderMarkStack"), true);
+  assertEquals(identitySource.includes("<ProviderMarkStack"), true);
   assertEquals(
-    managementSource.includes('monochromeColor="inherit"'),
+    identitySource.includes('monochromeColor="inherit"'),
     true,
   );
-  assertEquals(managementSource.includes('color: "text.primary"'), true);
+  assertEquals(identitySource.includes('color: "text.primary"'), true);
   assertEquals(managementSource.includes("ProviderCredentialMarks"), false);
   assertEquals(managementSource.includes("entries.slice(0, 4)"), false);
 });
@@ -331,7 +341,7 @@ test("Provider marks preserve host component classes and compact chip spacing", 
     false,
   );
   assertEquals(
-    managementSource.includes("data-provider-credential-consumers"),
+    identitySource.includes("data-provider-credential-consumers"),
     true,
   );
 });
