@@ -468,6 +468,17 @@ It is appended after the legacy `claude-account` and `api-key` methods, retainin
 their selection order. Its required bundle key satisfies the existing SDK
 contract; the named Claude native-profile path never exports that bundle.
 
+Native Claude methods are excluded from the legacy default account's portable
+credential contract. Its digest retains every legacy method, required key,
+projection and refresh rule in their original typed serialization. Adding a
+native recipe therefore preserves existing encrypted vault entries, signed
+replicas and writable projections through refresh, restart and rollback. It
+does not authorize a native method through default-account login or credential
+import. Native accounts still match the complete signed authentication contract,
+method, identity and exact package generation. Other Providers retain their
+existing portable contract; this compatibility rule follows the native-owned
+Claude boundary and is not a general relaxation of authentication checks.
+
 Native subscription login has a separate operator-only HTTP entry:
 `POST /api/provider-accounts/{account_id}/login`, with `machine_id`,
 `provider_version`, `generation_digest`, and `method`. The owner and Provider

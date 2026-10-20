@@ -74,6 +74,7 @@ use crate::machine_protocol::{
 };
 use crate::plugin_host::{PluginHostSpec, PluginUsageSidecar};
 use crate::plugin_host_bundle::{MAX_HOST_BUNDLE_BYTES, PluginHostBundle};
+use crate::provider_account::portable_contract;
 
 const MAX_PROVIDER_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES: usize = 1024 * 1024 * 1024;
@@ -1760,15 +1761,14 @@ impl MachinePluginStore {
             "session Provider auth replica has no credentials"
         );
         ensure!(
-            envelope.auth_contract_fingerprint
-                == package.manifest.compatibility.auth_contract_fingerprint
+            envelope.auth_contract_fingerprint == portable_contract::fingerprint(package)?
                 && envelope.projection_schema == auth.projection_schema,
             "session Provider auth replica uses a different contract"
         );
         let plaintext = self.encryption.open(&envelope)?;
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
             .context("decoding Provider runtime credential bundle")?;
-        validate_portable_bundle(auth, &bundle)?;
+        validate_portable_bundle(&portable_contract::contract(package), &bundle)?;
         let materialized = self
             .auth_provider_root(provider_id)
             .join("materialized/generations")
@@ -1827,12 +1827,11 @@ impl MachinePluginStore {
         let (package, _) = self
             .active_package(provider_id)?
             .context("Provider must be installed before Service authentication")?;
-        package
-            .manifest
-            .authentication
+        portable_contract::contract(&package)
             .methods
-            .into_iter()
+            .iter()
             .find(|method| method.id == method_id)
+            .cloned()
             .context("authentication method is not declared by the active Provider")
     }
 
@@ -1870,7 +1869,8 @@ impl MachinePluginStore {
         let (package, generation_digest) = self
             .active_package(provider_id)?
             .context("Provider must be installed before Service authentication")?;
-        let auth = &package.manifest.authentication;
+        let portable_auth = portable_contract::contract(&package);
+        let auth = &*portable_auth;
         let method = auth
             .methods
             .iter()
@@ -1955,7 +1955,7 @@ impl MachinePluginStore {
             },
         })
         .and_then(|candidate| {
-            validate_portable_bundle(auth, &candidate.bundle)?;
+            validate_portable_bundle(&portable_contract::contract(&package), &candidate.bundle)?;
             Ok(candidate)
         })
     }
@@ -1996,7 +1996,7 @@ impl MachinePluginStore {
                 base64::engine::general_purpose::STANDARD.encode(secret.as_bytes()),
             )]),
         };
-        validate_portable_bundle(&package.manifest.authentication, &bundle)?;
+        validate_portable_bundle(&portable_contract::contract(&package), &bundle)?;
         Ok(ExportedAuthCandidate {
             provider_version: package.manifest.version.clone(),
             native_identity: None,
@@ -2206,8 +2206,7 @@ impl MachinePluginStore {
             "Provider authentication envelope targets a different Provider"
         );
         ensure!(
-            package.manifest.compatibility.auth_contract_fingerprint
-                == envelope.auth_contract_fingerprint,
+            portable_contract::fingerprint(package)? == envelope.auth_contract_fingerprint,
             "installed Provider authentication contract does not match the Service generation"
         );
         ensure!(
@@ -2217,7 +2216,7 @@ impl MachinePluginStore {
         let plaintext = self.encryption.open(envelope)?;
         let bundle: PortableCredentialBundle =
             serde_json::from_slice(&plaintext).context("decoding portable credential bundle")?;
-        validate_portable_bundle(&package.manifest.authentication, &bundle)?;
+        validate_portable_bundle(&portable_contract::contract(package), &bundle)?;
         Ok(PreparedProviderAuth::Apply(bundle))
     }
 
@@ -2256,7 +2255,7 @@ impl MachinePluginStore {
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
         let auth = &package.manifest.authentication;
-        validate_portable_bundle(auth, bundle)?;
+        validate_portable_bundle(&portable_contract::contract(package), bundle)?;
         let provider_auth_root = self.auth_provider_root(&package.manifest.id);
         let materialized_root = provider_auth_root.join("materialized");
         let previous_generation = read_link_name(&materialized_root.join("current"))
@@ -2277,7 +2276,7 @@ impl MachinePluginStore {
             ensure!(
                 metadata.auth_generation == auth_generation
                     && metadata.auth_contract_fingerprint
-                        == package.manifest.compatibility.auth_contract_fingerprint,
+                        == portable_contract::fingerprint(package)?,
                 "existing Provider auth materialization has conflicting identity"
             );
             // Protocol-five Machines launched the Provider directly against
@@ -2313,11 +2312,7 @@ impl MachinePluginStore {
                 restore_projected_bundle(auth, &temporary, bundle)?;
                 let metadata = MaterializationMetadata {
                     auth_generation,
-                    auth_contract_fingerprint: package
-                        .manifest
-                        .compatibility
-                        .auth_contract_fingerprint
-                        .clone(),
+                    auth_contract_fingerprint: portable_contract::fingerprint(package)?,
                 };
                 atomic_write(
                     &temporary.join("metadata.json"),
@@ -2373,11 +2368,7 @@ impl MachinePluginStore {
                 restore_projected_bundle(&package.manifest.authentication, &temporary, bundle)?;
                 let metadata = MaterializationMetadata {
                     auth_generation,
-                    auth_contract_fingerprint: package
-                        .manifest
-                        .compatibility
-                        .auth_contract_fingerprint
-                        .clone(),
+                    auth_contract_fingerprint: portable_contract::fingerprint(package)?,
                 };
                 atomic_write(
                     &temporary.join("metadata.json"),
@@ -2438,8 +2429,7 @@ impl MachinePluginStore {
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
-                metadata.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint,
+                metadata.auth_contract_fingerprint == portable_contract::fingerprint(package)?,
                 "Provider runtime projection uses a different auth contract"
             );
             if generation != canonical {
@@ -2480,8 +2470,7 @@ impl MachinePluginStore {
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
-                metadata.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint,
+                metadata.auth_contract_fingerprint == portable_contract::fingerprint(package)?,
                 "Provider runtime projection uses a different auth contract"
             );
             if generation != canonical {
@@ -2541,8 +2530,7 @@ impl MachinePluginStore {
         let canonical = current.unwrap_or_else(|| generations[0].clone());
         let metadata = read_materialization_metadata(&canonical)?;
         ensure!(
-            metadata.auth_contract_fingerprint
-                == package.manifest.compatibility.auth_contract_fingerprint,
+            metadata.auth_contract_fingerprint == portable_contract::fingerprint(package)?,
             "Provider runtime credential source uses a different auth contract"
         );
         let name = canonical
@@ -2747,16 +2735,16 @@ impl MachinePluginStore {
         let metadata = fs::read(generation.join("metadata.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<MaterializationMetadata>(&bytes).ok());
+        let fingerprint = portable_contract::fingerprint(package)?;
         if !metadata.is_some_and(|value| {
             value.auth_generation == envelope.auth_generation
-                && value.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint
+                && value.auth_contract_fingerprint == fingerprint
         }) {
             return Ok(false);
         }
         let plaintext = self.encryption.open(envelope)?;
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)?;
-        validate_portable_bundle(&package.manifest.authentication, &bundle)?;
+        validate_portable_bundle(&portable_contract::contract(package), &bundle)?;
         Ok(materialization_contains_bundle(
             &package.manifest.authentication,
             &generation,
@@ -3241,14 +3229,13 @@ impl MachinePluginStore {
             return Ok(Vec::new());
         }
         ensure!(
-            envelope.auth_contract_fingerprint
-                == package.manifest.compatibility.auth_contract_fingerprint,
+            envelope.auth_contract_fingerprint == portable_contract::fingerprint(&package)?,
             "Provider auth replica contract does not match the active package"
         );
         let baseline: PortableCredentialBundle =
             serde_json::from_slice(&self.encryption.open(&envelope)?)
                 .context("decoding signed Provider credential replica")?;
-        validate_portable_bundle(auth, &baseline)?;
+        validate_portable_bundle(&portable_contract::contract(&package), &baseline)?;
         let (bundles, incomplete) = self.projected_refresh_bundles(&package, &baseline)?;
         if incomplete {
             failed.insert(provider_id.to_owned());
@@ -3283,8 +3270,7 @@ impl MachinePluginStore {
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
-                metadata.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint,
+                metadata.auth_contract_fingerprint == portable_contract::fingerprint(package)?,
                 "Provider runtime projection uses a different auth contract"
             );
             let projected = match projected_credential_bundle(
@@ -3758,8 +3744,7 @@ fn validate_materialization_metadata(
     let metadata = read_materialization_metadata(generation)?;
     ensure!(
         metadata.auth_generation == auth_generation
-            && metadata.auth_contract_fingerprint
-                == package.manifest.compatibility.auth_contract_fingerprint,
+            && metadata.auth_contract_fingerprint == portable_contract::fingerprint(package)?,
         "Provider runtime projection has conflicting identity"
     );
     Ok(())
@@ -5956,11 +5941,7 @@ mod tests {
             account_id: store.account_id.clone(),
             provider_id: package.manifest.id.clone(),
             auth_generation,
-            auth_contract_fingerprint: package
-                .manifest
-                .compatibility
-                .auth_contract_fingerprint
-                .clone(),
+            auth_contract_fingerprint: portable_contract::fingerprint(package).unwrap(),
             projection_schema: package.manifest.authentication.projection_schema.clone(),
             action: ProviderAuthAction::Apply,
             ephemeral_public_key: base64::engine::general_purpose::STANDARD
@@ -6049,6 +6030,99 @@ mod tests {
                 scope.account_id().as_str()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn native_login_addition_preserves_legacy_materialization_and_rollback() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let signer =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))
+                .unwrap();
+        store.pin_service_key(signer.public_key()).unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+        let next = cowboy_provider_sdk::build_package(source.clone().compile().unwrap()).unwrap();
+        let mut previous = source.clone();
+        previous
+            .authentication
+            .methods
+            .retain(|method| method.native_identity.is_none());
+        let previous = cowboy_provider_sdk::build_package(previous.compile().unwrap()).unwrap();
+        let bundle = |value: &str| PortableCredentialBundle {
+            portable_schema: previous.manifest.authentication.portable_schema.clone(),
+            method_id: "claude-account".into(),
+            values: BTreeMap::from([(
+                "credentials_json".into(),
+                base64::engine::general_purpose::STANDARD.encode(value),
+            )]),
+        };
+        let original = bundle("synthetic-original");
+        let envelope = seal_auth_for_test(&store, &previous, &signer, 1, &original);
+        store.apply_auth(&envelope).await.unwrap();
+        store.materialize_bundle(&previous, 1, &original).unwrap();
+        store.prepare_auth_inner(&envelope, Some(&next)).unwrap();
+        let digest = format!("sha256:{}", "1".repeat(64));
+        let old_home = store
+            .prepare_launch_auth_home("claude-code", &previous, 1, &digest)
+            .unwrap();
+        let new_home = store
+            .prepare_launch_auth_home("claude-code", &next, 1, &digest)
+            .unwrap();
+        assert_eq!(old_home, new_home);
+        let credentials = old_home.join(".claude/.credentials.json");
+        fs::write(&credentials, "synthetic-rotated").unwrap();
+        let (pending, incomplete) = store.projected_refresh_bundles(&next, &original).unwrap();
+        assert!(!incomplete);
+        assert_eq!(pending, vec![bundle("synthetic-rotated")]);
+        let rotated = bundle("synthetic-rotated");
+        let envelope = seal_auth_for_test(&store, &next, &signer, 2, &rotated);
+        assert_eq!(
+            envelope.auth_contract_fingerprint,
+            previous.manifest.compatibility.auth_contract_fingerprint
+        );
+        store.apply_auth(&envelope).await.unwrap();
+        store
+            .prepare_launch_auth_home("claude-code", &next, 2, &digest)
+            .unwrap();
+        store
+            .prepare_launch_auth_home("claude-code", &previous, 1, &digest)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&credentials).unwrap(),
+            "synthetic-rotated"
+        );
+        drop(store);
+        let reopened =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        // A host restart and rollback to the old package still use one lineage.
+        reopened
+            .prepare_launch_auth_home("claude-code", &previous, 2, &digest)
+            .unwrap();
+        reopened
+            .prepare_launch_auth_home("claude-code", &next, 2, &digest)
+            .unwrap();
+        let mut incompatible = source;
+        incompatible
+            .authentication
+            .projection_schema
+            .push_str("-different");
+        let incompatible =
+            cowboy_provider_sdk::build_package(incompatible.compile().unwrap()).unwrap();
+        assert!(
+            reopened
+                .prepare_auth_inner(&envelope, Some(&incompatible))
+                .is_err()
+        );
+        let native_bundle = PortableCredentialBundle {
+            method_id: "claude-subscription".into(),
+            ..rotated
+        };
+        assert!(
+            reopened
+                .materialize_bundle(&next, 3, &native_bundle)
+                .is_err()
+        );
     }
 
     #[tokio::test]

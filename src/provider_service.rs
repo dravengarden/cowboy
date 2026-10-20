@@ -29,6 +29,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use crate::machine_auth::{MachineIdentity, PROVIDER_AUTH_SIGNATURE_NAMESPACE};
 use crate::machine_protocol::{PortableCredentialBundle, ProviderAuthAction, SealedProviderAuth};
 use crate::provider_account::ProviderAccountId;
+use crate::provider_account::portable_contract;
 
 const VAULT_SCHEMA: u16 = 1;
 const AUTH_ENVELOPE_SCHEMA: u16 = 1;
@@ -615,7 +616,7 @@ impl ProviderAuthService {
         );
         self.require_portable_packages(packages)?;
         for package in packages {
-            validate_bundle(&package.manifest.authentication, bundle)?;
+            validate_bundle(&portable_contract::contract(package), bundle)?;
             ensure!(
                 self.account_id.is_default()
                     || self.recipient_key.is_some()
@@ -652,13 +653,9 @@ impl ProviderAuthService {
         for package in packages {
             let provider_id = &package.manifest.id;
             let auth = &package.manifest.authentication;
-            let (nonce, ciphertext) = self.seal_vault(
-                provider_id,
-                generation,
-                &package.manifest.compatibility.auth_contract_fingerprint,
-                &plaintext,
-                None,
-            )?;
+            let fingerprint = portable_contract::fingerprint(package)?;
+            let (nonce, ciphertext) =
+                self.seal_vault(provider_id, generation, &fingerprint, &plaintext, None)?;
             stored_values.push(StoredProviderAuthentication {
                 promotion_commitment: None,
                 vault_schema: self.vault_schema(),
@@ -668,11 +665,7 @@ impl ProviderAuthService {
                 auth_generation: generation,
                 authentication_state: ServiceAuthenticationState::Ready,
                 distribution_state: ServiceDistributionState::Pending,
-                auth_contract_fingerprint: package
-                    .manifest
-                    .compatibility
-                    .auth_contract_fingerprint
-                    .clone(),
+                auth_contract_fingerprint: fingerprint,
                 portable_schema: auth.portable_schema.clone(),
                 projection_schema: auth.projection_schema.clone(),
                 action: ProviderAuthAction::Apply,
@@ -737,11 +730,7 @@ impl ProviderAuthService {
             "Provider authentication cannot be refreshed in its current state"
         );
         ensure!(
-            current.auth_contract_fingerprint
-                == requested_package
-                    .manifest
-                    .compatibility
-                    .auth_contract_fingerprint
+            current.auth_contract_fingerprint == portable_contract::fingerprint(requested_package)?
                 && current.portable_schema
                     == requested_package.manifest.authentication.portable_schema
                 && current.projection_schema
@@ -751,7 +740,10 @@ impl ProviderAuthService {
         let current_bundle: PortableCredentialBundle =
             serde_json::from_slice(&self.open_vault(&current)?)
                 .context("decoding current Provider credential bundle")?;
-        validate_bundle(&requested_package.manifest.authentication, &current_bundle)?;
+        validate_bundle(
+            &portable_contract::contract(requested_package),
+            &current_bundle,
+        )?;
         ensure!(
             current_bundle.method_id == bundle.method_id,
             "credential refresh cannot change authentication method"
@@ -773,13 +765,9 @@ impl ProviderAuthService {
         for package in packages {
             let provider_id = &package.manifest.id;
             let auth = &package.manifest.authentication;
-            let (nonce, ciphertext) = self.seal_vault(
-                provider_id,
-                generation,
-                &package.manifest.compatibility.auth_contract_fingerprint,
-                &plaintext,
-                None,
-            )?;
+            let fingerprint = portable_contract::fingerprint(package)?;
+            let (nonce, ciphertext) =
+                self.seal_vault(provider_id, generation, &fingerprint, &plaintext, None)?;
             stored_values.push(StoredProviderAuthentication {
                 promotion_commitment: None,
                 vault_schema: self.vault_schema(),
@@ -788,11 +776,7 @@ impl ProviderAuthService {
                 auth_generation: generation,
                 authentication_state: ServiceAuthenticationState::Ready,
                 distribution_state: ServiceDistributionState::Pending,
-                auth_contract_fingerprint: package
-                    .manifest
-                    .compatibility
-                    .auth_contract_fingerprint
-                    .clone(),
+                auth_contract_fingerprint: fingerprint,
                 portable_schema: auth.portable_schema.clone(),
                 projection_schema: auth.projection_schema.clone(),
                 action: ProviderAuthAction::Apply,
@@ -1276,7 +1260,7 @@ fn validate_refresh_request<'a>(
             package.manifest.authentication.refresh == RefreshOwnership::CompareAndSwap,
             "Provider does not allow Machine credential refresh"
         );
-        validate_bundle(&package.manifest.authentication, bundle)?;
+        validate_bundle(&portable_contract::contract(package), bundle)?;
     }
     let plaintext = serde_json::to_vec(bundle)?;
     ensure!(
@@ -2119,6 +2103,62 @@ mod tests {
             service.status("gemini").unwrap().authentication_state,
             ServiceAuthenticationState::Ready
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_login_addition_preserves_the_legacy_refresh_contract() {
+        let (root, service) = service();
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+        let next = cowboy_provider_sdk::build_package(source.clone().compile().unwrap()).unwrap();
+        let mut previous = source;
+        previous
+            .authentication
+            .methods
+            .retain(|method| method.native_identity.is_none());
+        let previous = cowboy_provider_sdk::build_package(previous.compile().unwrap()).unwrap();
+        let original = PortableCredentialBundle {
+            portable_schema: previous.manifest.authentication.portable_schema.clone(),
+            method_id: "claude-account".into(),
+            values: BTreeMap::from([(
+                "credentials_json".into(),
+                base64::engine::general_purpose::STANDARD.encode(b"synthetic-original"),
+            )]),
+        };
+        let status = service.commit(&previous, &original, None, None).unwrap();
+        let expected = status.auth_contract_fingerprint;
+        assert_ne!(
+            expected,
+            next.manifest.compatibility.auth_contract_fingerprint
+        );
+        let mut rotated = original;
+        rotated.values.insert(
+            "credentials_json".into(),
+            base64::engine::general_purpose::STANDARD.encode(b"synthetic-rotated"),
+        );
+        let ProviderAuthRefreshResult::Updated(statuses) = service
+            .compare_and_swap_refresh(std::slice::from_ref(&next), &rotated, "claude-code", 1)
+            .unwrap()
+        else {
+            panic!("refresh was not committed");
+        };
+        assert_eq!(statuses[0].auth_contract_fingerprint, expected);
+        assert_eq!(statuses[0].auth_generation, 2);
+        // A fresh legacy login on the new release must remain readable by
+        // retained old workers and the accepted rollback release as well.
+        let refreshed = service.commit(&next, &rotated, None, Some(2)).unwrap();
+        assert_eq!(refreshed.auth_contract_fingerprint, expected);
+        drop(service);
+        let reopened = ProviderAuthService::open(&root).unwrap();
+        assert_eq!(
+            reopened
+                .status("claude-code")
+                .unwrap()
+                .auth_contract_fingerprint,
+            expected
+        );
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 

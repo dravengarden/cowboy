@@ -3,6 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+pub(crate) mod portable_contract;
+
 /// One bounded native authorization response. Validate at every ingress, not
 /// just the CLI: embedded newlines would become additional native commands.
 #[cfg(any(feature = "full", feature = "machine-host", test))]

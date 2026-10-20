@@ -106,7 +106,7 @@ mod service_catalog {
                             architecture: payload.architecture.clone(),
                         })
                         .collect(),
-                    manifest: package.manifest.ui_projection(),
+                    manifest: default_account_ui(&package),
                     compatibility_requirements: None,
                 };
                 ensure!(
@@ -290,7 +290,7 @@ mod service_catalog {
             publisher: release.publisher.clone(),
             contract_fingerprint: package.contract_fingerprint.clone(),
             supported_platforms: release.supported_platforms.clone(),
-            manifest: package.manifest.ui_projection(),
+            manifest: default_account_ui(&package),
             compatibility_requirements: Some(compatibility_requirements),
         };
         Ok(CatalogArtifact { entry, package })
@@ -346,12 +346,27 @@ mod service_catalog {
                 publisher: release.publisher,
                 contract_fingerprint: package.contract_fingerprint.clone(),
                 supported_platforms: release.supported_platforms,
-                manifest: package.manifest.ui_projection(),
+                manifest: default_account_ui(&package),
                 compatibility_requirements: None,
             };
             insert_unique(target, CatalogArtifact { entry, package })?;
         }
         Ok(())
+    }
+
+    /// The shared Providers sign-in surface manages the default account.
+    /// Named login discovery reads the complete signed package separately.
+    fn default_account_ui(package: &ProviderPackage) -> ProviderUiManifest {
+        let mut ui = package.manifest.ui_projection();
+        let portable = crate::provider_account::portable_contract::contract(package);
+        ui.authentication.presentation = portable.ui_presentation();
+        ui.authentication.methods.retain(|method| {
+            portable
+                .methods
+                .iter()
+                .any(|allowed| allowed.id == method.id)
+        });
+        ui
     }
 
     fn insert_unique(
@@ -651,6 +666,37 @@ mod service_catalog {
                 compare_versions("1.0.0", "1.0.0-rc.10"),
                 std::cmp::Ordering::Greater
             );
+        }
+
+        #[test]
+        fn default_account_ui_does_not_offer_named_native_login() {
+            let source: StandardProviderSource =
+                serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+            let package = build_package(source.compile().unwrap()).unwrap();
+            let ui = default_account_ui(&package);
+            let native = package
+                .manifest
+                .authentication
+                .methods
+                .iter()
+                .find(|method| method.native_identity.is_some())
+                .unwrap();
+            assert!(
+                !ui.authentication
+                    .methods
+                    .iter()
+                    .any(|method| method.id == native.id)
+            );
+            assert_eq!(
+                ui.authentication
+                    .methods
+                    .iter()
+                    .map(|method| method.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["claude-account", "api-key"]
+            );
+            // Display filtering never rewrites the signed package identity.
+            assert_eq!(ui.compatibility, package.manifest.compatibility);
         }
     }
 }

@@ -13616,16 +13616,14 @@ async fn api_provider_auth_start(
         )
             .into_response();
     };
-    if !package
-        .manifest
-        .authentication
+    if !crate::provider_account::portable_contract::contract(&package)
         .methods
         .iter()
         .any(|method| method.id == request.method)
     {
         return (
             StatusCode::BAD_REQUEST,
-            "authentication method is not declared by this Provider",
+            "authentication method is not available for the default account",
         )
             .into_response();
     }
@@ -14090,11 +14088,15 @@ fn recover_failed_provider_sessions(
         ) else {
             continue;
         };
+        let Ok(fingerprint) = crate::provider_account::portable_contract::fingerprint(&package)
+        else {
+            continue;
+        };
         let Some((expected_generation, next_generation)) = provider_auth_recovery_generations(
             &session,
             status,
             &outcome.synchronized_generations,
-            &package.manifest.compatibility.auth_contract_fingerprint,
+            &fingerprint,
         ) else {
             continue;
         };
