@@ -14,12 +14,19 @@ type Pending = LoginScope & { machine: string; cancelling: boolean } & (
 export interface LoginObservation { status: string; request_id?: string; cancel_requested?: boolean }
 export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
+  referenceMismatch?: boolean;
+}
+export function loginFailure(view: LoginView): string | undefined {
+  const failure = view.events.findLast((event) =>
+    (event.event === "login_state" && event.state === "error") ||
+    (event.event === "command_result" && !event.accepted));
+  return failure ? ("detail" in failure && failure.detail || "Native sign-in failed. Start again when the Machine is ready.") : undefined;
 }
 export function canReplaceLogin(view: LoginView): boolean {
   return Boolean(view.pending && (view.observation?.cancel_requested ||
     ["inactive", "not_started"].includes(view.observation?.status ?? "") ||
-    (view.observation?.status === "active" && view.events.some((event) =>
-      event.event === "login_challenge" && event.expires_at_ms <= Date.now()))));
+    (view.observation?.status === "active" && (loginFailure(view) !== undefined || view.events.some((event) =>
+      event.event === "login_challenge" && event.expires_at_ms <= Date.now())))));
 }
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -142,12 +149,18 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     },
     resume(reference: string) { return run(async () => {
       if (!id(reference)) throw new Error("Invalid sign-in reference.");
+      const mismatch = () => {
+        publish({ referenceMismatch: true });
+        return new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+      };
       if (state.pending) {
-        if (state.observation?.request_id && state.observation.request_id !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
-        if (state.pending.request && state.pending.request !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        if (state.observation?.request_id && state.observation.request_id !== reference) throw mismatch();
+        if (state.pending.request && state.pending.request !== reference) throw mismatch();
         const value = await request(receiptPath(state.pending));
-        if (!object(value) || value.request_id !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        if (!object(value) || !id(value.request_id)) throw new Error("The original sign-in is not confirmed. Check status.");
+        if (value.request_id !== reference) throw mismatch();
         observe(value, state.pending);
+        publish({ referenceMismatch: false });
         await readEvents(state.pending);
         return;
       }
@@ -155,6 +168,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
       const pending: Pending = { ...scope, request: reference, machine: value.machine_id, cancelling: value.cancel_requested === true };
       observe(value, pending);
+      publish({ referenceMismatch: false });
       save(pending); // Only a verified reference is persisted; never a new dispatch selection.
       await readEvents(pending);
     }); },

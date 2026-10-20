@@ -586,6 +586,11 @@ unsafe reuse. In the UI, an expired/disconnected attempt offers **Start again**.
 It cancels the original request, clears only the tab's pointer after acknowledgement,
 and reloads Machine readiness. A separate **Start sign-in** click creates a fresh
 operation; opening or refreshing the page never automatically restarts login.
+Native cancellation also recovers a disconnected in-memory tracker through the
+current enrollment-checked Machine connection; rejected or uncertain cancellation
+retains the tracker. Native errors and rejected login commands appear immediately
+in the form instead of waiting for the executor deadline. Restarting a handoff
+replaces its URL; a failed receipt read remains retryable on that same request.
 
 Receipt `status` is a live observation: `active`, `completed`, `inactive`,
 `cancelling`, or `unknown`; a fresh attempt refused before enqueue may return

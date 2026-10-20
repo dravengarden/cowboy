@@ -265,6 +265,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       if (path === `/api/provider-accounts/${handoffAccount}/logins/${handoffRequest}`) return Response.json({
         status: signedIn ? "completed" : "active", request_id: handoffRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh",
       });
+      if (path === "/api/provider-accounts/login-operations/another-operation") return Response.json({
+        status: "active", request_id: "provider-login-another-request", account_id: handoffAccount, provider_id: "claude-code", machine_id: "other-machine",
+      });
       if (path === `/api/providers/claude-code/auth/${handoffRequest}`) return Response.json({ request_id: handoffRequest, events: [{
         event: "login_challenge", request_id: handoffRequest, provider: "claude-code", verification_url: "https://claude.ai/oauth/authorize?state=private-handoff",
         expires_at_ms: Date.now() + 60_000, input_required: true,
@@ -296,7 +299,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     const continueFetch = globalThis.fetch;
     const restartEffects: string[] = [];
     let readinessReads = 0;
-    const nextRequest = "provider-login-explicit-restart";
+    const nextRequest = "provider-login-11111111-2222-4333-8444-555555555555";
     const nextReceipt = { status: "active", request_id: nextRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh" };
     globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
       const path = String(url);
@@ -317,7 +320,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         throw new Error("fixture loses the new login reply after dispatch");
       }
       if (path.startsWith("/api/provider-accounts/login-operations/")) return Response.json(nextReceipt);
-      if (path === `/api/providers/claude-code/auth/${nextRequest}`) return Response.json({ request_id: nextRequest, events: [] });
+      if (path === `/api/providers/claude-code/auth/${nextRequest}`) return Response.json({ request_id: nextRequest, events: [{
+        event: "login_state", request_id: nextRequest, provider: "claude-code", state: "error", detail: "Native profile cleanup is still pending",
+      }] });
       return continueFetch(url, init);
     }) as typeof fetch;
     handoffRender();
@@ -331,12 +336,16 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       "Start again cancels the original request, refreshes readiness and waits for an explicit new sign-in");
     await observe?.(surface, "restart");
     const previousHash = location.hash;
+    const previousHistoryLength = history.length;
     dialogButton("Start sign-in")!.click();
     await until(() => Boolean(dialogButton("Retry same sign-in") && !dialogButton("Check status")!.disabled));
     dialogButton("Check status")!.click();
     await until(() => location.hash.endsWith(`/${nextRequest}`));
-    check(restartEffects.join(",") === "DELETE,POST" && JSON.parse(sessionStorage.getItem(handoffKey)!).operation,
+    check(restartEffects.join(",") === "DELETE,POST" && JSON.parse(sessionStorage.getItem(handoffKey)!).operation && history.length === previousHistoryLength,
       "recovering a lost explicit start reply advances the continuation URL without dispatching twice");
+    await until(() => Boolean(dialogButton("Start again") && !dialogButton("Start again")!.disabled));
+    check(document.body.textContent!.includes("Native profile cleanup is still pending") && !document.body.textContent!.includes("Waiting for native sign-in"),
+      "native login failure is visible immediately and offers an explicit restart");
     history.replaceState(null, "", `${location.pathname}${location.search}${previousHash}`);
     root.unmount(); root = createRoot(container);
     sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
@@ -350,6 +359,26 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => Boolean(button("Start sign-in") && !button("Start sign-in")!.disabled));
     check(readinessReads > readsBeforeRestart && restartEffects.filter((effect) => effect === "POST").length === 1,
       "restored sign-in refreshes readiness on the same Machine before an explicit restart");
+    globalThis.fetch = continueFetch;
+    root.unmount(); root = createRoot(container);
+    sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
+      provider: "claude-code", operation: "recoverable-operation", machine: "ovh", version: "1", digest: "digest", method: "native", cancelling: false }));
+    let offlineHandoff = true;
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === "/api/provider-accounts/login-operations/recoverable-operation") return offlineHandoff
+        ? new Response("unavailable", { status: 503 })
+        : Response.json({ ...nextReceipt, request_id: handoffRequest });
+      return continueFetch(url, init);
+    }) as typeof fetch;
+    handoffRender();
+    await until(() => Boolean(document.querySelector('[role="alert"]') && dialogButton("Check status") && !dialogButton("Check status")!.disabled));
+    const retryable = !document.body.textContent!.includes("Another sign-in is saved") && !dialogButton("Start sign-in") &&
+      !document.querySelector('a[href^="https://claude.ai/oauth/"]');
+    offlineHandoff = false;
+    dialogButton("Check status")!.click();
+    await until(() => Boolean(document.querySelector('a[href^="https://claude.ai/oauth/"]')));
+    check(retryable && JSON.parse(sessionStorage.getItem(handoffKey)!).operation === "recoverable-operation",
+      "an unavailable saved operation stays retryable on the handoff without a false mismatch or redispatch");
     globalThis.fetch = continueFetch;
     for (const saved of [
       { request: "provider-login-another-request" },

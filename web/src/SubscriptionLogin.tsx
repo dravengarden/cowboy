@@ -4,7 +4,7 @@ import { ConfirmSheet } from "./Sheet";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
-import { canReplaceLogin, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
+import { canReplaceLogin, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
 export function SubscriptionLogin({ scope, label, disabled, request, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; onChange?: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -28,7 +28,8 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
   const [newSignIn, setNewSignIn] = useState(false);
   const [readinessRevision, setReadinessRevision] = useState(0);
   const reference = newSignIn ? undefined : request;
-  const requestMismatch = Boolean(reference && view.pending && (view.pending.request ?? view.observation?.request_id) !== reference);
+  const knownRequest = view.pending?.request ?? view.observation?.request_id;
+  const requestMismatch = Boolean(reference && view.pending && (view.referenceMismatch || (knownRequest && knownRequest !== reference)));
   const alive = useRef(false);
   const pollingUntil = useRef(Date.now() + 5 * 60_000);
   const owner = useMemo(() => subscriptionLogin(scope, {
@@ -70,7 +71,7 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
   // Observe only the current operation, at most once every two seconds for
   // five minutes while visible. No automatic POST, login restart, or vendor probe.
   useEffect(() => {
-    if (requestMismatch || view.busy || view.error || view.observation?.status !== "active" || Date.now() >= pollingUntil.current) return;
+    if (requestMismatch || view.busy || view.error || loginFailure(view) !== undefined || view.observation?.status !== "active" || Date.now() >= pollingUntil.current) return;
     const timer = setTimeout(() => {
       if (document.visibilityState === "visible") void owner.check();
     }, 2000);
@@ -87,7 +88,13 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
     <Alert severity="warning">Another sign-in is saved in this tab. Reconcile it in Subscriptions before opening this link.</Alert>
     <Button onClick={onClose}>Back to Cowboy</Button>
   </Stack>;
-  const link = challenge && challenge.expires_at_ms > Math.max(clock, Date.now()) ? loginLink(challenge.verification_url) : undefined;
+  if (reference && view.pending && !knownRequest) return <Stack spacing={1.5}>
+    {view.error ? <Alert severity="warning">{view.error}</Alert> : <Typography role="status">Checking the original sign-in…</Typography>}
+    <Button disabled={view.busy} onClick={() => void owner.resume(reference)}>Check status</Button>
+    <Button onClick={onClose}>Back to Cowboy</Button>
+  </Stack>;
+  const failure = loginFailure(view);
+  const link = !failure && challenge && challenge.expires_at_ms > Math.max(clock, Date.now()) ? loginLink(challenge.verification_url) : undefined;
   const done = view.observation?.status === "completed";
   const stateLabel: Record<string, string> = {
     active: "Waiting for native sign-in", completed: "Signed in on this Machine",
@@ -107,14 +114,15 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
       {machines.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.connected}>{entry.display_name || entry.id}{entry.connected ? "" : " · offline"}</MenuItem>)}
     </TextField>}
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
+    {failure && <Alert severity="error">{failure}</Alert>}
     {options?.native_profile && !view.pending && <Alert severity="success">A verified native login is available on this Machine.</Alert>}
     {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
     {!reference && !view.pending && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
       {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${entry.reason ?? "Unavailable"}` : ""}</MenuItem>)}
     </TextField>}
     {!reference && !view.pending && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
-    {view.pending && <Typography role="status" variant="body2">{stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}</Typography>}
-    {challenge && !link && view.observation?.status === "active" && <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
+    {view.pending && !failure && <Typography role="status" variant="body2">{stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}</Typography>}
+    {!failure && challenge && !link && view.observation?.status === "active" && <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
     {link && !view.pending?.cancelling && !done && <>
       <Button component="a" href={link} target="_blank" rel="noopener noreferrer" variant="contained">Open Claude sign-in</Button>
       <Typography variant="caption" color="text.secondary">Select this subscription’s account on Claude’s page. Keep the sign-in link and code private.</Typography>

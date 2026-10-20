@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { canReplaceLogin, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
+import { canReplaceLogin, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
 import { rememberSubscriptionSignIn, restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN, subscriptionSignInLink } from "./subscriptionSignInLink";
 
@@ -201,6 +201,40 @@ test("unknown and active sign-ins cannot be silently replaced; failed cancellati
     const restored = subscriptionLogin(scope, f.ports); restored.restore();
     assertEquals(restored.snapshot.pending?.request, "request");
   }
+});
+
+test("native failure is visible and permits only an explicitly cancelled replacement", async () => {
+  for (const failure of [
+    { event: "login_state", request_id: "request", provider: scope.provider, state: "error", detail: "Native profile cleanup is still pending" },
+    { event: "command_result", request_id: "request", accepted: false, detail: "Native login is unavailable" },
+  ]) {
+    const f = fixture();
+    f.setFetch(async (path, init) => Response.json(path.includes("/api/providers/")
+      ? { request_id: "request", events: [failure] }
+      : { status: init?.method === "DELETE" ? "cancellation_requested" : "active", cancel_requested: init?.method === "DELETE",
+        request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+    const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.resume("request");
+    assertEquals(loginFailure(owner.snapshot), failure.detail);
+    assert(canReplaceLogin(owner.snapshot));
+    await owner.prepareNew();
+    assert(!owner.snapshot.pending);
+    assertEquals(f.calls.filter((call) => call.init?.method).map((call) => call.init?.method), ["DELETE"]);
+  }
+});
+
+test("an unavailable saved operation is retryable without declaring a reference mismatch", async () => {
+  const f = fixture();
+  const original = subscriptionLogin(scope, f.ports); original.restore(); await original.start(options, "native");
+  const saved = [...f.values.entries()];
+  f.setFetch(async () => { throw new Error("offline"); });
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.resume("request");
+  assert(owner.snapshot.error); assert(!owner.snapshot.referenceMismatch);
+  assertEquals([...f.values.entries()], saved);
+  f.setFetch(async (path) => Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [] }
+    : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+  await owner.resume("request");
+  assertEquals(owner.snapshot.error, ""); assertEquals(owner.snapshot.observation?.request_id, "request");
+  assertEquals(f.calls.filter((call) => call.init?.method === "POST").length, 1);
 });
 
 test("sign-in links contain only strict account and request references", () => {

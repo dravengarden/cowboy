@@ -970,6 +970,82 @@ fn cancellation_keeps_failed_dispatch_and_never_targets_a_replacement_connection
 }
 
 #[tokio::test]
+async fn native_cancel_after_reconnect_requires_current_acceptance_before_retiring_tracker() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = ProviderAuthService::open(&dir.path().join("auth")).unwrap();
+    let store = crate::store::Store::connect(
+        &format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("cancel.sqlite").display()
+        ),
+        dir.path().join("artifacts"),
+    )
+    .await
+    .unwrap();
+    store.migrate().await.unwrap();
+    let control = MachineControl::default();
+    let requests = parking_lot::Mutex::new(HashMap::new());
+    let (mut old, mut old_commands) = fixture(&root, &control, "native", 7);
+    old.provider_id = "claude-code".into();
+    old.native_login = Some(NativeLogin {
+        registry_revision: 1,
+        recipient_key: old.named_login.take().unwrap().recipient_key,
+    });
+    old.cancel_requested = true;
+    requests.lock().insert("old-login".into(), old.clone());
+    let key = &old.native_login.as_ref().unwrap().recipient_key;
+    let enrollment = store
+        .create_machine_enrollment("native", "Native", 60)
+        .await
+        .unwrap();
+    store
+        .consume_machine_enrollment(&enrollment, &format!("ssh-ed25519 {key}"), key)
+        .await
+        .unwrap();
+    let receipt: crate::store::provider_accounts::logins::Receipt = serde_json::from_value(json!({
+        "request_id":"old-login", "provider_id":"claude-code", "cancel_requested":true,
+        "native_generation":1, "dispatch_registry_revision":1,
+        "dispatch_recipient_fingerprint":crate::admin::hex_sha256(key.as_bytes()),
+        "input":{"account_id":old.account_id,"machine_id":"native","provider_version":"fixture","generation_digest":"digest","method":"native"}
+    })).unwrap();
+    let (replacement, mut commands) = fixture(&root, &control, "native", 7);
+    assert!(!control.is_current(&old.connection));
+    for accepted in [false, true] {
+        let (result, ()) =
+            tokio::join!(native_cancel::recover(&store, &control, &receipt), async {
+                let MachineCommand::CancelLoginRequest {
+                    request_id,
+                    login_request_id,
+                } = commands.recv().await.unwrap()
+                else {
+                    panic!("correlated cancellation required");
+                };
+                assert_eq!(login_request_id, "old-login");
+                assert!(requests.lock().contains_key("old-login"));
+                control.record_remote(
+                    &replacement.connection,
+                    crate::machine_protocol::MachineEvent::CommandResult {
+                        request_id,
+                        accepted,
+                        detail: None,
+                    },
+                );
+            });
+        if result == Ok(true) {
+            forget_cancelled_executor(&requests, &old, "old-login").unwrap();
+        }
+        assert_eq!(requests.lock().contains_key("old-login"), !accepted);
+        assert!(old_commands.try_recv().is_err());
+        assert!(commands.try_recv().is_err());
+    }
+    // A replacement or another owner cannot be erased by the old cancellation.
+    requests.lock().insert("old-login".into(), replacement);
+    assert!(forget_cancelled_executor(&requests, &old, "old-login").is_err());
+    assert!(requests.lock().contains_key("old-login"));
+    assert!(root.status("claude-code").is_none());
+}
+
+#[tokio::test]
 async fn correlated_cancel_ignores_login_ack_and_preserves_refused_request_for_retry() {
     use crate::machine_protocol::MachineEvent;
     use std::time::Duration;

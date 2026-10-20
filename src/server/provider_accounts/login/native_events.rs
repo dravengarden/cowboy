@@ -86,6 +86,11 @@ fn project(
                 state: AuthState::Pending | AuthState::Error,
                 ..
             } => request_id == request && source == provider,
+            MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                ..
+            } => request_id == request,
             _ => false,
         })
         .collect()
@@ -102,6 +107,37 @@ mod tests {
             state: AuthState::Pending,
             account_label: None,
             detail: None,
+        }
+    }
+
+    #[test]
+    fn native_rejection_is_visible_only_for_the_current_active_request() {
+        let rejected = |request: &str| MachineEvent::CommandResult {
+            request_id: request.into(),
+            accepted: false,
+            detail: Some("native login unavailable".into()),
+        };
+        let projected = project(
+            "login",
+            "claude-code",
+            "active",
+            true,
+            vec![rejected("other"), rejected("login")],
+        );
+        assert!(
+            matches!(&projected[..], [MachineEvent::CommandResult { request_id, accepted: false, .. }] if request_id == "login")
+        );
+        for (status, active) in [("active", false), ("cancellation_requested", true)] {
+            assert!(
+                project(
+                    "login",
+                    "claude-code",
+                    status,
+                    active,
+                    vec![rejected("login")]
+                )
+                .is_empty()
+            );
         }
     }
 

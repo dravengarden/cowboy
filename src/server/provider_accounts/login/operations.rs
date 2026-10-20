@@ -33,18 +33,29 @@ pub(in crate::server) async fn cancel_operation(
             None
         }
     };
-    let Some(executor) = executor else {
-        if super::native_cancel::recover(
+    if executor
+        .as_ref()
+        .is_none_or(|executor| executor.native_login.is_some())
+        && super::native_cancel::recover(
             state.store.as_ref().ok_or("unavailable")?,
             &state.machine_control,
             &receipt,
         )
         .await?
-        {
-            return Ok(
-                json!({"status":"cancellation_requested", "request_id":receipt.request_id,"cancel_requested":true}),
-            );
+    {
+        if let Some(executor) = &executor {
+            super::forget_cancelled_executor(
+                &state.provider_auth_executors,
+                executor,
+                &receipt.request_id,
+            )
+            .map_err(|_| "authentication_request_mismatch")?;
         }
+        return Ok(
+            json!({"status":"cancellation_requested", "request_id":receipt.request_id,"cancel_requested":true}),
+        );
+    }
+    let Some(executor) = executor else {
         return observation(state, owner, &receipt).await;
     };
     super::cancel(state, &executor, &receipt.request_id)

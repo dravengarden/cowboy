@@ -205,7 +205,7 @@ pub(in crate::server) async fn http_cancel(
     operation_response(cancel_operation(&state, &auth.principal.user_id, &operation).await)
 }
 
-async fn retire_expired(state: &AppState, next: &ProviderAuthExecutor) -> Result<(), String> {
+async fn retire_expired(state: &Arc<AppState>, next: &ProviderAuthExecutor) -> Result<(), String> {
     let old = {
         let mut requests = state.provider_auth_executors.lock();
         requests
@@ -222,6 +222,23 @@ async fn retire_expired(state: &AppState, next: &ProviderAuthExecutor) -> Result
             })
     };
     if let Some((id, old)) = old {
+        if old.native_login.is_some() {
+            // A disconnected executor cannot command its old transport. Reuse
+            // durable, enrollment-checked cancellation on the current Machine;
+            // never discard its reservation merely because it disconnected.
+            let operation = state
+                .store
+                .as_ref()
+                .ok_or("persistence_required")?
+                .provider_login_operation_for_request(&old.owner_user_id, &id)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or("login_operation_not_found")?;
+            cancel_operation(state, &old.owner_user_id, &operation)
+                .await
+                .map_err(str::to_owned)?;
+            return Ok(());
+        }
         cancel(state, &old, &id).await?;
         dispatch_cancel(
             &state.machine_control,
@@ -307,6 +324,28 @@ pub(super) async fn send_confirmed_cancel(
         !(current.cancel_requested
             && current.owned_by(&executor.owner_user_id, &executor.provider_id)
             && current.account_id == executor.account_id
+            && current.machine_id == executor.machine_id
+            && current.connection.same(&executor.connection))
+    }) {
+        return Err("authentication_request_mismatch".into());
+    }
+    requests.remove(request);
+    Ok(())
+}
+
+/// Drop only the exact cancelled in-memory tracker after correlated acceptance.
+/// This does not remove durable receipts or attest process/profile cleanup.
+fn forget_cancelled_executor(
+    requests: &parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
+    executor: &ProviderAuthExecutor,
+    request: &str,
+) -> Result<(), String> {
+    let mut requests = requests.lock();
+    if requests.get(request).is_some_and(|current| {
+        !(current.cancel_requested
+            && current.owned_by(&executor.owner_user_id, &executor.provider_id)
+            && current.account_id == executor.account_id
+            && current.machine_id == executor.machine_id
             && current.connection.same(&executor.connection))
     }) {
         return Err("authentication_request_mismatch".into());
