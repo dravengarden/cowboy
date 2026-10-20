@@ -216,9 +216,9 @@ class Peer {
       if (ok === true) waiter?.resolve(value);
       else waiter?.reject(new Error("peer fixture failed"));
     });
-    this.worker.addEventListener("error", () => {
+    this.worker.addEventListener("error", (event) => {
       for (const waiter of this.pending.values()) {
-        waiter.reject(new Error("peer worker failed"));
+        waiter.reject(new Error(`peer worker failed: ${event.message}`));
       }
       this.pending.clear();
     });
