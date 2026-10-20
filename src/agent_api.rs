@@ -476,6 +476,7 @@ export interface Cowboy {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
     get(scope: "zed"): Promise<{scope:"zed";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
+    get(scope: "subscriptions"): Promise<{preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}}}>;
   };
 }
 "#,
