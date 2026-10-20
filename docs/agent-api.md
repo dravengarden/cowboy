@@ -457,8 +457,8 @@ enforcement or authorization to evade limits. Cowboy still requires a verified
 identity recipe for the exact signed Provider release before named login, and
 keeps session admission gated until runtime acceptance is complete.
 
-The unpublished `claude-subscription` method now declares a fresh-login JSON
-recipe for `.claude.json`: `oauthAccount.accountUuid` and
+The `claude-subscription` method in published Claude Plugin 3.20.1 declares a
+fresh-login JSON recipe for `.claude.json`: `oauthAccount.accountUuid` and
 `oauthAccount.organizationUuid`, with authority `claude-ai`. It requires both
 stable fields and never uses the email or label as identity. The logout recipe
 uses the same pinned executable's `auth logout`. These declarations target the
@@ -467,6 +467,18 @@ acceptance. Do not enable admission or claim deployment from the fixture tests.
 It is appended after the legacy `claude-account` and `api-key` methods, retaining
 their selection order. Its required bundle key satisfies the existing SDK
 contract; the named Claude native-profile path never exports that bundle.
+
+The
+[2026-10-20 release receipt](releases/claude-native-account-foundation-2026-10-20.json)
+records Controller and Machine activation, the OVH Plugin installation, exact
+artifact verification and the compatible Controller recovery floor. It does not
+record a real subscription login. At that acceptance point, the named account
+registry was empty and both native login and session rollout settings remained
+disabled. The remaining live acceptance requires user-selected subscriptions,
+independent official logins on each recipient Machine, session
+start/restart/stop and account revocation without affecting another account.
+Named Codex, DeepSeek and Grok runtime admission and macOS native-account
+containment remain outside this Claude Linux release's acceptance.
 
 Native Claude methods are excluded from the legacy default account's portable
 credential contract. Its digest retains every legacy method, required key,
