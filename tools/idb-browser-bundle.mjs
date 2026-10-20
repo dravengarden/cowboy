@@ -100,7 +100,7 @@ await build({
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "dormant-session" || suite === "info-metrics" ||
         suite === "review-context" || suite === "loading-progress" ||
-        suite === "client-update"
+        suite === "client-update" || suite === "subscriptions"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {

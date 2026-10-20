@@ -94,6 +94,18 @@ async fn advance(
     next.updated_at_ms = now_ms().max(previous.updated_at_ms);
     if previous.state == State::Starting && next.state == State::Running {
         next.started_at_ms = Some(next.updated_at_ms);
+        next.provider_account_id = state
+            .hub
+            .session_info(&next.child_session_id)
+            .filter(|child| {
+                child.meta.provider == next.provider
+                    && Some(&child.meta.machine_id) == next.runtime_machine_id.as_ref()
+                    && Some(child.meta.provider_version.as_str())
+                        == next.provider_version.as_deref()
+                    && Some(child.meta.provider_generation_digest.as_str())
+                        == next.provider_generation_digest.as_deref()
+            })
+            .map(|child| child.meta.provider_account_id);
         next.configuration = state
             .supervisor
             .observed_configuration(&next.child_session_id)

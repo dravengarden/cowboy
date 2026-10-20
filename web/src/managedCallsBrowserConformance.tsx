@@ -1,7 +1,7 @@
 /** Actual Calls dock and child notice, synthetic HTTP in an isolated browser. */
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Box } from "@mui/material";
+import { Box, CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
@@ -15,6 +15,7 @@ import { type ManagedCallSummary, useManagedCalls } from "./managedCalls";
 import { peekSession, retrySessionHydration } from "./store";
 import { AgentToolsSettings, SessionToolsSection } from "./AgentToolsPanel";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";
+import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import {
   type CallApproval,
   receiveCallApproval,
@@ -160,6 +161,7 @@ function summary(
     call_id: call,
     request_id: `review-${call}`,
     provider: "codex",
+    provider_account_id: call === "call-security" ? null : "default",
     purpose: "review",
     labels: { group: "PR 7961 review", round: "1", aspect },
     placement: {
@@ -212,6 +214,7 @@ const findingsResult = {
 };
 
 export async function runManagedCallsBrowserConformance(): Promise<string[]> {
+  bindProductSyncPrincipal("call-account-fixture");
   const originalFetch = globalThis.fetch;
   const tests: string[] = [];
   let recoveryText = "Checking current keyboard and queue behavior.";
@@ -242,6 +245,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
+      dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
+      registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
+      display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { codex: "OpenAI · Pika" } } },
+    }));
     if (url === "/api/sessions/parent-clear/bootstrap") {
       return Promise.resolve(Response.json({ messages: [{
         type: "snapshot", session_id: "parent-clear", reached_start: true,
@@ -640,6 +648,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "call previews show recorded model and reasoning on a dedicated configuration row");
     check(configuredPreview.querySelector("[data-call-preview-configuration]") === configuredPreview.firstElementChild!.children[1],
       "configuration must occupy the middle row between title and status");
+    check(configuredPreview.querySelector("[data-account-badge]")?.textContent === "Pika" &&
+      configuredPreview.firstElementChild!.children.length === 3,
+      "recorded execution account appears without adding a fourth preview row");
+    check(previewRail.querySelector('[data-call-preview="call-security"] [data-account-badge="unknown"]') !== null,
+      "historical calls without account evidence never inherit today's default");
     check(previewRail.querySelector('[data-call-preview="call-security"] [data-call-preview-configuration]')?.textContent?.includes("Model not recorded"),
       "legacy calls explicitly explain missing model history");
     check(configuredPreview.textContent?.includes("Done") && !configuredPreview.textContent.includes("Completed"),
@@ -678,7 +691,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "one preview fits its content within minimum and maximum widths instead of filling the rail");
     check(age.getBoundingClientRect().left - age.previousElementSibling!.getBoundingClientRect().right <= 8,
       "relative time follows the metadata without an expanding gap");
-    const title = titleRow.lastElementChild!;
+    const title = titleRow.querySelector("[data-call-preview-title]")!;
     const originalTitle = title.textContent;
     title.textContent = "A much longer call title ".repeat(12);
     check(Math.abs(preview.getBoundingClientRect().width - parseFloat(cardStyle.maxWidth)) <= 1,
@@ -1202,7 +1215,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     tests.push("call-approval-prompt-answers-and-expires");
     return tests;
   } catch (error) {
-    throw new Error(`After ${tests.at(-1) ?? "setup"}: ${error instanceof Error ? error.stack : String(error)}`);
+    throw new Error(`After ${tests.at(-1) ?? "setup"}: ${error instanceof Error ? `${error.message}\n${error.stack}` : String(error)}`);
   } finally {
     root.unmount();
     container.remove();
@@ -1216,6 +1229,7 @@ export async function renderManagedCallsPreview(
   surface: "desktop" | "mobile",
   railOnly = false,
 ): Promise<void> {
+  bindProductSyncPrincipal("call-account-fixture");
   const calls = [
     summary("call-security", "running", "security"),
     summary("call-correctness", "completed", "correctness", {
@@ -1232,6 +1246,11 @@ export async function renderManagedCallsPreview(
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
+      dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
+      registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
+      display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { codex: "OpenAI · Pika" } } },
+    }));
     const bootstrap = childBootstrap(url);
     if (bootstrap) return Promise.resolve(bootstrap);
     if (url === "/api/plugins") {
@@ -1270,6 +1289,7 @@ export async function renderManagedCallsPreview(
     root.render(
       <BrowserProductTheme>
         <SurfaceProvider>
+          <CssBaseline />
           <CallApprovalOverlay
             sessionId="parent"
             approval={{

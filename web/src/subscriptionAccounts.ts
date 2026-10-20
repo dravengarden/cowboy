@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
@@ -37,45 +37,79 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
       (account.revoking === undefined || typeof account.revoking === "boolean"));
 }
 
-/** Read-only account inventory; mutations continue through the shared writer. */
-export function useSubscriptionAccounts(connected: boolean) {
-  const [data, setData] = useState<SubscriptionSnapshot>();
-  const [error, setError] = useState("");
-  const alive = useRef(false);
-  const sequence = useRef(0);
-  const refresh = useCallback(async (): Promise<void> => {
-    const request = ++sequence.current;
-    const owner = productSyncPrincipal();
-    const signal = productSessionSignal();
-    try {
-      const response = await fetch("/api/provider-accounts", { cache: "no-store", signal });
-      if (!response.ok) throw new Error("Could not load registered accounts.");
-      const value: unknown = await response.json();
-      if (!alive.current || request !== sequence.current || signal.aborted || owner !== productSyncPrincipal()) return;
-      if (!validSubscriptionSnapshot(value, owner)) throw new Error("Account inventory changed. Reload to continue.");
-      setData((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id ||
-        (value.registry.revision >= old.registry.revision && (value.display_preferences?.revision ?? 0) >= (old.display_preferences?.revision ?? 0))
-        ? value : old);
-      setError("");
-    } catch (cause) {
-      if (alive.current && request === sequence.current && !signal.aborted) {
-        setError(cause instanceof Error ? cause.message : "Could not load registered accounts.");
+const empty: { data?: SubscriptionSnapshot; error: string } = { error: "" };
+let snapshot = empty;
+let snapshotOwner: string | undefined;
+let pending: Promise<void> | undefined;
+let invalidated = false;
+const listeners = new Set<() => void>();
+function current() {
+  return !productSessionSignal().aborted && snapshotOwner === productSyncPrincipal() ? snapshot : empty;
+}
+function publish() { for (const listener of listeners) listener(); }
+
+/** A single inventory request for the whole UI, including many session/call badges.
+ * A preference event during a request schedules another read instead of losing it. */
+async function refresh(): Promise<void> {
+  if (productSessionSignal().aborted || !productSyncPrincipal()) return;
+  if (pending) return pending;
+  pending = (async () => {
+    do {
+      invalidated = false;
+      const owner = productSyncPrincipal();
+      const signal = productSessionSignal();
+      try {
+        const response = await fetch("/api/provider-accounts", { cache: "no-store", signal });
+        if (!response.ok) throw new Error("Could not load registered accounts.");
+        const value: unknown = await response.json();
+        if (signal.aborted || owner !== productSyncPrincipal()) return;
+        if (!validSubscriptionSnapshot(value, owner)) throw new Error("Account inventory changed. Reload to continue.");
+        const old = current().data;
+        if (!old || old.dataset.dataset_id !== value.dataset.dataset_id ||
+          (value.registry.revision >= old.registry.revision && (value.display_preferences?.revision ?? 0) >= (old.display_preferences?.revision ?? 0))
+        ) { snapshot = { data: value, error: "" }; snapshotOwner = owner; }
+      } catch (cause) {
+        if (!signal.aborted && owner === productSyncPrincipal()) {
+          snapshot = { ...current(), error: cause instanceof Error ? cause.message : "Could not load registered accounts." };
+          snapshotOwner = owner;
+        }
       }
-    }
-  }, []);
-  useEffect(() => {
-    alive.current = true;
+      publish();
+    } while (invalidated && !productSessionSignal().aborted);
+  })().finally(() => { pending = undefined; });
+  return pending;
+}
+function changed(event: Event) {
+  const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
+  if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) {
+    invalidated = true;
     void refresh();
-    const changed = (event: Event) => {
-      const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
-      if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) void refresh();
-    };
+  }
+}
+function subscribe(listener: () => void) {
+  if (listeners.size === 0) {
     window.addEventListener(PREFERENCES_CHANGED, changed);
-    return () => {
-      alive.current = false;
-      ++sequence.current;
+    productSessionSignal().addEventListener("abort", clear, { once: true });
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      invalidated = true;
       window.removeEventListener(PREFERENCES_CHANGED, changed);
-    };
-  }, [connected, refresh]);
-  return { data: data?.dataset.user_id === productSyncPrincipal() ? data : undefined, error, refresh };
+      productSessionSignal().removeEventListener("abort", clear);
+    }
+  };
+}
+function clear() { snapshot = empty; snapshotOwner = undefined; publish(); }
+
+/** Read-only account inventory; mutations continue through the shared writer. */
+export function useSubscriptionAccounts(connected = true) {
+  const value = useSyncExternalStore(subscribe, current, () => empty);
+  const previous = useRef(connected);
+  useEffect(() => {
+    if (!current().data || invalidated || (connected && !previous.current)) void refresh();
+    previous.current = connected;
+  }, [connected]);
+  return { ...value, refresh };
 }

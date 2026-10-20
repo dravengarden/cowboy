@@ -303,6 +303,7 @@ pub(super) fn envelope(record: &Record) -> Value {
             "input_revision": record.input_revision,
             "preset": record.preset,
             "configuration": record.configuration,
+            "provider_account_id": record.provider_account_id,
             "selection": record.selection,
         },
         "created_at_ms": record.created_at_ms,

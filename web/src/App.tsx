@@ -133,6 +133,9 @@ import { Transcript } from "./Transcript";
 import { sessionListProjectLabel, sessionProjectLabel } from "./sessionProject";
 import { SessionMachineBadge } from "./SessionMachineBadge";
 import { SessionUpdateBadge } from "./SessionUpdateBadge";
+import { AccountBadge } from "./AccountBadge";
+import { sessionAccountIdentity } from "./accountIdentity";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
 import {
     SessionCacheGlyph,
@@ -794,6 +797,8 @@ function SessionList({
     // session) releases it. This is intentionally local UI state, not synced
     // session metadata.
     const deletingSessionIds = useStoreSelector((snapshot) => snapshot.deletingSessionIds);
+    const connected = useStoreSelector((snapshot) => snapshot.connected);
+    const { data: accounts } = useSubscriptionAccounts(connected);
     const [pinned, setPinned] = useState(false);
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
@@ -2213,6 +2218,7 @@ function SessionList({
                                         onInfo={() => onRequestInfo(s)}
                                         compact
                                     />
+                                    <AccountBadge account={sessionAccountIdentity(accounts, s)} />
                                     <SessionUpdateBadge session={s} />
                                     <SessionObligationBadge sessionId={s.id} />
                                     <SessionProjectionBadge sessionId={s.id} />
@@ -8468,7 +8474,11 @@ function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
 function SessionOverviewRows(
     { info, live }: { info: SessionInfoPayload; live?: SessionMeta | null },
 ): React.JSX.Element {
-    const sections = sessionOverviewSections(mergeSessionOverview(info, live));
+    const { data: accounts } = useSubscriptionAccounts();
+    const merged = mergeSessionOverview(info, live);
+    const sections = sessionOverviewSections(merged);
+    const account = sessionAccountIdentity(accounts, merged);
+    sections[0]?.rows.splice(3, 0, { label: "Account", value: account.label });
     return (
         <Stack spacing={1.15} sx={{ mt: 1 }}>
             {sections.map((section, index) => (

@@ -133,6 +133,9 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     check(writes.length === 1 && writes[0]!.path.endsWith("/lynx-request") && writes[0]!.code === "lynx-code" &&
       input("otter")?.value === "otter-code" && !button("otter", "Done"),
       "simultaneous account forms submit only their own code and only completed sign-in shows Done");
+    // The shared focus event refreshes both forms. Wait for Otter's own read
+    // to settle before clicking its temporarily disabled submission button.
+    await until(() => !button("otter", "Continue")!.disabled);
     click("otter", "Continue");
     await until(() => Boolean(button("otter", "Done") && !button("otter", "Done")!.disabled));
     check(writes.length === 2 && writes[1]!.path.endsWith("/otter-request") && writes[1]!.code === "otter-code" &&

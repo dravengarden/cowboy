@@ -279,6 +279,7 @@ mod tests {
             started_at_ms: None,
             finished_at_ms: None,
             configuration: None,
+            provider_account_id: None,
             input_revision: None,
             result: None,
             runtime_machine_id: None,

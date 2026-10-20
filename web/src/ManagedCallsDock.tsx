@@ -36,6 +36,9 @@ import { CallCleanup } from "./CallCleanup";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
+import { AccountBadge } from "./AccountBadge";
+import { accountIdentity } from "./accountIdentity";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { Markdown } from "./Markdown";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { setActiveSessionId } from "./controlPlane";
@@ -207,13 +210,16 @@ function CallRow({
           sx={{ fontSize: "1.25rem", flexShrink: 0 }}
         />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            variant="body2"
-            noWrap
-            sx={{ fontWeight: 600, textTransform: "capitalize" }}
-          >
-            {callTitle(call)}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+            <Typography
+              variant="body2"
+              noWrap
+              sx={{ flex: 1, minWidth: 0, fontWeight: 600, textTransform: "capitalize" }}
+            >
+              {callTitle(call)}
+            </Typography>
+            <CallAccountBadge call={call} />
+          </Stack>
           <Typography variant="caption" color="text.secondary" component="div" noWrap title={callModelLabel(call)}>
             {callModelLabel(call)}
           </Typography>
@@ -452,6 +458,7 @@ function CallDetailView({
       <Divider />
       <Typography variant="overline">Execution</Typography>
       <Stack spacing={0.5}>
+        <CallAccountDetails call={detail ?? call} />
         <DetailRow label="Model / effort" value={callModelLabel(call)} />
         <DetailRow label="Selected preset" value={call.preset ?? "Provider default"} />
         <DetailRow label="Selection" value={call.labels["selection_reason"] ?? call.selection ?? "Not recorded"} />
@@ -601,6 +608,20 @@ function Badge(
   );
 }
 
+function useCallAccount(call: Pick<ManagedCallSummary, "provider" | "provider_account_id">) {
+  const { data } = useSubscriptionAccounts();
+  return accountIdentity(data, call.provider, call.provider_account_id);
+}
+
+function CallAccountBadge({ call }: { call: ManagedCallSummary }): React.JSX.Element {
+  return <AccountBadge account={useCallAccount(call)} />;
+}
+
+function CallAccountDetails({ call }: { call: Pick<ManagedCallSummary, "provider" | "provider_account_id"> }): React.JSX.Element {
+  const account = useCallAccount(call);
+  return <DetailRow label="Account" value={<span title={account.description}>{account.label}</span>} />;
+}
+
 /** A compact phone header: title above status, placement, time and recorded configuration.
  * It replaces the sheet's grab handle. */
 function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
@@ -678,6 +699,7 @@ function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
           "& > *": { flexShrink: 0 },
         }}
       >
+        <CallAccountBadge call={call} />
         {/* A finished review's findings already say it completed. */}
         {(call.state !== "completed" || !outcome) && (
           <Badge
@@ -770,6 +792,7 @@ function CallConversation({
           minWidth: 0,
         }}
       >
+        <CallAccountBadge call={call} />
         <ProviderIcon
           provider={call.provider}
           sx={{ fontSize: "1rem", flexShrink: 0 }}
@@ -933,7 +956,8 @@ function CallPreview({ call, title, now, onOpen }: {
       }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
-          <Typography variant="caption" noWrap sx={{ minWidth: 0, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          <Typography data-call-preview-title variant="caption" noWrap sx={{ minWidth: 0, fontSize: "0.8125rem", fontWeight: 600, textTransform: "capitalize" }}>{title}</Typography>
+          <CallAccountBadge call={call} />
         </Stack>
         <Box data-call-preview-configuration sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
           {(model || reasoning) ? (

@@ -125,6 +125,7 @@ import {
 } from "./providerCatalog";
 import { providerName } from "./providerPresentation";
 import { SessionProviderAccess } from "./ProviderManagement";
+import { SessionAccountDetails } from "./SessionAccountDetails";
 import { resolveProviderAuthenticationPresentation } from "@cowboy/provider-ui";
 import {
   sessionProviderFacts,
@@ -7543,11 +7544,19 @@ function SessionInfoSection({
   );
 }
 
-function SessionProviderSection({
+export function SessionProviderSection({
   session,
 }: {
   session: SessionMeta;
 }): React.JSX.Element {
+  return <>
+    <SessionAccountDetails session={session} />
+    {(!session.provider_account_id || session.provider_account_id === "default") &&
+      <ServiceSessionProviderSection session={session} />}
+  </>;
+}
+
+function ServiceSessionProviderSection({ session }: { session: SessionMeta }): React.JSX.Element {
   const { catalog } = useProviderCatalog();
   const entry = currentProviderEntry(
     session.provider,

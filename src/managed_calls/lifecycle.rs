@@ -117,6 +117,10 @@ pub struct Record {
     /// Observed child configuration at dispatch, never inferred from today's catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration: Option<std::collections::BTreeMap<String, String>>,
+    /// Actual child binding observed at first dispatch; never a parent/default lookup.
+    /// Missing on historical calls means unknown, including after child deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<crate::provider_account::ProviderAccountId>,
     /// An immutable snapshot lease from the target, never the live cwd alone.
     pub input_revision: Option<String>,
     /// Retained structured result, not a shell exit code or review verdict.
@@ -202,6 +206,7 @@ pub struct Summary<'a> {
     pub started_at_ms: Option<i64>,
     pub finished_at_ms: Option<i64>,
     pub configuration: &'a Option<std::collections::BTreeMap<String, String>>,
+    pub provider_account_id: &'a Option<crate::provider_account::ProviderAccountId>,
     pub input_revision: &'a Option<String>,
     pub has_result: bool,
     pub runtime_machine_id: &'a Option<String>,
@@ -239,6 +244,7 @@ impl Record {
             started_at_ms: self.started_at_ms,
             finished_at_ms: self.finished_at_ms,
             configuration: &self.configuration,
+            provider_account_id: &self.provider_account_id,
             input_revision: &self.input_revision,
             has_result: self.result.is_some(),
             runtime_machine_id: &self.runtime_machine_id,
@@ -345,6 +351,7 @@ impl Record {
             && once(&self.started_at_ms, &next.started_at_ms)
             && once(&self.finished_at_ms, &next.finished_at_ms)
             && once(&self.configuration, &next.configuration)
+            && once(&self.provider_account_id, &next.provider_account_id)
             && once(&self.runtime_machine_id, &next.runtime_machine_id)
             && self.preset == next.preset
             && self.selection == next.selection
@@ -411,6 +418,7 @@ mod tests {
             started_at_ms: None,
             finished_at_ms: None,
             configuration: None,
+            provider_account_id: None,
             input_revision: None,
             result: None,
             runtime_machine_id: Some("ovh".into()),
@@ -482,6 +490,39 @@ mod tests {
         assert!(!value.validate());
         value.input_revision = Some(format!("sha256:{}", "b".repeat(64)));
         assert!(value.validate());
+    }
+
+    #[test]
+    fn observed_account_is_durable_and_cannot_be_rebound_or_erased() {
+        let mut starting = record();
+        starting.state = State::Starting;
+        let mut running = starting.clone();
+        running.state = State::Running;
+        running.revision += 1;
+        running.provider_account_id = Some(Default::default());
+        assert!(starting.accepts(&running));
+        let json = serde_json::to_value(&running).unwrap();
+        assert_eq!(json["provider_account_id"], "default");
+        let restored: Record = serde_json::from_value(json).unwrap();
+        assert!(restored == running);
+        assert_eq!(
+            serde_json::to_value(restored.summary()).unwrap()["provider_account_id"],
+            "default"
+        );
+        let mut waiting = restored.clone();
+        waiting.state = State::WaitingInput;
+        waiting.revision += 1;
+        assert!(restored.accepts(&waiting));
+        waiting.provider_account_id = None;
+        assert!(!restored.accepts(&waiting));
+        waiting.provider_account_id = Some(uuid::Uuid::new_v4().to_string().try_into().unwrap());
+        assert!(!restored.accepts(&waiting));
+        // Pre-upgrade records remain readable, with explicitly unknown account.
+        let old = serde_json::to_value(&starting).unwrap();
+        assert!(old.get("provider_account_id").is_none());
+        let old: Record = serde_json::from_value(old).unwrap();
+        assert!(old.provider_account_id.is_none());
+        assert!(serde_json::to_value(old.summary()).unwrap()["provider_account_id"].is_null());
     }
 
     #[test]

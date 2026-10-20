@@ -244,7 +244,7 @@ impl Host for SessionHost<'_> {
                         json!({"call_id":row.call_id,"request_id":row.request_id,"provider":row.provider,
                             "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
                             "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
-                            "configuration":row.configuration,"preset":row.preset,
+                            "configuration":row.configuration,"preset":row.preset,"provider_account_id":row.provider_account_id,
                             "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
                     })
                     .collect::<Vec<_>>();

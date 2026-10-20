@@ -13,6 +13,8 @@ import { SessionSubscription, useSessionSubscription } from "./SessionSubscripti
 import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
 import { SubscriptionLogin, SubscriptionLoginForm } from "./SubscriptionLogin";
 import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationBrowser";
+import { accountIdentityBrowser } from "./accountIdentityBrowser";
+export { accountIdentityBrowser };
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
   const state = useSessionSubscription(true, "claude-code");
@@ -26,6 +28,7 @@ export async function runSubscriptionsBrowserConformance(observe?: (surface: str
   for (const surface of ["mobile", "desktop"] as const) {
     checks.push(...(await runSurface(surface, observe)).map((check) => `${surface}: ${check}`));
   }
+  checks.push(...await accountIdentityBrowser(observe));
   return checks;
 }
 

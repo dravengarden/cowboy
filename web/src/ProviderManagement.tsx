@@ -923,6 +923,9 @@ function ProviderManagement(
             : undefined;
           const credentialEntries = credentialGroup?.entries ?? [entry];
           const sharedCredential = credentialEntries.length > 1;
+          const accountNames = credentialEntries.map((item) => accounts?.legacy(item.provider_id).title);
+          const accountTitle = accountNames[0] && accountNames.every((name) => name === accountNames[0])
+            ? accountNames[0] : undefined;
           const readyCredential = scope === "service" &&
             entry.manifest.authentication.required &&
             auth?.authentication_state === "ready";
@@ -1087,7 +1090,7 @@ function ProviderManagement(
                           statusLabel={managementStatus}
                           statusTone={managementStatusTone}
                           actions={identityActions}
-                          title={(!sharedCredential && accounts?.legacy(entry.provider_id).title) || (credentialGroup
+                          title={accountTitle || (credentialGroup
                             ? providerCredentialTitle(credentialGroup.entries)
                             : entry.manifest.display.name)}
                           summary={accounts ? entry.manifest.display.name : entry.manifest.display.summary}

@@ -365,11 +365,10 @@ export interface Cowboy {
 CALLS_SDK: r#"
 export type CallTiming = {created_at_ms:number;started_at_ms:number|null;finished_at_ms:number|null;updated_at_ms:number};
 export type CallConfiguration = {model?:string;reasoning_effort?:string;effort?:string};
-export type CallSummary = CallTiming & {call_id:string;request_id:string;provider:string;state:string;purpose:string;configuration:CallConfiguration|null;preset:string|null;has_result:boolean;verdict:string|null;findings:number|null};
-export type CallView = {
+export type CallSummary = CallTiming & {call_id:string;request_id:string;provider:string;provider_account_id:string|null;state:string;purpose:string;configuration:CallConfiguration|null;preset:string|null;has_result:boolean;verdict:string|null;findings:number|null};
+export type CallView = CallTiming & {
   state: string; call_id: string; request_id: string;
-  created_at_ms:number; started_at_ms:number|null; finished_at_ms:number|null; updated_at_ms:number;
-  resolved: { provider: string; machine_id: string; workspace_id: string; child_session_id?: string | null; preset:string|null; configuration:CallConfiguration|null; selection:string|null };
+  resolved: { provider: string; provider_account_id:string|null; machine_id: string; workspace_id: string; child_session_id?: string | null; preset:string|null; configuration:CallConfiguration|null; selection:string|null };
   labels?: Record<string, string>; cancel_requested: boolean;
   error: { code: string } | null; result?: unknown;
 };

@@ -5,6 +5,19 @@ and "Acceptance" for what has been proven in production.
 
 ## Implementation
 
+Calls record the actual child's `provider_account_id` when execution first
+starts, independently of the parent account and the current creation default.
+This immutable observation survives child removal and is exposed in summaries,
+details and CLI/MCP receipts. Older records without it display `Not recorded`;
+they are not backfilled from today's defaults. Session rows and Calls previews
+use the account's short display label; settings and execution details use the
+full label. Renaming changes presentation only.
+
+The optional field is backward-readable by this Controller, but older
+Controllers with strict call-record decoding cannot read newly populated
+records. Rollback must retain this reader or use a descendant corrective release;
+do not erase call history to downgrade.
+
 Image generation/editing extends this lifecycle with the separate signed
 `image_v1` profile and verified artifacts; see
 [managed native capabilities](managed-native-capabilities.md). Review and

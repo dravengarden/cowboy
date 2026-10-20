@@ -19,6 +19,8 @@ export interface ManagedCallSummary {
   call_id: string;
   request_id: string;
   provider: string;
+  /** Observed child's immutable binding; absent historical evidence stays unknown. */
+  provider_account_id?: string | null;
   purpose: string;
   labels: Record<string, string>;
   placement: {

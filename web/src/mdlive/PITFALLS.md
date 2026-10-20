@@ -3071,6 +3071,11 @@ Web gate and on the Desktop shell in Chrome; not run on iOS.
 
 ### 2026-10-17 Settings before the first worker starts
 
+2026-10-20: account metadata in Session Settings follows the immutable session
+binding. Named subscriptions render their own sign-in management and reported
+quota, never the Service credential editor or Provider-wide quota. This changes
+settings data/presentation only, with no editor, IME, caret or gesture changes.
+
 New sessions are workerless. Never hide the session settings entry point just
 because no ACP options have arrived. Mobile settings and Desktop Run
 configuration accept the Controller's signed preview; preferences are saved
