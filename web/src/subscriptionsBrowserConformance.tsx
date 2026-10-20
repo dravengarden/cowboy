@@ -16,7 +16,9 @@ import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationB
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
   const state = useSessionSubscription(true, "claude-code");
-  return <SessionSubscription state={state} disabled={false} desktop={desktop} />;
+  return <div data-subscription-selection={state.value} data-subscription-allowed={state.allowed} data-subscription-admission={state.data?.session_admission}>
+    <SessionSubscription state={state} disabled={false} desktop={desktop} />
+  </div>;
 }
 
 export async function runSubscriptionsBrowserConformance(observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
@@ -54,9 +56,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   sessionStorage.removeItem(key);
   let root = createRoot(container);
   const tests: string[] = [];
-  const data = { dataset: { dataset_id: "fixture", user_id: "subscription-fixture" }, session_admission: "not_enabled",
+  const data = { dataset: { dataset_id: "fixture", user_id: "subscription-fixture" }, session_admission: "not_enabled", session_providers: [] as string[],
     display_preferences: { scope: "subscriptions", revision: 0, values: { legacy_labels: {} as Record<string, string> } },
-    registry: { revision: 0, accounts: [{ id: "account", provider_id: "claude-code", label: "Personal", enabled: true, revoking: false }], defaults: {} } };
+    registry: { revision: 0, accounts: [{ id: "account", provider_id: "claude-code", label: "Personal", enabled: true, revoking: false }], defaults: {} as Record<string, string> } };
   const writes: string[] = [];
   const labelWrites: string[] = [];
   const lifecycleWrites: string[] = [];
@@ -200,16 +202,45 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => labelWrites.length === 2 && !sessionStorage.getItem(key));
     check(labelWrites[0] === labelWrites[1] && writes.length === 0 && lifecycleWrites.length === 0 && data.registry.revision === 0,
       "legacy rename retry does not mutate authority or invoke login");
-    await until(() => container.textContent!.includes("Account default · Claude · Lynx"));
+    await until(() => container.textContent!.includes("Claude · Lynx · Default"));
     check(container.querySelector("[data-provider-credential-card]")!.textContent!.includes("Claude · Lynx"), "legacy alias labels its actual credential card");
+    container.querySelector<HTMLElement>('[data-session-subscription] [role="combobox"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    await until(() => document.querySelectorAll('[role="option"]').length > 0);
+    const subscriptionOptions = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    check(subscriptionOptions.length === 2 && subscriptionOptions[0]!.textContent === "Claude · Lynx · Default" &&
+      subscriptionOptions[1]!.textContent === "PersonalSession access not enabled" &&
+      subscriptionOptions[1]!.getAttribute("aria-disabled") === "true" &&
+      Boolean(container.querySelector('[data-subscription-selection="default"]')),
+    "the picker lists each real account once, marks the default and explains blocked session access");
+    await observe?.(surface, "subscription-options");
+    subscriptionOptions[0]!.click();
+    await until(() => !document.querySelector('[role="listbox"]'));
     data.display_preferences.values.legacy_labels["claude-code"] = "Claude · Remote Lynx";
     data.display_preferences.revision++;
     window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { subscriptions: 2 } }));
-    await until(() => container.textContent!.includes("Account default · Claude · Remote Lynx") &&
+    await until(() => container.textContent!.includes("Claude · Remote Lynx · Default") &&
       [...container.querySelectorAll("input")].some((node) => node.value === "Claude · Remote Lynx"));
     check(true, "legacy rename updates both management and the open session picker");
     check(container.scrollWidth <= container.clientWidth, "mobile account controls fit available width");
     check(button("Use by default")!.disabled, "unavailable named runtime cannot become a GUI default");
+    data.session_admission = "enabled";
+    data.session_providers = ["claude-code"];
+    data.registry.defaults["claude-code"] = "account";
+    window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED));
+    await until(() => Boolean(container.querySelector('[data-subscription-admission="enabled"][data-subscription-selection="account"]')));
+    container.querySelector<HTMLElement>('[data-session-subscription] [role="combobox"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    await until(() => document.querySelectorAll('[role="option"]').length === 2);
+    const admittedOption = document.querySelector<HTMLElement>('[role="option"][data-value="account"]')!;
+    check(admittedOption.getAttribute("aria-disabled") !== "true" && admittedOption.textContent === "Personal · Default",
+      "admitted named defaults resolve to the actual account without adding a duplicate option");
+    admittedOption.click();
+    await until(() => Boolean(container.querySelector('[data-subscription-selection="account"][data-subscription-allowed="true"]')));
+    data.session_admission = "not_enabled";
+    data.session_providers = [];
+    window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED));
+    await until(() => Boolean(container.querySelector('[data-subscription-selection="account"][data-subscription-allowed="false"]')) &&
+      container.querySelector("[data-session-subscription]")!.textContent!.includes("Session access not enabled"));
+    delete data.registry.defaults["claude-code"];
     button("Disable")!.click();
     await until(() => writes.length === 1 && Boolean(button("Retry")));
     check(Boolean(sessionStorage.getItem(key)), "uncertain write is retained before dispatch");

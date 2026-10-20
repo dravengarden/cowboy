@@ -61,6 +61,7 @@ try {
       const stage of [
         "accounts",
         "connected-account",
+        "subscription-options",
         "login",
         "cancelled",
         "revocation",
@@ -116,7 +117,7 @@ try {
     }
   }
   const result = await page.report;
-  if (!result.ok || result.tests?.length !== 116) {
+  if (!result.ok || result.tests?.length !== 120) {
     throw new Error(JSON.stringify(result));
   }
   console.log(

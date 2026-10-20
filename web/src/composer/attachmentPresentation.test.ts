@@ -13,6 +13,9 @@ const inlineImagesSource = await readFile(
 const messagePreviewSource = await readFile(
   new URL("../MessagePreview.tsx", import.meta.url), "utf8",
 );
+const queuedAttachmentSource = await readFile(
+  new URL("../QueuedAttachmentChips.tsx", import.meta.url), "utf8",
+);
 
 function attachment(id: string, isImage: boolean, previewUrl = "data:image/png;base64,c2hvdA=="): Attachment {
   return {
@@ -181,11 +184,11 @@ test("pending edit surfaces retain previews for attachments without inline token
 
 test("attachment-only pending rows retain a full content edit target", () => {
   assertEquals(
-    composerSource.includes('data-pending-content-action="attachment-preview"'),
+    queuedAttachmentSource.includes('data-pending-content-action="attachment-preview"'),
     true,
   );
   assertEquals(
-    composerSource.includes(
+    queuedAttachmentSource.includes(
       'sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}',
     ),
     true,

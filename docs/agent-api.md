@@ -835,8 +835,13 @@ the cached launch and epoch are rechecked after DB admission. Thus an old worker
 cannot borrow its replacement's identity, and an admitted snapshot does not
 authorize events after account revocation. Rejected events are consumed and
 ACKed without projection; this ACK is neither authorization nor process-exit
-evidence. The public named-account gate remains closed pending the remaining
-account lifecycle and end-to-end runtime acceptance.
+evidence. Public named-account creation is separately controlled by
+`accounts.native_claude_sessions`; completing a login does not enable it.
+The [OVH Otter acceptance record](releases/claude-otter-session-acceptance-2026-10-20.json)
+records native start, hibernation/resume and confirmed deletion while existing
+Lynx workers retained their identities. Revocation and crash recovery checks used
+isolated synthetic profiles; neither real account was logged out or revoked.
+Other installations still require their own lifecycle and runtime acceptance.
 
 Native login operation status survives loss of the in-memory executor. A recorded
 completion without binding is `binding_pending`; a bound receipt whose current

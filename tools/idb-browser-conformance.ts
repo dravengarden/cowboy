@@ -199,8 +199,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
               "Content-Security-Policy":
                 // worker-src blob: lets the editor plugin sandbox (a srcdoc
                 // frame inheriting this policy) start its Worker, as on the
-                // production App, which sends no CSP.
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src blob:",
+                // production App, which sends no CSP. Attachment previews use
+                // data/blob URLs and must exercise actual browser decoding.
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src blob:; img-src 'self' data: blob:",
             },
           },
         );
@@ -283,7 +284,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "info-metrics"
         ? 20
         : suite === "subscriptions"
-        ? 116
+        ? 120
         : suite === "about-layout"
         ? 10
         : suite === "session-maintenance"

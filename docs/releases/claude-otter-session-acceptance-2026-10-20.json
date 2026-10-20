@@ -1,0 +1,83 @@
+{
+  "schema": "cowboy.native-account-session-acceptance/v1",
+  "observed_at": "2026-10-20T09:55:26.988074Z",
+  "scope": "Claude Otter native account on OVH, with commands and workspace on Hawk",
+  "runtime": {
+    "controller_revision": "2810ee364e3f4bccb7da462ff745251a812f24bd",
+    "machine_revision": "c0e273400d452bec542e8f5485be92281762b175",
+    "worker_revision": "529db1cc020a6c041823a4cff563e5c83407595b",
+    "worker_generation": "worker-2716b9cf3544442b28f8",
+    "provider_version": "3.20.1",
+    "provider_digest": "sha256:536aa2815832815dcf1db27f751ab64df2a1447229d44c244d47a198c5d454b9"
+  },
+  "account": {
+    "id": "fd376b94-c493-4d27-81da-67a1d154ca17",
+    "label": "Claude · Otter",
+    "registry_revision_before_and_after": 3,
+    "native_generation": 4,
+    "profile_still_available_after_session_deletion": true
+  },
+  "session": {
+    "id": "sess-1792479320181",
+    "native_session_id": "9cc02e31-2277-481b-bec3-3faea030e35c",
+    "creation": {
+      "surface": "MCP control sessions.create, using the public Web session API",
+      "operation": "otter-runtime-canary-create-workspace-20261020-sess1792205263224",
+      "http_status": 201,
+      "workspace_id": "columbus",
+      "runtime_machine": "ovh",
+      "execution_machine": "hawk"
+    },
+    "first_reply": "OTTER_RUNTIME_OK",
+    "hibernation": {
+      "operation": "otter-runtime-canary-hibernate-20261020-sess1792205263224",
+      "observed_status": "exited",
+      "worker_launch": "40211866-9afa-4abc-a2f7-e03a7c093859",
+      "durable_tree_exited": true
+    },
+    "resumption": {
+      "operation": "otter-runtime-canary-resume-20261020-sess1792205263224",
+      "reply": "OTTER_RESUME_OK",
+      "same_native_session": true,
+      "same_account_version_digest_and_auth_generation": true
+    },
+    "deletion": {
+      "operation": "otter-runtime-canary-delete-20261020-sess1792205263224",
+      "session_not_found": true,
+      "worker_absent": true,
+      "worker_launch": "68de18a3-5262-40f1-a82d-b02fb4dd0e67",
+      "durable_tree_exited": true
+    }
+  },
+  "separation_observations": {
+    "worker_and_all_observed_descendants_used_otter_generation_4_home": true,
+    "inherited_auth_override_keys_present": [],
+    "existing_lynx_workers": 13,
+    "existing_lynx_worker_pid_account_auth_generation_and_worker_generation_unchanged": 13,
+    "real_account_logout_or_revocation_performed": false
+  },
+  "deterministic_acceptance": {
+    "source_revision": "2887c5c4",
+    "controller_account_tests_passed": 78,
+    "controller_stop_tests_passed": 5,
+    "machine_native_profile_tests_passed": 20,
+    "machine_account_stop_tests_passed": 11,
+    "machine_account_worker_tests_passed": 3,
+    "machine_systemd_exit_tests_passed": 3,
+    "explicit_systemd_process_tree_tests_passed": 2,
+    "explicit_delegated_cgroup_native_crash_and_binding_tests_passed": 2,
+    "postgresql_tests_not_run": 12
+  },
+  "configuration": {
+    "accounts.native_claude_sessions": true,
+    "operation": "otter-runtime-acceptance-enable-20261020-sess1792205263224",
+    "observed_session_admission": "enabled",
+    "observed_session_providers": ["claude-code"]
+  },
+  "limits": [
+    "This is a dated observation of Otter on OVH alongside the existing legacy Lynx account, not acceptance of every Provider or Machine.",
+    "Revocation and crash recovery were tested with isolated synthetic profiles; neither real account was logged out or revoked.",
+    "Account-specific homes and Cowboy lifecycle admission prevent supported-path mixing, not access by a trusted host administrator or privileged agent.",
+    "Creation was exercised through the same public API used by the UI; physical iPhone acceptance was not performed."
+  ]
+}

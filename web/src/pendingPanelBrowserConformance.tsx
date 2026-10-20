@@ -278,7 +278,7 @@ export async function checkPendingPreviewTouchDisclosure(): Promise<string> {
       name: "pasted-image-1.png",
       mimeType: "image/png",
       isImage: true,
-      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=",
+      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGP4/x8AAwAB//wl3FEAAAAASUVORK5CYII=",
       block: { type: "image", data: "", mimeType: "image/png" },
     };
     const file: Attachment = {
@@ -305,9 +305,11 @@ export async function checkPendingPreviewTouchDisclosure(): Promise<string> {
     check(container.textContent?.includes("Steer · sending"), "Current turn retains its delivery status");
     check(container.textContent?.includes(file.name), "Current turn shows file attachments by name");
     const preview = container.querySelector<HTMLImageElement>("img.cm-inline-image");
+    await preview?.decode();
     check(preview?.complete && preview.naturalWidth > 0, "Current turn renders its inline image");
     renderNative("", [image]);
     await tick();
+    await container.querySelector<HTMLImageElement>("img")?.decode();
     check(container.querySelector<HTMLImageElement>("img")?.naturalWidth, "Attachment-only current turn renders its image");
     return "Pending preview Show more toggles once per stationary touch, consumes its paired click, ignores scrolls, and keeps mouse/keyboard clicks";
   } finally {
