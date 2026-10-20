@@ -3,7 +3,9 @@ import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { orderUsageAccounts, registeredUsageAccounts } from "./usageAccounts";
+import { orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota } from "./usageAccounts";
+import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
+import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const registry: SubscriptionSnapshot = {
@@ -49,6 +51,39 @@ test("registered accounts are distinct and never inherit Service usage or contro
   assertEquals(cards[1].usage.observed_at_ms, 0);
   assertEquals(cards[1].statusLabel, "NOT REPORTED");
   assertEquals(usageLimits(cards[0].usage)[0].remaining, 62);
+});
+test("session quota notices never borrow another account's exhausted window", async () => {
+  const previousFetch = globalThis.fetch;
+  const manifest = providerUiManifestFixture();
+  manifest.id = session.provider;
+  manifest.version = session.provider_version!;
+  manifest.host.account_usage = { provider: "anthropic" };
+  resetProviderCatalog();
+  try {
+    globalThis.fetch = async () => Response.json({
+      providers: [{
+        provider_id: manifest.id, provider_version: manifest.version,
+        package_digest: digest, artifact_digest: digest, contract_fingerprint: digest,
+        authentication_scope: "none-v1", release_state: "ready", publisher: manifest.publisher,
+        supported_platforms: [{ os: "linux", architecture: "x86_64" }], manifest,
+      }], authentications: [], authentication_executors: [], platform: { hosts: [] },
+    });
+    await loadProviderCatalog();
+    setup();
+    const exhausted = structuredClone(snapshot);
+    exhausted.providers[0]!.rate_limits = { rateLimits: { primary: { usedPercent: 100, windowDurationMins: 300 } } };
+    assertEquals(sessionAccountQuota(exhausted, registry, [], undefined), undefined);
+    assertEquals(sessionAccountQuota(exhausted, registry, [], session)?.rate_limits, undefined);
+    assertEquals(sessionAccountQuota(exhausted, registry, [session], { ...session, owner_user_id: "other" }), undefined);
+    assertEquals(sessionAccountQuota(exhausted, registry, [session], { ...session, provider: "codex" }), undefined);
+    const named = sessionAccountQuota(exhausted, registry, [session], session)!;
+    assertEquals(usageLimits(named)[0].remaining, 75);
+    const legacy = { ...session, provider_account_id: "default" };
+    assertEquals(usageLimits(sessionAccountQuota(exhausted, registry, [session], legacy)!)[0].remaining, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    resetProviderCatalog();
+  }
 });
 test("named quota requires exact account, owner, Provider and signed generation", () => {
   setup();

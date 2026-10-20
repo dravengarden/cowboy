@@ -2020,6 +2020,7 @@ export function ComposerWorkspace({
           the known exhausted window even though no transcript error exists. */
       }
       <ProviderQuotaStatus
+        sessionId={sessionId}
         provider={provider}
         {...(providerVersion === undefined ? {} : { providerVersion })}
         {...(providerDigest === undefined ? {} : { providerDigest })}

@@ -1,7 +1,7 @@
 import type { SessionMeta } from "./protocol";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
-import { accountProviderLabel, type ProviderUsage, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
+import { accountProviderLabel, providerUsage, type ProviderUsage, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
 
 export interface UsageAccountCard {
   id: string;
@@ -13,6 +13,23 @@ export interface UsageAccountCard {
   collector?: string;
   emptyMessage?: string;
   statusLabel?: string;
+}
+
+/** A session notice must use the same bound identity as Settings and About.
+ * Unknown metadata never authorizes falling back to the Service collector. */
+export function sessionAccountQuota(
+  snapshot: UsageSnapshot | null,
+  accounts: SubscriptionSnapshot | undefined,
+  sessions: readonly SessionMeta[],
+  session: SessionMeta | undefined,
+): ProviderUsage | undefined {
+  if (!session) return undefined;
+  if (!session.provider_account_id || session.provider_account_id === "default") {
+    return providerUsage(snapshot, session.provider, session.provider_version, session.provider_generation_digest);
+  }
+  if (session.owner_user_id !== accounts?.dataset.user_id) return undefined;
+  return registeredUsageAccounts(null, accounts, sessions).find((card) => card.id === session.provider_account_id &&
+    accounts?.registry.accounts.some((account) => account.id === card.id && account.provider_id === session.provider))?.usage;
 }
 
 /** Registry identity controls membership; Provider IDs only select presentation. */

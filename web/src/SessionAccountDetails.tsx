@@ -4,7 +4,7 @@ import type { SessionMeta } from "./protocol";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { SubscriptionLogins } from "./SubscriptionLogins";
-import { registeredUsageAccounts } from "./usageAccounts";
+import { sessionAccountQuota } from "./usageAccounts";
 import { sessionProviderUsageRows } from "./sessionSettingsPresentation";
 import { useStoreSelector } from "./store";
 import { useCallClock } from "./managedCalls";
@@ -20,8 +20,8 @@ export function SessionAccountDetails({ session }: { session: SessionMeta }): Re
   const clock = useCallClock();
   const account = sessionAccountIdentity(data, session);
   const scoped = data?.dataset.user_id === session.owner_user_id ? data : undefined;
-  const card = account.named ? registeredUsageAccounts(null, scoped, sessions).find((item) => item.id === account.id) : undefined;
-  const rows = card && card.usage.observed_at_ms > 0 ? sessionProviderUsageRows(card.usage, clock) : [];
+  const quota = account.named ? sessionAccountQuota(null, scoped, sessions, session) : undefined;
+  const rows = quota && quota.observed_at_ms > 0 ? sessionProviderUsageRows(quota, clock) : [];
   const machine = machines.find((item) => item.id === session.machine_id)?.display_name || session.machine_id || "Local";
   return <Stack spacing={0.75} data-session-account={account.id} sx={{ py: 0.75 }}>
     <Divider />

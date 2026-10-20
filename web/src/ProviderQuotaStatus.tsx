@@ -9,7 +9,6 @@ import { useProviderCatalog } from "./providerCatalog";
 import type { Status } from "./protocol";
 import {
   exhaustedAccountUsageLimits,
-  providerUsage,
   shortResetTime,
   providerUsageAccount,
   type UsageLimit,
@@ -17,6 +16,9 @@ import {
 } from "./usageLimits";
 import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
 import { lowPriorityInterval } from "./network/bandwidth";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { sessionAccountIdentity } from "./accountIdentity";
+import { sessionAccountQuota } from "./usageAccounts";
 
 const USAGE_POLL_MS = 60_000;
 
@@ -33,12 +35,14 @@ function limitDetail(limit: UsageLimit): string {
  * must not add its own transform, filter, or shadow layer.
  */
 export function ProviderQuotaStatus({
+  sessionId,
   provider,
   providerVersion,
   providerDigest,
   status,
   desktop = false,
 }: {
+  sessionId: string;
   provider: string;
   providerVersion?: string;
   providerDigest?: string;
@@ -48,9 +52,14 @@ export function ProviderQuotaStatus({
   const { catalog } = useProviderCatalog();
   // Shared Controller-owned usage: a refresh from any device updates it.
   const snapshot = useStoreSelector((state) => state.usage);
+  const sessions = useStoreSelector((state) => state.sessions);
+  const session = sessions.find((item) => item.id === sessionId && item.provider === provider);
+  const serviceAccount = Boolean(session && (!session.provider_account_id || session.provider_account_id === "default"));
+  const { data: accounts } = useSubscriptionAccounts();
   const [clock, setClock] = useState(() => Date.now());
 
   useEffect(() => {
+    if (!serviceAccount) return;
     const controller = new AbortController();
     const load = (): void => {
       if (document.visibilityState === "hidden") return;
@@ -64,7 +73,7 @@ export function ProviderQuotaStatus({
       stop();
       document.removeEventListener("visibilitychange", load);
     };
-  }, [provider, providerDigest, providerVersion]);
+  }, [provider, providerDigest, providerVersion, serviceAccount]);
   useEffect(() => setClock(Date.now()), [snapshot]);
 
   useEffect(() => {
@@ -73,14 +82,14 @@ export function ProviderQuotaStatus({
   }, []);
 
   const usage = useMemo(
-    () => providerUsage(snapshot, provider, providerVersion, providerDigest),
-    [catalog, provider, providerDigest, providerVersion, snapshot],
+    () => sessionAccountQuota(snapshot, accounts, sessions, session),
+    [catalog, accounts, session, sessions, snapshot],
   );
   const exhausted = useMemo(
     () => exhaustedAccountUsageLimits(usage, clock),
     [clock, usage],
   );
-  const account = providerUsageAccount(provider, providerVersion, providerDigest);
+  const account = serviceAccount ? providerUsageAccount(provider, providerVersion, providerDigest) : undefined;
   const refreshing = account !== undefined && usageRefreshing(snapshot, account);
   const refresh = useCallback(async (): Promise<void> => {
     if (!account) {
@@ -92,7 +101,8 @@ export function ProviderQuotaStatus({
   if (exhausted.length === 0) return null;
   const activeTurn = status === "busy";
   const details = exhausted.map(limitDetail).join(" · ");
-  const displayName = providerName(provider, providerVersion, providerDigest);
+  const identity = session && sessionAccountIdentity(accounts, session);
+  const displayName = identity?.label ?? providerName(provider, providerVersion, providerDigest);
 
   return (
     <Box
@@ -151,16 +161,18 @@ export function ProviderQuotaStatus({
               : "Sending now may wait until the provider makes capacity available."}
           </Typography>
         </Box>
-        <NetworkIconButton
-          aria-label="Refresh provider usage"
-          size="small"
-          reliableTouch
-          networkAction={refresh}
-          disabled={refreshing}
-          sx={{ flexShrink: 0, color: "warning.main" }}
-        >
-          <RefreshRounded fontSize="small" />
-        </NetworkIconButton>
+        {serviceAccount && (
+          <NetworkIconButton
+            aria-label="Refresh provider usage"
+            size="small"
+            reliableTouch
+            networkAction={refresh}
+            disabled={refreshing}
+            sx={{ flexShrink: 0, color: "warning.main" }}
+          >
+            <RefreshRounded fontSize="small" />
+          </NetworkIconButton>
+        )}
       </Stack>
     </Box>
   );
