@@ -19,6 +19,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
   let held: (() => void) | undefined;
   let holdAccount: string | undefined;
   let cancellationFails = false;
+  let codeRejection = 0;
   const tests: string[] = [];
   const check = (value: boolean, message: string) => { if (!value) throw new Error(message); tests.push(message); };
   const until = async (predicate: () => boolean) => {
@@ -48,6 +49,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     const request = `${account}-request`;
     if (init?.method === "POST") {
       writes.push({ path, method: "POST", code: JSON.parse(String(init.body)).code });
+      if (codeRejection) return new Response("private server detail", { status: codeRejection });
       statuses.set(account, account === "lynx" ? "binding_pending" : "completed");
       return new Response(null, { status: 202 });
     }
@@ -140,6 +142,32 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     check(Boolean(button("lynx", "Start sign-in")?.disabled) && !button("lynx", "Done") && Boolean(button("otter", "Done")) &&
       writes.length === 2 && !sessionStorage.getItem(keys[0]!) && Boolean(sessionStorage.getItem(keys[1]!)),
       "a completed login can explicitly select another Machine without dispatching or clearing the other account");
+    render();
+    for (const key of keys) sessionStorage.removeItem(key);
+    statuses.clear(); writes.length = 0;
+    render("lynx", "otter");
+    await until(() => Boolean(input("lynx") && input("otter") && !button("lynx", "Check status")?.disabled && !button("otter", "Check status")?.disabled));
+    codeRejection = 409;
+    typeCode("lynx", "retry-code");
+    await until(() => !button("lynx", "Continue")!.disabled);
+    click("lynx", "Continue");
+    await until(() => container.textContent!.includes("The code was not sent") && Boolean(input("lynx")) && !button("lynx", "Check status")!.disabled);
+    check(!button("lynx", "Done") && writes.length === 1 && Boolean(input("otter")) &&
+      JSON.parse(sessionStorage.getItem(keys[0]!)!).codeState === undefined, "a definite rejection restores the code input without restarting or affecting the other account");
+    codeRejection = 0;
+    typeCode("lynx", "retry-code");
+    await until(() => !button("lynx", "Continue")!.disabled);
+    click("lynx", "Continue");
+    await until(() => container.textContent!.includes("Verifying sign-in…") && !button("lynx", "Check status")!.disabled);
+    check(writes.length === 2 && writes.every((write) => write.path.endsWith("/lynx-request")) &&
+      !container.textContent!.includes("The code was not sent"), "an explicit retry uses the same login and clears its rejection notice after acceptance");
+    codeRejection = 503;
+    typeCode("otter", "uncertain-code");
+    await until(() => !button("otter", "Continue")!.disabled);
+    click("otter", "Continue");
+    await until(() => container.textContent!.includes("Code delivery is unconfirmed") && !button("otter", "Check status")!.disabled);
+    check(!input("otter") && !button("otter", "Done") && container.textContent!.includes("choose Cancel sign-in, then Start again"),
+      "unknown delivery retains the original attempt and explains explicit cancellation recovery");
     return tests;
   } finally {
     held?.(); root.unmount(); container.remove(); globalThis.fetch = originalFetch;

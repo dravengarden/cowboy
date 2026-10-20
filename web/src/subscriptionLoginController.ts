@@ -16,6 +16,14 @@ export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
   referenceMismatch?: boolean;
   checking?: boolean;
+  submissionError?: string | undefined;
+}
+class CodeRejected extends Error {
+  constructor(status: number) {
+    super(status === 401 || status === 403 || status === 428
+      ? "The code was not sent. Refresh your Cowboy sign-in, then reopen this account’s existing sign-in and enter the code again."
+      : `The code was not sent (HTTP ${status}). Check status, then enter the code again if this sign-in is still active.`);
+  }
 }
 export function loginCompleted(view: LoginView): boolean {
   return view.observation?.status === "completed" && !view.observation.cancel_requested && !view.pending?.cancelling;
@@ -108,6 +116,9 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     // Code submission returns an empty 202. It only acknowledges dispatch;
     // the original operation receipt still decides whether sign-in completed.
     if (reply === "accepted" && response.status === 202) return;
+    // The auth/code endpoint and product auth reject 4xx before enqueueing.
+    // A known rejection can be corrected; transport/5xx failures remain unknown.
+    if (reply === "accepted" && response.status >= 400 && response.status < 500) throw new CodeRejected(response.status);
     const value: unknown = await response.json().catch(() => undefined);
     if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
     if (!response.ok) {
@@ -240,7 +251,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       // POST here: fresh readiness and a separate user click are still needed.
       // The Machine retains the old receipt/profile and all cleanup fences.
       forget(state.pending);
-      publish({ pending: undefined, observation: undefined, events: [], error: "" });
+      publish({ pending: undefined, observation: undefined, events: [], error: "", submissionError: undefined });
     }); },
     submit(code: string) { return run(async () => {
       const pending = state.pending; const observation = state.observation;
@@ -253,18 +264,29 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       const previous = saved();
       if (!previous || !sameAttempt(previous, pending) || previous.cancelling) throw new Error("The saved sign-in changed. Reopen sign-in before continuing.");
       if (previous.codeState) throw new Error("An authorization code was already submitted. Check the original sign-in.");
+      publish({ submissionError: undefined });
       save({ ...pending, codeState: "submitting" });
-      let codeState: "accepted" | "unconfirmed" = "accepted";
+      let codeState: Pending["codeState"] = "accepted";
+      let submissionError: string | undefined;
       try {
         await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) }, "accepted");
-      } catch {
-        codeState = "unconfirmed";
+      } catch (error) {
+        if (error instanceof CodeRejected) { codeState = undefined; submissionError = error.message; }
+        else codeState = "unconfirmed";
       }
       if (!ports.current()) return;
-      let submitted: Pending = { ...pending, codeState };
+      let submitted: Pending = { ...pending, ...(codeState ? { codeState } : {}) };
       const current = saved();
-      if (current && sameAttempt(current, pending)) submitted = save(submitted);
+      if (current && sameAttempt(current, pending)) {
+        if (submissionError && current.codeState === "submitting") {
+          // Clear only our rejected submission, preserving concurrent cancellation.
+          submitted = { ...current }; delete submitted.codeState;
+          ports.storage.setItem(key, JSON.stringify(submitted));
+          publish({ pending: submitted });
+        } else submitted = save(submitted);
+      }
       else publish({ pending: submitted }); // Do not recreate or replace a newer tab pointer.
+      publish({ submissionError });
       // Even a lost/rejected delivery reply can race with completed native
       // authorization. Only the scoped receipt may settle that uncertainty.
       await check(submitted);
@@ -281,7 +303,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
           return;
         }
         if (state.pending) forget(state.pending);
-        publish({ pending: undefined, observation: undefined, events: [], error: "" });
+        publish({ pending: undefined, observation: undefined, events: [], error: "", submissionError: undefined });
       }
       catch { publish({ error: "Could not clear the saved sign-in. It remains available for reconciliation." }); }
     },

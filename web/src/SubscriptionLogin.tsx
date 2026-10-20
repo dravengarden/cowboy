@@ -148,6 +148,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
       {machines.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.connected}>{entry.display_name || entry.id}{entry.connected ? "" : " · offline"}</MenuItem>)}
     </TextField>}
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
+    {view.submissionError && !done && !cancelling && !failure && <Alert severity="warning">{view.submissionError}</Alert>}
     {failure && <Alert severity="error">{failure}</Alert>}
     {options?.native_profile && !view.pending && <Alert severity="success">Already signed in on this Machine. Sign in again only to renew this account’s login.</Alert>}
     {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
@@ -170,6 +171,9 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
       </Typography>
     </Stack>}
     {checksPaused && !done && !cancelling && <Typography variant="caption" color="text.secondary">Automatic checks paused. Choose Check status to continue.</Typography>}
+    {codeState === "unconfirmed" && !done && !cancelling && !failure && <Typography variant="caption" color="text.secondary">
+      Check status before trying again. If verification does not finish, choose Cancel sign-in, then Start again for a new authorization link.
+    </Typography>}
     {!failure && !cancelling && !codeState && challenge && challenge.expires_at_ms <= Math.max(clock, Date.now()) && view.observation?.status === "active" &&
       <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
     {link && challenge && <SubscriptionAuthorization

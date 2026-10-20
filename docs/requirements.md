@@ -640,6 +640,9 @@ Code delivery accepts the HTTP endpoint's empty `202` acknowledgement, then
 checks the original operation receipt. Acceptance alone never means signed in.
 A metadata-only submission marker is saved before sending: remounts and lost
 replies reconcile the existing attempt without submitting the code again.
+An explicit HTTP rejection before enqueue clears only that submission marker,
+retains cancellation intent, and permits an explicit code retry in the original
+login. Transport failures and server errors keep delivery unconfirmed.
 Verification hides the authorization input and link. Returning from the browser
 resumes status checks, including identity binding, with bounded visible polling;
 timeouts and paused checks retain an explicit recovery action. Success exposes

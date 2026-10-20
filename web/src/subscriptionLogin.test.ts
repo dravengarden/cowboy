@@ -78,13 +78,78 @@ test("a rejected text code reply reconciles an already completed login without e
     : Response.json({ status: "completed", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
   await owner.submit("one-time-code");
   assertEquals(owner.snapshot.error, "");
-  assertEquals(owner.snapshot.pending?.codeState, "unconfirmed");
+  assertEquals(owner.snapshot.pending?.codeState, undefined);
   assert(owner.snapshot.pending);
   assertEquals(owner.snapshot.observation?.status, "completed");
   await owner.check();
   assertEquals(owner.snapshot.error, "");
   assertEquals(owner.snapshot.observation?.status, "completed");
   assertEquals(f.calls.filter((call) => call.path === "/api/providers/claude-code/auth/request" && call.init?.method === "POST").length, 1);
+});
+
+test("definite code rejection preserves the original login and permits an explicit retry", async () => {
+  for (const status of [400, 401, 403, 404, 409, 428, 429]) {
+    const f = fixture();
+    const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
+    let posts = 0;
+    f.setFetch(async (path, init) => {
+      if (init?.method === "POST") {
+        posts++;
+        return posts === 1 ? new Response("private server detail", { status }) : new Response(null, { status: 202 });
+      }
+      return Response.json(path.includes("/api/providers/")
+        ? { request_id: "request", events: [] }
+        : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+    });
+    await owner.submit("private-code");
+    assertEquals(owner.snapshot.pending?.codeState, undefined);
+    assertEquals(JSON.parse([...f.values.values()][0]!).codeState, undefined);
+    assertEquals(owner.snapshot.observation?.status, "active");
+    assert(owner.snapshot.submissionError?.includes("not sent"));
+    assert(!owner.snapshot.submissionError?.includes("private"));
+    assertEquals(posts, 1);
+    const restored = subscriptionLogin(scope, f.ports); restored.restore(); await restored.check();
+    await restored.submit("private-code");
+    assertEquals(restored.snapshot.error, "");
+    assertEquals(restored.snapshot.pending?.codeState, "accepted");
+    assertEquals(posts, 2);
+  }
+});
+
+test("server failure leaves code delivery uncertain and does not allow resubmission", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
+  f.setFetch(async (path, init) => init?.method === "POST"
+    ? new Response("private upstream detail", { status: 503 })
+    : Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [] }
+    : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+  await owner.submit("private-code");
+  assertEquals(owner.snapshot.pending?.codeState, "unconfirmed");
+  const count = f.calls.length;
+  await owner.submit("private-code");
+  assertEquals(f.calls.length, count);
+});
+
+test("a late definite rejection clears its code marker while preserving concurrent cancellation", async () => {
+  const f = fixture();
+  const first = subscriptionLogin(scope, f.ports); first.restore(); await first.start(options, "native");
+  const second = subscriptionLogin(scope, f.ports); second.restore(); await second.check();
+  let release!: () => void;
+  const reply = new Promise<void>((resolve) => { release = resolve; });
+  f.setFetch(async (_path, init) => {
+    if (init?.method === "POST") { await reply; return new Response(null, { status: 409 }); }
+    if (init?.method === "DELETE") throw new Error("cancel reply lost");
+    return Response.json({ status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  });
+  const submitting = first.submit("private-code");
+  await second.cancel();
+  release(); await submitting;
+  assertEquals(first.snapshot.pending?.codeState, undefined);
+  assertEquals(first.snapshot.pending?.cancelling, true);
+  assertEquals(JSON.parse([...f.values.values()][0]!).cancelling, true);
+  const count = f.calls.length;
+  await first.submit("private-code");
+  assertEquals(f.calls.length, count);
 });
 
 test("accepting a code never relaxes the account, provider, Machine or request completion fence", async () => {
