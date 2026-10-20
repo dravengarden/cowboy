@@ -43,6 +43,7 @@ fn sixteen_mib_event_does_not_reject_following_small_events() {
         seq: 3,
         cmid: None,
         event: Event::TurnEnd {
+            usage: None,
             stop_reason: "done".into()
         },
     })));

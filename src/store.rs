@@ -10460,6 +10460,7 @@ mod storage_contract_tests {
                 session_id: session_id.to_owned(),
                 seq: 1,
                 event: Event::TurnEnd {
+                    usage: None,
                     stop_reason: "end_turn".to_owned(),
                 },
                 cmid: None,

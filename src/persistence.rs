@@ -361,6 +361,7 @@ mod tests {
                     session_id: "session".to_owned(),
                     seq: 2,
                     event: Event::TurnEnd {
+                        usage: None,
                         stop_reason: "end_turn".to_owned(),
                     },
                     cmid: None,

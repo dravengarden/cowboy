@@ -496,12 +496,18 @@ async fn exercise_managed_read_only(provider: &str) {
         let request: Value =
             serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
         assert_eq!(request["method"], "session/prompt");
+        let usage =
+            agent_client_protocol::schema::v1::Usage::new(110, 80, 10).cached_read_tokens(20);
         send_json(
             &mut write,
-            json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+            json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn","usage":usage}}),
         )
         .await;
         assert!(completed.await.unwrap().is_ok());
+        assert_eq!(
+            sink.hub.managed_turn(SESSION, 0).unwrap().usage,
+            crate::agent_model::TurnUsage::from_acp(&usage),
+        );
         assert_eq!(
             sink.hub.persisted_config_options(SESSION),
             Some(json!([confirmed[1].clone()]))
@@ -1427,7 +1433,7 @@ async fn partial_stream_failure_keeps_native_session_without_replaying_completed
             Event::Update { update } if update["toolCallId"] == "write-once" && update["status"] == "completed"
         )).count();
         assert_eq!(completed_tools, 1);
-        let failures = events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason } if stop_reason.starts_with("error:"))).count();
+        let failures = events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason, .. } if stop_reason.starts_with("error:"))).count();
         assert_eq!(failures, 1);
         assert!(!events.iter().any(|event| matches!(
             event.event,

@@ -217,6 +217,7 @@ mod tests {
         assert!(telemetry.active.is_some());
         telemetry.completed(Some("turn-a"), "Cancelled");
         let records = telemetry.event(&RuntimeEvent::TurnEnded {
+            usage: None,
             turn_id: "a".into(),
             stop_reason: "Cancelled".into(),
         });

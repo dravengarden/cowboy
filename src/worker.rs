@@ -283,7 +283,7 @@ impl RemoteSink {
                 state: Self::status_state(status),
                 detail,
             },
-            Event::TurnEnd { stop_reason } => {
+            Event::TurnEnd { stop_reason, usage } => {
                 let turn_id = self
                     .shared
                     .snapshot
@@ -292,6 +292,7 @@ impl RemoteSink {
                     .clone()
                     .unwrap_or_else(|| "unknown-turn".to_owned());
                 RuntimeEvent::TurnEnded {
+                    usage,
                     turn_id,
                     stop_reason,
                 }
@@ -1350,6 +1351,7 @@ mod tests {
                 telemetry.completed(Some(id), "EndTurn");
             }
             shared.emit(RuntimeEvent::TurnEnded {
+                usage: None,
                 turn_id: id.into(),
                 stop_reason: "EndTurn".into(),
             })
@@ -1459,6 +1461,7 @@ mod tests {
         sink.push(
             "sess-1",
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "EndTurn".into(),
             },
         );

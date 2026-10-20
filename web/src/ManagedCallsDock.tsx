@@ -62,6 +62,8 @@ import {
   callTitle,
   callPreviewTitles,
   callTone,
+  callUsageRows,
+  callConversationId,
   cancelCall,
   callTimesTitle,
   elapsedLabel,
@@ -433,7 +435,7 @@ function CallDetailView({
             size="small"
             variant="outlined"
             startIcon={<OpenInNew fontSize="small" />}
-            onClick={(): void => onOpenChild(call.child_session_id)}
+            onClick={(): void => onOpenChild(callConversationId(call))}
             sx={{ minHeight: desktop ? 32 : 44 }}
           >
             Open as session
@@ -459,6 +461,12 @@ function CallDetailView({
       <Typography variant="overline">Execution</Typography>
       <Stack spacing={0.5}>
         <CallAccountDetails call={detail ?? call} />
+        {(call.reused_from || detail?.result?.reused_from) && (
+          <DetailRow label="Reused result" value={call.reused_from ?? detail?.result?.reused_from?.call_id ?? ""} mono />
+        )}
+        {callUsageRows(detail?.result?.usage ?? call.usage, call.reused_from ?? detail?.result?.reused_from?.call_id).map((row) => (
+          <DetailRow key={row.label} label={row.label} value={row.value} />
+        ))}
         <DetailRow label="Model / effort" value={callModelLabel(call)} />
         <DetailRow label="Selected preset" value={call.preset ?? "Provider default"} />
         <DetailRow label="Selection" value={call.labels["selection_reason"] ?? call.selection ?? "Not recorded"} />
@@ -489,6 +497,12 @@ function CallDetailView({
           value={shortRevision(call.input_revision)}
           mono
         />
+        {call.labels["review_base"] && (
+          <DetailRow label="Review base" value={call.labels["review_base"]} mono />
+        )}
+        {detail?.result?.review_input?.root && (
+          <DetailRow label="Review repository" value={detail.result.review_input.root} mono />
+        )}
         <DetailRow
           label="Created"
           value={new Date(call.created_at_ms).toLocaleString()}
@@ -854,7 +868,7 @@ function CallConversation({
       {callActive(call.state) || call.input_revision !== null
         ? (
           <CallTranscript
-            sessionId={call.child_session_id}
+            sessionId={callConversationId(call)}
             provider={call.provider}
             settled={!callActive(call.state)}
             bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
@@ -1073,7 +1087,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
       setDesktopDetails((open) => !open);
     } else if (event.key === "o" && routed) {
       event.preventDefault();
-      openChild(routed.child_session_id);
+      openChild(callConversationId(routed));
     }
   };
   const stale = error !== null && observedAt !== null;
@@ -1337,7 +1351,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                 label: "Scroll to start",
                 icon: <VerticalAlignTop fontSize="small" />,
                 onActivate: (): void =>
-                  requestScrollToTop(routed.child_session_id),
+                  requestScrollToTop(callConversationId(routed)),
               },
               {
                 label: "Details",
@@ -1351,7 +1365,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                 label: "Scroll to latest",
                 icon: <VerticalAlignBottom fontSize="small" />,
                 onActivate: (): void =>
-                  requestStickToBottom(routed.child_session_id),
+                  requestStickToBottom(callConversationId(routed)),
               },
             ]
             : undefined}

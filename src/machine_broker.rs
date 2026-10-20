@@ -5877,6 +5877,7 @@ mod tests {
             1,
             2,
             &RuntimeEvent::TurnEnded {
+                usage: None,
                 turn_id: "turn-1".to_owned(),
                 stop_reason: "end_turn".to_owned(),
             },
@@ -6146,6 +6147,7 @@ mod tests {
                 command_id: "command-1".to_owned(),
             },
             RuntimeEvent::TurnEnded {
+                usage: None,
                 turn_id: "turn-1".to_owned(),
                 stop_reason: "end_turn".to_owned(),
             },

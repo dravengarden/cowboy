@@ -507,6 +507,20 @@ pub enum WorkerCommand {
     },
 }
 
+/// Native usage for exactly one prompt, retained with its turn-end event.
+/// Input includes cache reads; reasoning is already included in output.
+/// Missing cache evidence stays unknown rather than becoming zero.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TurnUsage {
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: Option<u64>,
+    pub uncached_input_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum RuntimeEvent {
@@ -552,6 +566,8 @@ pub enum RuntimeEvent {
     TurnEnded {
         turn_id: String,
         stop_reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
     },
     AgentSessionId {
         agent_session_id: String,

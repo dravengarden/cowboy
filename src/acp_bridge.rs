@@ -445,7 +445,7 @@ impl BridgeState {
                 PromptOutcome::Stopped(StopReason::Cancelled),
             ));
         }
-        if let Event::TurnEnd { stop_reason } = &envelope.event {
+        if let Event::TurnEnd { stop_reason, .. } = &envelope.event {
             if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
                 let pending = prompts.remove(index).expect("index came from queue");
                 let outcome = parse_stop_reason(stop_reason).map_or_else(
@@ -3358,6 +3358,7 @@ mod tests {
         events.push(envelope(
             10,
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "Cancelled".to_owned(),
             },
         ));
@@ -3475,6 +3476,7 @@ mod tests {
                 vec![envelope(
                     9,
                     Event::TurnEnd {
+                        usage: None,
                         stop_reason: "max_tokens".to_owned(),
                     },
                 )],

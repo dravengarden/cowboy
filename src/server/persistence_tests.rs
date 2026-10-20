@@ -61,6 +61,7 @@ async fn large_event_contract(url: &str, root: &FsPath) {
         seq: 0,
         cmid: None,
         event: Event::TurnEnd {
+            usage: None,
             stop_reason: "done".into()
         },
     })));

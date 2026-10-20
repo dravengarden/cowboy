@@ -193,6 +193,7 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
             seq,
             cmid: None,
             event: Event::TurnEnd {
+                usage: None,
                 stop_reason: format!("saved-{seq}"),
             },
         })

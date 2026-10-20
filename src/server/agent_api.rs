@@ -245,6 +245,8 @@ impl Host for SessionHost<'_> {
                             "state":row.state,"purpose":row.purpose,"updated_at_ms":row.updated_at_ms,
                             "created_at_ms":row.created_at_ms,"started_at_ms":row.started_at_ms,"finished_at_ms":row.finished_at_ms,
                             "configuration":row.configuration,"preset":row.preset,"provider_account_id":row.provider_account_id,
+                            "labels":row.labels,"input_revision":row.input_revision,
+                            "usage":summary.usage,"reused_from":summary.reused_from,
                             "has_result":summary.has_result,"verdict":summary.verdict,"findings":summary.finding_count})
                     })
                     .collect::<Vec<_>>();
@@ -948,7 +950,7 @@ fn coalesce(window: &[Envelope], fold_tools: bool) -> Vec<Item> {
                 ),
                 None,
             ),
-            Event::TurnEnd { stop_reason } => ("turn_end", stop_reason.clone(), None),
+            Event::TurnEnd { stop_reason, .. } => ("turn_end", stop_reason.clone(), None),
             Event::PermissionResolved { .. } => continue,
         };
         if matches!(kind, "user" | "agent")

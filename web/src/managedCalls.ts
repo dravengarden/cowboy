@@ -15,6 +15,16 @@ export type ManagedCallState =
   | "failed"
   | "cancelled";
 
+export interface CallUsage {
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number | null;
+  uncached_input_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
+}
+
 export interface ManagedCallSummary {
   call_id: string;
   request_id: string;
@@ -39,6 +49,9 @@ export interface ManagedCallSummary {
   selection?: string | null;
   input_revision: string | null;
   has_result: boolean;
+  usage?: CallUsage | null;
+  reused_from?: string | null;
+  reused_child_session_id?: string | null;
   runtime_machine_id: string | null;
   provider_version: string | null;
   cancel_requested: boolean;
@@ -52,6 +65,14 @@ export interface ManagedCallResult {
   truncated?: boolean;
   structured?: unknown;
   stop_reason?: string;
+  usage?: CallUsage | null;
+  reused_from?: {
+    call_id: string;
+    child_session_id: string;
+    started_at_ms: number | null;
+    finished_at_ms: number | null;
+  };
+  review_input?: { root: string; base: string; task: string };
 }
 
 export interface ManagedCallDetail extends
@@ -108,8 +129,9 @@ export function isManagedChild(session: SessionMeta | undefined): boolean {
 }
 
 export function callStateLabel(
-  call: Pick<ManagedCallSummary, "state" | "cancel_requested">,
+  call: Pick<ManagedCallSummary, "state" | "cancel_requested" | "reused_from">,
 ): string {
+  if (call.state === "completed" && call.reused_from) return "Reused";
   switch (call.state) {
     case "queued":
       return call.cancel_requested ? "Stopping" : "Queued";
@@ -131,6 +153,12 @@ export function callStateLabel(
 }
 
 export type CallTone = "active" | "success" | "error" | "neutral";
+
+export function callConversationId(
+  call: Pick<ManagedCallSummary, "child_session_id" | "reused_child_session_id">,
+): string {
+  return call.reused_child_session_id ?? call.child_session_id;
+}
 
 export function callTone(state: ManagedCallState): CallTone {
   if (callActive(state)) return "active";
@@ -201,7 +229,35 @@ export function callPreviewTitles(calls: readonly ManagedCallSummary[]): Map<str
 export function callGroup(
   call: Pick<ManagedCallSummary, "labels">,
 ): string | null {
-  return call.labels["group"] ?? call.labels["task"] ?? null;
+  return call.labels["group"] ?? call.labels["task"] ?? call.labels["review_task"] ?? null;
+}
+
+/** Report native evidence; a missing counter is never zero or a cost estimate. */
+export function callUsageRows(
+  usage: CallUsage | null | undefined,
+  reusedFrom?: string | null,
+): { label: string; value: string }[] {
+  if (reusedFrom) {
+    return [{ label: "Usage", value: "Reused result; no new model request" }];
+  }
+  if (!usage) {
+    return [{
+      label: "Usage",
+      value: "Not reported by this worker / provider",
+    }];
+  }
+  const count = (value: number | null): string =>
+    value == null ? "Not reported" : value.toLocaleString();
+  return [
+    { label: "New input tokens", value: count(usage.uncached_input_tokens) },
+    { label: "Cached input tokens", value: count(usage.cached_input_tokens) },
+    { label: "Output tokens", value: count(usage.output_tokens) },
+    { label: "Total tokens", value: count(usage.total_tokens) },
+    {
+      label: "Reasoning (included in output)",
+      value: count(usage.reasoning_tokens),
+    },
+  ];
 }
 
 export function machineName(id: string | null | undefined): string {

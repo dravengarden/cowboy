@@ -22,14 +22,19 @@ pub mod authority;
 pub mod lifecycle;
 pub mod media;
 pub mod protocol;
+pub mod review;
 #[cfg(feature = "full")]
 pub mod service;
 
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 
 /// Shared by the CLI and MCP; neither surface may silently weaken a review.
-pub fn review_instruction(design: bool, focus: &str) -> String {
-    let task = if design {
+pub fn review_instruction(design: bool, focus: &str, base: Option<&str>) -> String {
+    let task = if base.is_some() && design {
+        "Review the changed design documents in the captured worktree for gaps, contradictions and risks."
+    } else if base.is_some() {
+        "Review the change in the captured worktree. Read surrounding code as needed."
+    } else if design {
         "Review the design documents changed in this worktree for gaps, contradictions and risks."
     } else {
         "Review this worktree's change (uncommitted work and commits not yet on the default branch). Read surrounding code as needed."
@@ -40,9 +45,15 @@ pub fn review_instruction(design: bool, focus: &str) -> String {
     } else {
         format!("\nFocus: {focus}")
     };
-    format!(
-        "{task}{focus}\nReport actionable correctness, security, data-loss or contract problems, most severe first. Each finding needs path:line, trigger, impact and a concrete fix. Be concise; omit praise, restated diff and style nits. Do not omit distinct serious findings to meet a count or length target. If blocked or incomplete, say so and identify the missing evidence. Only after completing the requested review with no findings, reply exactly: No findings."
-    )
+    let result = format!(
+        "{task}{focus}\nReport actionable correctness, security, data-loss or contract problems, most severe first. Each finding needs path:line, trigger, impact and a concrete fix. Be concise; omit praise, restated diff and style nits. Do not omit distinct serious findings to meet a count or length target. If blocked or incomplete, say so and identify the missing evidence."
+    );
+    match base {
+        Some(base) => format!("{result}\n{}", review::input_contract(base)),
+        None => format!(
+            "{result} Only after completing the requested review with no findings, reply exactly: No findings."
+        ),
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +282,9 @@ impl Request {
         if !valid_id(&self.request_id) {
             return Err(InputError::InvalidRequestId);
         }
+        if !review::validate(self) {
+            return Err(InputError::InvalidContext);
+        }
         if self.instruction.trim().is_empty()
             || self.instruction.len() > 128 * 1024
             || self.instruction.contains('\0')
@@ -320,6 +334,9 @@ impl Request {
     /// The explicit task and file names only; never copy the parent's history
     /// or all project guidance into a native image turn.
     pub fn prompt(&self) -> String {
+        if let Some(prompt) = review::prompt(self) {
+            return prompt;
+        }
         if !self.purpose.is_image() {
             return self.instruction.clone();
         }

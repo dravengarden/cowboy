@@ -334,6 +334,15 @@ pub struct ReviewArgs {
     /// the current Git worktree; the target validates registration.
     #[arg(long)]
     root: Option<std::path::PathBuf>,
+    /// Stable task identity. With --base, reuse the same complete review input.
+    #[arg(long, requires = "base")]
+    task: Option<String>,
+    /// Base commit/ref for --task; resolved to the immutable merge-base with HEAD.
+    #[arg(long, requires = "task")]
+    base: Option<String>,
+    /// Deliberately request an independent review even if this input was reviewed.
+    #[arg(long, requires = "task")]
+    fresh: bool,
     /// Review design documents (specs, plans) instead of code.
     #[arg(long)]
     design: bool,
@@ -374,7 +383,7 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis());
-    let request = json!({
+    let mut request = json!({
         "schema": 1,
         "request_id": format!("review-{millis}-{}", std::process::id()),
         "labels": {
@@ -382,11 +391,32 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
             "selection_reason": args.reason.as_deref().unwrap_or("Session Tools selection"),
         },
         "purpose": if args.design { "design_review" } else { "review" },
-        "instruction": super::review_instruction(args.design, focus),
+        "instruction": super::review_instruction(args.design, focus, None),
         "context": {"scope": "current-worktree", "root": root},
         "access": "read-only",
         "conversation": {"mode": "fresh"},
     });
+    if let (Some(task), Some(base)) = (&args.task, &args.base) {
+        if base.starts_with('-') {
+            return Err("invalid base".into());
+        }
+        let resolved = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["merge-base", "HEAD", base])
+            .output()
+            .map_err(|_| "base unavailable")?;
+        let base = String::from_utf8(resolved.stdout).map_err(|_| "invalid base")?;
+        let base = base.trim();
+        if !resolved.status.success() || !super::review::valid_base(base) {
+            return Err("base unavailable".into());
+        }
+        request["labels"][super::review::TASK] = json!(task);
+        request["labels"][super::review::BASE] = json!(base);
+        request["labels"][super::review::REUSE] = json!((!args.fresh).to_string());
+        request["instruction"] = json!(super::review_instruction(args.design, focus, Some(base)));
+        request["output"] = json!({"format":"json_schema","schema":super::review::output_schema()});
+    }
     Request::parse(request.to_string().as_bytes()).map_err(|reason| reason.to_string())
 }
 
@@ -695,6 +725,9 @@ mod tests {
 
     fn review_args(design: bool) -> ReviewArgs {
         ReviewArgs {
+            task: None,
+            base: None,
+            fresh: false,
             title: None,
             reason: None,
             root: Some("/tasks/review".into()),

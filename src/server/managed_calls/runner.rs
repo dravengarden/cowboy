@@ -321,10 +321,6 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, |next| next.state = State::Stopping).await;
         return Step::Again;
     }
-    if now_ms() - record.created_at_ms > LAUNCH_DEADLINE_MS {
-        advance(state, store, record, fail("launch_timeout", None)).await;
-        return Step::Again;
-    }
     let request = match store
         .managed_call_input(&record.placement.parent_session_id, &record.call_id)
         .await
@@ -417,6 +413,14 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("identity_mismatch", None)).await;
         return Step::Again;
     }
+    if let Some(step) = reuse_review(state, store, record, &request, &prepared.input_revision).await
+    {
+        return step;
+    }
+    if now_ms() - record.created_at_ms > LAUNCH_DEADLINE_MS {
+        advance(state, store, record, fail("launch_timeout", None)).await;
+        return Step::Again;
+    }
     if let Err(code) = configuration::ready(state, store, record).await {
         if code == RETRY {
             return Step::Wait(POLL);
@@ -445,6 +449,82 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             .submit_managed_prompt(child, &record.call_id, request.prompt());
     }
     Step::Again
+}
+
+/// Snapshot preparation and child registration spend no model tokens. Reserve
+/// before activation so simultaneous requests and recovery share one prompt.
+async fn reuse_review(
+    state: &AppState,
+    store: &Store,
+    record: &Record,
+    request: &Request,
+    revision: &str,
+) -> Option<Step> {
+    let child = state.hub.session_info(&record.child_session_id)?;
+    let identity = crate::managed_calls::review::identity(
+        request,
+        record,
+        revision,
+        &child.meta.provider_account_id,
+        child.meta.provider_auth_generation,
+    )?;
+    let original = match store.reserve_review_input(record, &identity).await {
+        Ok(original) => original,
+        Err(_) => return Some(Step::Wait(POLL)),
+    };
+    if original.call_id == record.call_id {
+        return None;
+    }
+    if !original.state.terminal() {
+        return Some(Step::Wait(Duration::from_secs(2)));
+    }
+    let complete = crate::managed_calls::review::complete(&original);
+    let mut result = original.result.clone().unwrap_or_else(|| json!({}));
+    // Attribution belongs to the original call. Copying token counters into a
+    // reuse receipt would make task totals charge the same inference twice.
+    let Some(object) = result.as_object_mut() else {
+        advance(state, store, record, fail("review_source_invalid", None)).await;
+        return Some(Step::Again);
+    };
+    object.remove("usage");
+    result["reused_from"] = json!({
+        "call_id":original.call_id,
+        "child_session_id":original.child_session_id,
+        "started_at_ms":original.started_at_ms,
+        "finished_at_ms":original.finished_at_ms,
+    });
+    if !serde_json::to_vec(&result).is_ok_and(|bytes| bytes.len() <= 1024 * 1024) {
+        advance(
+            state,
+            store,
+            record,
+            fail("review_source_too_large", Some(original.call_id.clone())),
+        )
+        .await;
+        return Some(Step::Again);
+    }
+    advance(state, store, record, |next| {
+        next.input_revision = Some(revision.to_owned());
+        next.result = Some(result);
+        next.configuration.clone_from(&original.configuration);
+        next.provider_account_id
+            .clone_from(&original.provider_account_id);
+        next.state = if complete {
+            State::Completed
+        } else {
+            State::Failed
+        };
+        if !complete {
+            next.error = Some(
+                original
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| CallError::new("review_incomplete", None)),
+            );
+        }
+    })
+    .await;
+    Some(Step::Again)
 }
 
 /// Record the policy's preset as the child's configuration preferences.
@@ -821,7 +901,31 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         let parsed = (wants_schema && code == "completed")
             .then(|| serde_json::from_str::<Value>(turn.final_text.trim()).ok())
             .flatten();
+        let incomplete_review = request.as_ref().is_some_and(|request| {
+            request
+                .labels
+                .contains_key(crate::managed_calls::review::BASE)
+                && parsed.as_ref().is_some_and(|value| {
+                    value.get("review_complete") != Some(&Value::Bool(true))
+                        || !matches!(
+                            value["verdict"].as_str(),
+                            Some("approve" | "needs-attention")
+                        )
+                })
+        });
         let mut result = result_value(&turn.final_text, stop_reason, parsed.as_ref());
+        if let Some(usage) = turn.usage {
+            result["usage"] = json!(usage);
+        }
+        if let Some(request) = &request
+            && let Some(base) = request.labels.get(crate::managed_calls::review::BASE)
+        {
+            result["review_input"] = json!({
+                "root": request.context.root,
+                "base": base,
+                "task": request.labels.get(crate::managed_calls::review::TASK),
+            });
+        }
         if record.purpose.is_image()
             && let Some(failure) = turn
                 .generated_images
@@ -853,6 +957,10 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
                 "completed" if wants_schema && parsed.is_none() => {
                     next.state = State::Failed;
                     next.error = Some(CallError::new("structured_output_invalid", None));
+                }
+                "completed" if incomplete_review => {
+                    next.state = State::Failed;
+                    next.error = Some(CallError::new("review_incomplete", None));
                 }
                 // Completion wins a stop race: keep the actual result.
                 "completed" => next.state = State::Completed,

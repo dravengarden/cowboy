@@ -190,6 +190,14 @@ const findingsResult = {
   text: "{}",
   truncated: false,
   stop_reason: "end_turn",
+  usage: {
+    input_tokens: 1000,
+    cached_input_tokens: 900,
+    uncached_input_tokens: 100,
+    output_tokens: 50,
+    total_tokens: 1050,
+    reasoning_tokens: 10,
+  },
   structured: {
     verdict: "needs-attention",
     summary: "Retries can duplicate a charge.",
@@ -450,6 +458,35 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
 
     root.unmount();
     root = createRoot(container);
+    calls = [summary("call-reused", "completed", "correctness", {
+      child_session_id: "unused-reuse-child",
+      reused_from: "call-original",
+      reused_child_session_id: "child-original",
+    })];
+    composerStackExpandedStore().set("calls");
+    render(<ManagedCallsDock sessionId="parent" desktop />);
+    (await until(
+      () => document.querySelector<HTMLElement>("[data-desktop-item='call-call-reused']"),
+      "reused call missing",
+    )).click();
+    const reusedModal = await until(
+      () => document.querySelector<HTMLElement>("[data-desktop-call-modal='call-reused']"),
+      "reused call modal missing",
+    );
+    await until(
+      () => reusedModal.querySelector("[data-call-transcript='child-original']"),
+      "reused call must show the original transcript",
+    );
+    check(!reusedModal.querySelector("[data-call-transcript='unused-reuse-child']"),
+      "reuse must not show an unused child conversation");
+    reusedModal.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
+    check(getActiveSessionId() === "child-original",
+      "the open-session shortcut must follow the reused conversation");
+    tests.push("reused-call-opens-original-transcript-and-session");
+    setActiveSessionId("parent");
+    composerStackExpandedStore().set(null);
+    root.unmount();
+    root = createRoot(container);
     calls = [
       summary("call-security", "running", "security", { created_at_ms: Date.now() - 300_000 }),
       summary("call-correctness", "completed", "correctness", {
@@ -514,6 +551,13 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     await until(
       () => text().includes("Retry duplicates the charge") ? true : null,
       "full result not loaded",
+    );
+    check(
+      modal.textContent?.includes("New input") &&
+        modal.textContent.includes("Cached input") &&
+        modal.textContent.includes("1,050") &&
+        modal.textContent.includes("included in output"),
+      "call details must distinguish fresh, cached and total tokens without adding reasoning twice",
     );
     await until(
       () => modal.textContent?.includes("node-heredoc-") ? true : null,

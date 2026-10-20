@@ -199,7 +199,9 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   files?:string[],root?:string,child_session_id?:string,preset?:string,title?:string,reason?:string}
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
-// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string}
+// review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean}
+// task + base (immutable commit SHA) + root bind review input for automatic reuse.
+// Only use with all required evidence in the captured files/instruction. fresh:true requests an independent pass.
 // calls.cancel: {call_id:string}; operation MUST equal call_id. Cancellation is idempotent.
 // documents.mutate: {document_id:string,expected_revision:number,change:DraftChange}
 // control.apply: {name:string,input:object}; discover via cowboy.control.list(domain)/describe(name).
@@ -293,10 +295,10 @@ macro_rules! sdk {
 
 sdk! {
 SDK_HEADER: r#"// cowboy-ts-v1. CODE: async ({cowboy})=>{ CODE }; module: export default async function({cowboy}).
-// Return JSON <=16KiB; <=16 API calls; no network/files. Failures throw Error.code.
+// JSON<=16KiB; <=16 calls; no network/files; errors: .code.
 export interface Cowboy {
   api: {
-    help(topic: string): Promise<unknown>; // live discovery
+    help(topic: string): Promise<unknown>;
   };
 }
 "#,
@@ -325,10 +327,10 @@ export type MessageQuery = {after?:string;limit?:number;chars?:number}; // queue
 // Lists: page_required -> {limit:20}; text_window_required -> {chars:400}.
 export type EventKind = "user" | "agent" | "tool" | "plan" | "permission" | "turn_end" | "lifecycle";
 export type EventQuery = {
-  after?: Seq; before?: Seq;   // after: oldest first; otherwise the newest before `before`
-  limit?: number;              // items, default 20, max 100
-  chars?: number;              // text per item, default 400, max 4000
-  kinds?: EventKind[];         // default all but "lifecycle"
+  after?: Seq; before?: Seq; // after: oldest first; else newest before `before`
+  limit?: number; // items default20/max100
+  chars?: number; // text/item default400/max4000
+  kinds?: EventKind[]; // default excludes "lifecycle"
 };
 export type EventItem = {
   seq: Seq; to: Seq; kind: EventKind; text?: string; truncated?: true;
@@ -340,16 +342,13 @@ export type EventDetailQuery = {path?:string;offset?:number;chars?:number;limit?
 export type EventDetail = {seq:Seq;source:"durable"|"memory";revision:string;page:{path:string;kind:string;data:unknown;range:TextRange}};
 export type SearchQuery = {query:string;before?:Seq;limit?:number;chars?:number};
 export type SearchPage = {matches:{seq:Seq;path:string;text:string;offset:number;revision:string}[];scanned:number;next_before:Seq|null;reached_start:boolean;source:string};
-// Search locates events by literal case-sensitive substring in stored JSON string values,
-// including tool output. First hit per event; no cross-event match. Scans <=64 raw records;
-// default20/max64 hits, excerpt default200/max1000 chars, at least query length. Follow next_before even if empty.
-// event(seq) describes one raw event. Select a JSON pointer to read text, tool outputs,
-// inputs or attachment references. Strings use Unicode offset/chars (default1000/max4000);
-// objects/arrays use offset/limit (default50/max200). 32KiB/page; describe:true gives shape.
-// Pass expected:detail.revision on continuation; revision_conflict -> restart that event.
-// A coalesced summary covers seq..to; raw events in that range preserve every block.
-// Resume with {...query,...page.next}, even for empty filtered pages. Tool spans
-// can overlap: never derive a cursor from item.to. Pages are live observations.
+// search: literal case-sensitive JSON strings (tools included), first hit/event, no cross-event match.
+// Scan<=64 records; hits default20/max64; excerpts default200/max1000 chars (>=query length).
+// Follow next_before even if empty. event: raw shape; select JSON pointer for content.
+// Strings: Unicode offset/chars default1000/max4000; object/array: offset/limit default50/max200.
+// 32KiB/page; describe:true=shape. Continue with expected:detail.revision; conflict -> restart event.
+// Summary seq..to preserves raw blocks. Resume {...query,...page.next} even if empty.
+// Tool spans overlap: never page by item.to. Live pages.
 "#,
 SESSION_SDK: r#"
 export interface Cowboy {
@@ -360,7 +359,7 @@ export interface Cowboy {
     drafts(q?: MessageQuery): Promise<Message[]>;
     message(id: string, q?: TextWindow): Promise<Message>; // full queued/draft text in pages
     events(q?: EventQuery): Promise<EventPage>;
-    history(q?: Omit<EventQuery,"after">): Promise<HistoryPage>; // backward saved pages; no wake; may lag live events
+    history(q?: Omit<EventQuery,"after">): Promise<HistoryPage>; // saved, backward, may lag; no wake
     event(seq:Seq, q?:EventDetailQuery): Promise<EventDetail>;
     search(q:SearchQuery): Promise<SearchPage>;
   };
@@ -369,15 +368,18 @@ export interface Cowboy {
 CALLS_SDK: r#"
 export type CallTiming = {created_at_ms:number;started_at_ms:number|null;finished_at_ms:number|null;updated_at_ms:number};
 export type CallConfiguration = {model?:string;reasoning_effort?:string;effort?:string};
-export type CallSummary = CallTiming & {call_id:string;request_id:string;provider:string;provider_account_id:string|null;state:string;purpose:string;configuration:CallConfiguration|null;preset:string|null;has_result:boolean;verdict:string|null;findings:number|null};
+export type CallUsage = {total_tokens:number;input_tokens:number;output_tokens:number;cached_input_tokens:number|null;uncached_input_tokens:number|null;cache_write_tokens:number|null;reasoning_tokens:number|null};
+export type CallSummary = CallTiming & {call_id:string;request_id:string;provider:string;provider_account_id:string|null;state:string;purpose:string;configuration:CallConfiguration|null;preset:string|null;has_result:boolean;verdict:string|null;findings:number|null;labels:Record<string,string>;input_revision:string|null;usage:CallUsage|null;reused_from:string|null};
 export type CallView = CallTiming & {
   state: string; call_id: string; request_id: string;
   resolved: { provider: string; provider_account_id:string|null; machine_id: string; workspace_id: string; child_session_id?: string | null; preset:string|null; configuration:CallConfiguration|null; selection:string|null };
   labels?: Record<string, string>; cancel_requested: boolean;
+  usage: CallUsage|null; reused_from:string|null;
   error: { code: string } | null; result?: unknown;
 };
 export type CallCapabilities = {
   enabled: boolean; default: string;
+  review_input_reuse: boolean;
   providers: { id: string; available: boolean; reason: string | null; presets: unknown[]; review_candidates:string[]; preset:string|null; options:Record<string,string>|null; quota_account:string|null }[];
   review_selection: string; // quota + preference guidance
   review_preferences: {claude:string[];gpt:string[]};

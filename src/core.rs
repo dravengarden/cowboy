@@ -350,6 +350,7 @@ pub struct ManagedTurn {
     pub stop_reason: Option<String>,
     pub final_text: String,
     pub generated_images: Vec<serde_json::Value>,
+    pub usage: Option<crate::agent_model::TurnUsage>,
     pub status: Status,
 }
 
@@ -2774,8 +2775,8 @@ impl Hub {
     }
 
     /// Observe one managed child turn after `after_seq` from the hot log.
-    /// The final assistant text is the agent message after the turn's last
-    /// non-message update, which is what a native final response contains.
+    /// Keep the last assistant message, using native message identity where
+    /// available. Providers without IDs retain the tool-boundary fallback.
     #[must_use]
     pub fn managed_turn(&self, session_id: &str, after_seq: u64) -> Option<ManagedTurn> {
         let sessions = self.inner.sessions.lock();
@@ -2790,9 +2791,11 @@ impl Hub {
             stop_reason: None,
             final_text: String::new(),
             generated_images: Vec::new(),
+            usage: None,
             status: s.meta.status,
         };
         let mut final_text = String::new();
+        let mut message_id: Option<&str> = None;
         for entry in s.log.iter().filter(|entry| entry.seq > after_seq) {
             match &entry.event {
                 Event::Update { update } => {
@@ -2805,6 +2808,14 @@ impl Hub {
                     {
                         Some("user_message_chunk") => turn.prompted = true,
                         Some("agent_message_chunk") => {
+                            let next_id =
+                                update.get("messageId").and_then(serde_json::Value::as_str);
+                            if let Some(next_id) = next_id {
+                                if message_id != Some(next_id) {
+                                    final_text.clear();
+                                }
+                                message_id = Some(next_id);
+                            }
                             if let Some(text) = update
                                 .get("content")
                                 .and_then(|content| content.get("text"))
@@ -2821,11 +2832,15 @@ impl Hub {
                             | "config_option_update",
                         )
                         | None => {}
-                        Some(_) => final_text.clear(),
+                        Some(_) => {
+                            final_text.clear();
+                            message_id = None;
+                        }
                     }
                 }
-                Event::TurnEnd { stop_reason } => {
+                Event::TurnEnd { stop_reason, usage } => {
                     turn.stop_reason = Some(stop_reason.clone());
+                    turn.usage = *usage;
                     break;
                 }
                 _ => {}
@@ -7219,6 +7234,7 @@ mod managed_call_tests {
         hub.push(
             "child",
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".into(),
             },
         );
@@ -7238,6 +7254,7 @@ mod managed_call_tests {
         hub.push(
             "child",
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".into(),
             },
         );
@@ -7245,6 +7262,68 @@ mod managed_call_tests {
         assert_eq!(ended.stop_reason.as_deref(), Some("end_turn"));
         assert_eq!(ended.final_text, "{\"verdict\":\"approve\"}");
         assert!(hub.managed_turn("missing", 0).is_none());
+    }
+
+    #[test]
+    fn managed_turn_does_not_prepend_commentary_to_a_distinct_final_message() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        for (message_id, text) in [
+            (Some("progress"), "The probes confirm the defect.\n"),
+            (Some("answer"), "{\"verdict\":"),
+            (Some("answer"), "\"needs-attention\""),
+            // Some adapters omit an ID on subsequent chunks of the same message.
+            (None, "}"),
+        ] {
+            hub.push(
+                "child",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": message_id,
+                        "content": {"type": "text", "text": text},
+                    }),
+                },
+            );
+            hub.push("child", update("agent_thought_chunk", "internal"));
+        }
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                usage: None,
+                stop_reason: "end_turn".into(),
+            },
+        );
+        // A later turn must never replace this call's result.
+        hub.push("child", update("agent_message_chunk", "next turn"));
+        let turn = hub.managed_turn("child", 0).unwrap();
+        assert_eq!(turn.final_text, "{\"verdict\":\"needs-attention\"}");
+        assert!(serde_json::from_str::<serde_json::Value>(&turn.final_text).is_ok());
+    }
+
+    #[test]
+    fn managed_turn_usage_is_scoped_to_the_first_end_after_its_cursor() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        let usage = crate::agent_model::TurnUsage::from_acp(
+            &agent_client_protocol::schema::v1::Usage::new(100, 90, 10),
+        )
+        .unwrap();
+        let end = |usage| Event::TurnEnd {
+            stop_reason: "end_turn".into(),
+            usage,
+        };
+        hub.push("child", end(Some(usage)));
+        let cursor = hub.last_event_seq("child").unwrap();
+        // A missing usage report stays unknown; never borrow an adjacent turn.
+        hub.push("child", end(None));
+        let next_cursor = hub.last_event_seq("child").unwrap();
+        hub.push("child", end(Some(usage)));
+        assert_eq!(hub.managed_turn("child", cursor).unwrap().usage, None);
+        assert_eq!(
+            hub.managed_turn("child", next_cursor).unwrap().usage,
+            Some(usage)
+        );
     }
 }
 
@@ -10313,6 +10392,7 @@ mod core_tests {
                     session_id: "cursor".to_owned(),
                     seq: u64::try_from(index * 3).unwrap(),
                     event: Event::TurnEnd {
+                        usage: None,
                         stop_reason: "done".to_owned(),
                     },
                     cmid: None,
@@ -10451,6 +10531,7 @@ mod core_tests {
         hub.push(
             "question-tail",
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".to_owned(),
             },
         );
@@ -11623,6 +11704,7 @@ mod core_tests {
         hub.push(
             "auth-refresh",
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".to_owned(),
             },
         );
@@ -11664,6 +11746,7 @@ mod core_tests {
             session_id: "s".to_owned(),
             seq: 1,
             event: Event::TurnEnd {
+                usage: None,
                 stop_reason: "done".to_owned(),
             },
             cmid: None,

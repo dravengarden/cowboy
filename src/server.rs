@@ -2341,7 +2341,7 @@ async fn flush_event_batch(
 
 async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow::Result<()> {
     for envelope in rows {
-        if let Event::TurnEnd { stop_reason } = &envelope.event
+        if let Event::TurnEnd { stop_reason, .. } = &envelope.event
             && let Some(raw_summary) = stop_reason.strip_prefix("error: ")
         {
             let occurred_at_ms = now_ms();
@@ -17755,6 +17755,7 @@ mod machine_provider_tests {
         hub.push(
             "s",
             crate::core::Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".to_owned(),
             },
         );

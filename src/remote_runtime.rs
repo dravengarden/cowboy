@@ -1025,6 +1025,7 @@ impl RemoteRuntime {
             self.shared.hub.push(
                 session_id,
                 Event::TurnEnd {
+                    usage: None,
                     stop_reason: "Cancelled".to_owned(),
                 },
             );
@@ -2797,9 +2798,11 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             },
         ),
         RuntimeEvent::TurnStarted { .. } => hub.set_status(session_id, Status::Busy, None),
-        RuntimeEvent::TurnEnded { stop_reason, .. } => {
+        RuntimeEvent::TurnEnded {
+            stop_reason, usage, ..
+        } => {
             let refused = stop_reason.eq_ignore_ascii_case("refusal");
-            hub.push(session_id, Event::TurnEnd { stop_reason });
+            hub.push(session_id, Event::TurnEnd { stop_reason, usage });
             if refused {
                 // Set the hold before releasing the dispatch guard, including
                 // when a reconnect has already projected an idle worker.
@@ -3331,6 +3334,7 @@ mod tests {
                 &hub,
                 "s",
                 RuntimeEvent::TurnEnded {
+                    usage: None,
                     turn_id: "turn-1".to_owned(),
                     stop_reason: stop_reason.to_owned(),
                 },
@@ -3440,6 +3444,7 @@ mod tests {
                 &hub,
                 "s",
                 RuntimeEvent::TurnEnded {
+                    usage: None,
                     turn_id: "turn-2".to_owned(),
                     stop_reason: "EndTurn".to_owned(),
                 },
@@ -3498,6 +3503,7 @@ mod tests {
             &hub,
             "s",
             RuntimeEvent::TurnEnded {
+                usage: None,
                 turn_id: "turn-1".to_owned(),
                 stop_reason: "EndTurn".to_owned(),
             },
@@ -4431,6 +4437,7 @@ mod tests {
                         worker_epoch: snapshot("s").worker_epoch,
                         runtime_seq: 2,
                         event: RuntimeEvent::TurnEnded {
+                            usage: None,
                             turn_id,
                             stop_reason: "end_turn".into(),
                         },
@@ -4680,7 +4687,7 @@ mod tests {
         );
         assert!(!runtime.shared.sent.lock().contains(&prompt));
         let events = hub.snapshot("s").unwrap().0;
-        assert_eq!(events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason } if stop_reason == "Cancelled")).count(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason, .. } if stop_reason == "Cancelled")).count(), 1);
         assert_eq!(events.iter().filter(|event| matches!(&event.event, Event::Update { update } if update.pointer("/content/text").and_then(serde_json::Value::as_str) == Some("cancel before startup"))).count(), 1);
         assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
     }
@@ -6042,6 +6049,7 @@ mod tests {
             (
                 3,
                 RuntimeEvent::TurnEnded {
+                    usage: None,
                     turn_id: "new-turn".to_owned(),
                     stop_reason: "EndTurn".to_owned(),
                 },

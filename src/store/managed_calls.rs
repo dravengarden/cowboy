@@ -72,6 +72,13 @@ macro_rules! dispatch {
 }
 
 impl Store {
+    /// Atomically choose one owner for equivalent captured review input. A new
+    /// explicit attempt after an unsuccessful completion can claim the input;
+    /// callers already waiting on that attempt must observe its actual failure.
+    pub async fn reserve_review_input(&self, record: &Record, identity: &str) -> Result<Record> {
+        dispatch!(self, reserve_review_input(record, identity))
+    }
+
     /// Hide/restore settled rows without deleting idempotency receipts, child
     /// ownership or budget accounting. The terminal predicate wins cancel races.
     pub async fn dismiss_managed_call(
@@ -141,6 +148,32 @@ impl Store {
 macro_rules! implementation {
     ($backend:ty) => {
         impl $backend {
+            async fn reserve_review_input(&self, record: &Record, identity: &str) -> Result<Record> {
+                let parent = &record.placement.parent_session_id;
+                let mut identity = identity.to_owned();
+                // Retain failed owners too. Replacing their reservation would
+                // silently redirect existing waiters to a later retry.
+                for _ in 0..128 {
+                    sqlx::query("INSERT INTO managed_review_inputs (parent_session_id, input_identity, call_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+                        .bind(parent).bind(&identity).bind(&record.call_id).execute(&self.pool).await?;
+                    let (owner,): (String,) = sqlx::query_as("SELECT call_id FROM managed_review_inputs WHERE parent_session_id = $1 AND input_identity = $2")
+                        .bind(parent).bind(&identity).fetch_one(&self.pool).await?;
+                    let original = self.managed_call(parent, &owner).await?
+                        .ok_or_else(|| anyhow::anyhow!("review input owner missing"))?;
+                    if owner == record.call_id
+                        || !original.state.terminal()
+                        || crate::managed_calls::review::complete(&original)
+                        || original.finished_at_ms.is_none_or(|finished| record.created_at_ms <= finished)
+                    {
+                        return Ok(original);
+                    }
+                    identity = crate::managed_calls::canonical_digest(&serde_json::json!({
+                        "input": identity, "after": owner
+                    }));
+                }
+                anyhow::bail!("review retry history limit")
+            }
+
             async fn dismiss_managed_call(&self, parent: &str, id: &str, dismissed: bool) -> Result<bool> {
                 let result = sqlx::query("UPDATE managed_agent_calls SET dismissed = $3 WHERE parent_session_id = $1 AND call_id = $2 AND state IN ('completed', 'failed', 'cancelled')")
                     .bind(parent).bind(id).bind(dismissed).execute(&self.pool).await?;
@@ -295,8 +328,113 @@ mod tests {
         assert_rejected_images_do_not_poison_event_batches(&store).await;
         assert_image_retention(&store, &first, &request).await;
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;
+        assert_review_reservations(&store, &first, &request).await;
         drop(store);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[allow(clippy::too_many_lines)] // One durable timeline covers concurrent owners, failure and retry.
+    async fn assert_review_reservations(store: &Store, template: &Record, input: &Request) {
+        let parent = serde_json::from_value(serde_json::json!({
+            "id":"review-reservations","provider":"codex","machine_id":"hawk","cwd":"/workspace",
+            "title":"Review","origin":"api","status":"running"
+        }))
+        .unwrap();
+        store.insert_session(&parent).await.unwrap();
+        let mut records = Vec::new();
+        for index in 0..4 {
+            let mut request = input.clone();
+            request.request_id = format!("reservation-{index}");
+            let mut record = template.clone();
+            record.placement.parent_session_id = "review-reservations".into();
+            record.call_id = format!("reservation-{index}");
+            record.child_session_id = format!("reservation-child-{index}");
+            record.request_id.clone_from(&request.request_id);
+            record.request_digest = request.digest();
+            record.created_at_ms = 100 + index * 100;
+            record.updated_at_ms = record.created_at_ms;
+            store.admit_managed_call(&record, &request).await.unwrap();
+            let mut starting = record.clone();
+            starting.state = State::Starting;
+            starting.revision += 1;
+            assert!(
+                store
+                    .advance_managed_call(&record, &starting)
+                    .await
+                    .unwrap()
+            );
+            records.push(starting);
+        }
+        let (left, right) = tokio::join!(
+            store.reserve_review_input(&records[0], "same-input"),
+            store.reserve_review_input(&records[1], "same-input"),
+        );
+        let original = left.unwrap();
+        assert_eq!(original.call_id, right.unwrap().call_id);
+        let waiter = if original.call_id == records[0].call_id {
+            &records[1]
+        } else {
+            &records[0]
+        };
+        let mut failed = original.clone();
+        failed.state = State::Failed;
+        failed.revision += 1;
+        failed.updated_at_ms = 250;
+        failed.finished_at_ms = Some(250);
+        assert!(
+            store
+                .advance_managed_call(&original, &failed)
+                .await
+                .unwrap()
+        );
+        let retry = store
+            .reserve_review_input(&records[2], "same-input")
+            .await
+            .unwrap();
+        assert_eq!(retry.call_id, records[2].call_id);
+        // A retry must not steal the already-waiting request's original outcome.
+        assert_eq!(
+            store
+                .reserve_review_input(waiter, "same-input")
+                .await
+                .unwrap()
+                .call_id,
+            original.call_id
+        );
+        let mut completed = retry.clone();
+        completed.state = State::Completed;
+        completed.revision += 1;
+        completed.updated_at_ms = 350;
+        completed.finished_at_ms = Some(350);
+        completed.input_revision = Some(crate::managed_calls::canonical_digest(
+            &serde_json::json!("snapshot"),
+        ));
+        completed.result = Some(serde_json::json!({
+            "reused_from":{"call_id":"native-proof"},
+            "structured":{"review_complete":true,"verdict":"needs-attention"}
+        }));
+        assert!(
+            store
+                .advance_managed_call(&retry, &completed)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .reserve_review_input(&records[3], "same-input")
+                .await
+                .unwrap()
+                .call_id,
+            retry.call_id
+        );
+        assert_eq!(
+            store
+                .reserve_review_input(&records[3], "changed-input")
+                .await
+                .unwrap()
+                .call_id,
+            records[3].call_id
+        );
     }
 
     async fn assert_rejected_images_do_not_poison_event_batches(store: &Store) {
@@ -317,6 +455,7 @@ mod tests {
             seq: 0,
             cmid: None,
             event: Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".into(),
             },
         };

@@ -320,6 +320,63 @@ observations say so; current catalog defaults never rewrite history. Start is
 the recorded transition to Running before submitting the idempotent prompt,
 not the first model token; finish is the controller's terminal observation.
 
+### Bounded review and exact-input reuse
+
+The workflow should perform one primary review, accept fixes through relevant
+tests and evidence, and request a targeted follow-up only for a concrete
+unresolved risk. Neither minimum rounds nor a model pair per aspect belongs in
+Cowboy. A repeated defect family calls for invariant/root-cause investigation,
+not a fresh full review. Reaching a budget never approves unresolved work.
+
+`calls.capabilities().review_input_reuse` advertises opt-in automatic reuse.
+Supply `task`, `base` (an immutable commit SHA) and the actual repository `root`
+to MCP `review.start`. CLI:
+`cowboy review --task <stable-id> --base <ref>
+--root <worktree>` resolves the
+merge-base with HEAD before submission. `fresh:true` / `--fresh` deliberately
+requests a new independent opinion. Use this contract only when the instruction
+and captured files contain all required evidence; mutable external paths and
+branch refs are not review input. Calls without this declaration retain their
+existing behavior.
+
+The compatible request encoding uses reserved labels `review_task`,
+`review_base` and `review_reuse` (`"true"` or `"false"`). They define review
+meaning, never permission or account selection. The exact identity includes
+parent placement/authority, task, root, base, captured HEAD/index/worktree,
+instruction, output schema, Provider generation, runtime, account, authentication
+generation and preset.
+Changing any of these invalidates reuse. Cosmetic titles/round labels do not.
+Continued conversations are excluded because their native history also matters.
+This avoids confusing an outer workspace snapshot with an external project.
+
+After capture and before worker activation, a durable reservation selects one
+original call. Concurrent duplicates wait for it; controller recovery observes
+the same reservation. A reused result identifies `reused_from` and starts no
+model request. Only a successful result explicitly reporting
+`review_complete:true` and `approve` or `needs-attention` can be reused by later
+requests. Completeness does not mean approval. Failed, cancelled, incomplete or
+truncated results are not reusable completion evidence; a later explicit retry
+gets a new reservation while existing waiters retain their original outcome.
+
+Final output follows native message IDs, so commentary immediately before the
+final message cannot corrupt structured output. ID-less Providers retain the
+existing tool-boundary fallback.
+
+Native ACP prompt-response usage is retained on the turn-end event and in the
+call result, including cancelled turns when the Provider reports it. Calls and
+MCP expose total/new/cached input and output; reasoning is an output subset.
+Cache writes are included in new input. Missing usage/cache fields remain
+unknown, including historical calls and older workers. Reused receipts point to
+the original usage and do not duplicate it. These are reported token counts, not
+billing, proof of cache reuse on continuation, or an estimate of waste.
+
+Native Providers own token accounting and review execution. Cowboy only retains
+and projects their evidence across Machine, call ledger and UI boundaries. The
+optional ACP turn usage field is additive: older readers ignore it and new
+readers accept old events without counters. Claude shares this contract when its
+adapter reports native usage; absence remains explicit. Remove local
+normalization when ACP standardizes one unambiguous input/cache representation.
+
 Clear ended calls supports individual selection, bulk selection and Undo.
 `POST /api/sessions/{id}/calls/dismiss` takes
 `{"call_ids":["call-id"],"dismissed":true}` (maximum 100); `false` restores
@@ -595,17 +652,16 @@ later depth/concurrency budgets require explicit authority attenuation.
 
 ## Suger integration boundary
 
-Do not change any files in `marketplace-service` or `artifacts` for this feature.
 The canonical `.claude/commands/speckit.*.md`, constitution, native skill wrappers,
 design inputs, finding ledger and task status semantics stay project-owned.
 The outer Suger workspace owns a shared integration instruction and thin adapter.
 It maps transport, not prompts or acceptance policy. Both agent runtimes discover
 the same instruction through their existing guidance surfaces.
 
-The inspected `speckit.review-pr` contract requires one persistent Claude reviewer
-across rounds and fresh Codex reviewers per round/aspect, with concurrent review
-and recomputed round inputs. Preserve that exact asymmetry. Cowboy grouping labels
-show round/aspect; they do not determine how many rounds or which findings block.
+Review-policy changes must update the canonical command and constitution in
+their owning project. The transport must not preserve an obsolete minimum round
+count or reviewer pairing as a second policy. Cowboy grouping labels show
+round/aspect; they do not determine how many rounds or which findings block.
 The handler remains responsible for fixes, verification and task/artifact updates.
 Cowboy never marks a Suger task complete because a child command exited zero.
 

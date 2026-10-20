@@ -37,6 +37,12 @@ struct CallInput {
     title: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    task: Option<String>,
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    fresh: bool,
 }
 
 fn auto() -> String {
@@ -51,7 +57,14 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
             || input.purpose.is_some()
             || input.capability.is_some()
             || input.child_session_id.is_some()))
-        || (!review && (input.focus.is_some() || input.design))
+        || (!review
+            && (input.focus.is_some()
+                || input.design
+                || input.task.is_some()
+                || input.base.is_some()
+                || input.fresh))
+        || (input.task.is_some() != input.base.is_some())
+        || (input.fresh && input.task.is_none())
         || (input.capability.is_some() && input.purpose.is_some())
     {
         return Err("invalid_argument");
@@ -74,7 +87,11 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
         input.purpose.unwrap_or_else(|| "analysis".into())
     };
     let instruction = if review {
-        crate::managed_calls::review_instruction(input.design, input.focus.as_deref().unwrap_or(""))
+        crate::managed_calls::review_instruction(
+            input.design,
+            input.focus.as_deref().unwrap_or(""),
+            input.base.as_deref(),
+        )
     } else {
         input.instruction.ok_or("invalid_argument")?
     };
@@ -85,6 +102,17 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
     if let Some(reason) = input.reason {
         labels.insert("selection_reason", reason);
     }
+    let mut output = json!({"format":"text"});
+    if let (Some(task), Some(base)) = (input.task, input.base) {
+        labels.insert(crate::managed_calls::review::TASK, task);
+        labels.insert(crate::managed_calls::review::BASE, base);
+        labels.insert(
+            crate::managed_calls::review::REUSE,
+            (!input.fresh).to_string(),
+        );
+        output =
+            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()});
+    }
     let conversation = match input.child_session_id {
         Some(child) => json!({"mode":"continue","child_session_id":child}),
         None => json!({"mode":"fresh"}),
@@ -93,7 +121,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
         serde_json::to_string(&json!({
             "schema":1,"request_id":operation,"purpose":purpose,"instruction":instruction,
             "context":{"scope":"current-worktree","files":input.files,"root":input.root},
-            "access":"read-only","conversation":conversation,"labels":labels
+            "access":"read-only","conversation":conversation,"labels":labels,"output":output
         }))
         .map_err(|_| "invalid_argument")?
         .as_bytes(),
@@ -813,5 +841,26 @@ mod tests {
             document_operation("a", "one"),
             document_operation("a", "two")
         );
+    }
+
+    #[test]
+    fn review_reuse_needs_an_explicit_task_root_and_immutable_base() {
+        for args in [
+            json!({"task":"task"}),
+            json!({"base":"a".repeat(40)}),
+            json!({"task":"task","base":"main","root":"/tasks/project"}),
+            json!({"task":"task","base":"a".repeat(40)}),
+            json!({"fresh":true}),
+        ] {
+            assert!(call_action("review.start", args, "op").is_err());
+        }
+        let args = json!({"task":"task","base":"a".repeat(40),"root":"/tasks/project"});
+        assert!(call_action("calls.start", args.clone(), "op").is_err());
+        let Action::Start { request, .. } = call_action("review.start", args, "op").unwrap() else {
+            panic!("expected start");
+        };
+        assert_eq!(request.labels[crate::managed_calls::review::REUSE], "true");
+        assert!(!request.output.is_text());
+        assert!(request.prompt().contains(&"a".repeat(40)));
     }
 }

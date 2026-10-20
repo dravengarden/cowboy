@@ -228,6 +228,7 @@ fn transcript_chunks_coalesce_and_tool_updates_fold_into_their_call() {
         envelope(
             8,
             Event::TurnEnd {
+                usage: None,
                 stop_reason: "end_turn".into(),
             },
         ),

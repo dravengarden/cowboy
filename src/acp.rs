@@ -3682,6 +3682,7 @@ async fn run_session(
                         sink.push(
                             &sid,
                             Event::TurnEnd {
+                                usage: None,
                                 stop_reason: "Cancelled".to_owned(),
                             },
                         );
@@ -3706,6 +3707,7 @@ async fn run_session(
                         }
                         sink.prompt_completed(&sid, cmid.as_deref(), if cancelled { "Cancelled" } else { "Error" });
                         sink.push(&sid, Event::TurnEnd {
+                            usage: None,
                             stop_reason: if cancelled { "Cancelled" } else { "Error" }.to_owned(),
                         });
                         state.set_status(Status::Running, None);
@@ -3825,6 +3827,7 @@ async fn run_session(
                         sink.push(
                             &sid,
                             Event::TurnEnd {
+                                usage: None,
                                 stop_reason: format!("error: {reason}"),
                             },
                         );
@@ -3843,6 +3846,7 @@ async fn run_session(
                         sink.push(
                             &sid,
                             Event::TurnEnd {
+                                usage: None,
                                 stop_reason: "Cancelled".to_owned(),
                             },
                         );
@@ -3869,6 +3873,7 @@ async fn run_session(
                         sink.push(
                             &sid,
                             Event::TurnEnd {
+                                usage: None,
                                 stop_reason: format!("error: {detail}"),
                             },
                         );
@@ -3897,6 +3902,7 @@ async fn run_session(
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {
+                                    usage: r.usage.as_ref().and_then(crate::agent_model::TurnUsage::from_acp),
                                     stop_reason: format!("{:?}", r.stop_reason),
                                 },
                             );
@@ -3951,6 +3957,7 @@ async fn run_session(
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {
+                                    usage: None,
                                     stop_reason: format!("error: {detail}"),
                                 },
                             );

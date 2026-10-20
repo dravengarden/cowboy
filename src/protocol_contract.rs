@@ -93,6 +93,7 @@ fn event_field_serialization_matches_typescript_fixtures() {
             detail: None,
         },
         Event::TurnEnd {
+            usage: None,
             stop_reason: "end_turn".to_owned(),
         },
     ];

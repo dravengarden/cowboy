@@ -43,7 +43,7 @@ impl State {
         matches!(
             (self, next),
             (Self::Queued, Self::Starting | Self::Cancelled | Self::Failed)
-            | (Self::Starting, Self::Running | Self::Stopping | Self::Failed)
+            | (Self::Starting, Self::Running | Self::Stopping | Self::Failed | Self::Completed)
             | (Self::Running, Self::WaitingInput | Self::Stopping | Self::Completed | Self::Failed)
             | (Self::WaitingInput, Self::Running | Self::Stopping | Self::Completed | Self::Failed)
             // Completion can win a cancellation race. Preserve actual success;
@@ -209,6 +209,9 @@ pub struct Summary<'a> {
     pub provider_account_id: &'a Option<crate::provider_account::ProviderAccountId>,
     pub input_revision: &'a Option<String>,
     pub has_result: bool,
+    pub usage: Option<crate::runtime_wire::TurnUsage>,
+    pub reused_from: Option<&'a str>,
+    pub reused_child_session_id: Option<&'a str>,
     pub runtime_machine_id: &'a Option<String>,
     pub provider_version: &'a Option<String>,
     pub cancel_requested: bool,
@@ -247,6 +250,21 @@ impl Record {
             provider_account_id: &self.provider_account_id,
             input_revision: &self.input_revision,
             has_result: self.result.is_some(),
+            usage: self
+                .result
+                .as_ref()
+                .and_then(|result| result.get("usage"))
+                .and_then(|usage| serde_json::from_value(usage.clone()).ok()),
+            reused_from: self
+                .result
+                .as_ref()
+                .and_then(|result| result.pointer("/reused_from/call_id"))
+                .and_then(serde_json::Value::as_str),
+            reused_child_session_id: self
+                .result
+                .as_ref()
+                .and_then(|result| result.pointer("/reused_from/child_session_id"))
+                .and_then(serde_json::Value::as_str),
             runtime_machine_id: &self.runtime_machine_id,
             provider_version: &self.provider_version,
             cancel_requested: self.cancel_requested_at_ms.is_some(),
@@ -334,6 +352,14 @@ impl Record {
     pub fn accepts(&self, next: &Self) -> bool {
         self.validate()
             && next.validate()
+            && (!(self.state == State::Starting && next.state == State::Completed)
+                || (next.child_cursor.is_none()
+                    && next.result.as_ref().is_some_and(|result| {
+                        result
+                            .pointer("/reused_from/call_id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(super::valid_id)
+                    })))
             && self.state.permits(next.state)
             && self.call_id == next.call_id
             && self.request_id == next.request_id

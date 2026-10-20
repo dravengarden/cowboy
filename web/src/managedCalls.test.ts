@@ -7,6 +7,7 @@ import {
   callStateLabel,
   callTitle,
   callModelLabel,
+  callUsageRows,
   callTimesTitle,
   callPreviewTitles,
   isManagedChild,
@@ -16,6 +17,37 @@ import {
   startedLabel,
 } from "./managedCalls";
 import type { SessionMeta } from "./protocol";
+
+test("call usage distinguishes missing evidence, cache reads, reasoning and reused results", () => {
+  assert.match(callUsageRows(null)[0]!.value, /Not reported/);
+  const rows = callUsageRows({
+    total_tokens: 1110,
+    input_tokens: 1000,
+    output_tokens: 110,
+    cached_input_tokens: 900,
+    uncached_input_tokens: 100,
+    cache_write_tokens: 20,
+    reasoning_tokens: 50,
+  });
+  assert.equal(
+    rows.find((row) => row.label === "New input tokens")!.value,
+    "100",
+  );
+  assert.equal(
+    rows.find((row) => row.label === "Cached input tokens")!.value,
+    "900",
+  );
+  assert.equal(rows.find((row) => row.label === "Output tokens")!.value, "110");
+  assert.equal(
+    rows.find((row) => row.label === "Total tokens")!.value,
+    (1110).toLocaleString(),
+  );
+  assert.match(rows[4]!.label, /included in output/);
+  assert.match(
+    callUsageRows(null, "call-original")[0]!.value,
+    /no new model request/,
+  );
+});
 
 test("execution parameters preserve recorded observations and mark missing history", () => {
   assert.deepEqual(callExecutionParameters({ configuration: null, preset: "historic-preset" }), [
