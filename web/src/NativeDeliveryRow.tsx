@@ -2,6 +2,9 @@ import { useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import { ConfirmSheet } from "./Sheet";
 import { NetworkButton } from "./NetworkActionFeedback";
+import { MessagePreview } from "./MessagePreview";
+import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
+import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import { discardQueued, type QueuedMessage, retryQueued } from "./store";
 
 /** Pending native input is receipt-owned, never an editable/replayable queue row. */
@@ -9,11 +12,13 @@ export function NativeDeliveryRow(
   { sessionId, row }: { sessionId: string; row: QueuedMessage },
 ): React.JSX.Element {
   const [dismiss, setDismiss] = useState(false);
+  const tray = attachmentTrayForSurface(row.attachments, row.text);
   return (
     <Box sx={{ py: 0.75 }}>
-      <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-        {row.text || `${row.attachments.length} attachments`}
-      </Typography>
+      {row.text.trim() !== "" && (
+        <MessagePreview text={row.text} attachments={row.attachments} />
+      )}
+      {tray.length > 0 && <QueuedAttachmentChips attachments={tray} />}
       <Typography variant="caption" color="text.secondary">
         {row.nativeDelivery === "interrupt"
           ? "Interrupt & send"

@@ -8,6 +8,8 @@ import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 import { composerStackExpandedStore } from "./composerStackAccordion";
 import { MessagePreview } from "./MessagePreview";
+import { NativeDeliveryRow } from "./NativeDeliveryRow";
+import type { Attachment } from "./attachments";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 60));
 function check(value: unknown, message: string): asserts value {
@@ -271,6 +273,42 @@ export async function checkPendingPreviewTouchDisclosure(): Promise<string> {
     await tick();
     check(disclosure().textContent?.includes("Show less"), "Keyboard click expands");
     check(opened.length === 0, "Disclosure never opens the card's edit");
+    const image: Attachment = {
+      id: "native-preview-image",
+      name: "pasted-image-1.png",
+      mimeType: "image/png",
+      isImage: true,
+      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=",
+      block: { type: "image", data: "", mimeType: "image/png" },
+    };
+    const file: Attachment = {
+      id: "native-preview-file",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      isImage: false,
+      block: { type: "resource", resource: { uri: "file:///notes.txt", text: "notes", mimeType: "text/plain" } },
+    };
+    const renderNative = (text: string, attachments: Attachment[]): void => {
+      flushSync(() => root.render(
+        <SurfaceProvider><BrowserProductTheme>
+          <NativeDeliveryRow sessionId="native-preview-fixture" row={{
+            id: "native-preview", text, attachments,
+            currentTurn: true, nativeDelivery: "current_turn", status: "sending",
+          }} />
+        </BrowserProductTheme></SurfaceProvider>,
+      ));
+    };
+    renderNative(`![${image.name}](cowboy-att:${image.id})\n而且页面还是这样`, [image, file]);
+    await tick();
+    check(!container.textContent?.includes("cowboy-att:"), "Current turn hides internal image references");
+    check(container.textContent?.includes("而且页面还是这样"), "Current turn retains the message text");
+    check(container.textContent?.includes("Steer · sending"), "Current turn retains its delivery status");
+    check(container.textContent?.includes(file.name), "Current turn shows file attachments by name");
+    const preview = container.querySelector<HTMLImageElement>("img.cm-inline-image");
+    check(preview?.complete && preview.naturalWidth > 0, "Current turn renders its inline image");
+    renderNative("", [image]);
+    await tick();
+    check(container.querySelector<HTMLImageElement>("img")?.naturalWidth, "Attachment-only current turn renders its image");
     return "Pending preview Show more toggles once per stationary touch, consumes its paired click, ignores scrolls, and keeps mouse/keyboard clicks";
   } finally {
     root.unmount();
