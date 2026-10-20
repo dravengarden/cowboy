@@ -285,12 +285,7 @@ mod record {
                         std::os::unix::fs::symlink(state.path().join("absent"), &path).unwrap()
                     }
                     "directory" => std::fs::create_dir(&path).unwrap(),
-                    "fifo" => rustix::fs::mkfifoat(
-                        rustix::fs::CWD,
-                        &path,
-                        rustix::fs::Mode::from_raw_mode(0o600),
-                    )
-                    .unwrap(),
+                    "fifo" => crate::test_fifo(&path).unwrap(),
                     _ => {}
                 }
                 if !matches!(case, "link" | "directory" | "fifo") {

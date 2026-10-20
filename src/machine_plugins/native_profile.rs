@@ -1562,7 +1562,7 @@ mod tests {
         for credential in &package.manifest.authentication.credential_files {
             let path = home.join(&credential.relative_path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            rustix::fs::mkfifoat(rustix::fs::CWD, path, rustix::fs::Mode::RUSR).unwrap();
+            crate::test_fifo(path).unwrap();
         }
         let receipt = scoped
             .native_profile_receipt("claude-code", 1, "login-1")
@@ -1781,12 +1781,7 @@ mod tests {
         for credential in &package.manifest.authentication.credential_files {
             let path = home.join(&credential.relative_path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            rustix::fs::mkfifoat(
-                rustix::fs::CWD,
-                path,
-                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            )
-            .unwrap();
+            crate::test_fifo(path).unwrap();
         }
         assert_eq!(
             scoped

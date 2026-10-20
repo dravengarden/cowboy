@@ -325,14 +325,7 @@ fn corrupt_unknown_oversized_public_linked_and_special_evidence_is_rejected() {
     file.set_len(MAX_BINDING_BYTES + 1).unwrap();
     assert!(Bindings::open(&huge).is_err());
     let fifo = root.path().join("fifo");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .unwrap();
+    crate::test_fifo(&fifo).unwrap();
     assert!(Bindings::open(&fifo).is_err());
 }
 

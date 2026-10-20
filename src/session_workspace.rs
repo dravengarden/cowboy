@@ -1984,12 +1984,7 @@ mod tests {
         let temp = TestDir::new();
         let (workspace, session, _, _) = observed_cleanup_target(&temp);
         let target = session.join("project/target");
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            target.join("debug/deps/pipe"),
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .unwrap();
+        crate::test_fifo(target.join("debug/deps/pipe")).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
             sender
@@ -2309,12 +2304,7 @@ mod tests {
                         "link" => {
                             std::os::unix::fs::symlink(target.join("original-tag"), &tag).unwrap()
                         }
-                        "fifo" => rustix::fs::mkfifoat(
-                            rustix::fs::CWD,
-                            &tag,
-                            rustix::fs::Mode::from_raw_mode(0o600),
-                        )
-                        .unwrap(),
+                        "fifo" => crate::test_fifo(&tag).unwrap(),
                         _ => unreachable!(),
                     }
                 }
@@ -2827,12 +2817,7 @@ mod tests {
             let target = session.join("target");
             write_cargo_target(&target);
             std::fs::remove_file(target.join(name)).unwrap();
-            rustix::fs::mkfifoat(
-                rustix::fs::CWD,
-                target.join(name),
-                rustix::fs::Mode::from_raw_mode(0o600),
-            )
-            .unwrap();
+            crate::test_fifo(target.join(name)).unwrap();
             let observation = capture_cleanup_workspace(&managed, "sess-fifo", &session).unwrap();
             let (sender, receiver) = std::sync::mpsc::channel();
             let thread = std::thread::spawn(move || {

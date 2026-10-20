@@ -184,6 +184,7 @@
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
           ./src/provider_account.rs
+          ./src/provider_account
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
@@ -241,6 +242,7 @@
         ./src/provider/mod.rs
         ./src/provider_behavior.rs
         ./src/provider_account.rs
+        ./src/provider_account
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
         ./src/execution_environment.rs
@@ -755,6 +757,7 @@
         test -e ${machine-src}/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
         test -e ${machine-src}/src/provider_account.rs
+        test -e ${machine-src}/src/provider_account/portable_contract.rs
         test -e ${machine-src}/src/cgroup/containment/linux.rs
         test -e ${machine-src}/src/code_buffer_read/content.rs
         test -e ${machine-src}/src/code_buffer_read/text.rs

@@ -921,14 +921,7 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         assert!(apply_with(&request(&directory, b"", b"x", vec![]), |_| {}).is_err());
         let fifo = dir.path().join("fifo");
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            &fifo,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_raw_mode(0o600),
-            0,
-        )
-        .unwrap();
+        crate::test_fifo(&fifo).unwrap();
         assert!(apply_with(&request(&fifo, b"", b"x", vec![]), |_| {}).is_err());
         assert_eq!(temps(dir.path()), 0);
         let mut relative = request(&path, b"abcdef", b"abcdef", vec![]);

@@ -235,3 +235,18 @@ mod web_push;
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod workspace_extensions;
+
+/// FIFO fixtures use the POSIX utility: rustix's *at constructors are absent
+/// on macOS. Keep special-file rejection tests active on both host platforms.
+#[cfg(all(test, any(feature = "full", feature = "machine-host")))]
+pub(crate) fn test_fifo(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    let status = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(path.as_ref())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("mkfifo failed: {status}")))
+    }
+}
