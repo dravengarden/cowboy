@@ -240,14 +240,7 @@ async fn host_preflight_does_not_invent_an_identity_or_follow_an_unsafe_identity
             "oversized" => write(&path, &[b' '; 129]),
             "link" => symlink(root.path().join("saved-identity"), &path).unwrap(),
             "directory" => fs::create_dir(&path).unwrap(),
-            "fifo" => rustix::fs::mknodat(
-                rustix::fs::CWD,
-                &path,
-                rustix::fs::FileType::Fifo,
-                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-                0,
-            )
-            .unwrap(),
+            "fifo" => crate::test_fifo(&path).unwrap(),
             _ => unreachable!(),
         }
         let before = fingerprint(root.path());

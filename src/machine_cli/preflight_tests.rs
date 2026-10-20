@@ -284,12 +284,7 @@ async fn unsafe_writer_files_are_rejected_without_initialization_or_blocking() {
             }
             "dangling" => symlink(&other, &policy).unwrap(),
             "directory" => fs::create_dir(&policy).unwrap(),
-            "fifo" => rustix::fs::mkfifoat(
-                rustix::fs::CWD,
-                &policy,
-                rustix::fs::Mode::from_raw_mode(0o600),
-            )
-            .unwrap(),
+            "fifo" => crate::test_fifo(&policy).unwrap(),
             _ => {
                 write_policy(root.path(), &config());
                 match case {

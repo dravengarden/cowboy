@@ -1765,12 +1765,7 @@ mod tests {
             }
             "key-fifo" => {
                 std::fs::remove_file(key).unwrap();
-                rustix::fs::mkfifoat(
-                    rustix::fs::CWD,
-                    key,
-                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-                )
-                .unwrap();
+                crate::test_fifo(key).unwrap();
             }
             "key-oversized" => {
                 std::fs::OpenOptions::new()

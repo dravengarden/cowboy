@@ -300,7 +300,7 @@ mod tests {
         );
         assert!(read_login_file(home.path(), "credentials", 10).is_err());
         fs::remove_file(&path).unwrap();
-        rustix::fs::mkfifoat(rustix::fs::CWD, &path, Mode::RUSR | Mode::WUSR).unwrap();
+        crate::test_fifo(&path).unwrap();
         assert!(read_login_file(home.path(), "credentials", 1024).is_err());
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();

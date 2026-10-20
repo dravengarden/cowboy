@@ -347,12 +347,7 @@ mod tests {
     fn directory_observations_refuse_special_files_without_waiting_for_a_writer() {
         let parent = tempfile::tempdir().unwrap();
         let fifo = parent.path().join("fifo");
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            &fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .unwrap();
+        crate::test_fifo(&fifo).unwrap();
         assert!(observe(&fifo).is_none());
         let mut identities = SessionRootIdentities::default();
         assert!(identities.observe(fifo.to_str().unwrap()).is_err());
