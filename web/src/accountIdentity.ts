@@ -20,6 +20,10 @@ export function accountIdentity(
 ): AccountIdentity {
   if (!id) return { label: "Not recorded", short: "Account unknown", description: "Execution account was not recorded.", named: false, available: false };
   const named = id !== "default";
+  if (named && !accounts) return {
+    id, label: "Account not loaded", short: "Account …",
+    description: "Account details have not been loaded.", named: true, available: false,
+  };
   const account = named ? accounts?.registry.accounts.find((item) => item.id === id && item.provider_id === provider) : undefined;
   const label = named ? account?.label : accounts?.display_preferences?.values.legacy_labels[provider];
   const full = label || (named ? "Account unavailable" : "Service account");

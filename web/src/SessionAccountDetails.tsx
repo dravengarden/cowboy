@@ -36,7 +36,7 @@ export function SessionAccountDetails({ session }: { session: SessionMeta }): Re
         {providerName(session.provider, session.provider_version, session.provider_generation_digest)}
         {session.provider_version ? ` · v${session.provider_version}` : ""}
       </Typography>
-      {!account.available && <Typography variant="caption" color="warning.main">{account.description}</Typography>}
+      {scoped && !account.available && <Typography variant="caption" color="warning.main">{account.description}</Typography>}
       {rows.length ? rows.map((row) => <Box key={row.id}>
         <Stack direction="row" justifyContent="space-between" spacing={1}>
           <Typography variant="caption" color="text.secondary">{row.label}</Typography>

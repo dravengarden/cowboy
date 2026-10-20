@@ -284,7 +284,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "info-metrics"
         ? 30
         : suite === "subscriptions"
-        ? 128
+        ? 131
         : suite === "about-layout"
         ? 10
         : suite === "session-maintenance"

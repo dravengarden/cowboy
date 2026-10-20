@@ -94,18 +94,17 @@ async fn advance(
     next.updated_at_ms = now_ms().max(previous.updated_at_ms);
     if previous.state == State::Starting && next.state == State::Running {
         next.started_at_ms = Some(next.updated_at_ms);
-        next.provider_account_id = state
-            .hub
-            .session_info(&next.child_session_id)
-            .filter(|child| {
-                child.meta.provider == next.provider
-                    && Some(&child.meta.machine_id) == next.runtime_machine_id.as_ref()
-                    && Some(child.meta.provider_version.as_str())
-                        == next.provider_version.as_deref()
-                    && Some(child.meta.provider_generation_digest.as_str())
-                        == next.provider_generation_digest.as_deref()
-            })
-            .map(|child| child.meta.provider_account_id);
+        next.provider_account_id =
+            state
+                .hub
+                .session_info(&next.child_session_id)
+                .and_then(|child| {
+                    observed_account(
+                        &child.meta,
+                        &next.provider,
+                        next.runtime_machine_id.as_deref(),
+                    )
+                });
         next.configuration = state
             .supervisor
             .observed_configuration(&next.child_session_id)
@@ -140,6 +139,17 @@ async fn advance(
             false
         }
     }
+}
+
+/// A continued child can upgrade its Provider release while keeping its account
+/// binding. The release is not an account identity and must not erase evidence.
+fn observed_account(
+    child: &crate::core::SessionMeta,
+    provider: &str,
+    runtime: Option<&str>,
+) -> Option<crate::provider_account::ProviderAccountId> {
+    (child.provider == provider && Some(child.machine_id.as_str()) == runtime)
+        .then(|| child.provider_account_id.clone())
 }
 
 fn fail(code: &'static str, detail: Option<String>) -> impl FnOnce(&mut Record) {
@@ -920,5 +930,28 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 fn settle(state: &AppState, record: &Record) {
     if state.supervisor.has_live_worker(&record.child_session_id) {
         let _ = state.supervisor.hibernate_session(&record.child_session_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_observation_survives_child_release_updates_but_not_other_placements() {
+        let mut child: crate::core::SessionMeta = serde_json::from_value(json!({
+            "id": "child", "provider": "codex", "machine_id": "ovh",
+            "provider_version": "1.0.0", "provider_generation_digest": "old",
+            "cwd": "/workspace", "title": "Review", "status": "running"
+        }))
+        .unwrap();
+        let account = Some(child.provider_account_id.clone());
+        assert_eq!(observed_account(&child, "codex", Some("ovh")), account);
+        child.provider_version = "2.0.0".into();
+        child.provider_generation_digest = "new".into();
+        assert_eq!(observed_account(&child, "codex", Some("ovh")), account);
+        assert_eq!(observed_account(&child, "claude-code", Some("ovh")), None);
+        assert_eq!(observed_account(&child, "codex", Some("hawk")), None);
+        assert_eq!(observed_account(&child, "codex", None), None);
     }
 }

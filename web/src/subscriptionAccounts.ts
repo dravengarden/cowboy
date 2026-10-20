@@ -76,9 +76,16 @@ async function refresh(): Promise<void> {
       }
       publish();
     } while (invalidated && !productSessionSignal().aborted);
-  })().finally(() => { pending = undefined; });
+  })().finally(() => {
+    pending = undefined;
+    // A preference event can run after the loop's final check but before this
+    // continuation. Keep it in the same refresh promise instead of losing it.
+    if (invalidated && listeners.size > 0 && !productSessionSignal().aborted) return refresh();
+    return undefined;
+  });
   return pending;
 }
+function reload(): Promise<void> { invalidated = true; return refresh(); }
 function changed(event: Event) {
   const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
   if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) {
@@ -111,5 +118,5 @@ export function useSubscriptionAccounts(connected = true) {
     if (!current().data || invalidated || (connected && !previous.current)) void refresh();
     previous.current = connected;
   }, [connected]);
-  return { ...value, refresh };
+  return { ...value, refresh: reload };
 }

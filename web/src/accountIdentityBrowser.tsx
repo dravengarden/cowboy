@@ -10,8 +10,9 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 
-function Row({ id }: { id: string }) {
-  const { data } = useSubscriptionAccounts();
+function Row({ id, captureRefresh }: { id: string; captureRefresh?: (refresh: () => Promise<void>) => void }) {
+  const { data, refresh } = useSubscriptionAccounts();
+  captureRefresh?.(refresh);
   return <Stack direction="row" spacing={0.5} alignItems="center">
     <Typography variant="caption">columbus</Typography>
     <AccountBadge account={accountIdentity(data, "claude-code", id)} />
@@ -32,13 +33,34 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
   };
   let reads = 0;
   let release: (() => void) | undefined;
+  let pauseNext = false;
+  let invalidateOnParse = false;
+  let refreshAccounts: (() => Promise<void>) | undefined;
   const requests: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input); requests.push(url);
     if (url === "/api/provider-accounts") {
       ++reads;
-      if (reads === 1) await new Promise<void>((resolve) => { release = resolve; });
-      return Response.json(inventory);
+      if (reads === 1 || pauseNext) {
+        pauseNext = false;
+        await new Promise<void>((resolve) => { release = resolve; });
+      }
+      const response = Response.json(inventory);
+      if (invalidateOnParse) {
+        invalidateOnParse = false;
+        response.json = () => {
+          const observed = structuredClone(inventory);
+          // The first microtask runs before the awaiting refresh resumes.
+          // The second runs after its loop check, before pending is cleared.
+          queueMicrotask(() => queueMicrotask(() => {
+            inventory.registry.revision++;
+            inventory.registry.accounts[0]!.label = "Claude · Otter";
+            window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { provider_accounts: inventory.registry.revision } }));
+          }));
+          return Promise.resolve(observed);
+        };
+      }
+      return response;
     }
     return new Response(null, { status: 503 });
   }) as typeof fetch;
@@ -57,12 +79,14 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
   };
   try {
     flushSync(() => root.render(<BrowserProductTheme><CssBaseline /><Stack spacing={1}>
-      <Row id="default" /><Row id="otter" />
+      <Row id="default" captureRefresh={(refresh) => { refreshAccounts = refresh; }} /><Row id="otter" />
       <SessionProviderSection session={{ id: "named-fixture", cwd: "/workspace", title: "Test", status: "exited",
         provider: "claude-code", provider_account_id: "otter", owner_user_id: "subscription-fixture", machine_id: "ovh" }} />
     </Stack></BrowserProductTheme>));
     await waitFor(() => Boolean(release));
     check(reads === 1, "multiple session surfaces share one pending inventory request");
+    check(container.textContent!.includes("Account not loaded") && !container.textContent!.includes("Account unavailable"),
+      "pending account inventory does not report an unavailable subscription");
     window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { subscriptions: 2 } }));
     release!();
     await waitFor(() => reads === 2 && container.textContent!.includes("Claude · Otter"));
@@ -82,6 +106,18 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
     await waitFor(() => container.textContent!.includes("A very long custom"));
     check(container.scrollWidth <= container.clientWidth + 1, "custom labels truncate in rows and wrap in settings");
     check(reads === 3, "account rename updates every mounted surface with one request");
+    invalidateOnParse = true;
+    await refreshAccounts!();
+    await waitFor(() => reads === 5 && container.querySelector('[data-account-badge="otter"]')?.textContent === "Otter");
+    check(reads === 5, "invalidation between the loop check and pending cleanup triggers a fresh read");
+    pauseNext = true;
+    release = undefined;
+    const firstRefresh = refreshAccounts!();
+    await waitFor(() => Boolean(release));
+    const concurrentRefresh = refreshAccounts!();
+    release!();
+    await Promise.all([firstRefresh, concurrentRefresh]);
+    check(reads === 7, "manual refresh during an in-flight read waits for a newer observation");
     return results;
   } finally {
     release?.(); root.unmount(); container.remove(); globalThis.fetch = originalFetch;

@@ -13,12 +13,17 @@ test("session binding stays on the original account when creation default change
   expect(sessionAccountIdentity(inventory, { provider: "claude-code", provider_account_id: "otter", owner_user_id: "owner" }).short).toBe("Otter");
 });
 test("labels are owner and Provider scoped; missing named account never borrows default", () => {
-  expect(sessionAccountIdentity(inventory, { provider: "claude-code", provider_account_id: "otter", owner_user_id: "other" }).label).toBe("Account unavailable");
+  expect(sessionAccountIdentity(inventory, { provider: "claude-code", provider_account_id: "otter", owner_user_id: "other" }).label).toBe("Account not loaded");
   expect(accountIdentity(inventory, "codex", "otter").available).toBe(false);
   expect(accountIdentity(inventory, "claude-code", "deleted").label).toBe("Account unavailable");
   const disabled = structuredClone(inventory);
   disabled.registry.accounts[0]!.enabled = false;
   expect(accountIdentity(disabled, "claude-code", "otter")).toMatchObject({ label: "Claude · Otter", available: false });
+});
+test("unloaded inventory stays unknown without authorizing account controls", () => {
+  expect(accountIdentity(undefined, "claude-code", "otter")).toMatchObject({
+    id: "otter", label: "Account not loaded", short: "Account …", available: false, named: true,
+  });
 });
 test("Calls use recorded execution binding; missing history is not today's default or parent account", () => {
   expect(accountIdentity(inventory, "codex", "default").short).toBe("Pika");
