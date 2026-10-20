@@ -201,7 +201,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
     const draft = names[`legacy:${id}`];
     return { title: snapshot?.display_preferences?.values.legacy_labels[id], controls: <Stack spacing={1}>
       <Stack direction="row" spacing={1} alignItems="center">
-        <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled || !snapshot?.display_preferences} fullWidth
+        <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled || !snapshot?.display_preferences} fullWidth sx={{ minWidth: 0 }}
           onChange={(event) => setNames((old) => ({ ...old, [`legacy:${id}`]: event.target.value }))} />
         <Button disabled={disabled || !snapshot?.display_preferences || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
           onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save</Button>
@@ -218,12 +218,12 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
             <Typography variant="subtitle2" fontWeight={700} sx={{ overflowWrap: "anywhere" }}>{account.label}</Typography>
             <Typography variant="caption" color="text.secondary">{providers.find((entry) => entry.provider_id === account.provider_id)?.manifest.display.name ?? account.provider_id}{snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}{account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}</Typography>
           </Box>
-          <Button aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>
+          <Button sx={{ flexShrink: 0 }} aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>
         </Stack>
         {owner && <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label} disabled={disabled || !account.enabled || Boolean(account.revoking)} />}
         {editing.includes(account.id) && <Stack spacing={1}>
           <Stack direction="row" spacing={1}>
-            <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} fullWidth onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
+            <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} fullWidth sx={{ minWidth: 0 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
             <Button disabled={disabled || !validSubscriptionLabel(names[account.id] ?? "") || names[account.id]?.trim() === account.label} onClick={() => save({ type: "rename", id: account.id, label: names[account.id]!.trim() })}>Save</Button>
           </Stack>
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>

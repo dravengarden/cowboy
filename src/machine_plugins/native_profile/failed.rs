@@ -83,6 +83,10 @@ mod tests {
                 .unwrap();
             assert!(home.is_dir());
             assert_eq!(fs::read(&path).unwrap(), bytes);
+            if pending.identity.is_none() {
+                assert!(validate_reservation(&root, "new-login").is_err());
+            }
+            assert!(validate_reservation(&root, "login-1").is_err());
         }
         fs::write(&path, serde_json::to_vec(&failed).unwrap()).unwrap();
         assert!(

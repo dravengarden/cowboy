@@ -56,7 +56,11 @@ type LoginSessions = Arc<parking_lot::Mutex<std::collections::HashMap<String, Lo
 fn request_login_cancel(sessions: &LoginSessions, request: &str) -> bool {
     let mut entries = sessions.lock();
     let Some(session) = entries.get_mut(request) else {
-        return false;
+        // No live task accepts input for this request. Cancellation is
+        // idempotent intent, NOT proof of process exit or credential cleanup.
+        // Durable native profiles/candidate receipts still fence redispatch
+        // and any new login whose predecessor has not conclusively exited.
+        return true;
     };
     if let Some(candidate) = session.candidate.as_mut() {
         session.cancel.send_replace(true);

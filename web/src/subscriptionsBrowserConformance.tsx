@@ -11,6 +11,7 @@ import { classifySurface } from "./surface/profile";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
+import { SubscriptionLoginForm } from "./SubscriptionLogin";
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
   const state = useSessionSubscription(true, "claude-code");
@@ -29,12 +30,16 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   const desktop = surface === "desktop";
   const profile = classifySurface({ finePointer: desktop, hover: desktop, tabletWidth: false, touchCapable: !desktop, desktopHost: desktop });
   const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
+  const fontSize = document.documentElement.style.fontSize;
+  document.documentElement.style.fontSize = desktop ? "16px" : "10px";
   document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, !desktop);
   bindProductSyncPrincipal("subscription-fixture");
   resetProviderCatalog();
   const entry = managementEntryFixture("claude-code");
   entry.manifest.display.name = "Claude Code";
   entry.publisher = entry.manifest.publisher;
+  const unpublished = { ...entry, manifest: { ...entry.manifest, version: "999.0.0" }, provider_version: "999.0.0",
+    package_digest: `sha256:${"4".repeat(64)}`, release_state: "unbound" as const, artifact_digest: null };
   const realFetch = globalThis.fetch;
   const container = document.createElement("div");
   container.style.cssText = `width:${desktop ? 1000 : 360}px;max-width:100%;padding:12px;box-sizing:border-box`;
@@ -60,7 +65,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   let reject = false;
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
-    if (path === "/api/plugins") return Response.json({ providers: [entry], authentication_executors: [], authentications: [{
+    if (path === "/api/plugins") return Response.json({ providers: [entry, unpublished], authentication_executors: [], authentications: [{
       provider_id: entry.provider_id, authentication_scope: entry.authentication_scope, auth_generation: 1,
       authentication_state: "ready", distribution_state: "current", auth_contract_fingerprint: `sha256:${"3".repeat(64)}`,
       portable_schema: "fixture", projection_schema: "fixture", updated_at_ms: 1,
@@ -129,6 +134,20 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => Boolean(button("Disable") && !button("Disable")!.disabled));
     check(container.querySelectorAll("[data-provider-credential-card]").length === 1 && container.querySelectorAll("[data-subscription-account]").length === 1,
       "Service and named accounts render once in the same account surface");
+    check(!container.querySelector("[data-provider-release-warning]"),
+      "an unpublished declaration does not warn when a signed authentication runtime is available");
+    const legacyCard = container.querySelector<HTMLElement>("[data-provider-credential-card]")!;
+    const namedCard = container.querySelector<HTMLElement>("[data-subscription-account]")!;
+    const grid = container.querySelector<HTMLElement>("[data-provider-management-grid]")!;
+    if (!desktop) {
+      check(Math.abs(legacyCard.getBoundingClientRect().width - grid.clientWidth) < 2 &&
+        Math.abs(namedCard.getBoundingClientRect().width - grid.clientWidth) < 2,
+      "phone cards use the full available width even with small global text");
+    } else {
+      check(legacyCard.getBoundingClientRect().width >= Math.min(320, grid.clientWidth) &&
+        (grid.clientWidth < 800 || Math.abs(legacyCard.getBoundingClientRect().top - namedCard.getBoundingClientRect().top) < 2),
+      "desktop cards share columns only when each has enough room");
+    }
     await until(() => Boolean(button("Open sign-in")));
     check(container.querySelector("[data-subscription-account]")!.textContent!.includes("ovh · Waiting for sign-in") && lifecycleWrites.length === 0,
       "the account card discovers an agent-started Machine sign-in without dispatching or probing a Provider");
@@ -196,6 +215,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     check(Boolean(link && link.rel.includes("noopener") && link.rel.includes("noreferrer")), "native sign-in stays on the Provider page without opener access");
     check(!sessionStorage.getItem(loginKey)!.includes("private"), "authorization link stays out of persisted recovery metadata");
     await observe?.(surface, "login");
+    await until(() => Boolean(dialogButton("Cancel sign-in") && !dialogButton("Cancel sign-in")!.disabled));
     dialogButton("Cancel sign-in")!.focus();
     check(document.activeElement === dialogButton("Cancel sign-in"), "native sign-in cancellation is keyboard focusable");
     dialogButton("Cancel sign-in")!.click();
@@ -272,6 +292,65 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => document.body.textContent!.includes("Signed in on this Machine"));
     check(handoffWrites.length === 1 && handoffReads.filter((path) => path.includes("/logins/")).length >= 2 &&
       !document.querySelector('a[href^="https://claude.ai/oauth/"]'), "reopening a completed handoff reads its receipt without restarting authorization");
+    root.unmount(); root = createRoot(container); sessionStorage.removeItem(handoffKey);
+    const continueFetch = globalThis.fetch;
+    const restartEffects: string[] = [];
+    let readinessReads = 0;
+    const nextRequest = "provider-login-explicit-restart";
+    const nextReceipt = { status: "active", request_id: nextRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh" };
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path === `/api/provider-accounts/${handoffAccount}/logins/${handoffRequest}`) {
+        if (init?.method) restartEffects.push(init.method);
+        return Response.json({ status: init?.method === "DELETE" ? "cancellation_requested" : "inactive",
+          cancel_requested: init?.method === "DELETE", request_id: handoffRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh" });
+      }
+      if (path === `/api/provider-accounts/${handoffAccount}/login?machine_id=ovh`) {
+        readinessReads++;
+        return Response.json({
+          account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh", available: true, reason: null,
+          release: { provider_version: "1", generation_digest: "digest" }, methods: [{ id: "native", label: "Personal Claude subscription", available: true, reason: null }],
+        });
+      }
+      if (path === `/api/provider-accounts/${handoffAccount}/login` && init?.method === "POST") {
+        restartEffects.push("POST");
+        throw new Error("fixture loses the new login reply after dispatch");
+      }
+      if (path.startsWith("/api/provider-accounts/login-operations/")) return Response.json(nextReceipt);
+      if (path === `/api/providers/claude-code/auth/${nextRequest}`) return Response.json({ request_id: nextRequest, events: [] });
+      return continueFetch(url, init);
+    }) as typeof fetch;
+    handoffRender();
+    await until(() => Boolean(dialogButton("Start again")));
+    await observe?.(surface, "expired");
+    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]') && !document.querySelector('input[type="password"]'),
+      "expired handoff hides the old authorization link and code input");
+    dialogButton("Start again")!.click();
+    await until(() => Boolean(dialogButton("Start sign-in") && !dialogButton("Start sign-in")!.disabled));
+    check(restartEffects.join(",") === "DELETE" && !sessionStorage.getItem(handoffKey),
+      "Start again cancels the original request, refreshes readiness and waits for an explicit new sign-in");
+    await observe?.(surface, "restart");
+    const previousHash = location.hash;
+    dialogButton("Start sign-in")!.click();
+    await until(() => Boolean(dialogButton("Retry same sign-in") && !dialogButton("Check status")!.disabled));
+    dialogButton("Check status")!.click();
+    await until(() => location.hash.endsWith(`/${nextRequest}`));
+    check(restartEffects.join(",") === "DELETE,POST" && JSON.parse(sessionStorage.getItem(handoffKey)!).operation,
+      "recovering a lost explicit start reply advances the continuation URL without dispatching twice");
+    history.replaceState(null, "", `${location.pathname}${location.search}${previousHash}`);
+    root.unmount(); root = createRoot(container);
+    sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
+      provider: "claude-code", request: handoffRequest, machine: "ovh", cancelling: false }));
+    flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}>
+      <SubscriptionLoginForm scope={{ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount, provider: "claude-code" }} onClose={() => {}} />
+    </SurfaceContext.Provider></BrowserProductTheme>));
+    await until(() => Boolean(button("Start again") && !button("Start again")!.disabled) && readinessReads >= 2);
+    const readsBeforeRestart = readinessReads;
+    button("Start again")!.click();
+    await until(() => Boolean(button("Start sign-in") && !button("Start sign-in")!.disabled));
+    check(readinessReads > readsBeforeRestart && restartEffects.filter((effect) => effect === "POST").length === 1,
+      "restored sign-in refreshes readiness on the same Machine before an explicit restart");
+    globalThis.fetch = continueFetch;
     for (const saved of [
       { request: "provider-login-another-request" },
       { operation: "another-operation", version: "1", digest: "digest", method: "native" },
@@ -292,5 +371,5 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         `handoff blocks another saved ${"request" in saved ? "request" : "operation"} without exposing or driving it: ${JSON.stringify(blocked)}`);
     }
     return tests;
-  } finally { root.unmount(); container.remove(); resetProviderCatalog(); for (const item of [key, loginKey, revokeKey, handoffKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
+  } finally { root.unmount(); container.remove(); resetProviderCatalog(); for (const item of [key, loginKey, revokeKey, handoffKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); document.documentElement.style.fontSize = fontSize; }
 }

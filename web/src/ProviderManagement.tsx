@@ -246,9 +246,7 @@ function ProviderManagementIdentity({
             flex: 1,
             minWidth: 0,
             lineHeight: 1.3,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            overflowWrap: "anywhere",
           }}
         >
           {title}
@@ -507,10 +505,6 @@ function ProviderManagement(
     () => groupProviderAuthentications(serviceEntries),
     [serviceEntries],
   );
-  const unpublishedLatestEntries = useMemo(
-    () => latestEntries.filter((entry) => entry.release_state !== "ready"),
-    [latestEntries],
-  );
   const allProviderRows = useMemo(
     () =>
       scope === "machine"
@@ -553,6 +547,13 @@ function ProviderManagement(
       ) === true;
     });
   }, [allProviderRows, focusProviderId, serviceCredentialGroups]);
+  // Unbound catalog declarations are not running publication jobs. Warn only
+  // when this screen has no signed runtime to perform the sign-in action.
+  const unavailableAuthenticationEntries = providerRows.flatMap((row) =>
+    row.latestEntry && (row.latestEntry.release_state !== "ready" || !row.latestEntry.artifact_digest)
+      ? [row.latestEntry]
+      : []
+  );
   const authentications = useMemo(
     () =>
       new Map(
@@ -850,23 +851,15 @@ function ProviderManagement(
       {uninstall.value === null && uninstall.error
         ? <Alert severity="error">{uninstall.error}</Alert>
         : null}
-      {scope === "service" && unpublishedLatestEntries.length > 0
+      {scope === "service" && unavailableAuthenticationEntries.length > 0
         ? (
           <Alert
             severity="warning"
             data-provider-release-warning
-            aria-label={`Provider runtime publication pending: ${
-              unpublishedLatestEntries.map((entry) =>
-                `${entry.manifest.display.name} ${entry.provider_version}`
-              ).join(", ")
-            }`}
           >
-            {unpublishedLatestEntries.length}{" "}
-            Provider runtime update{unpublishedLatestEntries.length === 1
-              ? " is"
-              : "s are"}{" "}
-            still publishing. Existing credentials stay active; Cowboy uses the
-            newest signed release for sign-in changes.
+            Sign-in is unavailable for {unavailableAuthenticationEntries.map((entry) =>
+              entry.manifest.display.name).join(", ")} because no published runtime
+            is available. Existing credentials stay active.
           </Alert>
         )
         : null}
@@ -875,11 +868,13 @@ function ProviderManagement(
         : null}
       <Box
         id={detailsId}
+        data-provider-management-grid
         sx={{
           display: "grid",
           gridTemplateColumns: embedded
             ? "1fr"
-            : "repeat(auto-fit, minmax(min(100%, 20rem), 1fr))",
+            : "repeat(auto-fit, minmax(min(100%, max(320px, 24rem)), 1fr))",
+          alignItems: "start",
           gap: 1,
         }}
       >

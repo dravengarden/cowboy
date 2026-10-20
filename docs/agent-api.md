@@ -579,6 +579,13 @@ with initial dispatch is rechecked after executor registration. Replaying the
 original login never regains dispatch authority. `cancellation_requested` proves
 enqueue, not native process exit or credential revocation; receipts retain
 `cancel_requested:true` across Controller restart even when live status is unknown.
+If the Machine no longer has a live login task, cancellation acknowledges the
+intent idempotently. This still supplies no process-exit or profile-cleanup
+evidence: retained native profiles and candidate receipts continue to fence
+unsafe reuse. In the UI, an expired/disconnected attempt offers **Start again**.
+It cancels the original request, clears only the tab's pointer after acknowledgement,
+and reloads Machine readiness. A separate **Start sign-in** click creates a fresh
+operation; opening or refreshing the page never automatically restarts login.
 
 Receipt `status` is a live observation: `active`, `completed`, `inactive`,
 `cancelling`, or `unknown`; a fresh attempt refused before enqueue may return

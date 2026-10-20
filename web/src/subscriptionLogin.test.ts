@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
+import { canReplaceLogin, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
 import { rememberSubscriptionSignIn, restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN, subscriptionSignInLink } from "./subscriptionSignInLink";
 
@@ -167,6 +167,40 @@ test("closing a durably cancelled attempt clears only the tab pointer and never 
   f.setFetch(async () => Response.json({ status: "cancellation_requested", cancel_requested: true, request_id: "request" }));
   await owner.check(); const count = f.calls.length;
   owner.finish(); assertEquals(f.values.size, 0); assertEquals(owner.snapshot.pending, undefined); assertEquals(f.calls.length, count);
+});
+
+test("an expired continuation prepares a fresh selection only after cancellation and never dispatches on restart", async () => {
+  const f = fixture();
+  f.setFetch(async (_path, init) => Response.json({
+    status: init?.method === "DELETE" ? "cancellation_requested" : "inactive",
+    cancel_requested: init?.method === "DELETE",
+    request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
+  }));
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.resume("request");
+  assert(canReplaceLogin(owner.snapshot));
+  await owner.prepareNew();
+  assertEquals(owner.snapshot.pending, undefined); assertEquals(f.values.size, 0);
+  assertEquals(f.calls.filter((call) => call.init?.method).map((call) => [call.path, call.init?.method]),
+    [["/api/provider-accounts/account/logins/request", "DELETE"]]);
+});
+
+test("unknown and active sign-ins cannot be silently replaced; failed cancellation retains the original request", async () => {
+  for (const status of ["active", "unknown", "inactive"]) {
+    const f = fixture();
+    f.setFetch(async (path, init) => {
+      if (init?.method === "DELETE") throw new Error("reply lost");
+      return Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [] } : {
+        status, request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
+      });
+    });
+    const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.resume("request");
+    const before = f.calls.length; await owner.prepareNew();
+    assert(owner.snapshot.pending); assertEquals(owner.snapshot.pending.request, "request");
+    assertEquals(f.calls.length, before + (status === "inactive" ? 1 : 0));
+    assertEquals(f.calls.filter((call) => call.init?.method === "POST").length, 0);
+    const restored = subscriptionLogin(scope, f.ports); restored.restore();
+    assertEquals(restored.snapshot.pending?.request, "request");
+  }
 });
 
 test("sign-in links contain only strict account and request references", () => {

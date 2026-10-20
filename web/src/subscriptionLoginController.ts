@@ -15,6 +15,12 @@ export interface LoginObservation { status: string; request_id?: string; cancel_
 export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
 }
+export function canReplaceLogin(view: LoginView): boolean {
+  return Boolean(view.pending && (view.observation?.cancel_requested ||
+    ["inactive", "not_started"].includes(view.observation?.status ?? "") ||
+    (view.observation?.status === "active" && view.events.some((event) =>
+      event.event === "login_challenge" && event.expires_at_ms <= Date.now()))));
+}
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -168,6 +174,20 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       const pending = { ...state.pending, cancelling: true };
       save(pending);
       observe(await request(receiptPath(pending), { method: "DELETE" }), pending);
+    }); },
+    prepareNew() { return run(async () => {
+      if (!state.pending || !canReplaceLogin(state)) throw new Error("Check or cancel the original sign-in first.");
+      if (!state.observation?.cancel_requested && state.observation?.status !== "not_started") {
+        const pending = { ...state.pending, cancelling: true };
+        save(pending);
+        observe(await request(receiptPath(pending), { method: "DELETE" }), pending);
+        if (!state.observation?.cancel_requested) throw new Error("Cancellation is not acknowledged. Check the original sign-in.");
+      }
+      // An explicit new selection, not a replay of the old request. Do not
+      // POST here: fresh readiness and a separate user click are still needed.
+      // The Machine retains the old receipt/profile and all cleanup fences.
+      ports.storage.removeItem(key);
+      publish({ pending: undefined, observation: undefined, events: [], error: "" });
     }); },
     submit(code: string) { return run(async () => {
       const pending = state.pending; const observation = state.observation;

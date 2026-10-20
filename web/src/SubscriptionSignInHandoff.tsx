@@ -42,7 +42,8 @@ export function SubscriptionSignInHandoff({ hash }: { hash: string }): React.JSX
   }, [accountId, attempt]);
   return <ConfirmSheet open onClose={closeSubscriptionSignIn} title={account ? `${account.label} · Sign in` : "Subscription sign-in"} wide>
     {account && reference
-      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} request={reference.request} onClose={closeSubscriptionSignIn} />
+      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} request={reference.request} onClose={closeSubscriptionSignIn}
+        onStarted={(request) => { window.location.hash = `#subscription-sign-in/${account.scope.account}/${request}`; }} />
       : <Stack spacing={1.5}>{error ? <><Alert severity="warning">{error}</Alert><Button onClick={() => setAttempt((value) => value + 1)}>Retry</Button></> : <Typography role="status">Loading subscription…</Typography>}</Stack>}
   </ConfirmSheet>;
 }

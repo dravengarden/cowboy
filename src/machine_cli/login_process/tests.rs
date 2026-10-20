@@ -91,9 +91,14 @@ async fn cancellation_reserves_request_until_task_cleanup_and_refuses_input() {
     ));
     // Only the owning task's cleanup frees the reservation.
     login.sessions.lock().remove("fixture");
-    assert!(!super::super::request_login_cancel(
+    assert!(super::super::request_login_cancel(
         &login.sessions,
         "fixture"
+    ));
+    assert!(!super::super::submit_login_code(
+        &login.sessions,
+        "fixture",
+        "after"
     ));
 }
 
