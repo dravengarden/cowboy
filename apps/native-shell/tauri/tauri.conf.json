@@ -11,6 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "create": false,
         "title": "Cowboy",
         "width": 1100,
         "height": 800,

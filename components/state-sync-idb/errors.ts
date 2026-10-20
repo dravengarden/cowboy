@@ -16,8 +16,27 @@ export type IdbFailureCode =
 
 /** Closed, content-free diagnostics: never include keys, values or native text. */
 export class IdbPersistenceError extends Error {
-  constructor(readonly code: IdbFailureCode) {
+  readonly nativeErrorName: string;
+  constructor(readonly code: IdbFailureCode, nativeError?: unknown) {
     super(`IndexedDB persistence: ${code}`);
     this.name = "IdbPersistenceError";
+    // Keep only known browser error names, never native messages or record data.
+    const name = nativeError instanceof Error ? nativeError.name : "";
+    this.nativeErrorName = [
+        "AbortError",
+        "UnknownError",
+        "InvalidStateError",
+        "NotReadableError",
+        "QuotaExceededError",
+        "DataCloneError",
+        "DataError",
+        "TransactionInactiveError",
+        "NotFoundError",
+        "SecurityError",
+        "VersionError",
+        "ConstraintError",
+      ].includes(name)
+      ? name
+      : "";
   }
 }

@@ -71,8 +71,7 @@ export function shouldRouteExternalClick(event: {
   shiftKey: boolean;
 }): boolean {
   return hasNativeExternalOpener() && event.button === 0 &&
-    !event.defaultPrevented && !event.altKey && !event.ctrlKey &&
-    !event.metaKey && !event.shiftKey;
+    !event.defaultPrevented && !event.altKey;
 }
 
 export function openExternalUrl(url: string): void {

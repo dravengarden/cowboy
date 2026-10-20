@@ -3218,6 +3218,7 @@ function reportSyncStorageFailure(
     operation,
     error_name: error instanceof Error ? error.name : typeof error,
     error_code: code,
+    native_error_name: error instanceof IdbPersistenceError ? error.nativeErrorName : "",
   });
   return code === "" ? "" : ` (${code})`;
 }
@@ -3280,7 +3281,8 @@ function registerSync<T, M extends Mutators<T>>(
     void store.hydrate().catch((error: unknown) => {
       if (productSessionAbandoned) return;
       const code = reportSyncStorageFailure("sync_outbox_hydrate_failed", syncState, "hydrate", error);
-      notify(`Local state could not be restored; writes remain fenced.${code}`, "warning");
+      const label = syncState.startsWith("mobile-review:") ? "Review settings" : "Local settings";
+      notify(`${label} could not be restored. Changes to these settings cannot be saved; reload to retry.${code}`, "warning");
     });
   }
   return {
