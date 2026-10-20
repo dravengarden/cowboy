@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { BrowserProductTheme } from "../browserProductTheme";
 import { ExternalSignInButton } from "./ExternalSignInButton";
 import { LoginMethodFallback } from "./ProductLoginPage";
+import { restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN } from "../subscriptionSignInLink";
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
@@ -17,6 +18,9 @@ export async function runSignInBrowserConformance(): Promise<string[]> {
   let error: string | null = null;
   let timeout: (() => void) | undefined;
   const originalTimeout = globalThis.setTimeout;
+  const originalUrl = location.href;
+  const originalReturn = sessionStorage.getItem(SUBSCRIPTION_SIGN_IN_RETURN);
+  const handoff = "#subscription-sign-in/fd376b94-c493-4d27-81da-67a1d154ca17/provider-login-d1c970fe-2420-4d83-ab57-01ed5325a30e";
   // Exercise the actual slow-navigation recovery without a 20-second fixture.
   globalThis.setTimeout =
     ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
@@ -29,7 +33,7 @@ export async function runSignInBrowserConformance(): Promise<string[]> {
   function Fixture() {
     const [busy, setBusy] = useState(false);
     return (
-      <ExternalSignInButton
+      <div onClick={(event) => event.preventDefault()}><ExternalSignInButton
         href="#sign-in"
         busy={busy}
         onRedirectBusy={(value) => {
@@ -41,7 +45,7 @@ export async function runSignInBrowserConformance(): Promise<string[]> {
         }}
       >
         Continue with Cardea
-      </ExternalSignInButton>
+      </ExternalSignInButton></div>
     );
   }
   const button = () => {
@@ -62,7 +66,13 @@ export async function runSignInBrowserConformance(): Promise<string[]> {
       link.getAttribute("href") === "#sign-in",
       "ordinary redirect href lost",
     );
+    history.replaceState(history.state, "", `/${handoff}`);
     flushSync(() => link.click());
+    check(sessionStorage.getItem(SUBSCRIPTION_SIGN_IN_RETURN) === handoff, "product redirect lost the subscription reference");
+    history.replaceState(history.state, "", "/");
+    restoreSubscriptionSignIn();
+    check(location.hash === handoff && !sessionStorage.getItem(SUBSCRIPTION_SIGN_IN_RETURN), "product callback failed to restore the subscription once");
+    results.push("full-page product login returns to the original subscription sign-in");
     check(parentBusy, "redirect failed to lock method selection");
     check(
       button().getAttribute("aria-busy") === "true",
@@ -137,6 +147,9 @@ export async function runSignInBrowserConformance(): Promise<string[]> {
     results.push("native approval shows progress and retains cancellation");
     return results;
   } finally {
+    history.replaceState(history.state, "", originalUrl);
+    if (originalReturn === null) sessionStorage.removeItem(SUBSCRIPTION_SIGN_IN_RETURN);
+    else sessionStorage.setItem(SUBSCRIPTION_SIGN_IN_RETURN, originalReturn);
     globalThis.setTimeout = originalTimeout;
     flushSync(() => root.unmount());
     container.remove();

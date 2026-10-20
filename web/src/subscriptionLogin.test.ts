@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
-import { subscriptionSignInLink } from "./subscriptionSignInLink";
+import { rememberSubscriptionSignIn, restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN, subscriptionSignInLink } from "./subscriptionSignInLink";
 
 const scope = { owner: "owner", dataset: "dataset", account: "account", provider: "claude-code" };
 const options: LoginOptions = { account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
@@ -157,4 +157,32 @@ test("sign-in links contain only strict account and request references", () => {
   for (const invalid of [`${hash}?code=secret`, `${hash}/extra`, hash.replace(account, "default"), hash.replace(request, "../other"), "#sessions/abc"]) {
     assertEquals(subscriptionSignInLink(invalid), undefined);
   }
+});
+
+test("product sign-in redirects restore a reference once without overriding another route", () => {
+  const f = fixture();
+  const hash = "#subscription-sign-in/fd376b94-c493-4d27-81da-67a1d154ca17/provider-login-d1c970fe-2420-4d83-ab57-01ed5325a30e";
+  let destination: string | URL | null | undefined;
+  const navigation = { state: null, replaceState: (_state: unknown, _unused: string, url?: string | URL | null) => { destination = url; } };
+  const current = { pathname: "/", search: "?surface=mobile", hash: "" };
+  rememberSubscriptionSignIn(hash, f.ports.storage);
+  assertEquals(f.values.get(SUBSCRIPTION_SIGN_IN_RETURN), hash);
+  restoreSubscriptionSignIn(current, navigation, f.ports.storage);
+  assertEquals(destination, `/?surface=mobile${hash}`);
+  assertEquals(f.values.size, 0);
+  destination = undefined;
+  restoreSubscriptionSignIn(current, navigation, f.ports.storage);
+  assertEquals(destination, undefined);
+  for (const route of [{ ...current, hash: "#sessions/current" }, { ...current, pathname: "/auth/device" }]) {
+    rememberSubscriptionSignIn(hash, f.ports.storage);
+    restoreSubscriptionSignIn(route, navigation, f.ports.storage);
+    assertEquals(destination, undefined); assertEquals(f.values.size, 0);
+  }
+  rememberSubscriptionSignIn(`${hash}?code=secret`, f.ports.storage);
+  assertEquals(f.values.size, 0);
+  f.values.set(SUBSCRIPTION_SIGN_IN_RETURN, "https://other.example");
+  restoreSubscriptionSignIn(current, navigation, f.ports.storage);
+  assertEquals(destination, undefined); assertEquals(f.values.size, 0);
+  restoreSubscriptionSignIn(current, navigation, { getItem: () => { throw new Error("denied"); }, removeItem: () => {} });
+  assertEquals(destination, undefined);
 });

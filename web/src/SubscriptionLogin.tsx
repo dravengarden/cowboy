@@ -24,6 +24,7 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
   const [error, setError] = useState("");
   const [code, setCode] = useState("");
   const [view, setView] = useState<LoginView>({ events: [], busy: false, error: "" });
+  const requestMismatch = Boolean(request && view.pending && view.pending.request !== request);
   const alive = useRef(false);
   const pollingUntil = useRef(Date.now() + 5 * 60_000);
   const owner = useMemo(() => subscriptionLogin(scope, {
@@ -59,12 +60,16 @@ export function SubscriptionLoginForm({ scope, onClose, request }: { scope: Logi
   // Observe only the current operation, at most once every two seconds for
   // five minutes while visible. No automatic POST, login restart, or vendor probe.
   useEffect(() => {
-    if (view.busy || view.error || view.observation?.status !== "active" || Date.now() >= pollingUntil.current) return;
+    if (requestMismatch || view.busy || view.error || view.observation?.status !== "active" || Date.now() >= pollingUntil.current) return;
     const timer = setTimeout(() => {
       if (document.visibilityState === "visible") void owner.check();
     }, 2000);
     return () => clearTimeout(timer);
-  }, [owner, view]);
+  }, [owner, view, requestMismatch]);
+  if (requestMismatch) return <Stack spacing={1.5}>
+    <Alert severity="warning">Another sign-in is saved in this tab. Reconcile it in Subscriptions before opening this link.</Alert>
+    <Button onClick={onClose}>Back to Cowboy</Button>
+  </Stack>;
   const challenge = view.events.findLast((event) => event.event === "login_challenge");
   const link = challenge && challenge.expires_at_ms > Date.now() ? loginLink(challenge.verification_url) : undefined;
   const done = view.observation?.status === "completed";

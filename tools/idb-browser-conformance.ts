@@ -270,8 +270,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "sign-in" || suite === "session-move" ||
-          suite === "editor-plugin-sandbox"
+      (suite === "sign-in"
+        ? 5
+        : suite === "session-move" || suite === "editor-plugin-sandbox"
         ? 4
         : suite === "dormant-session"
         ? 21
@@ -282,7 +283,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "info-metrics"
         ? 20
         : suite === "subscriptions"
-        ? 50
+        ? 54
         : suite === "about-layout"
         ? 10
         : suite === "session-maintenance"

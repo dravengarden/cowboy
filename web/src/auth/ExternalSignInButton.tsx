@@ -1,5 +1,6 @@
 import { Button, type ButtonProps } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { rememberSubscriptionSignIn } from "../subscriptionSignInLink";
 
 /** Keep ordinary redirects visible while the browser waits for the server. */
 export function ExternalSignInButton({
@@ -51,6 +52,11 @@ export function ExternalSignInButton({
           !props.href || event.defaultPrevented || event.metaKey ||
           event.ctrlKey || event.shiftKey || event.altKey
         ) return;
+        try { rememberSubscriptionSignIn(); } catch {
+          event.preventDefault();
+          callbacks.current.onRedirectError?.("Could not save the subscription sign-in reference. Allow browser storage and try again.");
+          return;
+        }
         pending.current = true;
         setRedirecting(true);
         callbacks.current.onRedirectError?.(null);

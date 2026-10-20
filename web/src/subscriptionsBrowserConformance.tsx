@@ -243,6 +243,25 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => document.body.textContent!.includes("Signed in on this Machine"));
     check(handoffWrites.length === 1 && handoffReads.filter((path) => path.includes("/logins/")).length >= 2 &&
       !document.querySelector('a[href^="https://claude.ai/oauth/"]'), "reopening a completed handoff reads its receipt without restarting authorization");
+    for (const saved of [
+      { request: "provider-login-another-request" },
+      { operation: "another-operation", version: "1", digest: "digest", method: "native" },
+    ]) {
+      root.unmount(); root = createRoot(container);
+      const pending = JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
+        provider: "claude-code", machine: "other-machine", cancelling: false, ...saved });
+      sessionStorage.setItem(handoffKey, pending);
+      const before = handoffReads.length;
+      handoffRender();
+      await until(() => document.body.textContent!.includes("Another sign-in is saved in this tab"));
+      const blocked = {
+        actions: !dialogButton("Check status") && !dialogButton("Cancel sign-in") && !dialogButton("Retry same sign-in"),
+        inputs: !document.querySelector('input, a[href^="https://claude.ai/oauth/"]'),
+        reads: handoffReads.slice(before), preserved: sessionStorage.getItem(handoffKey) === pending,
+      };
+      check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset"].includes(path)) && blocked.preserved,
+        `handoff blocks another saved ${"request" in saved ? "request" : "operation"} without exposing or driving it: ${JSON.stringify(blocked)}`);
+    }
     return tests;
   } finally { root.unmount(); container.remove(); for (const item of [key, loginKey, revokeKey, handoffKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
 }

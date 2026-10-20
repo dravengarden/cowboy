@@ -34,8 +34,9 @@ import { installBrowserDevice } from "./browserDevice";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 import { lowPriorityInterval } from "./network/bandwidth";
-import { subscribeSignInLocation, subscriptionSignInLocation } from "./subscriptionSignInLink";
+import { restoreSubscriptionSignIn, subscribeSignInLocation, subscriptionSignInLocation } from "./subscriptionSignInLink";
 
+restoreSubscriptionSignIn();
 installBrowserDevice();
 
 // How long a freshly swapped-in build has to stay up before it counts as
