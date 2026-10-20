@@ -512,6 +512,14 @@ The page verifies the current account/dataset before reading the challenge,
 stores only recovery metadata and submits the code directly to Cowboy. Keep
 using the original parent-scoped MCP operation for MCP receipt/cancel calls.
 
+A fresh, explicitly requested native login can retire an older failed attempt
+only when its scoped Machine metadata proves both leader and process-tree exit,
+unsuccessful login, no bound identity and no logout in progress. The Machine
+persists a revocation tombstone before removing that generation's private home;
+the original request can never be dispatched again. Successful or uncertain
+attempts continue to require reconciliation. This does not rotate subscriptions
+or make cancellation acknowledgement itself proof of process exit.
+
 Settings exposes the same flow on Desktop and Mobile. Select a Machine and
 start sign-in explicitly; the authorization page belongs to the Provider.
 The UI retains only the original operation ID and exact account/Machine/release

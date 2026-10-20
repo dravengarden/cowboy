@@ -3,6 +3,7 @@
 use super::*;
 use crate::provider_account::{NativeIdentity, NativeProfileReceipt, prepare_private_directory};
 use serde::{Deserialize, Serialize};
+mod failed;
 mod logout;
 mod processes;
 pub(crate) use logout::LogoutPreparation;
@@ -279,6 +280,7 @@ impl MachinePluginStore {
         ] {
             prepare_private_directory(&path)?;
         }
+        self.retire_failed_native_logins(provider, request)?;
         validate_reservation(&root, request)?;
         let directory = root.join("generations").join(generation.to_string());
         // create_dir is exclusive, unlike prepare_private_directory. Retain an
