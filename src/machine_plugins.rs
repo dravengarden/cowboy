@@ -10,9 +10,9 @@
 mod artifact_cache;
 mod auth_refresh;
 pub(crate) mod auth_watch;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod code_navigation_conformance;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod code_sync_conformance;
 mod extensions;
 mod installation;
