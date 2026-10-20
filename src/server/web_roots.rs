@@ -30,8 +30,10 @@ impl WebRoots {
         roots
     }
 
-    /// Record the link's current target and return it.
-    fn observe(&self) -> Option<PathBuf> {
+    /// Record the target before serving any successful document or asset, not
+    /// just on a cache miss. Otherwise an intermediate release can serve a
+    /// shell without ever entering the fallback history.
+    pub(super) fn observe(&self) -> Option<PathBuf> {
         let current = std::fs::canonicalize(&self.link).ok()?;
         let mut observed = self.observed.lock();
         if observed.first() != Some(&current) {

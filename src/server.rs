@@ -10912,7 +10912,11 @@ struct VersionResponse {
 /// references the content-hashed JS/CSS bundles, so hashing it keeps `/version`
 /// aligned with the files currently exposed through the stable web-root path.
 async fn version(State(state): State<Arc<AppState>>) -> Response {
-    match tokio::fs::read(state.web_root.join("index.html")).await {
+    let web_root = state
+        .web_roots
+        .observe()
+        .unwrap_or_else(|| state.web_root.clone());
+    match tokio::fs::read(web_root.join("index.html")).await {
         Ok(bytes) => Json(VersionResponse {
             version: content_hash(&bytes),
         })
@@ -19838,6 +19842,30 @@ fn is_admin_console_path(requested: &str) -> bool {
 ///
 /// `/admin` and `/admin/*` never fall back to the session PWA `index.html`.
 /// When `admin.html` is present they return that document; otherwise 404.
+async fn resolve_web_document(
+    roots: &web_roots::WebRoots,
+    requested: &str,
+) -> Result<(String, Vec<u8>), StatusCode> {
+    // Pin this request to the observed target. A Web activation may retarget
+    // the link while the asynchronous read is in flight.
+    let document = match roots.observe() {
+        Some(root) => resolve_static_document(&root, requested).await,
+        None => Err(StatusCode::NOT_FOUND),
+    };
+    match document {
+        Err(status) if requested.starts_with("assets/") => {
+            match web_roots::previous_release_asset(roots, requested).await {
+                Some(content) => {
+                    tracing::info!(requested, "served a web asset from the previous release");
+                    Ok((requested.to_owned(), content))
+                }
+                None => Err(status),
+            }
+        }
+        document => document,
+    }
+}
+
 async fn resolve_static_document(
     web_root: &FsPath,
     requested: &str,
@@ -19913,7 +19941,7 @@ async fn static_handler(
     // opaque "Importing a module script failed" error because a JS import
     // received text/html.
     let requested_path = state.web_root.join(requested);
-    let (name, content) = match resolve_static_document(&state.web_root, requested).await {
+    let (name, content) = match resolve_web_document(&state.web_roots, requested).await {
         Ok(document) => document,
         Err(status) if is_admin_console_path(requested) => {
             tracing::info!(
@@ -19923,24 +19951,11 @@ async fn static_handler(
             return status.into_response();
         }
         Err(status) if requested.starts_with("assets/") => {
-            // A shell loaded before a Web release still imports its own hashed
-            // chunks; the previous root keeps them until the shell updates.
-            match web_roots::previous_release_asset(&state.web_roots, requested).await {
-                Some(content) => {
-                    tracing::info!(
-                        requested = %requested_path.display(),
-                        "served a web asset from the previous release"
-                    );
-                    (requested.to_owned(), content)
-                }
-                None => {
-                    tracing::info!(
-                        requested = %requested_path.display(),
-                        "requested web asset is no longer deployed"
-                    );
-                    return status.into_response();
-                }
-            }
+            tracing::info!(
+                requested = %requested_path.display(),
+                "requested web asset is no longer deployed"
+            );
+            return status.into_response();
         }
         Err(status) => {
             tracing::warn!(
@@ -20016,6 +20031,63 @@ mod static_asset_tests {
         static_content_type,
     };
     use axum::http::{StatusCode, header};
+
+    #[tokio::test]
+    async fn successful_shell_reads_retain_lazy_chunks_after_the_next_web_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = ["a", "b", "c"].map(|name| dir.path().join(name));
+        for root in &roots {
+            std::fs::create_dir_all(root.join("assets")).unwrap();
+            std::fs::write(
+                root.join("index.html"),
+                root.file_name().unwrap().as_encoded_bytes(),
+            )
+            .unwrap();
+        }
+        std::fs::write(roots[1].join("assets/Steer-b.js"), b"previous shortcut").unwrap();
+        let link = dir.path().join("web");
+        std::os::unix::fs::symlink(&roots[0], &link).unwrap();
+        let history = super::web_roots::WebRoots::new(link.clone());
+        let misses_only = super::web_roots::WebRoots::new(link.clone());
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&roots[1], &link).unwrap();
+        // B serves normally. No missing asset asks for fallback yet.
+        assert_eq!(
+            super::resolve_web_document(&history, "index.html")
+                .await
+                .unwrap()
+                .1,
+            b"b"
+        );
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&roots[2], &link).unwrap();
+        assert_eq!(
+            super::resolve_web_document(&history, "index.html")
+                .await
+                .unwrap()
+                .1,
+            b"c"
+        );
+        assert!(
+            super::web_roots::previous_release_asset(&misses_only, "assets/Steer-b.js")
+                .await
+                .is_none(),
+            "observing only misses loses the successfully served intermediate release"
+        );
+        assert_eq!(
+            super::resolve_web_document(&history, "assets/Steer-b.js")
+                .await
+                .unwrap()
+                .1,
+            b"previous shortcut"
+        );
+        assert_eq!(
+            super::resolve_web_document(&history, "assets/unknown.js")
+                .await
+                .unwrap_err(),
+            StatusCode::NOT_FOUND
+        );
+    }
 
     #[tokio::test]
     async fn published_artifacts_in_legacy_catalog_keep_streaming_and_cache_headers() {
