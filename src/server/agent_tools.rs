@@ -67,6 +67,8 @@ pub(super) struct MemoryTools {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CallsPolicy {
+    #[serde(default)]
+    pub review: ReviewPreferences,
     pub enabled: bool,
     /// Agents this session may call, in Auto's preference order.
     pub targets: Vec<CallTarget>,
@@ -149,11 +151,103 @@ pub(super) struct MemoryOverride {
 #[serde(deny_unknown_fields)]
 pub(super) struct CallsOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<Vec<CallTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReviewPreferences {
+    pub claude: Vec<String>,
+    pub gpt: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReviewOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpt: Option<Vec<String>>,
+}
+
+impl ReviewOverride {
+    fn apply(&self, mut defaults: ReviewPreferences) -> ReviewPreferences {
+        if let Some(order) = &self.claude {
+            defaults.claude = order.clone();
+        }
+        if let Some(order) = &self.gpt {
+            defaults.gpt = order.clone();
+        }
+        defaults
+    }
+}
+
+impl Default for ReviewPreferences {
+    fn default() -> Self {
+        Self {
+            claude: vec!["opus".into(), "fable".into()],
+            gpt: vec!["astra".into(), "sol".into()],
+        }
+    }
+}
+
+impl ReviewPreferences {
+    pub(super) fn valid(&self) -> bool {
+        fn order(values: &[String], allowed: &[&str]) -> bool {
+            !values.is_empty()
+                && values.len() <= allowed.len()
+                && values.iter().all(|v| allowed.contains(&v.as_str()))
+                && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+        }
+        order(&self.claude, &["opus", "fable"]) && order(&self.gpt, &["astra", "sol"])
+    }
+}
+
+#[cfg(test)]
+mod review_preferences_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_defaults_inherit_and_session_override_is_validated() {
+        let base = AgentTools::builtin("codex");
+        let mut old = serde_json::to_value(&base).unwrap();
+        old["calls"].as_object_mut().unwrap().remove("review");
+        let restored: AgentTools = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.calls.review, ReviewPreferences::default());
+        let sparse: SessionTools = serde_json::from_value(json!({
+            "schema":1,"calls":{"review":{"gpt":["sol"]}}
+        }))
+        .unwrap();
+        let mut changed_defaults = restored;
+        changed_defaults.calls.review.claude = vec!["fable".into()];
+        let inherited = changed_defaults.overlay(&sparse).calls.review;
+        assert_eq!(inherited.claude, ["fable"]);
+        assert_eq!(inherited.gpt, ["sol"]);
+        let mut session: SessionTools = serde_json::from_value(json!({
+            "schema":1,"calls":{"review":{"claude":["fable","opus"],"gpt":["sol"]}}
+        }))
+        .unwrap();
+        assert!(session.validate());
+        assert_eq!(
+            base.overlay(&session).calls.review.claude,
+            ["fable", "opus"]
+        );
+        for invalid in [
+            json!({"claude":[],"gpt":["astra"]}),
+            json!({"claude":["opus","opus"],"gpt":["astra"]}),
+            json!({"claude":["sonnet"],"gpt":["astra"]}),
+            json!({"claude":["opus"],"gpt":["luna"]}),
+        ] {
+            session.calls.review = Some(serde_json::from_value(invalid).unwrap());
+            assert!(!session.validate());
+        }
+    }
 }
 
 fn valid_agent(agent: &str) -> bool {
@@ -211,6 +305,7 @@ impl AgentTools {
                 recall: true,
             },
             calls: CallsPolicy {
+                review: ReviewPreferences::default(),
                 enabled: true,
                 targets,
                 default: AUTO.to_owned(),
@@ -222,6 +317,7 @@ impl AgentTools {
 
     pub fn validate(&self) -> bool {
         self.schema == SCHEMA
+            && self.calls.review.valid()
             && valid_targets(&self.calls.targets)
             && valid_default(&self.calls.default, &self.calls.targets)
             && (1..=16).contains(&self.calls.max_concurrent)
@@ -242,6 +338,9 @@ impl AgentTools {
 
     /// Apply a session's override. The result is validated by the caller.
     pub fn overlay(mut self, session: &SessionTools) -> Self {
+        if let Some(review) = &session.calls.review {
+            self.calls.review = review.apply(self.calls.review);
+        }
         if let Some(tools) = session.memory.tools {
             self.memory.tools = tools;
         }
@@ -267,6 +366,11 @@ impl AgentTools {
 impl SessionTools {
     pub fn validate(&self) -> bool {
         self.schema == SCHEMA
+            && self
+                .calls
+                .review
+                .as_ref()
+                .is_none_or(|review| review.apply(ReviewPreferences::default()).valid())
             && self
                 .calls
                 .targets
@@ -838,6 +942,7 @@ mod tests {
                 recall: Some(false),
             },
             calls: CallsOverride {
+                review: None,
                 enabled: Some(true),
                 targets: Some(vec![CallTarget {
                     agent: "codex".into(),

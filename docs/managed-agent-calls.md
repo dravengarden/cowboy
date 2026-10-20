@@ -282,15 +282,36 @@ and model limit windows, reset times and observation freshness. Missing or stale
 quota is unknown. Oversized quota data is explicitly omitted and can be read
 through `cowboy.usage.read`; capabilities never triggers a collector.
 
-The calling model chooses the strongest available reviewer quota permits,
-preferring Max where supported: Astra/Fable with ample quota, Opus/SOL when
-constrained. It respects explicit user choices and shared account windows;
-there is no fixed percentage router or silent downgrade. It passes `--agent`,
+Settings → Tools configures ordered Review preferences for each calling agent
+kind. Session card/Session Settings → Tools can override them; restoring defaults
+resumes inheritance. Each family inherits independently: overriding GPT does
+not freeze Claude defaults. The built-in orders are **Opus → Fable** and **Astra → SOL**.
+Each list can contain both models in either order, or just one. Empty lists,
+duplicates, cross-family entries and weaker models are rejected. These DB-backed
+preferences apply to future Review/Design Review calls, never running calls or
+ordinary analysis/image calls. Claude and GPT share the same Controller contract.
+
+Capabilities exposes effective `review_preferences` and each Provider's ordered
+signed preset IDs in `review_candidates` (metadata stays in `presets`). The calling model chooses the first preferred family
+whose fresh account and model quota permits review, preferring Max within that
+family. Greater strength alone is not a reason to skip the preferred family.
+The Controller excludes models outside the configured list; without an explicit
+preset it selects the first preferred signed preset. Generic Tools target pins
+remain inputs to ordinary calls; they do not override Review preferences.
+Quota assessment remains the calling agent's responsibility, with no fixed
+percentage router or automatic retry. Explicit preset choices must
+also remain in the allowed model list. It passes `--agent`,
 `--preset`, a short `--title` and `--reason` to `cowboy review`. The controller
 still enforces session authorization and signed presets. Generic managed-call
 clients may put the same display metadata in `labels.title` and
 `labels.selection_reason`; MCP `review.start` and `calls.start` accept `title`
 and `reason` directly.
+
+AI configuration uses the existing on-demand `control.describe` contracts for
+`tools.defaults_set` and `tools.session_set`. The field is
+`calls.review: {claude:["opus","fable"],gpt:["astra","sol"]}`. Read the current
+Tools document, preserve unrelated fields, and omit the session override to
+inherit. Existing authorization, DB persistence and operation receipts apply.
 
 Calls displays the persisted dispatch configuration (model and effort), chosen
 preset and reason, created/started/finished timestamps, elapsed time, time zone,

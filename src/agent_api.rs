@@ -378,19 +378,20 @@ export type CallView = CallTiming & {
 };
 export type CallCapabilities = {
   enabled: boolean; default: string;
-  providers: { id: string; available: boolean; reason: string | null; presets: unknown[]; preset:string|null; options:Record<string,string>|null; quota_account:string|null }[];
-  review_selection: string; // model-owned choice: strongest quota permits, prefer Max, no silent downgrade
+  providers: { id: string; available: boolean; reason: string | null; presets: unknown[]; review_candidates:string[]; preset:string|null; options:Record<string,string>|null; quota_account:string|null }[];
+  review_selection: string; // quota + preference guidance
+  review_preferences: {claude:string[];gpt:string[]};
   quota: {observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
   purposes: string[]; limits: Record<string, number>;
 };
 export interface Cowboy {
   calls: {
-    list(q?:{before?:string;limit?:number}): Promise<{calls:CallSummary[];next_before:string|null}>; // own parent, newest admission first; default20/max100
+    list(q?:{before?:string;limit?:number}): Promise<{calls:CallSummary[];next_before:string|null}>; // parent-scoped; newest first; default20/max100
     capabilities(): Promise<CallCapabilities>;
     capabilities(q:{capability:"image.generate"|"image.edit";if_revision?:string}): Promise<{revision:string;unchanged?:boolean;providers?:{id:string;available:boolean;reason:string|null}[];[key:string]:unknown}>;
     inspect(call_id: string): Promise<CallView>;
-    wait(call_id: string, timeout_ms?: number): Promise<CallView>; // bounded by the program
-    result(call_id: string, q?: TextWindow): Promise<CallView>; // range lives inside result
+    wait(call_id: string, timeout_ms?: number): Promise<CallView>;
+    result(call_id: string, q?: TextWindow): Promise<CallView>; // range in result
     observe(request_id: string): Promise<CallView>;
   };
 }

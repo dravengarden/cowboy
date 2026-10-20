@@ -19,12 +19,18 @@ export interface CallTarget {
 export type TargetChoice = Pick<CallTarget, "preset" | "options">;
 
 export interface CallsPolicy {
+  review?: ReviewPreferences;
   enabled: boolean;
   targets: CallTarget[];
   default: string;
   max_concurrent: number;
   max_per_session: number;
 }
+
+export interface ReviewPreferences { claude: string[]; gpt: string[] }
+export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
+  claude: ["opus", "fable"], gpt: ["astra", "sol"],
+};
 
 export interface AgentTools {
   schema: 1;
@@ -36,7 +42,7 @@ export interface AgentTools {
 export interface SessionToolsOverride {
   schema: 1;
   memory?: { tools?: boolean; recall?: boolean };
-  calls?: { enabled?: boolean; targets?: CallTarget[]; default?: string };
+  calls?: { enabled?: boolean; targets?: CallTarget[]; default?: string; review?: Partial<ReviewPreferences> };
 }
 
 export interface ToolPreset {
@@ -195,6 +201,14 @@ export function overrideFor(
   }
   if (Object.keys(memory).length > 0) override.memory = memory;
   const calls: NonNullable<SessionToolsOverride["calls"]> = {};
+  const review: Partial<ReviewPreferences> = {};
+  for (const family of ["claude", "gpt"] as const) {
+    const order = (next.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family];
+    if (JSON.stringify(order) !== JSON.stringify((defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES)[family])) {
+      review[family] = order;
+    }
+  }
+  if (Object.keys(review).length > 0) calls.review = review;
   if (next.calls.enabled !== defaults.calls.enabled) {
     calls.enabled = next.calls.enabled;
   }
