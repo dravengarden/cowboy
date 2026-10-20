@@ -88,11 +88,14 @@ pub(crate) struct PublicHostPlugin {
     native_capabilities: Vec<String>,
 }
 
-/// Usage fields consumed by the closed Cowboy renderers. Collector commands
-/// and Controller-side execution semantics deliberately do not cross the API.
+/// Usage fields consumed by the closed Cowboy renderers, including the
+/// data-only session quota projection. Collector commands and Controller-side
+/// execution semantics deliberately do not cross the API.
 #[derive(Debug, serde::Serialize)]
 struct PublicPluginUsage {
     account: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_rate_limits: Option<crate::plugin_host::UsageSessionRateLimits>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,6 +150,7 @@ impl From<&PluginUsageSpec> for PublicPluginUsage {
     fn from(usage: &PluginUsageSpec) -> Self {
         Self {
             account: usage.account.clone(),
+            session_rate_limits: usage.session_rate_limits.clone(),
             reset: usage.reset.clone(),
             product: usage.product.clone(),
             parser: usage.parser.clone(),
@@ -971,7 +975,6 @@ mod tests {
             "reset_argv",
             "reset_claim",
             "session_overlay",
-            "session_rate_limits",
             "activity",
         ] {
             assert!(
@@ -990,6 +993,11 @@ mod tests {
         assert_eq!(public["default_for_id"], true);
         assert_eq!(public["usage"]["account"], "future-account");
         assert_eq!(public["usage"]["widget"], "future-widget");
+        assert_eq!(
+            public["usage"]["session_rate_limits"]["pointer"],
+            "/rate_limits"
+        );
+        assert_eq!(public["usage"]["session_rate_limits"]["target"], "limits");
         assert_eq!(public["adapter_slot"], "future-agent");
         assert_eq!(public["native_capabilities"][0], "future-native");
     }

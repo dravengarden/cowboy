@@ -1,6 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
-import { DEFAULT_ABOUT_VALUES, orderedItems, useAboutPreferences } from "./aboutPreferences";
+import { DEFAULT_ABOUT_VALUES, useAboutPreferences } from "./aboutPreferences";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
@@ -36,7 +36,6 @@ import {
 import {
   acceptedScheduleTime,
   accountManageUrl,
-  accountProviderLabel,
   fullDateTime,
   type JsonRecord,
   nearestAvailableResetCredit,
@@ -49,7 +48,6 @@ import {
   resetCountdown,
   scheduledResetCountdown,
   usageAvailableStatus,
-  usageCardProviders,
   usageEmptyMessage,
   type UsageLimit,
   usageLimits,
@@ -75,6 +73,9 @@ import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel";
 import { QuotaMeter } from "./InfoMetricVisuals";
 import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRuntimeMetrics";
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
+import { useProviderCatalog } from "./providerCatalog";
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
@@ -125,6 +126,7 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
 }
 
 function ProviderUsageCard({
+  account,
   usage,
   schedule,
   now,
@@ -133,6 +135,7 @@ function ProviderUsageCard({
   refreshing = false,
   children,
 }: {
+  account: UsageAccountCard;
   children?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
@@ -144,6 +147,7 @@ function ProviderUsageCard({
 }): React.JSX.Element {
   return (
     <ProviderUsageCardBody
+      account={account}
       usage={usage}
       schedule={schedule}
       now={now}
@@ -156,6 +160,7 @@ function ProviderUsageCard({
 }
 
 function ProviderUsageCardBody({
+  account: identity,
   usage,
   schedule,
   now,
@@ -164,6 +169,7 @@ function ProviderUsageCardBody({
   refreshing,
   children,
 }: {
+  account: UsageAccountCard;
   children?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
@@ -190,9 +196,9 @@ function ProviderUsageCardBody({
         showDetails: true,
         limits,
         resetsLabel: resetText,
-        emptyMessage: providerUsageEmptyMessage(usage),
+        emptyMessage: identity.emptyMessage ?? providerUsageEmptyMessage(usage),
       }),
-    [limits, usage],
+    [identity.emptyMessage, limits, usage],
   );
   const account = record(usage.account?.account);
   const plan = account ? str(account.planType) : undefined;
@@ -207,12 +213,12 @@ function ProviderUsageCardBody({
     : [];
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
-  const resetProvider = usageResetProvider(usage);
-  const manageUrl = accountManageUrl(usage.provider);
+  const resetProvider = identity.collector ? usageResetProvider(usage) : undefined;
+  const manageUrl = identity.collector ? accountManageUrl(usage.provider) : undefined;
   const summary = record(usage.activity?.summary);
-  const title = accountProviderLabel(usage.provider);
+  const title = identity.title;
   const stale = usage.refresh?.stale === true;
-  const statusLabel = stale
+  const statusLabel = identity.statusLabel ?? (stale
     ? "CACHED"
     : plan
     ? plan.toUpperCase()
@@ -220,7 +226,7 @@ function ProviderUsageCardBody({
     ? usageAvailableStatus(usage.provider) ?? "LIVE"
     : usage.status === "session-only"
     ? "SESSION"
-    : refreshBusy ? "REFRESHING" : "NOT REPORTED";
+    : refreshBusy ? "REFRESHING" : "NOT REPORTED");
   const scheduleValid = fireAt !== "" &&
     new Date(fireAt).getTime() > Date.now();
   const openResetDialog = () => {
@@ -295,6 +301,7 @@ function ProviderUsageCardBody({
 
   return (
     <Box
+      data-usage-account={identity.id}
       sx={{
         border: 1,
         borderColor: "divider",
@@ -309,10 +316,13 @@ function ProviderUsageCardBody({
           justifyContent="space-between"
           alignItems="baseline"
         >
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            {title}
-          </Typography>
-          <Stack direction="row" alignItems="center" spacing={0.25}>
+          <Box sx={{ minWidth: 0, overflowWrap: "anywhere", pr: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {title}
+            </Typography>
+            {identity.subtitle && <Typography variant="caption" color="text.secondary">{identity.subtitle}</Typography>}
+          </Box>
+          <Stack direction="row" alignItems="center" spacing={0.25} sx={{ flexShrink: 0 }}>
             <Typography
               variant="caption"
               color={stale
@@ -348,7 +358,7 @@ function ProviderUsageCardBody({
           {limits.length === 0 && credits.length === 0 &&
             !usageOmitEmptyLimits(usage.provider) && (
             <Typography variant="body2" color="text.secondary">
-              {providerUsageEmptyMessage(usage)}
+              {identity.emptyMessage ?? providerUsageEmptyMessage(usage)}
             </Typography>
           )}
         </PluginSlot>
@@ -527,10 +537,10 @@ function ProviderUsageCardBody({
             </AccordionDetails>
           </Accordion>
         )}
-        <Typography variant="caption" color="text.secondary">
+        {usage.observed_at_ms > 0 && <Typography variant="caption" color="text.secondary">
           {usage.source} · {stale ? "Cached" : "Updated"}{" "}
           {relativeUpdateTime(usage.observed_at_ms, now)}
-        </Typography>
+        </Typography>}
         {children}
       </Stack>
       <ConfirmSheet
@@ -619,10 +629,14 @@ function ProviderUsageCardBody({
   );
 }
 
-function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutAction: React.ReactNode }): React.JSX.Element {
+export function UsageInfoSection({ order, layoutAction, accounts }: {
+  order: string[]; layoutAction: React.ReactNode; accounts: ReturnType<typeof useSubscriptionAccounts>;
+}): React.JSX.Element {
   // Usage and its refresh progress belong to the Controller and are pushed to
   // every client, so closing and reopening this sheet keeps showing a refresh.
   const snapshot = useStoreSelector((state) => state.usage);
+  const sessions = useStoreSelector((state) => state.sessions);
+  useProviderCatalog();
   const refreshing = usageRefreshing(snapshot);
   const [execution, setExecution] = useState<UsageExecutionSettings | null>(
     null,
@@ -632,12 +646,12 @@ function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutActi
   const load = useCallback(async (manual: boolean): Promise<void> => {
     setError(null);
     try {
-      await (manual ? requestUsageRefresh() : loadUsageSnapshot());
+      await (manual ? Promise.all([requestUsageRefresh(), accounts.refresh()]) : loadUsageSnapshot());
       setExecution(await readUsageExecutors());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     }
-  }, []);
+  }, [accounts.refresh]);
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {
@@ -691,20 +705,24 @@ function UsageInfoSection({ order, layoutAction }: { order: string[]; layoutActi
           </NetworkIconButton>
         </Stack>
       </Stack>
+      {accounts.error && <Alert severity="warning" action={<Button onClick={() => void accounts.refresh()}>Retry</Button>}>
+        {accounts.error} {accounts.data ? "Showing the last account list." : "Additional accounts could not be listed."}
+      </Alert>}
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 1.25, alignItems: "start" }}>
-      {orderedItems(usageCardProviders(snapshot), order, (provider) => provider.provider).map((provider) => (
+      {orderUsageAccounts(registeredUsageAccounts(snapshot, accounts.data, sessions), order).map((account) => (
         <ProviderUsageCard
-          key={provider.provider}
-          usage={provider}
-          schedule={usageResetSchedule(snapshot, provider)}
+          key={account.id}
+          account={account}
+          usage={account.usage}
+          schedule={account.collector ? usageResetSchedule(snapshot, account.usage) : undefined}
           now={clock}
           onUsageChanged={() => load(false)}
-          onRefresh={() => loadProvider(provider.provider)}
-          refreshing={usageRefreshing(snapshot, provider.provider)}
+          onRefresh={account.collector ? () => loadProvider(account.collector!) : undefined}
+          refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : false}
         >
-          {execution && (
+          {execution && account.collector && (
             <UsageExecutorPicker
-              account={provider.provider}
+              account={account.collector}
               settings={execution}
               onChange={async (account, machine) => {
                 setExecution(await setUsageExecutor(account, machine));
@@ -735,12 +753,14 @@ export function InfoContent({
 } = {}): React.JSX.Element {
   const connected = useStoreSelector((state) => state.connected);
   const layout = useAboutPreferences(connected);
+  const accounts = useSubscriptionAccounts(connected);
+  const usageSnapshot = useStoreSelector((state) => state.usage);
   const [editing, setEditing] = useState(false);
   const values = layout.data?.preferences.values ?? DEFAULT_ABOUT_VALUES;
   const choices = useMemo(() => layout.data ? {
     ...layout.data.choices,
-    usage_order: layout.data.choices.usage_order.map((item) => ({ ...item, name: accountProviderLabel(item.id) })),
-  } : undefined, [layout.data]);
+    usage_order: registeredUsageAccounts(usageSnapshot, accounts.data, []).map((item) => ({ id: item.id, name: item.title })),
+  } : undefined, [layout.data, usageSnapshot, accounts.data]);
   return (
     <Stack spacing={1.5} sx={{ containerType: "inline-size" }}>
       {editing && <Stack direction="row" alignItems="center" justifyContent="space-between">
@@ -753,7 +773,7 @@ export function InfoContent({
         : (
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       <Box>
-        <UsageInfoSection order={values.usage_order} layoutAction={
+        <UsageInfoSection accounts={accounts} order={values.usage_order} layoutAction={
           <Tooltip title="Customize layout">
             <span><IconButton aria-label="Customize layout" disabled={!layout.data || layout.saving || !!layout.pending} onClick={() => setEditing(true)} sx={{ width: 44, height: 44 }}><Tune fontSize="small" /></IconButton></span>
           </Tooltip>

@@ -1,4 +1,5 @@
 import { isPluginIdentifier } from "./pluginHost/identity";
+import { applySessionQuotaHosts } from "./sessionQuota";
 
 export type UsageActivityAgent = {
   id: string;
@@ -360,6 +361,7 @@ let overlayUsage = emptyUsageMaps();
 /** Replace account capability data from the activated, validated host inventory. */
 export function applyUsageHostPlugins(hosts: unknown): void {
   overlayUsage = collectUsageMaps(hosts);
+  applySessionQuotaHosts(hosts);
 }
 
 /** Map account-usage provider ids onto Agent Plugin slot ids. */

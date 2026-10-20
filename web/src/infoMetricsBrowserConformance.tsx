@@ -9,6 +9,9 @@ import { ProductAuthGate } from "./auth/ProductAuthGate";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import type { MaintenanceMachine } from "./SessionMaintenancePanel";
 import type { ServiceMetrics } from "./InfoRuntimeMetrics";
+import type { SubscriptionSnapshot } from "./subscriptionAccounts";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
+import type { SessionMeta } from "./protocol";
 
 export async function runInfoMetricsBrowserConformance(
   keepFixture = false,
@@ -35,6 +38,16 @@ export async function runInfoMetricsBrowserConformance(
   const now = Date.now();
   const gb = 1024 ** 3;
   let failMetrics = true;
+  const digest = `sha256:${"a".repeat(64)}`;
+  let accounts: SubscriptionSnapshot = {
+    dataset: { dataset_id: "fixture", user_id: "info-fixture" },
+    registry: { revision: 1, accounts: [
+      { id: "otter", provider_id: "claude-code", label: "Claude · Otter", enabled: true },
+    ], defaults: {} },
+    display_preferences: { scope: "subscriptions", revision: 1, values: { legacy_labels: { "claude-code": "Claude · Lynx" } } },
+    session_admission: "enabled",
+  };
+  let socket: FixtureSocket | undefined;
   const service: ServiceMetrics = {
     db_bytes: 190.6 * 1024 ** 2,
     events_rows: 67_396,
@@ -130,6 +143,7 @@ export async function runInfoMetricsBrowserConformance(
     onclose: (() => void) | null = null;
     onerror = null;
     constructor() {
+      socket = this;
       setTimeout(() => {
         this.onopen?.();
         this.onmessage?.({
@@ -184,7 +198,20 @@ export async function runInfoMetricsBrowserConformance(
         providers: [],
         authentications: [],
         authentication_executors: [],
+        platform: { hosts: [{
+          id: "claude-code", plugin_version: "1.0.0", artifact_digest: digest, generation: "a".repeat(64),
+          default_for_id: true, slots: ["provider.usage"],
+          ui: { schema_version: 1, renderers: { "provider.usage": "provider-usage-v1" } },
+          usage: { account: "anthropic", product: "Anthropic", order: 0,
+            session_rate_limits: { pointer: "/_meta/quota", target: "rateLimits",
+              required_number_fields: ["utilization"], required_string_fields: ["rateLimitType"] },
+            limit_labels: [{ id: "five_hour", label: "5h", window_minutes: 300 }],
+          },
+        }] },
       });
+    }
+    if (path === "/api/provider-accounts") {
+      return Response.json(accounts);
     }
     if (path === "/api/metrics") {
       return failMetrics
@@ -218,7 +245,7 @@ export async function runInfoMetricsBrowserConformance(
         refresh_interval_ms: 60_000,
         providers: [
           {
-            provider: "Claude",
+            provider: "anthropic",
             status: "available",
             source: "Claude Code",
             observed_at_ms: now,
@@ -377,6 +404,54 @@ export async function runInfoMetricsBrowserConformance(
       ),
       "quota meters expose remaining rather than consumed capacity",
     );
+    const accountCard = (id: string) => container.querySelector<HTMLElement>(`[data-usage-account="${id}"]`);
+    await until(() => accountCard("anthropic")?.textContent?.includes("Claude · Lynx") === true && !!accountCard("otter"));
+    check(container.querySelectorAll("[data-usage-account]").length === 3,
+      "registered accounts each have one card alongside other Providers");
+    check(accountCard("anthropic")!.textContent?.includes("Default") &&
+      accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels and default identity are visible");
+    check(accountCard("otter")!.querySelectorAll('[role="meter"]').length === 0 &&
+      accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Lynx percentages");
+    check(!accountCard("otter")!.querySelector("button, input") &&
+      !accountCard("otter")!.textContent?.includes("Updated"), "uncollected account has no wrong-account refresh or fabricated timestamp");
+    const changed = () => {
+      accounts = { ...accounts, registry: { ...accounts.registry, revision: accounts.registry.revision + 1 } };
+      window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { provider_accounts: accounts.registry.revision } }));
+    };
+    accounts.registry.accounts[0]!.label = "Claude · River Otter";
+    changed();
+    await until(() => accountCard("otter")?.textContent?.includes("River Otter") === true);
+    check(!accountCard("otter")!.textContent?.includes("Claude · Otter"), "account rename updates the open About view");
+    accounts.registry.accounts.push({ id: "new", provider_id: "no-collector", label: "New account", enabled: true });
+    changed();
+    await until(() => !!accountCard("new"));
+    check(accountCard("new")!.textContent?.includes("NOT REPORTED"), "new accounts without a usage Plugin stay visible");
+    accounts.registry.accounts = accounts.registry.accounts.filter((a) => a.id !== "new");
+    changed();
+    await until(() => !accountCard("new"));
+    check(container.querySelectorAll("[data-usage-account]").length === 3, "removed accounts disappear without refreshing the page");
+    const report: SessionMeta = {
+      id: "otter-session", provider: "claude-code", provider_account_id: "otter", owner_user_id: "info-fixture",
+      provider_version: "1.0.0", provider_generation_digest: digest,
+      cwd: "/fixture", title: "Otter session", status: "running",
+      usage: { used: 10, size: 100, observed_at_ms: now,
+        raw: { _meta: { quota: { utilization: 25, rateLimitType: "five_hour" } } } },
+    };
+    socket!.onmessage?.({ data: JSON.stringify({ type: "sessions", sessions: [report] }) });
+    await until(() => accountCard("otter")?.querySelector('[role="meter"]') !== null);
+    check(accountCard("otter")!.textContent?.includes("75% remaining") &&
+      accountCard("anthropic")!.textContent?.includes("82% remaining"), "session quota is isolated by account and exact Provider generation");
+    accounts.registry.accounts[0]!.enabled = false;
+    changed();
+    await until(() => accountCard("otter")?.textContent?.includes("DISABLED") === true);
+    check(!accountCard("otter")!.querySelector('[role="meter"]'), "disabled accounts retain their card without active quota");
+    accounts.registry.accounts[0]!.enabled = true;
+    accounts.registry.accounts[0]!.label = "Claude · Otter";
+    accounts.registry.defaults["claude-code"] = "otter";
+    changed();
+    await until(() => accountCard("otter")?.textContent?.includes("Default") === true);
+    check(!accountCard("anthropic")!.textContent?.includes("Default") &&
+      accountCard("anthropic")!.textContent?.includes("82% remaining"), "changing the default never reassigns the legacy usage observation");
     for (const width of [320, 390, 768, 1200]) {
       container.style.width = `${width}px`;
       render(width >= 768);

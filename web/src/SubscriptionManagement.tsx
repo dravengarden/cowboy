@@ -9,17 +9,11 @@ import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
-import { legacySubscriptionLabel, type SubscriptionDisplay, validLegacyLabels, validSubscriptionDisplay, validSubscriptionLabel } from "./subscriptionDisplay";
+import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
+import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
+export { validSubscriptionSnapshot } from "./subscriptionAccounts";
 export { validSubscriptionLabel } from "./subscriptionDisplay";
 
-interface Account { id: string; provider_id: string; label: string; enabled: boolean; revoking?: boolean }
-interface Snapshot {
-  dataset: { dataset_id: string; user_id: string };
-  registry: { revision: number; accounts: Account[]; defaults: Record<string, string> };
-  display_preferences?: SubscriptionDisplay;
-  session_admission: string;
-  session_providers?: string[];
-}
 type Change = { type: "create"; provider_id: string; label: string }
   | { type: "rename"; id: string; label: string }
   | { type: "set_enabled"; id: string; enabled: boolean }
@@ -34,18 +28,6 @@ function revision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 function text(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
-
-export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is Snapshot {
-  if (!owner || !record(value) || !record(value.dataset) || !record(value.registry)) return false;
-  const { dataset, registry } = value;
-  return dataset.user_id === owner && text(dataset.dataset_id) && revision(registry.revision) &&
-    (value.display_preferences === undefined || validSubscriptionDisplay(value.display_preferences)) &&
-    (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
-    typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
-    Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
-      text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
-      (account.revoking === undefined || typeof account.revoking === "boolean"));
-}
 
 export function validPendingSubscription(value: unknown): value is Pending {
   if (!record(value) || !text(value.operation) || !text(value.dataset) || !revision(value.expected_revision) || !record(value.change)) return false;

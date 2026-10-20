@@ -28,8 +28,30 @@ pub(super) async fn read_value(
     // collectors or copy activity/usage payloads into the agent response.
     let mut usage = state.usage.plugin_bindings();
     usage.sort_by_key(|binding| binding.order.unwrap_or(u16::MAX));
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    let registry = store
+        .provider_accounts(owner)
+        .await
+        .map_err(|_| "unavailable")?;
+    let display = store
+        .preferences(owner, "subscriptions")
+        .await
+        .map_err(|_| "unavailable")?;
+    let catalog = state.provider_catalog.entries();
+    let mut usage_choices = usage.iter().map(|binding| {
+        let alias = catalog.iter().filter(|entry| entry.manifest.host.account_usage.as_ref()
+            .is_some_and(|usage| usage.provider == binding.account))
+            .find_map(|entry| display.as_ref()?.values.get("legacy_labels")?.get(&entry.provider_id)?.as_str());
+        json!({"id":binding.account,"name":alias.unwrap_or(binding.product.as_deref().unwrap_or(&binding.account))})
+    }).collect::<Vec<_>>();
+    usage_choices.extend(
+        registry
+            .accounts
+            .iter()
+            .map(|account| json!({"id":account.id,"name":account.label})),
+    );
     Ok(json!({"preferences":prefs,"choices":{
-        "usage_order":usage.iter().map(|p| json!({"id":p.account,"name":p.product.as_deref().unwrap_or(&p.account)})).collect::<Vec<_>>(),
+        "usage_order":usage_choices,
         "machine_order":machines.iter().map(|m| json!({"id":m.id,"name":m.display_name})).collect::<Vec<_>>()
     }}))
 }

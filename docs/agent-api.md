@@ -257,6 +257,21 @@ not evidence of consumption within the current plan window. A missing section is
 only from a live session remains available through that session's
 `usage().usage.raw`, separately from the cached account observation.
 
+About joins these Service observations with the current subscription registry:
+legacy display names label the Service cards, and every registered additional
+account has its own card, including disabled accounts and Providers without a
+collector. Renames, additions and removals follow account preference events.
+Additional accounts never inherit the Service account's quota, activity,
+refresh operation, reset credits or query Machine. Background quota collection
+for native additional accounts is not yet implemented. Their cards show
+`Not reported` until a session for the same owner, account and Provider reports
+quota through its exact signed generation's data-only `session_rate_limits`
+projection. Context tokens and cost are not quota. These observations show
+`Session report` and their actual timestamp. Agents can inspect the same
+underlying report through `sessions.usage(id)` after matching its
+`provider_account_id`; `usage.read("anthropic")` continues to mean the Service
+account, even when an additional account becomes the default for new sessions.
+
 Use a JSON pointer such as `path:"/rateLimits/primary"` or
 `path:"/last24Hours/summary"` to select before copying. `page.data` contains at
 most 50 object entries or array elements by default (maximum 200); object keys
@@ -1276,14 +1291,18 @@ gate opens. Existing sessions deserialize and migrate to `default`.
 
 ### User preferences and configuration coverage
 
-About's Usage Provider order and Machine order are account-owned DB state,
+About's Usage account order and Machine order are user-owned DB state,
 shared by mobile, desktop and agents. `cowboy_read({help:"preferences"})`
 discovers the contract without loading unrelated declarations.
 `preferences.get("about")` returns the revision, values and compact ID/name
 choices, without usage details or resource metrics. `usage_order` and
 `machine_order` are unique ID arrays: listed items appear first, unlisted items
 retain their default order, unavailable IDs stay dormant, and empty arrays
-restore defaults. An omitted field is unchanged.
+restore defaults. Service cards retain their Plugin account key; additional
+cards use their registry account ID. An old Provider order keeps its additional
+accounts beside it until an explicit account order is saved. Discovery returns
+registered account labels, including legacy display aliases, without running a
+collector. An omitted field is unchanged.
 
 Legacy subscription names use `preferences.get("subscriptions")` and the same
 `preferences.update` action with `scope:"subscriptions"`, `expected_revision`,

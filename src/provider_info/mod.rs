@@ -11,24 +11,33 @@ use crate::plugin_host::{PluginUsageSpec, UsageSessionRateLimits};
 use crate::usage::ProviderUsage;
 
 pub(crate) fn overlay_session_usage(
-    mut snapshot: crate::usage::UsageSnapshot,
+    snapshot: crate::usage::UsageSnapshot,
     sessions: &[SessionMeta],
     catalog: &crate::provider_catalog::ProviderCatalog,
     bindings: &[PluginUsageSpec],
 ) -> crate::usage::UsageSnapshot {
+    overlay_service_sessions(snapshot, sessions, bindings, |session| {
+        catalog.account_usage_provider(
+            &session.provider,
+            &session.provider_version,
+            &session.provider_generation_digest,
+        )
+    })
+}
+
+fn overlay_service_sessions(
+    mut snapshot: crate::usage::UsageSnapshot,
+    sessions: &[SessionMeta],
+    bindings: &[PluginUsageSpec],
+    provider_for: impl Fn(&SessionMeta) -> Option<String>,
+) -> crate::usage::UsageSnapshot {
     for provider in &mut snapshot.providers {
         let Some((_, session, usage)) = sessions
             .iter()
-            .filter(|session| {
-                catalog
-                    .account_usage_provider(
-                        &session.provider,
-                        &session.provider_version,
-                        &session.provider_generation_digest,
-                    )
-                    .as_deref()
-                    == Some(provider.provider)
-            })
+            // The Service collector owns the legacy/default credential. A
+            // named account report must never fill its quota or activity.
+            .filter(|session| session.provider_account_id.is_default())
+            .filter(|session| provider_for(session).as_deref() == Some(provider.provider))
             .filter_map(|session| {
                 session
                     .usage
@@ -257,5 +266,75 @@ mod tests {
             fallback.rate_limits.unwrap()["rateLimits"]["utilization"],
             90
         );
+    }
+
+    #[test]
+    fn named_session_cannot_fill_default_account_quota_or_activity() {
+        let projection = binding(
+            "future",
+            Some(UsageSessionRateLimits {
+                pointer: "/limits".into(),
+                target: "rateLimits".into(),
+                required_number_fields: vec!["utilization".into()],
+                required_string_fields: vec![],
+            }),
+        );
+        let default = crate::core::Hub::prepare_session(crate::core::SessionRegistration {
+            id: "default-session".into(),
+            provider: "future-agent".into(),
+            provider_account_id: Default::default(),
+            provider_version: "1.0.0".into(),
+            provider_generation_digest: "digest".into(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "machine".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/fixture".into(),
+            title: String::new(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("owner".into()),
+            owner_username: None,
+        });
+        let mut default = default;
+        default.usage = Some(crate::agent_model::SessionUsage {
+            used: 1,
+            size: 100,
+            observed_at_ms: 10,
+            raw: json!({"limits":{"utilization":20}}),
+        });
+        let mut named = default.clone();
+        named.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        named.usage.as_mut().unwrap().observed_at_ms = 20;
+        named.usage.as_mut().unwrap().raw = json!({"limits":{"utilization":95}});
+        let snapshot = crate::usage::UsageSnapshot {
+            refreshed_at_ms: 0,
+            next_refresh_at_ms: 0,
+            refresh_interval_ms: 0,
+            providers: vec![unavailable("future", "Fixture", "No data")],
+            reset_schedules: Default::default(),
+            refreshing: vec![],
+        };
+        let result = overlay_service_sessions(
+            snapshot.clone(),
+            &[default, named.clone()],
+            std::slice::from_ref(&projection),
+            |_| Some("future".into()),
+        );
+        assert_eq!(
+            result.providers[0].rate_limits.as_ref().unwrap()["rateLimits"]["utilization"],
+            20
+        );
+        assert_eq!(
+            result.providers[0].activity.as_ref().unwrap()["latest_session"]["session"]["limits"]["utilization"],
+            20
+        );
+        let result =
+            overlay_service_sessions(snapshot, &[named], &[projection], |_| Some("future".into()));
+        assert!(result.providers[0].rate_limits.is_none());
+        assert!(result.providers[0].activity.is_none());
     }
 }
