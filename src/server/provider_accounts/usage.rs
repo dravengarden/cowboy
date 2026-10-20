@@ -168,6 +168,9 @@ fn error_message(code: &str) -> &str {
         "native_usage_collector_failed" => {
             "The native quota query failed. Cowboy will retry automatically."
         }
+        "usage_admission_unavailable" => {
+            "Usage collection is paused. The Service admission ledger needs repair and a restart."
+        }
         _ => "Account usage could not be refreshed. Cowboy will retry automatically.",
     }
 }
@@ -208,18 +211,24 @@ pub(in crate::server) async fn read_one(
         &crate::usage::limiter::Limiter::account_key(owner, id.as_str()),
         now_ms(),
     );
+    let retry_at_ms = budget.retry_at_ms(now_ms());
+    let stopped = budget.next_allowed_ms == i64::MAX;
     value["usage"] = json!(entry.usage);
     if value["usage"].is_object() {
         value["usage"]["refresh"] = json!({
             "last_attempt_at_ms":entry.last_attempt_at_ms,
-            "manual_refresh_after_ms":budget.next_allowed_ms,
-            "next_auto_refresh_at_ms":budget.next_allowed_ms,
-            "stale":entry.error.is_some(),
+            "manual_refresh_after_ms":retry_at_ms,
+            "next_auto_refresh_at_ms":retry_at_ms,
+            "stale":stopped || entry.error.is_some(),
         });
     }
     value["last_attempt_at_ms"] = json!(budget.last_attempt_ms);
-    value["next_refresh_at_ms"] = json!(budget.next_allowed_ms);
-    if let Some(code) = entry.error {
+    value["next_refresh_at_ms"] = json!(retry_at_ms);
+    if let Some(code) = if stopped {
+        Some("usage_admission_unavailable")
+    } else {
+        entry.error
+    } {
         value["reason"] = json!(code);
         value["message"] = json!(error_message(code));
     }
@@ -262,6 +271,21 @@ pub(in crate::server) async fn refresh_one(
     owner: &str,
     id: &ProviderAccountId,
 ) -> Result<(), &'static str> {
+    let state = Arc::clone(state);
+    let owner = owner.to_owned();
+    let id = id.clone();
+    // Own the entire admission transaction, not just the later network query.
+    // An HTTP/MCP observer may detach while the transaction is committing.
+    tokio::spawn(async move { refresh_owned(&state, &owner, &id).await })
+        .await
+        .map_err(|_| "native_usage_unavailable")?
+}
+
+async fn refresh_owned(
+    state: &Arc<AppState>,
+    owner: &str,
+    id: &ProviderAccountId,
+) -> Result<(), &'static str> {
     // Resolve ownership before allocating a cache slot for an untrusted ID.
     target(state, owner, id).await?;
     let cache = state.usage.native.entry(owner, id.as_str());
@@ -289,36 +313,55 @@ pub(in crate::server) async fn refresh_one(
             }
             Ok(due)
         })
-        .await
-        .map_err(|_| "account_binding_changed")?;
+        .await;
+    let due = match due {
+        Ok(due) => due,
+        Err(_) => {
+            if let Some(permit) = permit {
+                permit.finish(crate::usage::limiter::Outcome::LocalFailure, now_ms());
+            }
+            return Err("account_binding_changed");
+        }
+    };
     if !due {
         return Ok(());
     }
-    // A browser closing or a short MCP deadline must not discard an admitted
-    // query's result while still charging its shared refresh budget.
-    let state = Arc::clone(state);
-    let owner = owner.to_owned();
-    let id = id.as_str().to_owned();
-    tokio::spawn(async move {
-        state.hub.broadcast_account_usage_changed(&owner);
-        let result = collect(&state, &owner, &target).await;
-        let outcome = match &result {
-            Ok(_) => crate::usage::limiter::Outcome::Success,
-            Err("native_usage_authentication_required") => {
-                crate::usage::limiter::Outcome::Authentication
-            }
-            Err(_) => crate::usage::limiter::Outcome::Failure,
-        };
-        cache.data.lock().finish(&target.completion, result);
-        if let Some(permit) = permit {
-            permit.finish(outcome, now_ms());
-        }
-        drop(collection);
-        state.hub.broadcast_account_usage_changed(&owner);
-        tracing::debug!(account_id = id, "native account usage refresh settled");
-    })
-    .await
-    .map_err(|_| "native_usage_unavailable")
+    state.hub.broadcast_account_usage_changed(owner);
+    let result = collect(state, owner, &target).await;
+    let outcome = collection_outcome(result.as_ref().err().copied());
+    cache.data.lock().finish(&target.completion, result);
+    if let Some(permit) = permit {
+        permit.finish(outcome, now_ms());
+    }
+    drop(collection);
+    state.hub.broadcast_account_usage_changed(owner);
+    tracing::debug!(
+        account_id = id.as_str(),
+        "native account usage refresh settled"
+    );
+    Ok(())
+}
+
+fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
+    use crate::usage::limiter::Outcome;
+    match error {
+        None => Outcome::Success,
+        Some("native_usage_authentication_required") => Outcome::Authentication,
+        Some(
+            "machine_unavailable"
+            | "machine_usage_update_required"
+            | "machine_connection_changed"
+            | "native_usage_busy"
+            | "machine_usage_busy"
+            | "account_binding_changed"
+            | "native_usage_profile_changed"
+            | "native_usage_collector_unavailable"
+            | "native_usage_home_unsupported"
+            | "runtime_not_allowed"
+            | "native_usage_dispatch_failed",
+        ) => Outcome::LocalFailure,
+        Some(_) => Outcome::Failure,
+    }
 }
 
 async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value, &'static str> {
@@ -458,5 +501,46 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
             let _ = refresh_one(&state, &owner, &id).await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_native_failures_leave_other_provider_accounts_available() {
+        use crate::usage::limiter::{Limiter, Outcome};
+        for reason in [
+            "machine_unavailable",
+            "machine_usage_update_required",
+            "machine_connection_changed",
+            "native_usage_busy",
+            "machine_usage_busy",
+            "account_binding_changed",
+            "native_usage_profile_changed",
+            "native_usage_collector_unavailable",
+            "native_usage_home_unsupported",
+            "runtime_not_allowed",
+            "native_usage_dispatch_failed",
+        ] {
+            let limiter = Limiter::new(None);
+            limiter
+                .start("anthropic", "offline", 1000)
+                .unwrap_or_else(|_| panic!("start"))
+                .finish(collection_outcome(Some(reason)), 1000);
+            limiter
+                .start("anthropic", "online", 61_000)
+                .unwrap_or_else(|_| panic!("{reason}"))
+                .finish(Outcome::Success, 61_000);
+        }
+        assert_eq!(
+            collection_outcome(Some("native_usage_collector_failed")),
+            Outcome::Failure
+        );
+        assert_eq!(
+            collection_outcome(Some("native_usage_authentication_required")),
+            Outcome::Authentication
+        );
     }
 }

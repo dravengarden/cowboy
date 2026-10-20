@@ -444,18 +444,16 @@ impl UsageService {
             .is_some_and(PluginUsageSpec::claims_reset_before_attempt)
     }
 
-    async fn collect_binding(&self, binding: &PluginUsageSpec) -> ProviderUsage {
+    async fn collect_binding(&self, binding: &PluginUsageSpec) -> (ProviderUsage, bool) {
+        let mut local_failure = false;
         let usage = if !binding.collector_argv.is_empty() || binding.collector.is_command() {
-            collect_command(
-                binding,
-                self.store.as_ref(),
-                self.command_route(&binding.account, PluginHostOperation::CollectUsage),
-                &self.machine_control,
-            )
-            .await
+            let route = self.command_route(&binding.account, PluginHostOperation::CollectUsage);
+            local_failure = matches!(route, PluginCommandRoute::Unavailable(_));
+            collect_command(binding, self.store.as_ref(), route, &self.machine_control).await
         } else if binding.collector.is_session() {
             placeholder_usage(binding)
         } else {
+            local_failure = true;
             crate::provider_info::error(
                 intern_usage_str(binding.account.clone()),
                 intern_usage_str(binding.product_label().to_owned()),
@@ -465,7 +463,7 @@ impl UsageService {
                 ),
             )
         };
-        bind_collected_usage(usage, binding)
+        (bind_collected_usage(usage, binding), local_failure)
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
@@ -568,6 +566,8 @@ impl UsageService {
         let permit = match self.limiter.start(&binding.account, &key, now_ms()) {
             Ok(permit) => permit,
             Err(budget) => {
+                let retry_at_ms = budget.retry_at_ms(now_ms());
+                let stopped = budget.next_allowed_ms == i64::MAX;
                 let mut snapshot = self.snapshot.lock().await;
                 if let Some(usage) = snapshot
                     .providers
@@ -576,10 +576,13 @@ impl UsageService {
                 {
                     usage.refresh = Some(ProviderRefreshState {
                         last_attempt_at_ms: budget.last_attempt_ms,
-                        manual_refresh_after_ms: budget.next_allowed_ms,
-                        next_auto_refresh_at_ms: budget.next_allowed_ms,
-                        stale: usage.refresh.as_ref().is_some_and(|state| state.stale),
+                        manual_refresh_after_ms: retry_at_ms,
+                        next_auto_refresh_at_ms: retry_at_ms,
+                        stale: stopped || usage.refresh.as_ref().is_some_and(|state| state.stale),
                     });
+                    if stopped {
+                        usage.error = Some("Usage collection is paused. The Service admission ledger needs repair and a restart.".into());
+                    }
                 }
                 self.persist_snapshot(&snapshot);
                 self.in_flight.lock().remove(&binding.account);
@@ -587,7 +590,7 @@ impl UsageService {
                 return;
             }
         };
-        let attempt = self.collect_binding(binding).await;
+        let (attempt, local_failure) = self.collect_binding(binding).await;
         let completed_at_ms = now_ms();
         let outcome = if matches!(attempt.status, "available" | "exhausted") {
             limiter::Outcome::Success
@@ -595,6 +598,11 @@ impl UsageService {
             == UsageFailureKind::Authentication
         {
             limiter::Outcome::Authentication
+        } else if local_failure
+            || classify_usage_failure(attempt.error.as_deref().unwrap_or(""))
+                == UsageFailureKind::Configuration
+        {
+            limiter::Outcome::LocalFailure
         } else {
             limiter::Outcome::Failure
         };
@@ -611,10 +619,12 @@ impl UsageService {
                 .find(|usage| usage.provider == binding.account)
                 .and_then(|usage| usage.refresh.as_mut())
             {
-                refresh.manual_refresh_after_ms =
-                    refresh.manual_refresh_after_ms.max(budget.next_allowed_ms);
-                refresh.next_auto_refresh_at_ms =
-                    refresh.next_auto_refresh_at_ms.max(budget.next_allowed_ms);
+                refresh.manual_refresh_after_ms = refresh
+                    .manual_refresh_after_ms
+                    .max(budget.retry_at_ms(completed_at_ms));
+                refresh.next_auto_refresh_at_ms = refresh
+                    .next_auto_refresh_at_ms
+                    .max(budget.retry_at_ms(completed_at_ms));
             }
             update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
             self.persist_snapshot(&snapshot);
@@ -941,6 +951,9 @@ fn classify_usage_failure(detail: &str) -> UsageFailureKind {
         "does not expose",
         "method not found",
         "invalid request",
+        "has no plugin command",
+        "collector argv is empty",
+        "spawn plugin command",
     ]
     .iter()
     .any(|needle| detail.contains(needle))
@@ -1196,7 +1209,24 @@ fn intern_dynamic(value: String) -> &'static str {
 
 fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
     let bytes = std::fs::read(path).ok()?;
-    let cached: CachedUsageSnapshot = serde_json::from_slice(&bytes).ok()?;
+    let mut cached: CachedUsageSnapshot = serde_json::from_slice(&bytes).ok()?;
+    // Older caches may contain a fail-closed admission sentinel. Admission is
+    // still enforced by the ledger; cache hints must not disable recovery.
+    if cached.next_refresh_at_ms == i64::MAX {
+        cached.next_refresh_at_ms = 0;
+    }
+    for refresh in cached
+        .providers
+        .iter_mut()
+        .filter_map(|provider| provider.refresh.as_mut())
+    {
+        if refresh.manual_refresh_after_ms == i64::MAX {
+            refresh.manual_refresh_after_ms = 0;
+        }
+        if refresh.next_auto_refresh_at_ms == i64::MAX {
+            refresh.next_auto_refresh_at_ms = 0;
+        }
+    }
     let reset_schedules = cached.reset_schedules;
     Some(UsageSnapshot {
         refreshed_at_ms: cached.refreshed_at_ms,
@@ -1626,6 +1656,79 @@ mod tests {
                 .is_empty()
         );
         assert!(service.in_flight.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn repaired_admission_ledger_is_not_blocked_by_the_cached_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("usage.json");
+        let ledger = directory.path().join("usage-rate-limits.json");
+        std::fs::write(&ledger, b"corrupt").unwrap();
+        let mut binding = openai_usage_binding();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec!["must-not-run".into()];
+        let service = UsageService::with_bindings(None, Some(cache.clone()), vec![binding.clone()]);
+        service.collect_and_store(&binding).await;
+        let snapshot = load_cached_snapshot(&cache).unwrap();
+        let usage = find_provider(&snapshot, &binding.account).unwrap();
+        let retry = usage.refresh.as_ref().unwrap().next_auto_refresh_at_ms;
+        assert!(retry < now_ms() + 120_000);
+        assert!(usage.refresh.as_ref().unwrap().stale);
+        assert!(usage.error.as_ref().unwrap().contains("paused"));
+        assert_eq!(std::fs::read(&ledger).unwrap(), b"corrupt");
+
+        std::fs::remove_file(&ledger).unwrap(); // simulate an operator repairing only the ledger
+        let restarted = UsageService::with_bindings(None, Some(cache), vec![binding.clone()]);
+        let key = limiter::Limiter::account_key("service", &binding.account);
+        let due = restarted
+            .limiter
+            .view(&binding.account, &key, now_ms())
+            .next_allowed_ms;
+        for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
+            assert!(provider_refresh_due(Some(usage), due, policy));
+        }
+        restarted
+            .limiter
+            .start(&binding.account, &key, due)
+            .unwrap_or_else(|_| panic!("recovered"))
+            .finish(limiter::Outcome::Success, due);
+    }
+
+    #[tokio::test]
+    async fn detached_refresh_observer_still_publishes_and_reuses_its_result() {
+        let root = tempfile::tempdir().unwrap();
+        let started = root.path().join("started");
+        let mut binding = openai_usage_binding();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "read -r _request; touch '{}'; sleep 0.2; printf '%s' '{{\"provider\":\"openai\",\"status\":\"available\",\"source\":\"fixture\",\"observed_at_ms\":7}}'",
+                started.display()
+            ),
+        ];
+        let service = UsageService::with_bindings(None, None, vec![binding]);
+        let collector = service.clone();
+        let observer = tokio::spawn(async move { collector.refresh_provider("openai").await });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !started.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        observer.abort();
+        assert!(observer.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            service.wait_settled(&["openai".into()]),
+        )
+        .await
+        .unwrap();
+        let cached = service.refresh_provider("openai").await.unwrap();
+        assert!(cached.refreshing.is_empty());
+        assert_eq!(find_provider(&cached, "openai").unwrap().observed_at_ms, 7);
     }
 
     #[tokio::test]
@@ -2255,6 +2358,26 @@ mod tests {
         let loaded = load_cached_snapshot(&path).expect("legacy cached snapshot");
         assert!(loaded.providers[0].refresh.is_none());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_fail_closed_cache_does_not_disable_admission_recovery() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), serde_json::to_vec(&json!({
+            "refreshed_at_ms":0, "next_refresh_at_ms":i64::MAX, "refresh_interval_ms":300_000,
+            "providers":[{"provider":"openai","status":"unavailable","source":"fixture","observed_at_ms":0,
+                "refresh":{"last_attempt_at_ms":0, "manual_refresh_after_ms":i64::MAX,
+                    "next_auto_refresh_at_ms":i64::MAX,"stale":true}}]
+        })).unwrap()).unwrap();
+        let snapshot = load_cached_snapshot(file.path()).unwrap();
+        assert_eq!(snapshot.next_refresh_at_ms, 0);
+        for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
+            assert!(provider_refresh_due(
+                Some(&snapshot.providers[0]),
+                now_ms(),
+                policy
+            ));
+        }
     }
 
     #[tokio::test]

@@ -50,11 +50,24 @@ pub(crate) struct Budget {
     pub next_allowed_ms: i64,
 }
 
-#[derive(Clone, Copy)]
+impl Budget {
+    /// Cache scheduling is only a hint. Never persist the fail-closed sentinel
+    /// there: a repaired ledger must be reachable again without editing caches.
+    pub fn retry_at_ms(self, now: i64) -> i64 {
+        if self.next_allowed_ms == i64::MAX {
+            now.saturating_add(60_000)
+        } else {
+            self.next_allowed_ms
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Success,
     Failure,
     Authentication,
+    LocalFailure,
 }
 
 pub(crate) struct Permit {
@@ -89,10 +102,14 @@ impl Limiter {
                 })
                 .unwrap_or_else(|| {
                     failed_closed = true;
+                    tracing::error!(
+                        "invalid usage admission ledger; new quota queries are stopped"
+                    );
                     empty(now)
                 }),
             Some(Err(error)) if error.kind() != std::io::ErrorKind::NotFound => {
                 failed_closed = true;
+                tracing::error!(%error, "unreadable usage admission ledger; new quota queries are stopped");
                 empty(now)
             }
             _ => empty(if path.is_some() { now + 300_000 } else { 0 }),
@@ -211,7 +228,7 @@ impl Limiter {
         let slot = state.durable.accounts.entry(account.into()).or_default();
         match outcome {
             Outcome::Success => slot.failures = 0,
-            Outcome::Failure | Outcome::Authentication => {
+            Outcome::Failure | Outcome::Authentication | Outcome::LocalFailure => {
                 slot.failures = slot.failures.saturating_add(1);
                 let backoff = if matches!(outcome, Outcome::Authentication) {
                     max_backoff
@@ -241,7 +258,7 @@ impl Limiter {
                         .min(max_backoff),
                 );
             }
-            Outcome::Authentication => {}
+            Outcome::Authentication | Outcome::LocalFailure => {}
         }
         if !self.save(&state.durable) {
             state.failed_closed = true;
@@ -385,6 +402,23 @@ mod tests {
                 .finish(Outcome::Failure, now);
             assert!(limiter.view("anthropic", "lynx", now).next_allowed_ms <= now + 3_600_000);
         }
+    }
+
+    #[test]
+    fn local_failure_backs_off_only_its_account() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "offline", 1000)
+            .unwrap_or_else(|_| panic!("start"))
+            .finish(Outcome::LocalFailure, 2000);
+        assert_eq!(
+            limiter.view("anthropic", "offline", 2000).next_allowed_ms,
+            602_000
+        );
+        limiter
+            .start("anthropic", "online", 61_000)
+            .unwrap_or_else(|_| panic!("other account"))
+            .finish(Outcome::Success, 61_000);
     }
 
     #[test]

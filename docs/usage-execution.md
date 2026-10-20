@@ -77,8 +77,11 @@ an invalid/unwritable ledger fails closed and logs an operator diagnostic.
 Failure/cancellation spends budget. Account failures back off for 10, 20, 40,
 then 60 minutes; Provider failures also pause other accounts (4, 8, 16… minutes,
 capped at the configured maximum). Authentication failures affect their account.
+Machine, placement and binding failures also back off only their own account;
+they do not identify a Provider-wide outage. A failed-closed ledger uses a finite
+cache retry hint, so repairing the ledger and restarting needs no cache edit.
 There is no immediate retry loop. A caller disconnect does not cancel the
-Service-owned collection.
+Service-owned admission transaction or collection.
 
 The counted unit is a **collector invocation**, not opaque native CLI HTTP.
 Current Claude and Grok collectors can additionally read reset/credit details;
