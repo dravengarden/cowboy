@@ -2,9 +2,37 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
 import { applyUsageHostPlugins } from "./usageHostMap.ts";
-import { usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
+import { usageBalanceForAccount, usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
+import type { ProviderUsage } from "./usageLimits";
 
 applyUsageHostPlugins(testFirstPartyHostPlugins());
+
+test("account balance is available before activity and does not combine currencies", () => {
+  const usage: ProviderUsage = {
+    provider: "deepseek",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    account: { accounts: [
+      { balanceInfos: [{ currency: "CNY", total_balance: "108.80" }, { currency: "USD", total_balance: "12" }] },
+      { balanceInfos: [{ currency: "USD", total_balance: 3 }] },
+    ] },
+  };
+  assertEquals(usageBalanceForAccount(usage), { currency: "USD", balance: 15 });
+  assertEquals(usageBalanceForAccount({ ...usage, activity: { pricing: { currency: "CNY" } } }), { currency: "CNY", balance: 108.8 });
+  assertEquals(usageBalanceForAccount({ ...usage, status: "unavailable" }), undefined);
+  assertEquals(usageBalanceForAccount({ ...usage, provider: "anthropic" }), undefined);
+});
+
+test("account balance preserves unknown versus zero", () => {
+  const usage: ProviderUsage = {
+    provider: "deepseek", status: "available", source: "test", observed_at_ms: 1,
+  };
+  for (const total_balance of [undefined, null, "", " ", "unknown", Infinity, NaN]) {
+    assertEquals(usageBalanceForAccount({ ...usage, account: { balanceInfos: [{ currency: "USD", total_balance }] } }), undefined);
+  }
+  assertEquals(usageBalanceForAccount({ ...usage, account: { balanceInfos: [{ currency: "EUR", total_balance: "0" }] } }), { currency: "EUR", balance: 0 });
+});
 
 test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
   const providers = usageWidgetProviders({

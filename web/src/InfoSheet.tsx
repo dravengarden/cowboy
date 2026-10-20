@@ -77,6 +77,7 @@ import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
+import { formatCompactCurrency, usageBalanceForAccount } from "./usageWidget";
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
@@ -192,14 +193,16 @@ function ProviderUsageCardBody({
   const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const usageContext = useMemo(
-    () =>
-      ({ ...providerUsageSlotContext(usage, {
+    () => {
+      const balance = usageBalanceForAccount(usage);
+      return { ...providerUsageSlotContext(usage, {
         showTitle: false,
         showDetails: false,
         limits,
         resetsLabel: resetText,
-        emptyMessage: identity.emptyMessage ?? providerUsageEmptyMessage(usage),
-      }), creditDetails: [] }),
+        emptyMessage: balance ? "" : identity.emptyMessage ?? providerUsageEmptyMessage(usage),
+      }), creditDetails: balance ? [{ label: "Balance", value: formatCompactCurrency(balance.balance, balance.currency) }] : [] };
+    },
     [identity.emptyMessage, limits, usage],
   );
   const detailsContext = providerUsageSlotContext(usage, {
@@ -364,7 +367,8 @@ function ProviderUsageCardBody({
           context={usageContext}
         >
           {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
-          {limits.length === 0 && credits.length === 0 &&
+          <ProviderUsageCredits rows={usageContext.creditDetails} />
+          {limits.length === 0 && credits.length === 0 && usageContext.creditDetails.length === 0 &&
             !usageOmitEmptyLimits(usage.provider) && (
             <Typography variant="body2" color="text.secondary">
               {identity.emptyMessage ?? providerUsageEmptyMessage(usage)}

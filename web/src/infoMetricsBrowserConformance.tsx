@@ -208,6 +208,11 @@ export async function runInfoMetricsBrowserConformance(
               required_number_fields: ["utilization"], required_string_fields: ["rateLimitType"] },
             limit_labels: [{ id: "five_hour", label: "5h", window_minutes: 300 }],
           },
+        }, {
+          id: "deepseek", plugin_version: "1.0.0", artifact_digest: digest, generation: "a".repeat(64),
+          default_for_id: true, slots: ["provider.usage"],
+          ui: { schema_version: 1, renderers: { "provider.usage": "provider-usage-activity-v1" } },
+          usage: { account: "deepseek", product: "DeepSeek", order: 2, widget_shape: "balance", omit_empty_limits: true },
         }] },
       });
     }
@@ -286,6 +291,10 @@ export async function runInfoMetricsBrowserConformance(
                 },
               },
             },
+          },
+          {
+            provider: "deepseek", status: "available", source: "DeepSeek", observed_at_ms: now,
+            account: { balanceInfos: [{ currency: "USD", total_balance: "12.34" }] },
           },
           {
             provider: "Gemini",
@@ -412,8 +421,11 @@ export async function runInfoMetricsBrowserConformance(
     );
     const accountCard = (id: string) => container.querySelector<HTMLElement>(`[data-usage-account="${id}"]`);
     await until(() => accountCard("anthropic")?.textContent?.includes("Claude · Lynx") === true && !!accountCard("otter"));
-    check(container.querySelectorAll("[data-usage-account]").length === 3,
+    check(container.querySelectorAll("[data-usage-account]").length === 4,
       "registered accounts each have one card alongside other Providers");
+    check(accountCard("deepseek")?.textContent?.includes("USD 12.34") &&
+      accountCard("deepseek")?.querySelector('[aria-label="DeepSeek usage details"]')?.getAttribute("aria-expanded") === "false",
+      "balance-based accounts keep their balance visible before activity or details are loaded");
     check(accountCard("anthropic")!.textContent?.includes("Default") &&
       accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels and default identity are visible");
     const details = accountCard("anthropic")!.querySelector<HTMLButtonElement>('[aria-label="Claude · Lynx usage details"]')!;
@@ -445,7 +457,7 @@ export async function runInfoMetricsBrowserConformance(
     accounts.registry.accounts = accounts.registry.accounts.filter((a) => a.id !== "new");
     changed();
     await until(() => !accountCard("new"));
-    check(container.querySelectorAll("[data-usage-account]").length === 3, "removed accounts disappear without refreshing the page");
+    check(container.querySelectorAll("[data-usage-account]").length === 4, "removed accounts disappear without refreshing the page");
     const report: SessionMeta = {
       id: "otter-session", provider: "claude-code", provider_account_id: "otter", owner_user_id: "info-fixture",
       provider_version: "1.0.0", provider_generation_digest: digest,

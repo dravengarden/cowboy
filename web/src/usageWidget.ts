@@ -57,10 +57,7 @@ export function formatCompactCurrency(
   return `${currency} ${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
 }
 
-function accountBalance(
-  usage: ProviderUsage,
-  currency: string,
-): number | undefined {
+function accountBalances(usage: ProviderUsage): Map<string, number> {
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((account) =>
       account !== undefined
@@ -79,16 +76,34 @@ function accountBalance(
       balance !== undefined
     )
     : [];
-  const amounts = balances.flatMap((balance) => {
-    if (balance.currency !== currency) return [];
+  const totals = new Map<string, number>();
+  for (const balance of balances) {
+    const currency = balance.currency;
+    if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) continue;
     const raw = typeof balance.total_balance === "string"
-      ? Number(balance.total_balance)
+      ? balance.total_balance.trim() === "" ? undefined : Number(balance.total_balance)
       : num(balance.total_balance);
-    return raw === undefined || !Number.isFinite(raw) ? [] : [raw];
-  });
-  return amounts.length === 0
-    ? undefined
-    : amounts.reduce((sum, amount) => sum + amount, 0);
+    if (raw === undefined || !Number.isFinite(raw)) continue;
+    totals.set(currency, (totals.get(currency) ?? 0) + raw);
+  }
+  return totals;
+}
+
+/** Balance is primary account information even before any activity is recorded. */
+export function usageBalanceForAccount(
+  usage: ProviderUsage,
+): { currency: string; balance: number } | undefined {
+  if (usage.status !== "available" || usageWidgetShape(usage.provider) !== "balance") {
+    return undefined;
+  }
+  const balances = accountBalances(usage);
+  const pricedCurrency = record(usage.activity?.pricing)?.currency;
+  const currency = typeof pricedCurrency === "string" && balances.has(pricedCurrency)
+    ? pricedCurrency
+    : balances.has("USD") ? "USD" : balances.keys().next().value;
+  if (!currency) return undefined;
+  const balance = balances.get(currency)!;
+  return Number.isFinite(balance) ? { currency, balance } : undefined;
 }
 
 function activitySpend24h(usage: ProviderUsage):
@@ -145,7 +160,7 @@ function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
 function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   const spend24h = activitySpend24h(usage);
   const balance = spend24h
-    ? accountBalance(usage, spend24h.currency)
+    ? accountBalances(usage).get(spend24h.currency)
     : undefined;
   const rolling = record(usage.activity?.last24Hours);
   const rollingSummary = record(rolling?.summary);
