@@ -2,6 +2,53 @@ use super::*;
 use crate::machine_protocol::{MachineCommand, PROVIDER_ACCOUNT_PROTOCOL_VERSION};
 
 #[tokio::test]
+async fn native_usage_rejects_legacy_protocol_and_replaced_connections() {
+    let control = MachineControl::default();
+    let profile = serde_json::from_value(json!({
+        "account_id":"11111111-1111-4111-8111-111111111111","provider_id":"claude-code",
+        "request_id":"login","generation":2,"method":"native","provider_version":"1",
+        "generation_digest":"digest","auth_contract_fingerprint":"contract",
+        "identity":{"authority":"claude","subject":"otter"}
+    }))
+    .unwrap();
+    for protocol in [
+        PROVIDER_ACCOUNT_PROTOCOL_VERSION,
+        crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION,
+    ] {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let connection = control.install("machine".into(), "epoch".into(), false, protocol, tx);
+        let pending = control.begin_native_usage(&connection, &profile);
+        if protocol == PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+            assert!(pending.is_err());
+            assert!(rx.try_recv().is_err());
+            continue;
+        }
+        let pending = pending.unwrap();
+        let MachineCommand::CollectNativeUsage {
+            request_id,
+            profile: sent,
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("scoped query expected")
+        };
+        assert_eq!(*sent, profile);
+        control.record_remote(
+            &connection,
+            crate::machine_protocol::MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: true,
+                payload: Some(json!({"status":"available"})),
+                detail: None,
+            },
+        );
+        let (tx, _replacement) = tokio::sync::mpsc::unbounded_channel();
+        control.install("machine".into(), "new".into(), false, protocol, tx);
+        assert!(pending.await.is_err());
+    }
+}
+
+#[tokio::test]
 async fn binding_preparation_requires_exact_typed_current_connection_receipt() {
     use crate::machine_protocol::MachineEvent;
     use crate::provider_account::{

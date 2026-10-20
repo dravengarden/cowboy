@@ -1,7 +1,7 @@
 import { desktopSize } from "./surface/desktopSize";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
 import { DEFAULT_ABOUT_VALUES, useAboutPreferences } from "./aboutPreferences";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Children, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -76,6 +76,7 @@ import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
 import { useProviderCatalog } from "./providerCatalog";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
@@ -179,6 +180,7 @@ function ProviderUsageCardBody({
   refreshing: boolean;
 }): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
@@ -191,15 +193,23 @@ function ProviderUsageCardBody({
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const usageContext = useMemo(
     () =>
-      providerUsageSlotContext(usage, {
+      ({ ...providerUsageSlotContext(usage, {
         showTitle: false,
-        showDetails: true,
+        showDetails: false,
         limits,
         resetsLabel: resetText,
         emptyMessage: identity.emptyMessage ?? providerUsageEmptyMessage(usage),
-      }),
+      }), creditDetails: [] }),
     [identity.emptyMessage, limits, usage],
   );
+  const detailsContext = providerUsageSlotContext(usage, {
+    showTitle: false,
+    showDetails: true,
+    limits: [],
+    resetsLabel: resetText,
+    emptyMessage: "",
+  });
+  delete detailsContext.refreshLabel;
   const account = record(usage.account?.account);
   const plan = account ? str(account.planType) : undefined;
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
@@ -354,13 +364,33 @@ function ProviderUsageCardBody({
           context={usageContext}
         >
           {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
-          <ProviderUsageCredits rows={usageContext.creditDetails} />
           {limits.length === 0 && credits.length === 0 &&
             !usageOmitEmptyLimits(usage.provider) && (
             <Typography variant="body2" color="text.secondary">
               {identity.emptyMessage ?? providerUsageEmptyMessage(usage)}
             </Typography>
           )}
+        </PluginSlot>
+        {!!(detailsContext.creditDetails?.length || manageUrl || usage.activity || usage.observed_at_ms > 0 || Children.toArray(children).length) && (
+          <Accordion
+            disableGutters
+            elevation={0}
+            expanded={detailsOpen}
+            onChange={(_event, expanded) => setDetailsOpen(expanded)}
+            slotProps={{ transition: { unmountOnExit: true } }}
+            sx={{ bgcolor: "transparent", "&::before": { display: "none" } }}
+          >
+            <AccordionSummary
+              expandIcon={<ExpandMore />}
+              aria-label={`${title} usage details`}
+              sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
+            >
+              <Typography variant="body2" color="text.secondary">Details</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 0, pt: 0 }}>
+              <Stack spacing={1.35}>
+        <PluginSlot pluginId={usagePluginId(usage.provider)} slot="provider.usage" context={detailsContext}>
+          <ProviderUsageCredits rows={detailsContext.creditDetails} />
         </PluginSlot>
         {resetProvider !== undefined && credits.length > 0 && (
           <Accordion
@@ -542,6 +572,10 @@ function ProviderUsageCardBody({
           {relativeUpdateTime(usage.observed_at_ms, now)}
         </Typography>}
         {children}
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
+        )}
       </Stack>
       <ConfirmSheet
         open={resetOpen}
@@ -636,6 +670,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
   // every client, so closing and reopening this sheet keeps showing a refresh.
   const snapshot = useStoreSelector((state) => state.usage);
   const sessions = useStoreSelector((state) => state.sessions);
+  const native = useNativeAccountUsage(accounts.data?.registry.revision);
   useProviderCatalog();
   const refreshing = usageRefreshing(snapshot);
   const [execution, setExecution] = useState<UsageExecutionSettings | null>(
@@ -646,12 +681,14 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
   const load = useCallback(async (manual: boolean): Promise<void> => {
     setError(null);
     try {
-      await (manual ? Promise.all([requestUsageRefresh(), accounts.refresh()]) : loadUsageSnapshot());
+      await (manual ? Promise.all([requestUsageRefresh(), accounts.refresh(),
+        ...native.accounts.filter((account) => account.available).map((account) => native.refresh(account.account_id))])
+        : loadUsageSnapshot());
       setExecution(await readUsageExecutors());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     }
-  }, [accounts.refresh]);
+  }, [accounts.refresh, native.accounts, native.refresh]);
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {
@@ -708,8 +745,9 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
       {accounts.error && <Alert severity="warning" action={<Button onClick={() => void accounts.refresh()}>Retry</Button>}>
         {accounts.error} {accounts.data ? "Showing the last account list." : "Additional accounts could not be listed."}
       </Alert>}
+      {native.error && <Alert severity="warning" action={<Button onClick={() => void native.load()}>Retry</Button>}>{native.error}</Alert>}
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 1.25, alignItems: "start" }}>
-      {orderUsageAccounts(registeredUsageAccounts(snapshot, accounts.data, sessions), order).map((account) => (
+      {orderUsageAccounts(registeredUsageAccounts(snapshot, accounts.data, sessions, native.accounts), order).map((account) => (
         <ProviderUsageCard
           key={account.id}
           account={account}
@@ -717,8 +755,9 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           schedule={account.collector ? usageResetSchedule(snapshot, account.usage) : undefined}
           now={clock}
           onUsageChanged={() => load(false)}
-          onRefresh={account.collector ? () => loadProvider(account.collector!) : undefined}
-          refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : false}
+          onRefresh={account.collector ? () => loadProvider(account.collector!)
+            : account.native?.available ? () => native.refresh(account.id) : undefined}
+          refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
         >
           {execution && account.collector && (
             <UsageExecutorPicker
@@ -730,6 +769,8 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
               }}
             />
           )}
+          {account.native?.machine_id && <InfoRow k="Usage query Machine" v={execution?.machines.find((machine) => machine.id === account.native!.machine_id)?.name ?? account.native.machine_id} />}
+          {account.native?.message && account.native.usage && <Typography variant="caption" color="warning.main">{account.native.message}</Typography>}
         </ProviderUsageCard>
       ))}
       </Box>

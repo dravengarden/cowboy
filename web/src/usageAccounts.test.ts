@@ -28,6 +28,26 @@ const session: SessionMeta = {
   usage: { used: 100, size: 1000, observed_at_ms: 200,
     raw: { _meta: { "future/quota": { utilization: 25, rateLimitType: "five_hour" } } } },
 };
+
+test("native observations remain account scoped, support refresh and preserve plan information", () => {
+  setup();
+  const observed = { account_id: "otter", provider_id: "claude-code", available: true, refreshing: false,
+    usage: { provider: "anthropic", status: "available", source: "Anthropic", observed_at_ms: 300,
+      account: { account: { planType: "max" } },
+      rate_limits: { rateLimits: { primary: { usedPercent: 46, windowDurationMins: 300 } } } } };
+  const cards = registeredUsageAccounts(snapshot, registry, [session], [observed]);
+  assertEquals(usageLimits(cards[1].usage)[0].remaining, 54);
+  assertEquals(cards[1].usage.account, observed.usage.account);
+  assertEquals(cards[1].statusLabel, undefined);
+  assertEquals(cards[1].collector, undefined); // Native quota never exposes Service reset/placement.
+  assertEquals(cards[0].usage, snapshot.providers[0]);
+  for (const wrong of [{ ...observed, account_id: "lynx" }, { ...observed, provider_id: "codex" }]) {
+    assertEquals(registeredUsageAccounts(snapshot, registry, [], [wrong])[1].usage.rate_limits, undefined);
+  }
+  const disabled = structuredClone(registry);
+  disabled.registry.accounts[0]!.enabled = false;
+  assertEquals(registeredUsageAccounts(snapshot, disabled, [], [observed])[1].usage.rate_limits, undefined);
+});
 function setup() {
   applyUsageHostPlugins([
     { id: "claude-code", plugin_version: "1.0.0", artifact_digest: digest, usage: {

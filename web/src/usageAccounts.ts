@@ -1,6 +1,7 @@
 import type { SessionMeta } from "./protocol";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
+import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountProviderLabel, providerUsage, type ProviderUsage, type UsageSnapshot, usageCardProviders, usagePluginId } from "./usageLimits";
 
 export interface UsageAccountCard {
@@ -9,10 +10,11 @@ export interface UsageAccountCard {
   title: string;
   subtitle?: string;
   usage: ProviderUsage;
-  /** Only Service collectors currently support refresh, placement and resets. */
+  /** Service collectors own configurable placement and reset-credit actions. */
   collector?: string;
   emptyMessage?: string;
   statusLabel?: string;
+  native?: NativeAccountUsage;
 }
 
 /** A session notice must use the same bound identity as Settings and About.
@@ -37,6 +39,7 @@ export function registeredUsageAccounts(
   snapshot: UsageSnapshot | null,
   accounts: SubscriptionSnapshot | undefined,
   sessions: readonly SessionMeta[],
+  observations: readonly NativeAccountUsage[] = [],
 ): UsageAccountCard[] {
   const named = accounts?.registry.accounts ?? [];
   const cards: UsageAccountCard[] = [];
@@ -50,7 +53,9 @@ export function registeredUsageAccounts(
       const usage = sessionQuota(session);
       return usage ? [usage] : [];
     }) : [];
-    const usage = reports.sort((a, b) => b.observed_at_ms - a.observed_at_ms)[0];
+    const native = enabled ? observations.find((item) => item.account_id === account.id && item.provider_id === account.provider_id) : undefined;
+    const collected = native?.usage ?? undefined;
+    const usage = collected ?? reports.sort((a, b) => b.observed_at_ms - a.observed_at_ms)[0];
     const provider = usage?.provider ?? snapshot?.providers.find((item) =>
       usagePluginId(item.provider) === account.provider_id
     )?.provider ?? account.provider_id;
@@ -59,10 +64,11 @@ export function registeredUsageAccounts(
       id: account.id, group: provider, title: account.label,
       subtitle: `${accountProviderLabel(provider)}${defaultLabel}`,
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
-      statusLabel: account.revoking ? "REVOKING" : !account.enabled ? "DISABLED" : usage ? "SESSION" : "NOT REPORTED",
+      ...(native ? { native } : {}),
+      ...(!collected ? { statusLabel: account.revoking ? "REVOKING" : !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : "NOT REPORTED" } : {}),
       emptyMessage: account.revoking ? "Access revocation is in progress."
         : !account.enabled ? "This account is disabled."
-        : "No quota reported for this account yet. Background quota refresh is not available; quota reported by this account’s sessions appears here.",
+        : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),
     };
   };
   for (const usage of usageCardProviders(snapshot)) {

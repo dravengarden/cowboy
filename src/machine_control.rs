@@ -1510,6 +1510,47 @@ impl MachineControl {
         }
     }
 
+    /// Enqueue under the owner's current native-login transaction. The returned
+    /// future owns only this request's waiter, not reusable account authority.
+    pub(crate) fn begin_native_usage<'a>(
+        &'a self,
+        connection: &'a ConnectionToken,
+        profile: &crate::provider_account::NativeProfileReceipt,
+    ) -> Result<impl Future<Output = Result<serde_json::Value, String>> + 'a, String> {
+        if profile.account_id.is_default()
+            || profile.provider_id != "claude-code"
+            || profile.generation == 0
+        {
+            return Err("named_native_profile_required".into());
+        }
+        let request_id = self.request_id("native-usage")?;
+        let (rx, pending) = self.begin_request(
+            &connection.0.machine_id,
+            &request_id,
+            MachineCommand::CollectNativeUsage {
+                request_id: request_id.clone(),
+                profile: Box::new(profile.clone()),
+            },
+            ReplyKind::PluginHost,
+            Some(RequestBinding::Connection(connection)),
+        )?;
+        Ok(async move {
+            let _pending = pending;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(35), rx).await;
+            if !self.is_current(connection) {
+                return Err("machine_connection_changed".into());
+            }
+            match result {
+                Ok(Ok(Reply::PluginHost {
+                    accepted: true,
+                    payload: Some(value),
+                    ..
+                })) => Ok(value),
+                _ => Err("native_usage_unavailable".into()),
+            }
+        })
+    }
+
     /// Caller must admit the owner-scoped revocation and confirm session stops.
     /// A generic command ACK never completes this typed request.
     pub(crate) fn begin_native_logout<'a>(

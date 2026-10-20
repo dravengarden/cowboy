@@ -262,15 +262,32 @@ legacy display names label the Service cards, and every registered additional
 account has its own card, including disabled accounts and Providers without a
 collector. Renames, additions and removals follow account preference events.
 Additional accounts never inherit the Service account's quota, activity,
-refresh operation, reset credits or query Machine. Background quota collection
-for native additional accounts is not yet implemented. Their cards show
-`Not reported` until a session for the same owner, account and Provider reports
-quota through its exact signed generation's data-only `session_rate_limits`
-projection. Context tokens and cost are not quota. These observations show
-`Session report` and their actual timestamp. Agents can inspect the same
-underlying report through `sessions.usage(id)` after matching its
-`provider_account_id`; `usage.read("anthropic")` continues to mean the Service
-account, even when an additional account becomes the default for new sessions.
+refresh operation, reset credits or query Machine. Native Claude subscriptions
+have their own bounded background collector on a Machine with a current login.
+It uses the exact signed collector and native CLI in that account's private
+home, without a model prompt, credential export, sidecars or private-API credits
+enrichment. Owner, account, enrollment, login generation and connection are
+checked around dispatch and publication. Machine protocol 37 is required;
+older Machines report an update requirement instead of querying the Service
+account. Cached observations are separate from authentication authority and are
+discarded when their native binding changes. Refresh attempts coalesce and share
+a five-minute budget; failed refreshes retain the last valid quota as stale.
+Controller restart rebuilds this in-memory cache. Collection is serial and
+independent of session workers, including while all sessions are asleep.
+
+`cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as
+`GET /api/provider-accounts/{account_id}/usage`. Explicit
+`control.apply("usage.refresh",{account:account_id})` or `POST` to that URL waits
+for the bounded, coalesced refresh. CLI equivalents are
+`cowboy account usage ACCOUNT_ID` and `cowboy account usage ACCOUNT_ID --refresh`.
+Missing quota stays unknown. Unsupported Providers can still show a matching
+session's signed `session_rate_limits` projection; context tokens and cost are
+not quota. `usage.read("anthropic")` continues to mean the Service account,
+even when an additional account becomes the default for new sessions.
+
+About keeps account identity, quota windows and refresh visible. Each card's
+Details disclosure contains credits, resets, activity, source age and query
+Machine information; it starts collapsed and uses native keyboard focus.
 
 Use a JSON pointer such as `path:"/rateLimits/primary"` or
 `path:"/last24Hours/summary"` to select before copying. `page.data` contains at

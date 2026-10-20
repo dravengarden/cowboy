@@ -73,6 +73,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "preferences.schema",
     "preferences.get",
     "accounts.list",
+    "accounts.usage",
     "accounts.login_options",
     "accounts.logins",
     "accounts.login_status",
@@ -113,6 +114,9 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Stops the original worker and replaces its binding; never starts a worker. Same operation on every retry.
 // Query transition_status after uncertainty. unconfirmed/not_admitted do not undo already committed stages.
 // Read: await cowboy.accounts.list() -> {registry:{revision,accounts:[{id,provider_id,label,enabled,revoking}],defaults},session_admission}.
+// Read: await cowboy.accounts.usage(account_id) -> {account_id,provider_id,machine_id?,usage?,refreshing,reason?,message?,next_refresh_at_ms?}.
+// Named usage is cached, owner-scoped and native-profile-bound. Missing usage is unknown, not zero.
+// Refresh through control.apply("usage.refresh",{account:account_id}); the five-minute budget is shared with background collection.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
 // Readiness is a snapshot, not permission or proof of login; start rechecks admission.
@@ -395,6 +399,7 @@ ACCOUNTS_READ_SDK: r#"
 export interface AccountLogin {status:string;request_id:string;account_id:string;provider_id:string;machine_id:string;cancel_requested:boolean;native_generation:number|null;continue_url:string}
 export interface Cowboy {
   accounts: {
+    usage(account_id:string): Promise<unknown>;
     logins(account_id:string,q?:{after_machine?:string;limit?:number}): Promise<{account_id:string;provider_id:string;logins:AccountLogin[];next_after_machine:string|null}>;
     login_status(account_id:string,request_id:string): Promise<AccountLogin>;
     revocation_status(account_id:string): Promise<{status:"not_started"|"revoking"|"completed";account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;

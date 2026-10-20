@@ -38,6 +38,7 @@ export async function runInfoMetricsBrowserConformance(
   const now = Date.now();
   const gb = 1024 ** 3;
   let failMetrics = true;
+  let nativeUsage: import("./nativeAccountUsage").NativeAccountUsage[] = [];
   const digest = `sha256:${"a".repeat(64)}`;
   let accounts: SubscriptionSnapshot = {
     dataset: { dataset_id: "fixture", user_id: "info-fixture" },
@@ -238,6 +239,9 @@ export async function runInfoMetricsBrowserConformance(
     if (path === "/api/usage/executors") {
       return Response.json({ providers: {}, machines: [] });
     }
+    if (path === "/api/provider-accounts/usage") {
+      return Response.json({ accounts: nativeUsage });
+    }
     if (path === "/api/usage") {
       return Response.json({
         refreshed_at_ms: now,
@@ -393,11 +397,13 @@ export async function runInfoMetricsBrowserConformance(
         ?.getAttribute("data-machine-resources") === "ovh",
       "saved Machine order survives the resource grid",
     );
-    check(
-      container.textContent?.includes("45d ago") &&
-        container.textContent?.includes("NOT REPORTED"),
-      "unavailable Provider data has readable age and no false waiting state",
-    );
+    const olderDetails = container.querySelector<HTMLButtonElement>('[aria-label="Gemini usage details"]')!;
+    check(olderDetails?.getAttribute("aria-expanded") === "false" && !container.textContent?.includes("45d ago"),
+      "secondary Provider details are collapsed initially");
+    olderDetails.click();
+    await until(() => container.textContent?.includes("45d ago") === true);
+    check(container.textContent?.includes("NOT REPORTED"),
+      "expanded Provider details expose real age without a false waiting state");
     check(
       [...container.querySelectorAll('[role="meter"]')].some(
         (meter) => meter.getAttribute("aria-valuetext") === "82% remaining",
@@ -410,6 +416,16 @@ export async function runInfoMetricsBrowserConformance(
       "registered accounts each have one card alongside other Providers");
     check(accountCard("anthropic")!.textContent?.includes("Default") &&
       accountCard("otter")!.textContent?.includes("Claude · Otter"), "registered account labels and default identity are visible");
+    const details = accountCard("anthropic")!.querySelector<HTMLButtonElement>('[aria-label="Claude · Lynx usage details"]')!;
+    check(details.getAttribute("aria-expanded") === "false" && !accountCard("anthropic")!.textContent?.includes("Balance"),
+      "quota stays visible while balance and query details are folded");
+    details.focus();
+    check(document.activeElement === details, "card details is reachable by keyboard");
+    details.click();
+    await until(() => accountCard("anthropic")!.textContent?.includes("Balance") === true);
+    check(accountCard("anthropic")!.querySelectorAll('[role="meter"]').length === 2, "expanding details never duplicates the quota meters");
+    details.click();
+    await until(() => !accountCard("anthropic")!.textContent?.includes("Balance"));
     check(accountCard("otter")!.querySelectorAll('[role="meter"]').length === 0 &&
       accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Lynx percentages");
     check(!accountCard("otter")!.querySelector("button, input") &&
@@ -441,6 +457,17 @@ export async function runInfoMetricsBrowserConformance(
     await until(() => accountCard("otter")?.querySelector('[role="meter"]') !== null);
     check(accountCard("otter")!.textContent?.includes("75% remaining") &&
       accountCard("anthropic")!.textContent?.includes("82% remaining"), "session quota is isolated by account and exact Provider generation");
+    nativeUsage = [{
+      account_id: "otter", provider_id: "claude-code", machine_id: "ovh", available: true, refreshing: false,
+      usage: { provider: "anthropic", source: "Anthropic", status: "available", observed_at_ms: now + 1,
+        rate_limits: { rateLimits: { primary: { usedPercent: 46, windowDurationMins: 300 } } } },
+    }];
+    window.dispatchEvent(new Event("focus"));
+    await until(() => accountCard("otter")!.textContent?.includes("54% remaining") === true);
+    check(accountCard("anthropic")!.textContent?.includes("82% remaining"),
+      "background named quota replaces its own session fallback without changing the Service account");
+    check(!!accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') &&
+      !accountCard("otter")!.textContent?.includes("Usage query Machine"), "named refresh is available while Machine metadata starts collapsed");
     accounts.registry.accounts[0]!.enabled = false;
     changed();
     await until(() => accountCard("otter")?.textContent?.includes("DISABLED") === true);
@@ -452,6 +479,8 @@ export async function runInfoMetricsBrowserConformance(
     await until(() => accountCard("otter")?.textContent?.includes("Default") === true);
     check(!accountCard("anthropic")!.textContent?.includes("Default") &&
       accountCard("anthropic")!.textContent?.includes("82% remaining"), "changing the default never reassigns the legacy usage observation");
+    details.click();
+    await until(() => accountCard("anthropic")!.textContent?.includes("Auto reload") === true);
     for (const width of [320, 390, 768, 1200]) {
       container.style.width = `${width}px`;
       render(width >= 768);
@@ -486,6 +515,9 @@ export async function runInfoMetricsBrowserConformance(
       "inspection and viewport changes perform no mutations or extra metric polling",
     );
     if (keepFixture) {
+      details.click();
+      olderDetails.click();
+      await until(() => !accountCard("anthropic")!.textContent?.includes("Auto reload"));
       container.style.width = `${screenshotWidth}px`;
       render(screenshotWidth >= 768);
     }

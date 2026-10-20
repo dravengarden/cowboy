@@ -14,6 +14,13 @@ pub struct AccountArgs {
 enum AccountCommand {
     /// List this operator's subscriptions and registry revision.
     List,
+    /// Read this named account's cached quota; --refresh uses its native login.
+    Usage {
+        #[arg(value_parser = parse_account)]
+        account: ProviderAccountId,
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Latest login on each Machine, including logins started by the UI or MCP.
     Logins {
         #[arg(value_parser = parse_account)]
@@ -174,6 +181,16 @@ async fn execute(
     input: impl std::io::Read,
 ) -> Result<String> {
     match command {
+        AccountCommand::Usage { account, refresh } => {
+            ensure!(!account.is_default(), "named account ID required");
+            client
+                .expect(
+                    if refresh { Method::POST } else { Method::GET },
+                    &format!("/api/provider-accounts/{}/usage", account.as_str()),
+                    None,
+                )
+                .await
+        }
         AccountCommand::Logins {
             account,
             after_machine,

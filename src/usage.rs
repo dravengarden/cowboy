@@ -23,6 +23,7 @@ use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 
 mod execution;
+pub(crate) mod native;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 // All collection entry points share the same budget, including failed attempts.
@@ -126,6 +127,7 @@ impl std::error::Error for ResetError {}
 
 #[derive(Clone)]
 pub struct UsageService {
+    pub(crate) native: native::Cache,
     bindings: UsageBindingSource,
     machine_control: Arc<crate::machine_control::MachineControl>,
     store: Option<crate::store::Store>,
@@ -228,6 +230,7 @@ impl UsageService {
             });
         align_snapshot_bindings(&mut snapshot, &initial_bindings);
         Self {
+            native: native::Cache::default(),
             bindings,
             machine_control,
             store,

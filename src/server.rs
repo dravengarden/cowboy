@@ -10468,6 +10468,8 @@ async fn serve_axum(
         .route("/api/drafts", get(draft_documents::list))
         .route("/api/preferences/{scope}", get(preferences::read))
         .route("/api/provider-accounts", get(provider_accounts::read).put(provider_accounts::update).layer(DefaultBodyLimit::max(16 * 1024)))
+        .route("/api/provider-accounts/usage", get(provider_accounts::usage::list))
+        .route("/api/provider-accounts/{account_id}/usage", get(provider_accounts::usage::read).post(provider_accounts::usage::refresh))
         .route("/api/provider-accounts/{account_id}/revocation", get(provider_accounts::lifecycle::http_status).post(provider_accounts::lifecycle::http_start).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/provider-accounts/{account_id}/revocation/reconcile", post(provider_accounts::lifecycle::http_resume).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/provider-accounts/login-operations/{operation}", get(provider_accounts::login::http_receipt).delete(provider_accounts::login::http_cancel))
@@ -10797,6 +10799,7 @@ async fn serve_axum(
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
     let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
+    let native_usage_task = tokio::spawn(provider_accounts::usage::run(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -10812,6 +10815,7 @@ async fn serve_axum(
     generation_retention_task.abort();
     account_recovery_task.abort();
     usage_broadcast_task.abort();
+    native_usage_task.abort();
     code_buffers.shutdown().await;
     result?;
     Ok(())

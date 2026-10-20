@@ -3031,6 +3031,26 @@ fn handle_machine_command(
                 profile,
             });
         }
+        MachineCommand::CollectNativeUsage {
+            request_id,
+            profile,
+        } => {
+            let invocation = execution.native_usage(*profile);
+            tokio::spawn(async move {
+                let result = if protocol >= crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION {
+                    providers.collect_native_usage(invocation).await
+                } else {
+                    Err(anyhow::anyhow!("native usage protocol required"))
+                };
+                let _ = events.send(MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: result.is_ok(),
+                    started: true,
+                    payload: result.ok(),
+                    detail: Some("Native account usage is unavailable".into()),
+                });
+            });
+        }
         MachineCommand::QueryWorkerExit { request_id, worker } => {
             let observation = (protocol
                 >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
@@ -3082,31 +3102,34 @@ fn handle_machine_command(
                 });
             tokio::spawn(async move {
                 let observation = match scoped {
-                    Ok(store) => native_logout::run(
-                        &store,
-                        &logout.provider_id,
-                        logout.generation,
-                        &logout.login_request_id,
-                        &logout.operation_id,
-                    )
-                    .await
-                    .ok()
-                    .map(|succeeded| {
-                        crate::provider_account::NativeLogoutObservation {
-                            process_trees_exited: succeeded.is_some()
-                                && store
-                                    .native_auth_trees_exited(
-                                        &logout.provider_id,
-                                        logout.generation,
-                                        &logout.login_request_id,
-                                        &logout.operation_id,
-                                    )
-                                    .unwrap_or(false),
-                            request: logout,
-                            succeeded,
-                            profile_cleaned: succeeded == Some(true),
-                        }
-                    }),
+                    Ok(store) => {
+                        let _observation = store.native_observation_guard().await;
+                        native_logout::run(
+                            &store,
+                            &logout.provider_id,
+                            logout.generation,
+                            &logout.login_request_id,
+                            &logout.operation_id,
+                        )
+                        .await
+                        .ok()
+                        .map(|succeeded| {
+                            crate::provider_account::NativeLogoutObservation {
+                                process_trees_exited: succeeded.is_some()
+                                    && store
+                                        .native_auth_trees_exited(
+                                            &logout.provider_id,
+                                            logout.generation,
+                                            &logout.login_request_id,
+                                            &logout.operation_id,
+                                        )
+                                        .unwrap_or(false),
+                                request: logout,
+                                succeeded,
+                                profile_cleaned: succeeded == Some(true),
+                            }
+                        })
+                    }
                     Err(_) => None,
                 };
                 let _ = events.send(MachineEvent::NativeLogoutObserved {

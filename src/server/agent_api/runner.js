@@ -96,6 +96,7 @@ const cowboy = Object.freeze({
     get: (scope) => ({ scope }),
   }),
   accounts: namespace("accounts", {
+    usage: (account_id) => ({ account_id }),
     revocation_status: (account_id) => ({ account_id }),
     transition_status: (operation) => ({ operation }),
     list: none,

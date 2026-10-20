@@ -9,6 +9,7 @@ pub(super) mod native_generation;
 pub(super) mod registration;
 mod revocation;
 pub(super) mod transitions;
+pub(super) mod usage;
 pub(in crate::server) use revocation::reconcile;
 pub(in crate::server) use revocation::run_recovery;
 

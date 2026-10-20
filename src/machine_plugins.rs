@@ -18,6 +18,7 @@ mod extensions;
 mod installation;
 mod native_identity;
 mod native_profile;
+pub(crate) mod native_usage;
 pub(crate) use native_profile::LogoutPreparation;
 mod operations;
 mod remove_projection;
@@ -145,6 +146,12 @@ struct ResolvedPluginHostInvocation {
     collector_sidecars: Vec<PluginUsageSidecar>,
     installation_revision:
         Option<crate::machine_protocol::installation_revision::InstallationRevision>,
+}
+
+#[derive(Clone, Copy)]
+enum HostAuthentication<'a> {
+    Service(Option<u64>),
+    Native(&'a crate::provider_account::NativeProfileReceipt),
 }
 
 fn decode_host_response(
@@ -1270,7 +1277,7 @@ impl MachinePluginStore {
                 &plugin_id,
                 &plugin_version,
                 &generation_digest,
-                auth_generation,
+                HostAuthentication::Service(auth_generation),
                 operation,
                 &mut payload,
             )
@@ -1346,25 +1353,31 @@ impl MachinePluginStore {
         decode_host_response(&output)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep signed host resolution and account scope in one auditable path.
     fn resolve_host_invocation(
         &self,
         plugin_id: &str,
         plugin_version: &str,
         generation_digest: &str,
-        auth_generation: Option<u64>,
+        authentication: HostAuthentication<'_>,
         operation: PluginHostOperation,
         payload: &mut serde_json::Value,
     ) -> Result<ResolvedPluginHostInvocation> {
+        let (auth_generation, native) = match authentication {
+            HostAuthentication::Service(generation) => (generation, None),
+            HostAuthentication::Native(profile) => (None, Some(profile)),
+        };
         validate_plugin_id(plugin_id)?;
         self.operations.ensure_unfenced(plugin_id)?;
         ensure!(
             read_link_name(&self.plugin_root(plugin_id).join("active")).as_deref()
                 == Some(digest_generation_name(generation_digest)?.as_str())
-                && self
-                    .latest_auth_envelope(plugin_id)?
-                    .as_ref()
-                    .map(|envelope| envelope.auth_generation)
-                    == auth_generation,
+                && (native.is_some()
+                    || self
+                        .latest_auth_envelope(plugin_id)?
+                        .as_ref()
+                        .map(|envelope| envelope.auth_generation)
+                        == auth_generation),
             "active Plugin or authentication generation changed before host invocation"
         );
         let verification_started = Instant::now();
@@ -1380,19 +1393,21 @@ impl MachinePluginStore {
         );
         let verification_ms = verification_started.elapsed().as_millis();
         let inventory_started = Instant::now();
-        let active = self
-            .inventory_one_with_verified_provider(
+        let installation_revision = if native.is_some() {
+            self.operations
+                .installations
+                .revision(plugin_id, generation_digest)?
+        } else {
+            self.service_host_inventory(
                 plugin_id,
-                Some((package, generation_digest, &plugin.contract_fingerprint)),
+                plugin_version,
+                generation_digest,
+                package,
+                &plugin.contract_fingerprint,
+                auth_generation,
             )?
-            .context("Plugin is not active on this Machine")?;
-        ensure!(
-            active.state == PluginInstallationState::Active
-                && active.plugin_version == plugin_version
-                && active.generation_digest == generation_digest
-                && active.auth_generation == auth_generation,
-            "active Plugin or authentication generation changed before host invocation"
-        );
+            .installation_revision
+        };
         let inventory_ms = inventory_started.elapsed().as_millis();
         ensure!(
             plugin.manifest.version == plugin_version,
@@ -1425,10 +1440,22 @@ impl MachinePluginStore {
         // This request already verified the signed generation, all executable
         // artifacts and the Provider projection under the lifecycle lock. Reuse
         // only those request-local bytes; later requests verify from disk again.
-        let launch = self.launch_context_from_package(
+        let scoped;
+        let (store, generation) = if let Some(profile) = native {
+            ensure!(
+                operation == PluginHostOperation::CollectUsage
+                    && usage.collector_sidecars.is_empty(),
+                "native usage cannot mutate an account or query sidecars"
+            );
+            scoped = self.for_account(&profile.account_id)?;
+            (&scoped, Some(profile.generation))
+        } else {
+            (self, auth_generation)
+        };
+        let launch = store.launch_context_from_package(
             package,
             package_path,
-            auth_generation,
+            generation,
             &release.artifact_digest,
         )?;
         tracing::info!(%plugin_id, ?operation, verification_ms, inventory_ms,
@@ -1441,8 +1468,33 @@ impl MachinePluginStore {
                 .collect(),
             environment: plugin_host_environment(&launch)?,
             collector_sidecars: usage.collector_sidecars,
-            installation_revision: active.installation_revision,
+            installation_revision,
         })
+    }
+
+    fn service_host_inventory(
+        &self,
+        plugin_id: &str,
+        plugin_version: &str,
+        generation_digest: &str,
+        package: &ProviderPackage,
+        contract_fingerprint: &str,
+        auth_generation: Option<u64>,
+    ) -> Result<PluginInventory> {
+        let active = self
+            .inventory_one_with_verified_provider(
+                plugin_id,
+                Some((package, generation_digest, contract_fingerprint)),
+            )?
+            .context("Plugin is not active on this Machine")?;
+        ensure!(
+            active.state == PluginInstallationState::Active
+                && active.plugin_version == plugin_version
+                && active.generation_digest == generation_digest
+                && active.auth_generation == auth_generation,
+            "active Plugin or authentication generation changed before host invocation"
+        );
+        Ok(active)
     }
 
     fn validate_host_observation(
@@ -1450,6 +1502,23 @@ impl MachinePluginStore {
         plugin_id: &str,
         digest: &str,
         auth_generation: Option<u64>,
+        revision: Option<&crate::machine_protocol::installation_revision::InstallationRevision>,
+    ) -> Result<()> {
+        self.validate_host_installation(plugin_id, digest, revision)?;
+        ensure!(
+            self.latest_auth_envelope(plugin_id)?
+                .as_ref()
+                .map(|envelope| envelope.auth_generation)
+                == auth_generation,
+            "Plugin authentication changed during host observation"
+        );
+        Ok(())
+    }
+
+    fn validate_host_installation(
+        &self,
+        plugin_id: &str,
+        digest: &str,
         revision: Option<&crate::machine_protocol::installation_revision::InstallationRevision>,
     ) -> Result<()> {
         self.operations.ensure_unfenced(plugin_id)?;
@@ -1461,13 +1530,8 @@ impl MachinePluginStore {
                     .installations
                     .revision(plugin_id, digest)?
                     .as_ref()
-                    == revision
-                && self
-                    .latest_auth_envelope(plugin_id)?
-                    .as_ref()
-                    .map(|envelope| envelope.auth_generation)
-                    == auth_generation,
-            "Plugin installation or authentication changed during host observation"
+                    == revision,
+            "Plugin installation changed during host observation"
         );
         Ok(())
     }

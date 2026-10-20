@@ -351,6 +351,18 @@ impl Host for SessionHost<'_> {
                     .await
                     .map_err(str::to_owned)
             }
+            "accounts.usage" => {
+                only_keys(&args, &["account_id"])?;
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                let account = arg_str(&args, "account_id")?
+                    .parse()
+                    .map_err(str::to_owned)?;
+                let value = super::provider_accounts::usage::read_one(self.state, &owner, &account)
+                    .await
+                    .map_err(str::to_owned)?;
+                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+                Ok(value)
+            }
             "accounts.login_options" => {
                 only_keys(&args, &["account_id", "machine_id"])?;
                 let owner = actions::account_owner(self.state, self.meta).await?;

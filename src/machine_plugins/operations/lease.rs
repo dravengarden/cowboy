@@ -31,6 +31,12 @@ pub(crate) struct PluginExecutionScope {
 }
 
 impl PluginExecutionScope {
+    pub(crate) fn native_usage(
+        &self,
+        profile: crate::provider_account::NativeProfileReceipt,
+    ) -> crate::machine_plugins::native_usage::Invocation {
+        crate::machine_plugins::native_usage::Invocation::new(profile, Arc::clone(&self.connected))
+    }
     pub(crate) fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,

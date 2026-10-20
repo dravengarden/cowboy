@@ -22,7 +22,9 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 36;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 37;
+/// Read-only quota collection in a verified named native profile.
+pub const NATIVE_USAGE_PROTOCOL_VERSION: u16 = 37;
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 pub const DELIVERY_CONTROLS_PROTOCOL_VERSION: u16 = 35;
 /// Native image profiles, minimal input snapshots and verified deliveries.
@@ -965,6 +967,10 @@ pub enum MachineCommand {
         generation: u64,
         login_request_id: String,
     },
+    CollectNativeUsage {
+        request_id: String,
+        profile: Box<crate::provider_account::NativeProfileReceipt>,
+    },
     NativeLogout {
         request_id: String,
         logout: crate::provider_account::NativeLogoutRequest,
@@ -1157,6 +1163,7 @@ impl MachineCommand {
     #[allow(clippy::too_many_lines)] // One exhaustive table keeps mixed-generation admission auditable.
     pub fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
             Self::BeginNativeLogin { .. }
             | Self::QueryNativeProfile { .. }
             | Self::NativeLogout { .. }

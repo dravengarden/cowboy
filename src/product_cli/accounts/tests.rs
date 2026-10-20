@@ -3,6 +3,16 @@ use clap::Parser;
 
 const ACCOUNT: &str = "11111111-1111-4111-8111-111111111111";
 
+#[test]
+fn usage_cli_distinguishes_cached_read_and_explicit_refresh() {
+    for (tail, refresh) in [vec![], vec!["--refresh"]].into_iter().zip([false, true]) {
+        let mut args = vec!["cowboy", "account", "usage", ACCOUNT];
+        args.extend(tail);
+        let parsed = crate::cli::Cli::try_parse_from(args);
+        assert!(parsed.is_ok(), "usage refresh={refresh}");
+    }
+}
+
 #[tokio::test]
 async fn discovery_cli_uses_existing_owner_login_without_dispatch_or_automatic_retry() {
     use axum::{

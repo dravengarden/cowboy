@@ -729,6 +729,48 @@ mod tests {
     }
 
     #[test]
+    fn quota_observation_requires_the_exact_native_identity_and_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(
+            temp.path(),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".into(),
+        )
+        .unwrap();
+        let id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let scoped = store.for_account(&id).unwrap();
+        let package = package();
+        ready(&scoped, &package);
+        let profile = store
+            .observe_native_profile(&id, "claude-code", 1, "login-1")
+            .unwrap();
+        store.validate_native_usage(&profile).unwrap();
+        for field in [
+            "account_id",
+            "provider_id",
+            "generation",
+            "identity",
+            "generation_digest",
+            "request_id",
+        ] {
+            let mut wrong = profile.clone();
+            match field {
+                "account_id" => {
+                    wrong.account_id = crate::provider_account::ProviderAccountId::default();
+                }
+                "provider_id" => wrong.provider_id = "codex".into(),
+                "generation" => wrong.generation += 1,
+                "identity" => wrong.identity.subject = "another-user".into(),
+                "generation_digest" => wrong.generation_digest = "other".into(),
+                _ => wrong.request_id = "other-login".into(),
+            }
+            assert!(store.validate_native_usage(&wrong).is_err(), "{field}");
+        }
+        scoped.revoke_native_profiles("claude-code").unwrap();
+        assert!(store.validate_native_usage(&profile).is_err());
+    }
+
+    #[test]
     fn leader_only_login_cannot_complete_recover_or_launch_after_restart() {
         let temp = tempfile::tempdir().unwrap();
         let root = MachinePluginStore::new(

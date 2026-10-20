@@ -838,6 +838,21 @@ async fn dispatch(
             .get("account")
             .map(|_| arg_str(&input, "account"))
             .transpose()?;
+        if let Some(account) = account
+            && let Ok(id) = account.parse::<crate::provider_account::ProviderAccountId>()
+            && !id.is_default()
+        {
+            let owner = parent
+                .owner_user_id
+                .as_deref()
+                .ok_or("account_owner_required")?;
+            super::super::provider_accounts::usage::refresh_one(state, owner, &id)
+                .await
+                .map_err(str::to_owned)?;
+            return super::super::provider_accounts::usage::read_one(state, owner, &id)
+                .await
+                .map_err(str::to_owned);
+        }
         let snapshot = state
             .usage
             .request_refresh(account)
