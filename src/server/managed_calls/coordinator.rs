@@ -814,6 +814,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "quota_account": readiness.generation.as_ref().and_then(|generation| state.provider_catalog.account_usage_provider(provider, &generation.version, &generation.digest)),
             // `--preset` choices; the session's Tools choose otherwise.
             "presets": agent_tools::presets(state, provider),
+            "review_candidates": super::selection::candidates(&agent_tools::presets(state, provider), provider, &policy.review).iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -846,6 +847,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         "enabled": policy.enabled,
         "default": policy.default,
         "review_selection": super::selection::GUIDANCE,
+        "review_preferences": policy.review,
         "quota": quota,
         "providers": providers,
         "purposes": ["review","design_review","analysis"],
@@ -986,9 +988,28 @@ async fn start(
         }
         refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
     }
-    let Some(target) = chosen else {
+    let Some(mut target) = chosen else {
         return error(refusal.unwrap_or("provider_unavailable"), "not_submitted");
     };
+    if continued.is_none()
+        && matches!(
+            request.purpose,
+            crate::managed_calls::Purpose::Review | crate::managed_calls::Purpose::DesignReview
+        )
+    {
+        let choices = super::selection::candidates(
+            &agent_tools::presets(state, &target.agent),
+            &target.agent,
+            &policy.review,
+        );
+        // Generic Tools pins apply to ordinary calls. Review uses its own
+        // ordered list unless this invocation explicitly names a signed preset.
+        target.preset = match super::selection::review_preset(&choices, preset) {
+            Ok(selected) => Some(selected),
+            Err(code) => return error(code, "not_submitted"),
+        };
+        target.options = None;
+    }
     let call_id = random_id("call");
     let child_id = state.supervisor.reserve_session_id();
     let choice = crate::managed_calls::service::Choice {

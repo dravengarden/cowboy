@@ -27,6 +27,21 @@ const defaults: AgentTools = {
   },
 };
 
+test("review preferences inherit defaults and persist only an explicit override", () => {
+  const configured = { ...defaults, calls: { ...defaults.calls,
+    review: { claude: ["opus", "fable"], gpt: ["astra", "sol"] } } };
+  assertEquals(overrideFor(configured, configured), { schema: 1 });
+  assertEquals(overrideFor(configured, { ...configured, calls: { ...configured.calls,
+    review: { claude: ["opus", "fable"], gpt: ["sol"] },
+  } }), { schema: 1, calls: { review: { gpt: ["sol"] } } });
+  const changed = { ...configured, calls: { ...configured.calls,
+    review: { claude: ["fable"], gpt: ["sol", "astra"] } } };
+  assertEquals(overrideFor(configured, changed), { schema: 1, calls: {
+    review: { claude: ["fable"], gpt: ["sol", "astra"] },
+  } });
+  assertEquals(withMemoryKey(withWireKey(changed)), changed);
+});
+
 test("session tools serialize writes across surfaces and release after failures", async () => {
   const originalFetch = globalThis.fetch;
   let release!: (response: Response) => void;

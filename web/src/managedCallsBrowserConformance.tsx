@@ -23,6 +23,7 @@ import {
 } from "./callApproval";
 import {
   type AgentTools,
+  DEFAULT_REVIEW_PREFERENCES,
   overrideFor,
   type SessionToolsOverride,
 } from "./agentTools";
@@ -92,7 +93,9 @@ function overlay(
   return {
     ...defaults,
     memory: { ...defaults.memory, ...override.memory },
-    calls: { ...defaults.calls, ...override.calls },
+    calls: { ...defaults.calls, ...override.calls, review: {
+      ...(defaults.calls.review ?? DEFAULT_REVIEW_PREFERENCES), ...override.calls?.review,
+    } },
   };
 }
 
@@ -1106,6 +1109,23 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         JSON.stringify({ schema: 1 }),
       "defaults must produce an empty override",
     );
+    const preference = await until(() => {
+      const select = document.querySelector<HTMLElement>("[role='combobox'][aria-label='GPT review preference']");
+      return select?.getAttribute("aria-disabled") !== "true" ? select : null;
+    }, "review preference must be editable while calls are off");
+    check(preference.textContent?.includes("Astra → SOL"), "GPT defaults prefer Astra");
+    preference.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    (await until(() => [...document.querySelectorAll<HTMLElement>("[role='option']")]
+      .find((node) => node.textContent?.trim() === "SOL only"), "SOL-only preference must be available")).click();
+    await until(() => sessionWrites.length === 6 ? true : null, "review preference was not saved");
+    check(JSON.stringify(sessionWrites[5]?.calls?.review) ===
+      JSON.stringify({ gpt: ["sol"] }), "review preference overrides only GPT and excludes unselected models");
+    (await until(() => {
+      const reset = button("Use Claude defaults");
+      return reset && !reset.disabled ? reset : null;
+    }, "review override can restore defaults")).click();
+    await until(() => sessionWrites.length === 7 ? true : null, "review reset was not saved");
+    check(JSON.stringify(sessionWrites[6]) === JSON.stringify({ schema: 1 }), "review reset resumes inheritance");
     tests.push("session-tools-store-only-changes");
 
     // Agent defaults: one switch writes the whole default for that kind.
