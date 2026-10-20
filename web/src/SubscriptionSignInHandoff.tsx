@@ -42,7 +42,7 @@ export function SubscriptionSignInHandoff({ hash }: { hash: string }): React.JSX
   }, [accountId, attempt]);
   return <ConfirmSheet open onClose={closeSubscriptionSignIn} title={account ? `${account.label} · Sign in` : "Subscription sign-in"} wide>
     {account && reference
-      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} request={reference.request} onClose={closeSubscriptionSignIn}
+      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} label={account.label} request={reference.request} onClose={closeSubscriptionSignIn}
         onStarted={(request) => {
           history.replaceState(history.state, "", `${location.pathname}${location.search}#subscription-sign-in/${account.scope.account}/${request}`);
           window.dispatchEvent(new Event("hashchange"));

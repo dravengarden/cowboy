@@ -4,6 +4,7 @@ import { ConfirmSheet } from "./Sheet";
 import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
+import { SubscriptionAuthorization } from "./SubscriptionAuthorization";
 import { canReplaceLogin, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
 export function SubscriptionLogin({ scope, label, disabled, request, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; onChange?: () => void }): React.JSX.Element {
@@ -12,18 +13,25 @@ export function SubscriptionLogin({ scope, label, disabled, request, onChange }:
   return <>
     <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? "Open sign-in" : "Sign in…"}</Button>
     <ConfirmSheet open={open} onClose={close} title={`${label} · Sign in`} wide>
-      {open && <SubscriptionLoginForm scope={scope} onClose={close} {...(request ? { request } : {})} />}
+      {open && <SubscriptionLoginForm scope={scope} label={label} onClose={close} {...(request ? { request } : {})} />}
     </ConfirmSheet>
   </>;
 }
 
-export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { scope: LoginScope; onClose: () => void; request?: string; onStarted?: (request: string) => void }): React.JSX.Element {
+interface LoginFormProps { scope: LoginScope; label: string; onClose: () => void; request?: string; onStarted?: (request: string) => void }
+export function SubscriptionLoginForm(props: LoginFormProps): React.JSX.Element {
+  const { scope, request } = props;
+  // A changed account/request is a different form, including its async owner,
+  // selected Machine, authorization code and in-flight browser callbacks.
+  return <ScopedSubscriptionLoginForm key={JSON.stringify([scope.owner, scope.dataset, scope.provider, scope.account, request])} {...props} />;
+}
+
+function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted }: LoginFormProps): React.JSX.Element {
   const machines = useStoreSelector((state) => state.machines);
   const [machine, setMachine] = useState("");
   const [options, setOptions] = useState<LoginOptions>();
   const [method, setMethod] = useState("");
   const [error, setError] = useState("");
-  const [code, setCode] = useState("");
   const [view, setView] = useState<LoginView>({ events: [], busy: false, error: "" });
   const [newSignIn, setNewSignIn] = useState(false);
   const [readinessRevision, setReadinessRevision] = useState(0);
@@ -94,23 +102,28 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
     <Button onClick={onClose}>Back to Cowboy</Button>
   </Stack>;
   const failure = loginFailure(view);
-  const link = !failure && challenge && challenge.expires_at_ms > Math.max(clock, Date.now()) ? loginLink(challenge.verification_url) : undefined;
+  const link = !failure && view.observation?.status === "active" && !view.observation.cancel_requested && !view.pending?.cancelling &&
+    challenge && challenge.expires_at_ms > Math.max(clock, Date.now()) ? loginLink(challenge.verification_url) : undefined;
   const done = view.observation?.status === "completed";
+  const cancelling = view.pending?.cancelling || view.observation?.cancel_requested;
+  const cancellationAcknowledged = view.observation?.cancel_requested === true;
+  const machineName = machines.find((entry) => entry.id === view.pending?.machine)?.display_name || view.pending?.machine;
   const stateLabel: Record<string, string> = {
-    active: "Waiting for native sign-in", completed: "Signed in on this Machine",
+    active: "Waiting for authorization", completed: "Signed in on this Machine",
     binding_pending: "Verifying account identity", binding_unavailable: "Account binding is unavailable",
     unknown: "Status is unknown. Check the original sign-in before starting another.", inactive: "This sign-in expired or disconnected. Start again for a new authorization link.",
-    cancelling: "Cancellation pending", cancellation_requested: "Cancellation requested; cleanup is not confirmed",
+    cancelling: "Cancellation pending", cancellation_requested: "Cancellation requested. The Machine has not confirmed cleanup yet.",
     cancelled: "Cancelled; cleanup is not confirmed", not_started: "Sign-in did not start",
   };
   return <Stack spacing={1.5}>
-    <Typography variant="body2">{reference ? "Continue this account’s existing sign-in." : "Choose where to sign in. Each Machine has its own login."}</Typography>
-    {reference && view.pending && <TextField size="small" fullWidth label="Machine" value={machines.find((entry) => entry.id === view.pending!.machine)?.display_name || view.pending.machine} slotProps={{ input: { readOnly: true } }} />}
-    {!reference && <TextField select size="small" fullWidth label="Machine" value={view.pending?.machine ?? machine}
-      disabled={view.busy || Boolean(view.pending)} onChange={(event) => setMachine(event.target.value)}>
+    {view.pending
+      ? <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{label} · {machineName}</Typography>
+      : <Typography variant="body2">Choose where to sign in. Each Machine has its own login.</Typography>}
+    {!reference && !view.pending && <TextField select size="small" fullWidth label="Machine" value={machine}
+      disabled={view.busy} onChange={(event) => setMachine(event.target.value)}>
       <MenuItem value="" disabled>Select a Machine</MenuItem>
-      {(view.pending?.machine ?? machine) && !machines.some((entry) => entry.id === (view.pending?.machine ?? machine)) &&
-        <MenuItem value={view.pending?.machine ?? machine}>{view.pending?.machine ?? machine}</MenuItem>}
+      {machine && !machines.some((entry) => entry.id === machine) &&
+        <MenuItem value={machine}>{machine}</MenuItem>}
       {machines.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.connected}>{entry.display_name || entry.id}{entry.connected ? "" : " · offline"}</MenuItem>)}
     </TextField>}
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
@@ -121,19 +134,17 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
       {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${entry.reason ?? "Unavailable"}` : ""}</MenuItem>)}
     </TextField>}
     {!reference && !view.pending && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
-    {view.pending && !failure && <Typography role="status" variant="body2">{stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}</Typography>}
-    {!failure && challenge && !link && view.observation?.status === "active" && <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
-    {link && !view.pending?.cancelling && !done && <>
-      <Button component="a" href={link} target="_blank" rel="noopener noreferrer" variant="contained">Open Claude sign-in</Button>
-      <Typography variant="caption" color="text.secondary">Select this subscription’s account on Claude’s page. Keep the sign-in link and code private.</Typography>
-      <Typography variant="caption" color="text.secondary">Complete authorization before the link expires. If it expires, choose Start again here.</Typography>
-      {challenge?.user_code && <Typography component="code">{challenge.user_code}</Typography>}
-      {challenge?.input_required && <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-        <TextField fullWidth size="small" label="Authorization code" value={code} autoComplete="off" type="password"
-          disabled={view.busy} onChange={(event) => setCode(event.target.value)} />
-        <Button disabled={view.busy || !code.trim()} onClick={() => { const input = code; setCode(""); void owner.submit(input); }}>Continue</Button>
-      </Stack>}
-    </>}
+    {view.pending && !failure && <Typography role="status" variant="body2">
+      {cancelling
+        ? stateLabel[cancellationAcknowledged ? "cancellation_requested" : "cancelling"]
+        : !view.observation && view.checking ? "Checking sign-in…"
+        : stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}
+    </Typography>}
+    {!failure && !cancelling && challenge && challenge.expires_at_ms <= Math.max(clock, Date.now()) && view.observation?.status === "active" &&
+      <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
+    {link && challenge && <SubscriptionAuthorization
+      key={JSON.stringify([challenge.request_id, link, challenge.expires_at_ms])}
+      label={label} link={link} challenge={challenge} busy={view.busy} checking={view.checking === true} submit={(code) => owner.submit(code)} />}
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
       {!reference && !view.pending && <Button variant="contained" disabled={view.busy || !options?.available || !method}
         onClick={() => { if (options) void (async () => {
@@ -144,7 +155,7 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
         const previousMachine = owner.snapshot.pending?.machine;
         await owner.prepareNew();
         if (!owner.snapshot.pending) {
-          setCode(""); setOptions(undefined); setMethod(""); setMachine(previousMachine ?? ""); setNewSignIn(true);
+          setOptions(undefined); setMethod(""); setMachine(previousMachine ?? ""); setNewSignIn(true);
           setReadinessRevision((value) => value + 1);
           pollingUntil.current = Date.now() + 5 * 60_000;
         }
@@ -152,8 +163,8 @@ export function SubscriptionLoginForm({ scope, onClose, request, onStarted }: { 
       {view.pending && !done && <Button disabled={view.busy} onClick={() => void owner.check()}>Check status</Button>}
       {view.pending && !view.pending.request && !view.pending.cancelling && view.error && <Button disabled={view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
       {reference && !view.pending && <Button disabled={view.busy} onClick={() => void owner.resume(reference)}>Check status</Button>}
-      {view.pending && !done && <Button disabled={view.busy} onClick={() => void owner.cancel()}>{view.pending.cancelling ? "Retry cancellation" : "Cancel sign-in"}</Button>}
-      {(done || view.observation?.status === "not_started" || view.observation?.cancel_requested) && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
+      {view.pending && !done && !cancellationAcknowledged && <Button disabled={view.busy} onClick={() => void owner.cancel()}>{view.pending.cancelling ? "Retry cancellation" : "Cancel sign-in"}</Button>}
+      {done && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
     </Stack>
   </Stack>;
 }

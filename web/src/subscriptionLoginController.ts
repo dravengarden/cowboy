@@ -15,6 +15,7 @@ export interface LoginObservation { status: string; request_id?: string; cancel_
 export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
   referenceMismatch?: boolean;
+  checking?: boolean;
 }
 export function loginFailure(view: LoginView): string | undefined {
   const failure = view.events.findLast((event) =>
@@ -103,7 +104,12 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       (state.observation?.request_id && value.request_id && state.observation.request_id !== value.request_id)) {
       throw new Error("Sign-in response does not match this operation.");
     }
-    publish({ observation: value as unknown as LoginObservation, events: [] });
+    // Keep the same live challenge mounted during receipt polling. Unmounting
+    // it every two seconds discards a code while the user is entering it.
+    // Terminal/cancellation transitions and all read failures still clear it.
+    const sameActive = value.status === "active" && !value.cancel_requested && !pending.cancelling &&
+      value.request_id === state.observation?.request_id;
+    publish({ observation: value as unknown as LoginObservation, ...(sameActive ? {} : { events: [] }) });
   }
   const receiptPath = (pending: Pending) => pending.request
     ? `/api/provider-accounts/${scope.account}/logins/${pending.request}`
@@ -120,12 +126,12 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       publish({ events: eventsFrom(events, scope.provider, observation.request_id) });
     }
   }
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>, checking = false) {
     if (!ready || state.busy || !ports.current()) return;
-    publish({ busy: true, error: "" });
+    publish({ busy: true, checking, error: "" });
     try { await action(); } catch (error) {
       publish({ error: error instanceof Error ? error.message : "Sign-in is not confirmed. Check status.", events: [], observation: undefined });
-    } finally { publish({ busy: false }); }
+    } finally { publish({ busy: false, checking: false }); }
   }
   async function send(pending: Pending) {
     if (pending.request) throw new Error("Continue this existing sign-in with Check status. It cannot be restarted here.");
@@ -171,7 +177,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       publish({ referenceMismatch: false });
       save(pending); // Only a verified reference is persisted; never a new dispatch selection.
       await readEvents(pending);
-    }); },
+    }, true); },
     start(options: LoginOptions, method: string) { return run(async () => {
       if (state.pending) throw new Error("Reconcile the existing sign-in first.");
       options = loginOptions(options, scope, options.machine_id);
@@ -182,7 +188,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       await send(pending);
     }); },
     retry() { return run(async () => { if (state.pending) await send(state.pending); }); },
-    check() { return run(async () => { if (state.pending) await check(state.pending); }); },
+    check() { return run(async () => { if (state.pending) await check(state.pending); }, true); },
     cancel() { return run(async () => {
       if (!state.pending) return;
       const pending = { ...state.pending, cancelling: true };

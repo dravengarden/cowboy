@@ -100,6 +100,32 @@ export function openExternalUrl(url: string): void {
   openInBrowser(resolved);
 }
 
+/** Account authorization must not replace the shell's shared authentication
+ * sheet. Use the OS browser and surface launch failures without a WebView
+ * fallback. Browser/PWA callers keep a normal noopener anchor instead.
+ * This selects a presentation surface, not an isolated browser cookie store. */
+export async function openAccountAuthorizationUrl(url: string): Promise<void> {
+  const resolved = safeAuthenticationUrl(url);
+  if (!resolved || new URL(resolved).protocol !== "https:" || new URL(resolved).username || new URL(resolved).password) {
+    throw new Error("Invalid account authorization link.");
+  }
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  try {
+    if (root.__TAURI__?.opener?.openUrl) {
+      await root.__TAURI__.opener.openUrl(resolved);
+    } else if (root.__TAURI__?.core?.invoke) {
+      await root.__TAURI__.core.invoke("plugin:opener|open_url", { url: resolved });
+    } else if (root.__TAURI_INTERNALS__?.invoke) {
+      await root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", { url: resolved });
+    } else {
+      throw new Error("System browser unavailable");
+    }
+  } catch {
+    // Native launch errors can contain the private OAuth URL.
+    throw new Error("Could not open the browser. Copy the link and open it in your browser.");
+  }
+}
+
 /** Open an interactive Provider sign-in without replacing Cowboy's main view.
  * The iOS shell presents SFSafariViewController, Desktop uses the Tauri opener,
  * and browser/PWA callers open a new tab from the originating user gesture. */

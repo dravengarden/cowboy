@@ -630,6 +630,23 @@ is closed. Native sign-in now has an explicit Machine picker, official browser
 authorization, ephemeral code input, status recovery and cancellation. Only
 operation metadata is retained in tab storage; an uncertain reply never creates
 a new login automatically. CLI and MCP use the same owner-scoped lifecycle.
+The sign-in form treats a verified completion, a cancellation acknowledgement,
+and confirmed process cleanup as different states. Only verified completion
+offers `Done`; cancelled attempts retain status/restart recovery. Account or
+request changes reset form state and authorization input, and stale replies
+cannot populate another account's form. Polling the same challenge must preserve
+an in-progress code; a new challenge clears it.
+Named account authorization opens an external browser rather than replacing the
+native shell's shared authentication sheet. A failed OS-browser launch offers
+copy-link recovery, without silently navigating that shared sheet. Browser/PWA
+links use a fresh `noopener noreferrer` tab. These presentation choices do not
+isolate Provider cookies: the UI offers an explicit copy-link path to a separate
+browser profile (or a fresh private session) and asks the user to check the
+Provider account before authorizing. No cross-origin cookie clearing, automatic
+sign-out, account switching, or OAuth URL rewriting is performed. Independent
+[Safari profiles](https://support.apple.com/en-us/105100) have separate cookie
+stores; an ordinary new tab is not that boundary. This UI verification does not
+replace real two-account runtime and revocation acceptance.
 Revocation has a separate explicit confirmation and typed HTTP/CLI/MCP entry;
 it cannot be invoked through the metadata writer. Its immutable plan and
 pending-target inventory can be observed and resumed from another device or

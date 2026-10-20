@@ -12,6 +12,7 @@ import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
 import { SubscriptionLoginForm } from "./SubscriptionLogin";
+import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationBrowser";
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
   const state = useSessionSubscription(true, "claude-code");
@@ -94,7 +95,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         completion: cleanup || data.registry.accounts[0]!.revoking ? { account_completed: cleanup, missing: cleanup ? [] : [{ kind: "session_process_tree_exit", target: "offline-machine" }] } : undefined });
     }
     if (path.startsWith("/api/provider-accounts/login-operations/")) {
-      if (init?.method === "DELETE") { lifecycleWrites.push(path); return Response.json({ status: "cancellation_requested", request_id: "request" }); }
+      if (init?.method === "DELETE") { lifecycleWrites.push(path); return Response.json({ status: "cancellation_requested", cancel_requested: true, request_id: "request" }); }
       return Response.json({ status: "active", request_id: "request", account_id: "account", provider_id: "claude-code", machine_id: "machine" });
     }
     if (path === "/api/providers/claude-code/auth/request") return Response.json({ request_id: "request", events: [{
@@ -221,6 +222,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     dialogButton("Cancel sign-in")!.click();
     await until(() => document.body.textContent!.includes("Cancellation requested"));
     check(!document.querySelector('a[href^="https://claude.ai/oauth/"]'), "cancellation removes the old authorization link");
+    await observe?.(surface, "cancelled");
     root.unmount(); root = createRoot(container); await render();
     await until(() => Boolean(button("Remove account…") && !button("Remove account…")!.disabled));
     button("Remove account…")!.click();
@@ -344,14 +346,14 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     check(restartEffects.join(",") === "DELETE,POST" && JSON.parse(sessionStorage.getItem(handoffKey)!).operation && history.length === previousHistoryLength,
       "recovering a lost explicit start reply advances the continuation URL without dispatching twice");
     await until(() => Boolean(dialogButton("Start again") && !dialogButton("Start again")!.disabled));
-    check(document.body.textContent!.includes("Native profile cleanup is still pending") && !document.body.textContent!.includes("Waiting for native sign-in"),
+    check(document.body.textContent!.includes("Native profile cleanup is still pending") && !document.body.textContent!.includes("Waiting for authorization"),
       "native login failure is visible immediately and offers an explicit restart");
     history.replaceState(null, "", `${location.pathname}${location.search}${previousHash}`);
     root.unmount(); root = createRoot(container);
     sessionStorage.setItem(handoffKey, JSON.stringify({ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount,
       provider: "claude-code", request: handoffRequest, machine: "ovh", cancelling: false }));
     flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}>
-      <SubscriptionLoginForm scope={{ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount, provider: "claude-code" }} onClose={() => {}} />
+      <SubscriptionLoginForm scope={{ owner: "subscription-fixture", dataset: "fixture", account: handoffAccount, provider: "claude-code" }} label="Claude · Otter" onClose={() => {}} />
     </SurfaceContext.Provider></BrowserProductTheme>));
     await until(() => Boolean(button("Start again") && !button("Start again")!.disabled) && readinessReads >= 2);
     const readsBeforeRestart = readinessReads;
@@ -399,6 +401,8 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset", "/api/provider-accounts/login-operations/another-operation"].includes(path)) && blocked.preserved,
         `handoff blocks another saved ${"request" in saved ? "request" : "operation"} without exposing or driving it: ${JSON.stringify(blocked)}`);
     }
+    root.unmount(); root = createRoot(container);
+    tests.push(...await subscriptionLoginIsolationBrowser(profile));
     return tests;
   } finally { root.unmount(); container.remove(); resetProviderCatalog(); for (const item of [key, loginKey, revokeKey, handoffKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); document.documentElement.style.fontSize = fontSize; }
 }

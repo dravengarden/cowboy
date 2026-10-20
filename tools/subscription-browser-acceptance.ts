@@ -56,36 +56,51 @@ try {
   await page.evaluate("globalThis.start()");
   const screenshots: string[] = [];
   for (const surface of ["mobile", "desktop"]) {
-    for (const stage of ["login", "revocation"]) {
+    await resize(surface === "mobile");
+    for (
+      const stage of [
+        "accounts",
+        "login",
+        "cancelled",
+        "revocation",
+        "handoff",
+        "expired",
+        "restart",
+      ]
+    ) {
       await until(
         `globalThis.stage === ${JSON.stringify(`${surface}-${stage}`)}`,
       );
       await new Promise((resolve) => setTimeout(resolve, 400));
       // Touch sheets intentionally preserve the existing responder. Establish
       // an explicit form focus before testing hardware-keyboard traversal.
-      if (surface === "mobile") {
+      if (
+        surface === "mobile" && (stage === "login" || stage === "revocation")
+      ) {
         await page.evaluate(
           "document.querySelector('[role=dialog] button:not([disabled])')?.focus()",
         );
       }
-      await page.send("Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: "Tab",
-        code: "Tab",
-        windowsVirtualKeyCode: 9,
-      });
-      await page.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "Tab",
-        code: "Tab",
-        windowsVirtualKeyCode: 9,
-      });
-      if (
-        !await page.evaluate<boolean>(
-          "document.activeElement !== document.body && Boolean(document.activeElement?.closest('[role=dialog]'))",
-        )
-      ) {
-        throw new Error(`${surface} ${stage}: Tab escaped the dialog`);
+      if (stage === "login" || stage === "revocation") {
+        await page.send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: "Tab",
+          code: "Tab",
+          windowsVirtualKeyCode: 9,
+        });
+        await page.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "Tab",
+          code: "Tab",
+          windowsVirtualKeyCode: 9,
+        });
+        if (
+          !await page.evaluate<boolean>(
+            "document.activeElement !== document.body && Boolean(document.activeElement?.closest('[role=dialog]'))",
+          )
+        ) {
+          throw new Error(`${surface} ${stage}: Tab escaped the dialog`);
+        }
       }
       const screenshot = await page.send("Page.captureScreenshot", {
         format: "png",
@@ -93,12 +108,11 @@ try {
       const file = `${output}/${surface}-${stage}-${theme}.png`;
       await writeFile(file, Buffer.from(screenshot.data, "base64"));
       screenshots.push(file);
-      if (surface === "mobile" && stage === "revocation") await resize(false);
       await page.evaluate("globalThis.stage = null; globalThis.next()");
     }
   }
   const result = await page.report;
-  if (!result.ok || result.tests?.length !== 36) {
+  if (!result.ok || result.tests?.length !== 92) {
     throw new Error(JSON.stringify(result));
   }
   console.log(

@@ -83,6 +83,25 @@ test("challenges are ephemeral, scoped, and cannot produce a dangerous navigatio
   owner.finish(); assert(owner.snapshot.pending);
 });
 
+test("receipt polling retains the current challenge, while cancellation removes it immediately", async () => {
+  const f = fixture();
+  const views: { links: number; status: string | undefined }[] = [];
+  f.setFetch(async (path, init) => Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [{
+    event: "login_challenge", provider: scope.provider, request_id: "request",
+    verification_url: "https://claude.ai/oauth/authorize?state=private", expires_at_ms: Date.now() + 60_000,
+  }] } : { status: init?.method === "DELETE" ? "cancellation_requested" : "active", cancel_requested: init?.method === "DELETE",
+    request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+  const owner = subscriptionLogin(scope, { ...f.ports, changed: (view) => { views.push({ links: view.events.length, status: view.observation?.status }); } });
+  owner.restore(); await owner.start(options, "native");
+  views.length = 0;
+  await owner.check();
+  assert(views.length > 0);
+  assert(views.every((view) => view.links === 1 && view.status === "active"));
+  await owner.cancel();
+  assertEquals(owner.snapshot.events.length, 0);
+  assertEquals(owner.snapshot.observation?.cancel_requested, true);
+});
+
 test("login readiness and cleanup completion reject mismatched or incomplete evidence", () => {
   assertThrows(() => loginOptions({ ...options, machine_id: "other" }, scope, "machine"));
   assertThrows(() => loginOptions({ ...options, account_id: "other" }, scope, "machine"));

@@ -8,6 +8,7 @@ import {
   NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
   NativeAuthenticationBrowserOpenError,
+  openAccountAuthorizationUrl,
   openAuthenticationUrl,
   openAuthenticationUrlConfirmed,
   openExternalUrl,
@@ -17,6 +18,48 @@ import {
   shouldRouteAuthenticationClick,
   shouldRouteExternalClick,
 } from "./openExternal";
+
+for (const bridge of ["opener", "core", "internals"] as const) {
+  test(`account authorization uses ${bridge} without replacing the shared auth browser`, async () => {
+    const root = globalThis as typeof globalThis & {
+      __TAURI__?: { opener?: { openUrl: (url: string) => Promise<void> }; core?: { invoke: (command: string, args: Record<string, unknown>) => Promise<void> } };
+      __TAURI_INTERNALS__?: { invoke: (command: string, args: Record<string, unknown>) => Promise<void> };
+      __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+      __cowboyCloseAuthenticationBrowser?: () => void;
+    };
+    const urls: string[] = [];
+    let fail = false;
+    let sharedEffects = 0;
+    const openUrl = async (url: string) => { urls.push(url); if (fail) throw `private native error: ${url}`; };
+    const invoke = async (command: string, args: Record<string, unknown>) => {
+      assertEquals(command, "plugin:opener|open_url");
+      await openUrl(String(args.url));
+    };
+    root.__cowboyOpenAuthenticationBrowser = () => { sharedEffects++; return true; };
+    root.__cowboyCloseAuthenticationBrowser = () => { sharedEffects++; };
+    if (bridge === "internals") root.__TAURI_INTERNALS__ = { invoke };
+    else root.__TAURI__ = bridge === "opener" ? { opener: { openUrl } } : { core: { invoke } };
+    try {
+      await openAccountAuthorizationUrl("https://claude.ai/oauth/authorize?state=lynx");
+      await openAccountAuthorizationUrl("https://claude.ai/oauth/authorize?state=otter");
+      assertEquals(urls.length, 2);
+      fail = true;
+      const error = await assertRejects(() => openAccountAuthorizationUrl("https://claude.ai/oauth/authorize?state=private"), Error, "Copy the link");
+      assertEquals(error.message.includes("private"), false);
+      assertEquals(sharedEffects, 0);
+      delete root.__TAURI__;
+      delete root.__TAURI_INTERNALS__;
+      await assertRejects(() => openAccountAuthorizationUrl("https://claude.ai/oauth/authorize"), Error, "Copy the link");
+      assertEquals(sharedEffects, 0); // No silent fallback even on an older shell.
+      for (const invalid of ["javascript:alert(1)", "http://claude.ai/oauth/authorize"]) {
+        await assertRejects(() => openAccountAuthorizationUrl(invalid), Error, "Invalid");
+      }
+    } finally {
+      delete root.__TAURI__; delete root.__TAURI_INTERNALS__;
+      delete root.__cowboyOpenAuthenticationBrowser; delete root.__cowboyCloseAuthenticationBrowser;
+    }
+  });
+}
 
 test("external links allow explicit network and contact protocols", () => {
   for (
