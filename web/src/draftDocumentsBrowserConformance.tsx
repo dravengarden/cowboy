@@ -381,6 +381,7 @@ export async function runDraftDocumentsBrowserConformance(
   document.body.append(container);
   const root = createRoot(container);
   const results: string[] = [];
+  let scenarioFailed = false;
   const repo = draftRepository();
   function Harness() {
     const route = useDraftRoute();
@@ -2306,11 +2307,18 @@ export async function runDraftDocumentsBrowserConformance(
       "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager",
     );
     return results;
+  } catch (error) {
+    scenarioFailed = true;
+    throw error;
   } finally {
     try {
       root.unmount();
     } catch { /* already unmounted */ }
-    await repo.dispose();
+    // Preserve the first failed assertion. A broken scenario can leave a
+    // writer waiting on its mocked transport; the isolated runner destroys
+    // this profile after the failure report. Successful runs still drain.
+    if (scenarioFailed) void repo.dispose().catch(() => undefined);
+    else await repo.dispose();
     container.remove();
     document.documentElement.style.fontSize = originalFont;
     globalThis.WebSocket = originalWebSocket;
