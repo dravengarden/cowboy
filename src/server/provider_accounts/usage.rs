@@ -10,6 +10,41 @@ struct Target {
     source: String,
 }
 
+/// Advisory projection only. The dispatch/commit paths recheck this scope in
+/// their admission transaction; ordinary reads never acquire its write locks.
+async fn observes_binding(
+    store: &crate::store::Store,
+    owner: &str,
+    operation: &str,
+    completion: &NativeCompletion,
+    account: &crate::store::provider_accounts::Account,
+    revision: i64,
+) -> Result<bool, &'static str> {
+    let receipt = store
+        .provider_login_receipt(owner, operation)
+        .await
+        .map_err(|_| "unavailable")?;
+    let key = store
+        .machine_encryption_public_key(&completion.machine_id)
+        .await
+        .map_err(|_| "unavailable")?;
+    Ok(receipt.as_ref().is_some_and(|receipt| {
+        !receipt.cancel_requested
+            && receipt.dispatch_rejection.is_none()
+            && receipt.native_logout.is_none()
+            && receipt.native_completion.as_ref() == Some(completion)
+            && receipt
+                .native_binding_revision
+                .is_some_and(|bound| account.admits_binding(bound, revision))
+    }) && key.as_ref().is_some_and(|key| {
+        crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
+    }) && completion
+        .profile
+        .identity
+        .fingerprint(&account.provider_id)
+        .is_ok_and(|fingerprint| account.identity_fingerprint.as_ref() == Some(&fingerprint)))
+}
+
 async fn target(
     state: &AppState,
     owner: &str,
@@ -62,18 +97,22 @@ async fn target(
         ) else {
             continue;
         };
-        if store
-            .with_native_login_binding(owner, &operation, &completion, || {
-                resolve_provider_generation_with_auth(
-                    &state.provider_catalog,
-                    &state.plugin_catalog,
-                    &[installed],
-                    &account.provider_id,
-                    SchedulingAuthentication::Native(&completion.profile),
-                )
-                .map_err(anyhow::Error::msg)
-            })
-            .await
+        if !observes_binding(
+            store,
+            owner,
+            &operation,
+            &completion,
+            account,
+            registry.revision,
+        )
+        .await?
+            || resolve_provider_generation_with_auth(
+                &state.provider_catalog,
+                &state.plugin_catalog,
+                &[installed],
+                &account.provider_id,
+                SchedulingAuthentication::Native(&completion.profile),
+            )
             .is_err()
         {
             continue;
@@ -113,6 +152,22 @@ fn error_message(code: &str) -> &str {
         "machine_unavailable" => {
             "The signed-in Machine is offline. Usage will refresh when it reconnects."
         }
+        "native_usage_authentication_required" => {
+            "This Machine's native login needs renewal. Sign in again to refresh usage."
+        }
+        "native_usage_busy" | "machine_usage_busy" => {
+            "This Machine is busy. Cowboy will retry the usage query automatically."
+        }
+        "runtime_not_allowed" => "This Provider cannot currently run on the signed-in Machine.",
+        "native_usage_collector_unavailable" | "native_usage_home_unsupported" => {
+            "The installed Provider cannot query this native login. Check its Machine installation."
+        }
+        "native_usage_profile_changed" | "account_binding_changed" => {
+            "This account's login changed. Cowboy will query the current login."
+        }
+        "native_usage_collector_failed" => {
+            "The native quota query failed. Cowboy will retry automatically."
+        }
         _ => "Account usage could not be refreshed. Cowboy will retry automatically.",
     }
 }
@@ -145,34 +200,24 @@ pub(in crate::server) async fn read_one(
     value["available"] = json!(true);
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
-    // Bind the cache only inside current admission: a delayed read of an old
-    // login must not erase the newer login's successful observation.
-    store
-        .with_native_login_binding(owner, &target.operation, &target.completion, || {
-            let entry = {
-                let mut entry = cache.data.lock();
-                entry.bind(&target.completion);
-                entry.clone()
-            };
-            value["usage"] = json!(entry.usage);
-            if value["usage"].is_object() {
-                value["usage"]["refresh"] = json!({
-                    "last_attempt_at_ms":entry.last_attempt_at_ms,
-                    "manual_refresh_after_ms":entry.last_attempt_at_ms.saturating_add(300_000),
-                    "next_auto_refresh_at_ms":entry.last_attempt_at_ms.saturating_add(300_000),
-                    "stale":entry.error.is_some(),
-                });
-            }
-            value["last_attempt_at_ms"] = json!(entry.last_attempt_at_ms);
-            value["next_refresh_at_ms"] = json!(entry.last_attempt_at_ms.saturating_add(300_000));
-            if let Some(code) = entry.error {
-                value["reason"] = json!(code);
-                value["message"] = json!(error_message(code));
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|_| "account_binding_changed")?;
+    // A read neither takes the database admission write lock nor binds a cache
+    // generation. Delayed reads cannot erase a newer login's observation.
+    let entry = cache.data.lock().snapshot(&target.completion);
+    value["usage"] = json!(entry.usage);
+    if value["usage"].is_object() {
+        value["usage"]["refresh"] = json!({
+            "last_attempt_at_ms":entry.last_attempt_at_ms,
+            "manual_refresh_after_ms":entry.last_attempt_at_ms.saturating_add(300_000),
+            "next_auto_refresh_at_ms":entry.last_attempt_at_ms.saturating_add(300_000),
+            "stale":entry.error.is_some(),
+        });
+    }
+    value["last_attempt_at_ms"] = json!(entry.last_attempt_at_ms);
+    value["next_refresh_at_ms"] = json!(entry.last_attempt_at_ms.saturating_add(300_000));
+    if let Some(code) = entry.error {
+        value["reason"] = json!(code);
+        value["message"] = json!(error_message(code));
+    }
     Ok(value)
 }
 
@@ -195,7 +240,14 @@ pub(in crate::server) async fn list_value(
             .collect::<Vec<_>>(),
     );
     for account in registry.accounts {
-        accounts.push(read_one(state, owner, &account.id).await?);
+        accounts.push(
+            read_one(state, owner, &account.id)
+                .await
+                .unwrap_or_else(|code| {
+                    json!({"account_id":account.id,"provider_id":account.provider_id,
+                "reason":code,"message":error_message(code),"refreshing":false})
+                }),
+        );
     }
     Ok(json!({"accounts":accounts}))
 }
@@ -253,20 +305,27 @@ async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value
     }
     let pending = store
         .with_native_login_binding(owner, &target.operation, completion, || {
-            anyhow::ensure!(
-                state
+            // Keep transport/admission reasons separate from a database binding
+            // rejection, without exporting arbitrary internal error text.
+            Ok(
+                if state
                     .supervisor
-                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id),
-                "runtime_not_allowed"
-            );
-            state
-                .machine_control
-                .begin_native_usage(&connection, &completion.profile)
-                .map_err(anyhow::Error::msg)
+                    .runtime_allowed(&completion.profile.provider_id, &completion.machine_id)
+                {
+                    state
+                        .machine_control
+                        .begin_native_usage(&connection, &completion.profile)
+                        .map_err(|code| dispatch_error(&code))
+                } else {
+                    Err("runtime_not_allowed")
+                },
+            )
         })
         .await
-        .map_err(|_| "account_binding_changed")?;
-    let raw = pending.await.map_err(|_| "native_usage_unavailable")?;
+        .map_err(|_| "account_binding_changed")??;
+    let raw = pending
+        .await
+        .map_err(|code| crate::machine_protocol::native_usage_error_code(&code))?;
     let machines = store.list_machines().await.map_err(|_| "unavailable")?;
     let installed = active_machine_plugin(
         &machines,
@@ -287,6 +346,15 @@ async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value
             "observed_at_ms":now_ms(),"account":raw.get("account"),"rate_limits":raw["rate_limits"],
         }))
     }).await.map_err(|_| "native_usage_unavailable")
+}
+
+fn dispatch_error(code: &str) -> &'static str {
+    match code {
+        "Machine pending request budget exceeded" => "machine_usage_busy",
+        "Machine is not connected" | "Machine disconnected" => "machine_unavailable",
+        "Machine operation connection is no longer current" => "machine_connection_changed",
+        _ => "native_usage_dispatch_failed",
+    }
 }
 
 pub(in crate::server) async fn list(

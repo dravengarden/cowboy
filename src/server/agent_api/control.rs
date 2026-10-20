@@ -842,14 +842,11 @@ async fn dispatch(
             && let Ok(id) = account.parse::<crate::provider_account::ProviderAccountId>()
             && !id.is_default()
         {
-            let owner = parent
-                .owner_user_id
-                .as_deref()
-                .ok_or("account_owner_required")?;
-            super::super::provider_accounts::usage::refresh_one(state, owner, &id)
+            let owner = super::actions::account_owner(state, parent).await?;
+            super::super::provider_accounts::usage::refresh_one(state, &owner, &id)
                 .await
                 .map_err(str::to_owned)?;
-            return super::super::provider_accounts::usage::read_one(state, owner, &id)
+            return super::super::provider_accounts::usage::read_one(state, &owner, &id)
                 .await
                 .map_err(str::to_owned);
         }

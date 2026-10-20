@@ -49,6 +49,56 @@ async fn native_usage_rejects_legacy_protocol_and_replaced_connections() {
 }
 
 #[tokio::test]
+async fn native_usage_reports_closed_reasons_without_forwarding_provider_output() {
+    let control = MachineControl::default();
+    let profile = serde_json::from_value(json!({
+        "account_id":"11111111-1111-4111-8111-111111111111","provider_id":"claude-code",
+        "request_id":"login","generation":2,"method":"native","provider_version":"1",
+        "generation_digest":"digest","auth_contract_fingerprint":"contract",
+        "identity":{"authority":"claude","subject":"otter"}
+    }))
+    .unwrap();
+    for (detail, expected) in [
+        (
+            "native_usage_authentication_required",
+            "native_usage_authentication_required",
+        ),
+        (
+            "native_usage_profile_changed",
+            "native_usage_profile_changed",
+        ),
+        (
+            "native stderr containing a private path or credential",
+            "native_usage_unavailable",
+        ),
+    ] {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let connection = control.install(
+            "machine".into(),
+            "epoch".into(),
+            false,
+            crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION,
+            tx,
+        );
+        let pending = control.begin_native_usage(&connection, &profile).unwrap();
+        let MachineCommand::CollectNativeUsage { request_id, .. } = rx.try_recv().unwrap() else {
+            panic!("scoped query expected")
+        };
+        control.record_remote(
+            &connection,
+            crate::machine_protocol::MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: false,
+                started: false,
+                payload: None,
+                detail: Some(detail.into()),
+            },
+        );
+        assert_eq!(pending.await.unwrap_err(), expected);
+    }
+}
+
+#[tokio::test]
 async fn binding_preparation_requires_exact_typed_current_connection_receipt() {
     use crate::machine_protocol::MachineEvent;
     use crate::provider_account::{

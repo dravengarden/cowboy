@@ -41,6 +41,14 @@ impl Cache {
 }
 
 impl Entry {
+    pub fn snapshot(&self, completion: &NativeCompletion) -> Self {
+        if self.scope.as_ref() == Some(completion) {
+            self.clone()
+        } else {
+            Self::default()
+        }
+    }
+
     pub fn bind(&mut self, completion: &NativeCompletion) {
         if self.scope.as_ref() != Some(completion) {
             *self = Self {
@@ -118,8 +126,12 @@ mod tests {
         assert!(entry.error.is_some());
         entry.bind(&new);
         assert!(entry.usage.is_none());
+        let current = serde_json::json!({"rate_limits":{"remaining":42}});
+        entry.finish(&new, Ok(current.clone()));
+        assert!(entry.snapshot(&old).usage.is_none());
+        assert_eq!(entry.snapshot(&new).usage, Some(current.clone()));
         entry.finish(&old, Ok(usage));
-        assert!(entry.usage.is_none());
+        assert_eq!(entry.usage, Some(current));
         assert!(entry.error.is_none());
     }
 }

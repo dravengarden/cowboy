@@ -1546,6 +1546,9 @@ impl MachineControl {
                     payload: Some(value),
                     ..
                 })) => Ok(value),
+                Ok(Ok(Reply::PluginHost {
+                    detail: Some(code), ..
+                })) => Err(crate::machine_protocol::native_usage_error_code(&code).into()),
                 _ => Err("native_usage_unavailable".into()),
             }
         })

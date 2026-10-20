@@ -279,6 +279,7 @@ pub(crate) struct MachinePluginStore {
     architecture: String,
     encryption: MachineEncryptionIdentity,
     lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
+    native_observations: std::sync::Arc<native_usage::Observations>,
     auth_candidates: std::sync::Arc<parking_lot::Mutex<()>>,
     telemetry_export: std::sync::Arc<tokio::sync::Mutex<()>>,
     code_runtimes: std::sync::Arc<CodeRuntimeHost>,
@@ -365,6 +366,7 @@ impl MachinePluginStore {
             architecture,
             encryption,
             lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            native_observations: std::sync::Arc::default(),
             auth_candidates: std::sync::Arc::default(),
             telemetry_export: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             code_runtimes: std::sync::Arc::new(CodeRuntimeHost::default()),
@@ -2155,6 +2157,14 @@ impl MachinePluginStore {
             )
             .map_err(anyhow::Error::msg)?;
         }
+        // Native observations can release the installation fence after spawn,
+        // but a wipe must wait until this account's process has stopped. Acquire
+        // in the same account -> lifecycle order as the observation path.
+        let _native_observation = if self.account_id.is_default() {
+            None
+        } else {
+            Some(self.native_observation_guard().await)
+        };
         let _lifecycle = self.lifecycle.lock().await;
         validate_plugin_id(&envelope.provider_id)?;
         ensure!(

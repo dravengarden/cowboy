@@ -1775,7 +1775,19 @@ mod tests {
         assert!(store.apply_auth(&envelope).await.is_err());
         assert!(home.exists());
         store.pin_service_key(signer.public_key()).unwrap();
-        let receipt = store.apply_auth(&envelope).await.unwrap();
+        let observation = scoped.native_observation_guard().await;
+        let mut wipe = std::pin::pin!(store.apply_auth(&envelope));
+        assert!(futures::poll!(&mut wipe).is_pending());
+        assert!(
+            home.exists(),
+            "an active quota process still owns this home"
+        );
+        assert!(
+            store.lifecycle.try_lock().is_ok(),
+            "waiting for a native process must not block other Providers"
+        );
+        drop(observation);
+        let receipt = wipe.await.unwrap();
         assert_eq!(
             receipt.materialization_state,
             ProviderMaterializationState::NotInstalled

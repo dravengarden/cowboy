@@ -3035,19 +3035,27 @@ fn handle_machine_command(
             request_id,
             profile,
         } => {
+            let account = profile.account_id.clone();
+            let provider = profile.provider_id.clone();
+            let generation = profile.generation;
             let invocation = execution.native_usage(*profile);
             tokio::spawn(async move {
                 let result = if protocol >= crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION {
                     providers.collect_native_usage(invocation).await
                 } else {
-                    Err(anyhow::anyhow!("native usage protocol required"))
+                    Err(anyhow::anyhow!("machine_usage_update_required"))
                 };
+                let detail = result.as_ref().err().map(|error| {
+                    let code = crate::machine_protocol::native_usage_error_code(&error.to_string());
+                    tracing::warn!(account = account.as_str(), %provider, generation, reason = code, "Native account usage failed");
+                    code.to_owned()
+                });
                 let _ = events.send(MachineEvent::PluginHostResponse {
                     request_id,
                     accepted: result.is_ok(),
                     started: true,
                     payload: result.ok(),
-                    detail: Some("Native account usage is unavailable".into()),
+                    detail,
                 });
             });
         }
