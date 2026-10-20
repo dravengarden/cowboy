@@ -64,6 +64,8 @@ try {
         "cancelled",
         "revocation",
         "handoff",
+        "verifying",
+        "signed-in",
         "expired",
         "restart",
       ]
@@ -112,7 +114,7 @@ try {
     }
   }
   const result = await page.report;
-  if (!result.ok || result.tests?.length !== 92) {
+  if (!result.ok || result.tests?.length !== 102) {
     throw new Error(JSON.stringify(result));
   }
   console.log(

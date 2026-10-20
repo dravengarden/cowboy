@@ -57,7 +57,7 @@ export function SubscriptionLogins({ scope, label, disabled }: { scope: LoginSco
       <Typography variant="body2" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
         {machines.find((machine) => machine.id === login.machine_id)?.display_name || login.machine_id} · {status[login.status] ?? "Sign-in needs attention"}
       </Typography>
-      <SubscriptionLogin scope={scope} label={label} request={login.request_id} disabled={busy} onChange={() => void load()} />
+      <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} onChange={() => void load()} />
     </Stack>)}
     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy} onChange={() => void load()} />

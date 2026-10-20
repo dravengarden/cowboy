@@ -7,7 +7,7 @@ export interface LoginOptions {
   methods: { id: string; label?: string; available: boolean; reason: string | null }[];
   native_profile?: { generation: number } | null;
 }
-type Pending = LoginScope & { machine: string; cancelling: boolean } & (
+type Pending = LoginScope & { machine: string; cancelling: boolean; codeState?: "submitting" | "accepted" | "unconfirmed" } & (
   | { operation: string; version: string; digest: string; method: string; request?: never }
   | { request: string; operation?: never; version?: never; digest?: never; method?: never }
 );
@@ -16,6 +16,9 @@ export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
   referenceMismatch?: boolean;
   checking?: boolean;
+}
+export function loginCompleted(view: LoginView): boolean {
+  return view.observation?.status === "completed" && !view.observation.cancel_requested && !view.pending?.cancelling;
 }
 export function loginFailure(view: LoginView): string | undefined {
   const failure = view.events.findLast((event) =>
@@ -26,8 +29,8 @@ export function loginFailure(view: LoginView): string | undefined {
 export function canReplaceLogin(view: LoginView): boolean {
   return Boolean(view.pending && (view.observation?.cancel_requested ||
     ["inactive", "not_started"].includes(view.observation?.status ?? "") ||
-    (view.observation?.status === "active" && (loginFailure(view) !== undefined || view.events.some((event) =>
-      event.event === "login_challenge" && event.expires_at_ms <= Date.now())))));
+    (view.observation?.status === "active" && (loginFailure(view) !== undefined || (!view.pending.codeState && view.events.some((event) =>
+      event.event === "login_challenge" && event.expires_at_ms <= Date.now()))))));
 }
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -49,15 +52,19 @@ export function loginLink(value: string): string | undefined {
   catch { return undefined; }
 }
 function restore(value: unknown, scope: LoginScope): Pending {
-  if (!object(value) || Object.keys(value).some((key) => !["owner", "dataset", "account", "provider", "operation", "machine", "version", "digest", "method", "cancelling", "request"].includes(key)) ||
+  if (!object(value) || Object.keys(value).some((key) => !["owner", "dataset", "account", "provider", "operation", "machine", "version", "digest", "method", "cancelling", "request", "codeState"].includes(key)) ||
     value.owner !== scope.owner || value.dataset !== scope.dataset || value.account !== scope.account || value.provider !== scope.provider ||
     !id(value.machine) || typeof value.cancelling !== "boolean" ||
+    (value.codeState !== undefined && (typeof value.codeState !== "string" || !["submitting", "accepted", "unconfirmed"].includes(value.codeState))) ||
     (value.request !== undefined
       ? !id(value.request) || ["operation", "version", "digest", "method"].some((key) => key in value)
       : !id(value.operation) || !text(value.version) || !text(value.digest) || !id(value.method))) {
     throw new Error("Saved sign-in belongs to another account or dataset, or is invalid.");
   }
   return value as unknown as Pending;
+}
+function sameAttempt(left: Pending, right: Pending): boolean {
+  return (["machine", "operation", "request", "version", "digest", "method"] as const).every((field) => left[field] === right[field]);
 }
 
 /** One persisted operation per account. Only metadata is stored, never codes or links.
@@ -76,18 +83,39 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     state = { ...state, ...patch };
     if (ports.current()) ports.changed(state);
   };
+  const saved = () => {
+    const raw = ports.storage.getItem(key);
+    return raw ? restore(JSON.parse(raw), scope) : undefined;
+  };
   const save = (pending: Pending) => {
+    const previous = saved();
+    if (previous && !sameAttempt(previous, pending)) throw new Error("Another sign-in is saved in this tab. Reopen sign-in to continue it.");
+    const codeState = pending.codeState ?? previous?.codeState;
+    pending = { ...pending, cancelling: pending.cancelling || previous?.cancelling === true,
+      ...(codeState ? { codeState } : {}) };
     ports.storage.setItem(key, JSON.stringify(pending));
     publish({ pending });
+    return pending;
   };
-  async function request(path: string, init?: RequestInit): Promise<unknown> {
+  const forget = (pending: Pending) => {
+    const previous = saved();
+    if (previous && sameAttempt(previous, pending)) ports.storage.removeItem(key);
+  };
+  async function request(path: string, init?: RequestInit, reply: "json" | "accepted" = "json"): Promise<unknown> {
     if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
     const response = await ports.fetch(path, { cache: "no-store", ...init });
-    const value: unknown = await response.json();
+    if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
+    // Code submission returns an empty 202. It only acknowledges dispatch;
+    // the original operation receipt still decides whether sign-in completed.
+    if (reply === "accepted" && response.status === 202) return;
+    const value: unknown = await response.json().catch(() => undefined);
     if (!ports.current()) throw new Error("Account changed. Reopen subscriptions.");
     if (!response.ok) {
       const code = object(value) && object(value.error) && id(value.error.code) ? ` (${value.error.code})` : "";
       throw new Error(`Sign-in is not confirmed${code}. Check status or retry the same operation.`);
+    }
+    if (reply === "accepted" || value === undefined) {
+      throw new Error("Sign-in response could not be verified. Check status before trying again.");
     }
     return value;
   }
@@ -134,6 +162,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     } finally { publish({ busy: false, checking: false }); }
   }
   async function send(pending: Pending) {
+    if (pending.codeState) throw new Error("An authorization code was already submitted. Check the original sign-in.");
     if (pending.request) throw new Error("Continue this existing sign-in with Check status. It cannot be restarted here.");
     if (pending.cancelling) throw new Error("Cancellation is pending. Check status to reconcile this attempt.");
     const value = await request(`/api/provider-accounts/${scope.account}/login`, {
@@ -149,7 +178,11 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     restore() {
       try {
         const saved = ports.storage.getItem(key);
-        if (saved) publish({ pending: restore(JSON.parse(saved), scope) });
+        if (saved) {
+          const pending = restore(JSON.parse(saved), scope);
+          // A remount cannot know whether an in-flight write reached the Machine.
+          publish({ pending: pending.codeState === "submitting" ? { ...pending, codeState: "unconfirmed" } : pending });
+        }
         ready = true;
       } catch { publish({ error: "Saved sign-in could not be read. No new login will start." }); }
     },
@@ -206,23 +239,50 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       // An explicit new selection, not a replay of the old request. Do not
       // POST here: fresh readiness and a separate user click are still needed.
       // The Machine retains the old receipt/profile and all cleanup fences.
-      ports.storage.removeItem(key);
+      forget(state.pending);
       publish({ pending: undefined, observation: undefined, events: [], error: "" });
     }); },
     submit(code: string) { return run(async () => {
       const pending = state.pending; const observation = state.observation;
       if (!pending || pending.cancelling || observation?.status !== "active" || observation.cancel_requested || !observation.request_id) throw new Error("Sign-in is not accepting a code.");
+      if (pending.codeState) throw new Error("An authorization code was already submitted. Check the original sign-in.");
       code = code.trim();
       if (!code || new TextEncoder().encode(code).length > 4096 || Array.from(code).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error("Enter one authorization code.");
-      await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
-      await check(pending);
+      // Persist only the attempt marker before sending. Reloads and lost replies
+      // recover this request; neither the code nor an automatic retry is stored.
+      const previous = saved();
+      if (!previous || !sameAttempt(previous, pending) || previous.cancelling) throw new Error("The saved sign-in changed. Reopen sign-in before continuing.");
+      if (previous.codeState) throw new Error("An authorization code was already submitted. Check the original sign-in.");
+      save({ ...pending, codeState: "submitting" });
+      let codeState: "accepted" | "unconfirmed" = "accepted";
+      try {
+        await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) }, "accepted");
+      } catch {
+        codeState = "unconfirmed";
+      }
+      if (!ports.current()) return;
+      let submitted: Pending = { ...pending, codeState };
+      const current = saved();
+      if (current && sameAttempt(current, pending)) submitted = save(submitted);
+      else publish({ pending: submitted }); // Do not recreate or replace a newer tab pointer.
+      // Even a lost/rejected delivery reply can race with completed native
+      // authorization. Only the scoped receipt may settle that uncertainty.
+      await check(submitted);
     }); },
     finish() {
       // Only forget the tab pointer after completion or a durable cancellation
       // acknowledgement. The server retains cancellation and all cleanup fences;
       // this does not assert that the native process exited or dispatch a retry.
-      if (state.busy || !ports.current() || (!state.observation?.cancel_requested && !["completed", "not_started"].includes(state.observation?.status ?? ""))) return;
-      try { ports.storage.removeItem(key); publish({ pending: undefined, observation: undefined, events: [], error: "" }); }
+      if (state.busy || !ports.current() || (!state.observation?.cancel_requested && !loginCompleted(state) && state.observation?.status !== "not_started")) return;
+      try {
+        const previous = saved();
+        if (previous && state.pending && sameAttempt(previous, state.pending) && previous.cancelling && !state.observation?.cancel_requested) {
+          publish({ pending: previous });
+          return;
+        }
+        if (state.pending) forget(state.pending);
+        publish({ pending: undefined, observation: undefined, events: [], error: "" });
+      }
       catch { publish({ error: "Could not clear the saved sign-in. It remains available for reconciliation." }); }
     },
   };

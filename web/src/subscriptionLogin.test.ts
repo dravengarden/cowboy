@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { canReplaceLogin, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
+import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
 import { rememberSubscriptionSignIn, restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN, subscriptionSignInLink } from "./subscriptionSignInLink";
 
@@ -12,9 +12,11 @@ function fixture() {
   const values = new Map<string, string>();
   const calls: { path: string; init?: RequestInit }[] = [];
   let current = true;
-  let fetch = async (path: string, _init?: RequestInit) => Response.json(path.includes("/api/providers/")
-    ? { request_id: "request", events: [] }
-    : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  let fetch = async (path: string, init?: RequestInit) => path.includes("/api/providers/") && init?.method === "POST"
+    ? new Response(null, { status: 202 })
+    : Response.json(path.includes("/api/providers/")
+      ? { request_id: "request", events: [] }
+      : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
   const ports = {
     fetch: async (path: string, init?: RequestInit) => { calls.push({ path, init }); return await fetch(path, init); },
     storage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } },
@@ -36,6 +38,213 @@ test("lost sign-in reply and panel remount retain the exact operation without au
   assertEquals(f.calls[1]!.init!.body, body);
   await retry.start({ ...options, machine_id: "other" }, "native");
   assertEquals(f.calls.length, 2);
+});
+
+test("an empty accepted code reply reconciles the original login without declaring completion", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.start(options, "native");
+  let status = "active";
+  f.setFetch(async (path, init) => {
+    if (init?.method === "POST") return new Response(null, { status: 202 });
+    return Response.json(path.includes("/api/providers/")
+      ? { request_id: "request", events: [] }
+      : { status, request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  });
+  const before = f.calls.length;
+  await owner.submit("one-time-code");
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.observation?.status, "active");
+  assertEquals(f.calls.slice(before).map((call) => [call.path, call.init?.method ?? "GET"]), [
+    ["/api/providers/claude-code/auth/request", "POST"],
+    ["/api/provider-accounts/login-operations/operation", "GET"],
+    ["/api/providers/claude-code/auth/request", "GET"],
+  ]);
+  owner.finish();
+  assert(owner.snapshot.pending);
+  status = "completed";
+  await owner.check();
+  assertEquals(owner.snapshot.observation?.status, "completed");
+  assertEquals(f.calls.slice(before).filter((call) => call.init?.method === "POST").length, 1);
+  assert(![...f.values.values()].join().includes("one-time-code"));
+});
+
+test("a rejected text code reply reconciles an already completed login without exposing the response body", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.start(options, "native");
+  f.setFetch(async (_path, init) => init?.method === "POST"
+    ? new Response("authentication request is not active; private diagnostic", { status: 404 })
+    : Response.json({ status: "completed", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+  await owner.submit("one-time-code");
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.pending?.codeState, "unconfirmed");
+  assert(owner.snapshot.pending);
+  assertEquals(owner.snapshot.observation?.status, "completed");
+  await owner.check();
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.observation?.status, "completed");
+  assertEquals(f.calls.filter((call) => call.path === "/api/providers/claude-code/auth/request" && call.init?.method === "POST").length, 1);
+});
+
+test("accepting a code never relaxes the account, provider, Machine or request completion fence", async () => {
+  for (const field of ["account_id", "provider_id", "machine_id", "request_id"]) {
+    const f = fixture();
+    const owner = subscriptionLogin(scope, f.ports); owner.restore();
+    await owner.start(options, "native");
+    f.setFetch(async (_path, init) => init?.method === "POST"
+      ? new Response(null, { status: 202 })
+      : Response.json({ status: "completed", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine", [field]: "other" }));
+    await owner.submit("one-time-code");
+    assert(owner.snapshot.error.includes("does not match"));
+    assertEquals(owner.snapshot.observation, undefined);
+    owner.finish();
+    assert(owner.snapshot.pending);
+  }
+});
+
+test("JSON receipts still require a body and code submission requires the accepted acknowledgement", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.start(options, "native");
+  f.setFetch(async (path, init) => Response.json(init?.method === "POST" ? { status: "completed" }
+    : path.includes("/api/providers/") ? { request_id: "request", events: [] }
+    : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));
+  await owner.submit("one-time-code");
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.pending?.codeState, "unconfirmed");
+  assertEquals(owner.snapshot.observation?.status, "active");
+  f.setFetch(async () => new Response(null, { status: 202 }));
+  await owner.check();
+  assertEquals(owner.snapshot.error, "Sign-in response could not be verified. Check status before trying again.");
+  owner.finish();
+  assert(owner.snapshot.pending);
+});
+
+test("a code submission survives a lost reply and reload without ever posting the code twice", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.start(options, "native");
+  let completed = false;
+  f.setFetch(async (path, init) => {
+    if (init?.method === "POST") {
+      assertEquals(JSON.parse([...f.values.values()][0]!).codeState, "submitting");
+      throw new Error("reply lost");
+    }
+    return Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [] } : {
+      status: completed ? "completed" : "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
+    });
+  });
+  await owner.submit("one-time-code");
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.pending?.codeState, "unconfirmed");
+  const restored = subscriptionLogin(scope, f.ports); restored.restore();
+  await restored.check(); await restored.submit("one-time-code"); await restored.retry();
+  assertEquals(f.calls.filter((call) => call.path === "/api/providers/claude-code/auth/request" && call.init?.method === "POST").length, 1);
+  assertEquals(f.calls.filter((call) => call.path === "/api/provider-accounts/account/login" && call.init?.method === "POST").length, 1);
+  completed = true;
+  await restored.check();
+  assertEquals(restored.snapshot.error, "");
+  assertEquals(restored.snapshot.observation?.status, "completed");
+  assert(![...f.values.values()].join().includes("one-time-code"));
+});
+
+test("code delivery is fenced before sending and an unacknowledged submission restores as uncertain", async () => {
+  const f = fixture();
+  let denyWrites = false;
+  const owner = subscriptionLogin(scope, { ...f.ports, storage: { ...f.ports.storage, setItem: (key, value) => {
+    if (denyWrites) throw new Error("storage unavailable"); f.ports.storage.setItem(key, value);
+  } } }); owner.restore();
+  await owner.start(options, "native");
+  const before = f.calls.length;
+  denyWrites = true;
+  await owner.submit("private-code");
+  assertEquals(f.calls.length, before);
+  for (const [key, value] of f.values) f.values.set(key, JSON.stringify({ ...JSON.parse(value), codeState: "submitting" }));
+  const restored = subscriptionLogin(scope, f.ports); restored.restore();
+  assertEquals(restored.snapshot.pending?.codeState, "unconfirmed");
+  await restored.check(); await restored.submit("private-code");
+  assert(f.calls.slice(before).every((call) => !call.init?.method));
+  assert(!canReplaceLogin({ ...restored.snapshot, observation: { status: "active", request_id: "request" }, events: [{
+    event: "login_challenge", request_id: "request", provider: scope.provider, verification_url: "https://claude.ai/", expires_at_ms: 1,
+  }] }));
+});
+
+test("duplicate forms submit once and a late acknowledgement preserves a newer cancellation", async () => {
+  const f = fixture();
+  const first = subscriptionLogin(scope, f.ports); first.restore(); await first.start(options, "native");
+  const second = subscriptionLogin(scope, f.ports); second.restore(); await second.check();
+  let release!: () => void;
+  const reply = new Promise<void>((resolve) => { release = resolve; });
+  let cancelled = false;
+  f.setFetch(async (path, init) => {
+    if (init?.method === "POST") { await reply; return new Response(null, { status: 202 }); }
+    if (init?.method === "DELETE") cancelled = true;
+    return Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [] } : {
+      status: cancelled ? "cancellation_requested" : "active", cancel_requested: cancelled,
+      request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
+    });
+  });
+  const submitting = first.submit("private-code");
+  await second.submit("private-code");
+  assert(second.snapshot.error.includes("already submitted"));
+  await second.cancel();
+  release(); await submitting;
+  assertEquals(first.snapshot.observation?.status, "cancellation_requested");
+  assertEquals(first.snapshot.pending?.cancelling, true);
+  assertEquals(JSON.parse([...f.values.values()][0]!).cancelling, true);
+  assertEquals(f.calls.filter((call) => call.path === "/api/providers/claude-code/auth/request" && call.init?.method === "POST").length, 1);
+});
+
+test("late code acknowledgement and Done cannot replace or remove a newer saved attempt", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
+  let release!: () => void;
+  const reply = new Promise<void>((resolve) => { release = resolve; });
+  f.setFetch(async (_path, init) => {
+    if (init?.method === "POST") { await reply; return new Response(null, { status: 202 }); }
+    return Response.json({ status: "completed", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  });
+  const submitting = owner.submit("private-code");
+  const key = [...f.values.keys()][0]!;
+  const newer = JSON.stringify({ ...scope, operation: "new-operation", machine: "machine", version: "1", digest: "digest", method: "native", cancelling: false });
+  f.values.set(key, newer);
+  release(); await submitting;
+  assertEquals(owner.snapshot.observation?.status, "completed");
+  assertEquals(f.values.get(key), newer);
+  owner.finish();
+  assertEquals(f.values.get(key), newer);
+  const count = f.calls.length;
+  await owner.start(options, "native");
+  assertEquals(f.calls.length, count);
+  assertEquals(f.values.get(key), newer);
+});
+
+test("Done preserves an unacknowledged cancellation even when native sign-in completes", async () => {
+  const f = fixture();
+  const first = subscriptionLogin(scope, f.ports); first.restore(); await first.start(options, "native");
+  const second = subscriptionLogin(scope, f.ports); second.restore(); await second.check();
+  let cancellationFailed = true;
+  f.setFetch(async (_path, init) => {
+    if (init?.method === "DELETE" && cancellationFailed) throw new Error("reply lost");
+    return Response.json({ status: cancellationFailed ? "completed" : "cancellation_requested", cancel_requested: !cancellationFailed,
+      request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  });
+  await first.check();
+  assert(loginCompleted(first.snapshot));
+  await second.cancel();
+  first.finish();
+  assert(!loginCompleted(first.snapshot));
+  assert(first.snapshot.pending?.cancelling);
+  assertEquals(f.values.size, 1);
+  await first.check();
+  first.finish();
+  assert(!loginCompleted(first.snapshot));
+  assertEquals(f.values.size, 1);
+  cancellationFailed = false;
+  await first.cancel();
+  first.finish();
+  assertEquals(f.values.size, 0);
 });
 
 test("concurrent clicks dispatch once and durable cancellation cannot be retried as login", async () => {
@@ -67,7 +276,7 @@ test("storage failure, wrong dataset, and changed product account prevent login 
 
 test("challenges are ephemeral, scoped, and cannot produce a dangerous navigation", async () => {
   const f = fixture();
-  f.setFetch(async (path) => Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [{
+  f.setFetch(async (path, init) => path.includes("/api/providers/") && init?.method === "POST" ? new Response(null, { status: 202 }) : Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [{
     event: "login_challenge", provider: "claude-code", request_id: "request", verification_url: "https://claude.ai/oauth/authorize?state=private-link",
     input_required: true, expires_at_ms: Date.now() + 60_000,
   }] } : { status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }));

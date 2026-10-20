@@ -98,7 +98,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       if (init?.method === "DELETE") { lifecycleWrites.push(path); return Response.json({ status: "cancellation_requested", cancel_requested: true, request_id: "request" }); }
       return Response.json({ status: "active", request_id: "request", account_id: "account", provider_id: "claude-code", machine_id: "machine" });
     }
-    if (path === "/api/providers/claude-code/auth/request") return Response.json({ request_id: "request", events: [{
+    if (path === "/api/providers/claude-code/auth/request") return init?.method === "POST" ? new Response(null, { status: 202 }) : Response.json({ request_id: "request", events: [{
       event: "login_challenge", request_id: "request", provider: "claude-code", verification_url: "https://claude.ai/oauth/authorize?state=private",
       expires_at_ms: Date.now() + 60_000, input_required: true,
     }] });
@@ -149,7 +149,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
         (grid.clientWidth < 800 || Math.abs(legacyCard.getBoundingClientRect().top - namedCard.getBoundingClientRect().top) < 2),
       "desktop cards share columns only when each has enough room");
     }
-    await until(() => Boolean(button("Open sign-in")));
+    await until(() => Boolean(button("Continue sign-in")));
     check(container.querySelector("[data-subscription-account]")!.textContent!.includes("ovh · Waiting for sign-in") && lifecycleWrites.length === 0,
       "the account card discovers an agent-started Machine sign-in without dispatching or probing a Provider");
     for (const node of container.querySelectorAll<HTMLButtonElement>("button")) if (node.textContent === "Done") node.click();
@@ -256,16 +256,18 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     const handoffReads: string[] = [];
     const handoffWrites: string[] = [];
     let signedIn = false;
+    let verifying = false;
     globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
       const path = String(url); handoffReads.push(path);
       if (path === "/api/provider-accounts") return Response.json({ ...data,
         registry: { ...data.registry, accounts: [{ id: handoffAccount, label: "Claude · Otter", provider_id: "claude-code", enabled: true }] } });
       if (init?.method === "POST") {
         if (path !== `/api/providers/claude-code/auth/${handoffRequest}`) throw new Error("handoff dispatched another login");
-        handoffWrites.push(path); signedIn = true;
+        handoffWrites.push(path); verifying = true;
+        return new Response(null, { status: 202 });
       }
       if (path === `/api/provider-accounts/${handoffAccount}/logins/${handoffRequest}`) return Response.json({
-        status: signedIn ? "completed" : "active", request_id: handoffRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh",
+        status: signedIn ? "completed" : verifying ? "binding_pending" : "active", request_id: handoffRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh",
       });
       if (path === "/api/provider-accounts/login-operations/another-operation") return Response.json({
         status: "active", request_id: "provider-login-another-request", account_id: handoffAccount, provider_id: "claude-code", machine_id: "other-machine",
@@ -291,7 +293,12 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     currentHandoffInput.dispatchEvent(new Event("input", { bubbles: true }));
     await until(() => Boolean(dialogButton("Continue") && !dialogButton("Continue")!.disabled));
     dialogButton("Continue")!.click();
+    await until(() => document.body.textContent!.includes("Verifying sign-in…"));
+    await observe?.(surface, "verifying");
+    signedIn = true;
+    window.dispatchEvent(new Event("focus"));
     await until(() => document.body.textContent!.includes("Signed in on this Machine"));
+    await observe?.(surface, "signed-in");
     check(handoffWrites.length === 1 && !sessionStorage.getItem(handoffKey)!.includes("private-code"), "handoff submits the code directly to the original request");
     root.unmount(); root = createRoot(container); handoffRender();
     await until(() => document.body.textContent!.includes("Signed in on this Machine"));
@@ -400,6 +407,22 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       };
       check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset", "/api/provider-accounts/login-operations/another-operation"].includes(path)) && blocked.preserved,
         `handoff blocks another saved ${"request" in saved ? "request" : "operation"} without exposing or driving it: ${JSON.stringify(blocked)}`);
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url) === `/api/provider-accounts/${handoffAccount}/logins/provider-login-another-request` ||
+          String(url) === "/api/provider-accounts/login-operations/another-operation") {
+          if (init?.method) throw new Error("resuming a saved login must only observe it");
+          return Response.json({ status: "inactive", request_id: "provider-login-another-request",
+            account_id: handoffAccount, provider_id: "claude-code", machine_id: "other-machine" });
+        }
+        return savedFetch(url, init);
+      }) as typeof fetch;
+      const effectsBefore = handoffWrites.length;
+      dialogButton("Continue saved sign-in")!.click();
+      await until(() => document.body.textContent!.includes("This sign-in expired or disconnected."));
+      check(handoffWrites.length === effectsBefore && !document.querySelector('input[type="password"], a[href^="https://claude.ai/oauth/"]') &&
+        document.body.textContent!.includes("other-machine"), "a conflicting handoff can explicitly resume its saved attempt without dispatching a new login");
+      globalThis.fetch = savedFetch;
     }
     root.unmount(); root = createRoot(container);
     tests.push(...await subscriptionLoginIsolationBrowser(profile));

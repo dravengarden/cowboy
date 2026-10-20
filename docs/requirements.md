@@ -636,6 +636,15 @@ offers `Done`; cancelled attempts retain status/restart recovery. Account or
 request changes reset form state and authorization input, and stale replies
 cannot populate another account's form. Polling the same challenge must preserve
 an in-progress code; a new challenge clears it.
+Code delivery accepts the HTTP endpoint's empty `202` acknowledgement, then
+checks the original operation receipt. Acceptance alone never means signed in.
+A metadata-only submission marker is saved before sending: remounts and lost
+replies reconcile the existing attempt without submitting the code again.
+Verification hides the authorization input and link. Returning from the browser
+resumes status checks, including identity binding, with bounded visible polling;
+timeouts and paused checks retain an explicit recovery action. Success exposes
+details and an explicit choice to sign in on another Machine, without starting
+that login automatically.
 Named account authorization opens an external browser rather than replacing the
 native shell's shared authentication sheet. A failed OS-browser launch offers
 copy-link recovery, without silently navigating that shared sheet. Browser/PWA

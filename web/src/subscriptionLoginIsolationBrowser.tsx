@@ -18,6 +18,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
   const challenges = new Map<string, number>();
   let held: (() => void) | undefined;
   let holdAccount: string | undefined;
+  let cancellationFails = false;
   const tests: string[] = [];
   const check = (value: boolean, message: string) => { if (!value) throw new Error(message); tests.push(message); };
   const until = async (predicate: () => boolean) => {
@@ -47,11 +48,12 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     const request = `${account}-request`;
     if (init?.method === "POST") {
       writes.push({ path, method: "POST", code: JSON.parse(String(init.body)).code });
-      statuses.set(account, "completed");
-      return Response.json({ ok: true });
+      statuses.set(account, account === "lynx" ? "binding_pending" : "completed");
+      return new Response(null, { status: 202 });
     }
     if (init?.method === "DELETE") {
       writes.push({ path, method: "DELETE" });
+      if (cancellationFails) throw new Error("cancel reply lost");
       statuses.set(account, "cancellation_requested");
     }
     if (path === `/api/providers/claude-code/auth/${request}`) {
@@ -96,9 +98,18 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     await until(() => !button("otter", "Check status")!.disabled);
     check(input("otter")?.value === "" && button("otter", "Continue")!.disabled,
       "a replacement authorization challenge cannot reuse the previous code");
+    cancellationFails = true;
+    statuses.set("otter", "completed");
     click("otter", "Cancel sign-in");
     check(!input("otter") && !button("otter", "Done") && !container.textContent!.includes("link has expired"),
       "pending cancellation hides authorization without misreporting expiry or completion");
+    await until(() => !button("otter", "Check status")!.disabled);
+    click("otter", "Check status");
+    await until(() => !button("otter", "Check status")!.disabled);
+    check(!button("otter", "Done") && Boolean(button("otter", "Retry cancellation")) && container.textContent!.includes("Cancellation pending"),
+      "native completion cannot show Done while this tab still has an unconfirmed cancellation");
+    cancellationFails = false;
+    click("otter", "Retry cancellation");
     await until(() => Boolean(button("otter", "Start again") && !button("otter", "Start again")!.disabled));
     check(!button("otter", "Done") && !button("otter", "Retry cancellation") && !input("otter") &&
       !container.querySelector("a"), "acknowledged cancellation offers restart and status without a false Done or stale link");
@@ -111,6 +122,11 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     typeCode("lynx", "lynx-code"); typeCode("otter", "otter-code");
     await until(() => !button("lynx", "Continue")!.disabled && !button("otter", "Continue")!.disabled);
     click("lynx", "Continue");
+    await until(() => container.textContent!.includes("Verifying sign-in…") && !button("lynx", "Check status")!.disabled);
+    check(!input("lynx") && !button("lynx", "Continue") && !button("lynx", "Done") && writes.length === 1 &&
+      input("otter")?.value === "otter-code", "accepted code enters verification without allowing another submission or disturbing the other account");
+    statuses.set("lynx", "completed");
+    window.dispatchEvent(new Event("focus"));
     await until(() => Boolean(button("lynx", "Done") && !button("lynx", "Done")!.disabled));
     check(writes.length === 1 && writes[0]!.path.endsWith("/lynx-request") && writes[0]!.code === "lynx-code" &&
       input("otter")?.value === "otter-code" && !button("otter", "Done"),
@@ -120,6 +136,10 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     check(writes.length === 2 && writes[1]!.path.endsWith("/otter-request") && writes[1]!.code === "otter-code" &&
       keys.every((key) => !sessionStorage.getItem(key)!.includes("lynx-code") && !sessionStorage.getItem(key)!.includes("otter-code")),
       "both account forms complete independently without persisting either authorization code");
+    click("lynx", "Sign in on another Machine");
+    check(Boolean(button("lynx", "Start sign-in")?.disabled) && !button("lynx", "Done") && Boolean(button("otter", "Done")) &&
+      writes.length === 2 && !sessionStorage.getItem(keys[0]!) && Boolean(sessionStorage.getItem(keys[1]!)),
+      "a completed login can explicitly select another Machine without dispatching or clearing the other account");
     return tests;
   } finally {
     held?.(); root.unmount(); container.remove(); globalThis.fetch = originalFetch;
