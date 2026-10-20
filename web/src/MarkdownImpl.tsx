@@ -23,12 +23,13 @@ import {
   memo,
   type ReactNode,
   useCallback,
+  useContext,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { Box, IconButton, Link, useMediaQuery, useTheme } from "@mui/material";
+import { Box, IconButton, Link, Menu, MenuItem, useMediaQuery, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -37,7 +38,8 @@ import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbo
 import { MermaidDiagram } from "./MermaidDiagram";
 import { copyText } from "./clipboard";
 import { headingSlug } from "./mobile/review/reviewLinkTarget";
-import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
+import { hasNativeExternalOpener, openExternalUrl, safeExternalUrl, shouldRouteExternalClick } from "./openExternal";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
@@ -699,6 +701,8 @@ const MarkdownImpl = memo(function MarkdownImpl({
   galleryImagesRef.current = galleryImages;
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
+  const nativeLinkMenu = useContext(SurfaceContext)?.kind === "desktop" && hasNativeExternalOpener();
+  const [linkMenu, setLinkMenu] = useState<{ url: string; top: number; left: number } | null>(null);
   const renderedTextRef = useRef(renderedText);
   renderedTextRef.current = renderedText;
   const streamingRef = useRef(streaming);
@@ -803,6 +807,13 @@ const MarkdownImpl = memo(function MarkdownImpl({
           href={href ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
+          onContextMenu={(event): void => {
+            const url = href ? safeExternalUrl(href) : null;
+            if (!nativeLinkMenu || !url) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setLinkMenu({ url, top: event.clientY, left: event.clientX });
+          }}
           onClick={(event): void => {
             // A host may CLAIM a link before it is treated as a web address:
             // inside the code reviewer a relative href is another file in the
@@ -877,7 +888,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         </Box>
       );
     },
-  }), [centerCopy, codeTheme, dark, invert, touchWrap]);
+  }), [centerCopy, codeTheme, dark, invert, touchWrap, nativeLinkMenu]);
 
   return (
     <>
@@ -915,6 +926,21 @@ const MarkdownImpl = memo(function MarkdownImpl({
           {renderedText}
         </ReactMarkdown>
       </Box>
+      <Menu
+        open={linkMenu !== null}
+        onClose={() => setLinkMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={linkMenu ? { top: linkMenu.top, left: linkMenu.left } : undefined}
+      >
+        <MenuItem onClick={() => {
+          if (linkMenu) openExternalUrl(linkMenu.url);
+          setLinkMenu(null);
+        }}>Open in browser</MenuItem>
+        <MenuItem onClick={() => {
+          if (linkMenu) void copyText(linkMenu.url);
+          setLinkMenu(null);
+        }}>Copy link</MenuItem>
+      </Menu>
       {/* plate={false}: chat images are screenshots/photos, not white-bg
           diagrams, so no white framing behind them. */}
       <ImageLightbox

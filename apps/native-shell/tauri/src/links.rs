@@ -6,19 +6,14 @@ fn trusted_document(url: &Url) -> bool {
         && url.host_str() == Some("cowboy.stormbird.xyz")
         && url.port_or_known_default() == Some(443))
         || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
-        || (matches!(url.scheme(), "http" | "https")
+        || (cfg!(windows)
+            && matches!(url.scheme(), "http" | "https")
             && url.host_str() == Some("tauri.localhost")
             && url.port().is_none())
 }
 
-fn external_url(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https" | "mailto" | "tel") && !trusted_document(url)
-}
-
-fn shell_navigation(url: &Url) -> bool {
-    // WebKit also consults this callback for the editor's opaque sandbox frame.
-    // Inert frame documents may load, but must never count as trusted IPC sources.
-    trusted_document(url) || (url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc"))
+fn browser_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "mailto" | "tel")
 }
 
 fn open_from_main(app: &AppHandle, url: &Url) {
@@ -28,7 +23,7 @@ fn open_from_main(app: &AppHandle, url: &Url) {
         .get_webview_window("main")
         .and_then(|window| window.url().ok())
         .is_some_and(|source| trusted_document(&source));
-    if trusted && matches!(url.scheme(), "http" | "https" | "mailto" | "tel") {
+    if trusted && browser_url(url) {
         // Never log the URL: Provider authorization links may contain secrets.
         if app.opener().open_url(url.as_str(), None::<&str>).is_err() {
             eprintln!("Cowboy could not open the external link in the system browser");
@@ -40,20 +35,12 @@ pub fn configure(
     window: WebviewWindowBuilder<'_, Wry, tauri::App>,
     app: AppHandle,
 ) -> WebviewWindowBuilder<'_, Wry, tauri::App> {
-    let navigation = app.clone();
-    window
-        .on_new_window(move |url, _| {
-            open_from_main(&app, &url);
-            NewWindowResponse::Deny
-        })
-        .on_navigation(move |url| {
-            if external_url(url) {
-                open_from_main(&navigation, url);
-                false
-            } else {
-                shell_navigation(url)
-            }
-        })
+    // Preserve ordinary navigation for authentication and embedded documents.
+    // Page link/context-menu gestures use the scoped opener IPC directly.
+    window.on_new_window(move |url, _| {
+        open_from_main(&app, &url);
+        NewWindowResponse::Deny
+    })
 }
 
 #[cfg(test)]
@@ -65,19 +52,21 @@ mod tests {
         for address in [
             "https://cowboy.stormbird.xyz/",
             "tauri://localhost/index.html",
-            "http://tauri.localhost/index.html",
         ] {
             let url = Url::parse(address).unwrap();
             assert!(trusted_document(&url));
-            assert!(!external_url(&url));
         }
+        assert_eq!(
+            trusted_document(&Url::parse("http://tauri.localhost/index.html").unwrap()),
+            cfg!(windows)
+        );
         for address in [
             "https://suger.awsapps.com/start/#/device",
             "http://localhost:8080",
             "mailto:a@example.com",
             "tel:+123",
         ] {
-            assert!(external_url(&Url::parse(address).unwrap()));
+            assert!(browser_url(&Url::parse(address).unwrap()));
         }
         for address in [
             "file:///etc/passwd",
@@ -87,7 +76,7 @@ mod tests {
         ] {
             let url = Url::parse(address).unwrap();
             assert!(!trusted_document(&url));
-            assert!(!external_url(&url));
+            assert!(!browser_url(&url));
         }
         assert!(!trusted_document(
             &Url::parse("https://cowboy.stormbird.xyz:444/").unwrap()
@@ -97,9 +86,8 @@ mod tests {
         ));
         for address in ["about:blank", "about:srcdoc"] {
             let url = Url::parse(address).unwrap();
-            assert!(shell_navigation(&url));
             assert!(!trusted_document(&url));
-            assert!(!external_url(&url));
+            assert!(!browser_url(&url));
         }
     }
 }
