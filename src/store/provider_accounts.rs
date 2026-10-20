@@ -149,7 +149,7 @@ pub(crate) enum MutationResult {
     Invalid(&'static str),
 }
 
-fn provider_id_valid(id: &str) -> bool {
+pub(super) fn provider_id_valid(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id
@@ -157,7 +157,7 @@ fn provider_id_valid(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn label_valid(label: &str) -> bool {
+pub(super) fn label_valid(label: &str) -> bool {
     !label.trim().is_empty() && label.len() <= 128 && !label.chars().any(char::is_control)
 }
 

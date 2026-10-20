@@ -1,8 +1,10 @@
 import { Button, MenuItem, Stack, TextField } from "@mui/material";
 import { useEffect, useState } from "react";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
+import { legacySubscriptionLabel, type SubscriptionDisplay, validSubscriptionDisplay } from "./subscriptionDisplay";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
-interface Accounts { registry: { accounts: Account[]; defaults: Record<string, string> }; session_admission: string; session_providers?: string[] }
+interface Accounts { registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay; session_admission: string; session_providers?: string[] }
 
 export function providerSubscriptionEnabled(data: { session_admission: string; session_providers?: string[] } | undefined, provider: string): boolean {
   return data?.session_admission === "enabled" && data.session_providers?.includes(provider) === true;
@@ -25,6 +27,15 @@ export function useSessionSubscription(active: boolean, provider: string) {
   const [selection, select] = useState({ provider: "", id: "" });
   const value = selection.provider === provider ? selection.id : "";
   useEffect(() => {
+    if (!active) return;
+    const changed = (event: Event) => {
+      const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
+      if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) refresh((current) => current + 1);
+    };
+    window.addEventListener(PREFERENCES_CHANGED, changed);
+    return () => window.removeEventListener(PREFERENCES_CHANGED, changed);
+  }, [active]);
+  useEffect(() => {
     if (!active) { setData(undefined); select({ provider: "", id: "" }); return; }
     const abort = new AbortController();
     setError(false);
@@ -33,7 +44,8 @@ export function useSessionSubscription(active: boolean, provider: string) {
       .then(async (response) => {
         if (!response.ok) throw new Error("unavailable");
         const next = await response.json() as Accounts;
-        if (!Array.isArray(next.registry?.accounts) || !next.registry.defaults ||
+        if ((next.display_preferences !== undefined && !validSubscriptionDisplay(next.display_preferences)) ||
+          !Array.isArray(next.registry?.accounts) || !next.registry.defaults ||
           typeof next.registry.defaults !== "object" || Array.isArray(next.registry.defaults) ||
           !Object.values(next.registry.defaults).every((id) => typeof id === "string") ||
           !next.registry.accounts.every((account) => account && typeof account.id === "string" &&
@@ -57,16 +69,18 @@ export function SessionSubscription({ state, disabled, desktop }: {
 }): React.JSX.Element {
   const accounts = state.data?.registry.accounts.filter((account) => account.provider_id === state.provider) ?? [];
   const defaultId = state.data?.registry.defaults[state.provider] ?? "default";
-  const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? (defaultId === "default" ? "Existing account" : "Unavailable");
+  const legacyLabel = legacySubscriptionLabel(state.data?.display_preferences, state.provider);
+  const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? (defaultId === "default" ? legacyLabel : "Unavailable");
   return (
     <Stack spacing={0.5}>
       <TextField select fullWidth size={desktop ? "small" : "medium"} label="Subscription"
+        slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
         value={state.value} disabled={disabled || (!state.data && !state.error)}
         error={state.error || Boolean(state.data && !state.allowed)}
         helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? "This subscription is not available for new sessions." : "Independent of the selected Machine."}
         onChange={(event) => state.select(event.target.value)}>
         <MenuItem value="" disabled={state.error}>Account default · {defaultLabel}</MenuItem>
-        <MenuItem value="default">Existing account</MenuItem>
+        <MenuItem value="default">{legacyLabel}</MenuItem>
         {accounts.map((account) => <MenuItem key={account.id} value={account.id} disabled={!account.enabled || !providerSubscriptionEnabled(state.data, account.provider_id)}>
           {account.label}{!account.enabled ? " · Disabled" : !providerSubscriptionEnabled(state.data, account.provider_id) ? " · Unavailable" : ""}
         </MenuItem>)}

@@ -1209,6 +1209,19 @@ choices, without usage details or resource metrics. `usage_order` and
 retain their default order, unavailable IDs stay dormant, and empty arrays
 restore defaults. An omitted field is unchanged.
 
+Legacy subscription names use `preferences.get("subscriptions")` and the same
+`preferences.update` action with `scope:"subscriptions"`, `expected_revision`,
+and `changes:{legacy_labels:{"claude-code":"Claude · Lynx"}}`. Read and preserve
+the other entries when replacing this complete Provider-to-label map; `{}`
+restores the generic labels. Labels are trimmed, nonempty, at most 128 UTF-8
+bytes and contain no control characters. The map holds at most 128 Provider
+IDs. `accounts.list().display_preferences` projects this same state for the
+mobile/desktop subscription manager and New Session picker. Its revision is
+independent of the account registry: renaming the legacy `default` identity
+never changes credentials, native admission, existing sessions or which account
+is selected by default. Existing Controllers can ignore these preference rows
+on rollback; the authority registry's stored format is unchanged.
+
 `preferences.update` revalidates the live parent account, applies both fields in
 one transaction, and persists the exact result alongside the operation receipt.
 A revision conflict returns `current`; retry only after reconciling the user's

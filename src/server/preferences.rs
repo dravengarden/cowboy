@@ -16,6 +16,9 @@ pub(super) async fn read_value(
         .await
         .map_err(|_| "unavailable")?
         .ok_or("unknown_scope")?;
+    if scope != "about" {
+        return Ok(json!({"preferences":prefs}));
+    }
     let machines = state
         .machine_snapshots
         .load()

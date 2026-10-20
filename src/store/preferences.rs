@@ -27,10 +27,15 @@ pub(crate) enum PreferenceResult {
 }
 
 pub(crate) fn defaults(scope: &str) -> Option<Preferences> {
-    (scope == "about").then(|| Preferences {
+    let values = match scope {
+        "about" => json!({"usage_order":[],"machine_order":[]}),
+        "subscriptions" => json!({"legacy_labels":{}}),
+        _ => return None,
+    };
+    Some(Preferences {
         scope: scope.into(),
         revision: 0,
-        values: json!({"usage_order":[],"machine_order":[]}),
+        values,
     })
 }
 
@@ -40,6 +45,10 @@ pub(crate) fn schema() -> Value {
         "update":{"action":"preferences.update","arguments":{"scope":"zed","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
         "receipts":"preferences domain; accepted means queued, not committed. The 4096 most recently used receipts expire on eviction or Controller restart. On unknown, read current state before retry; retain expected/input/operation.",
         "activation":"Next code-context entry or Open default directory; never moves Agent workspace or starts a worker."},
+        "subscriptions":{"storage":"database","ownership":"current_user",
+        "fields":{"legacy_labels":{"type":"provider_label_map","default":{}}},
+        "provider_label_map":{"max_items":128,"provider_pattern":"^[a-z0-9-]{1,64}$","label_max_utf8_bytes":128},
+        "semantics":"Display names for each Provider's legacy default account. Replace the complete map using the observed revision; omitted entries restore Existing account. Labels must be trimmed, nonempty and contain no control characters. Does not change account identity, credentials, admission or session defaults."},
         "about":{"storage":"database","ownership":"current_user",
         "fields":{"usage_order":{"type":"unique_id_array","default":[]},
                   "machine_order":{"type":"unique_id_array","default":[]}},
@@ -53,6 +62,19 @@ fn valid(change: &PreferenceChange) -> bool {
         && change.changes.as_object().is_some_and(|fields| {
             !fields.is_empty()
                 && fields.iter().all(|(key, value)| {
+                    if change.scope == "subscriptions" {
+                        return key == "legacy_labels"
+                            && value.as_object().is_some_and(|labels| {
+                                labels.len() <= 128
+                                    && labels.iter().all(|(provider, label)| {
+                                        super::provider_accounts::provider_id_valid(provider)
+                                            && label.as_str().is_some_and(|label| {
+                                                label == label.trim()
+                                                    && super::provider_accounts::label_valid(label)
+                                            })
+                                    })
+                            });
+                    }
                     matches!(key.as_str(), "usage_order" | "machine_order")
                         && value.as_array().is_some_and(|ids| {
                             let mut unique = std::collections::HashSet::new();
@@ -165,6 +187,74 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn legacy_label_contract(store: &Store) {
+        let owner = uuid::Uuid::new_v4().to_string();
+        let registry = store.provider_accounts(&owner).await.unwrap();
+        let change = PreferenceChange {
+            scope: "subscriptions".into(),
+            expected_revision: 0,
+            changes: json!({"legacy_labels":{"claude-code":"Claude · Lynx","codex":"Codex · Fox"}}),
+        };
+        let first = store
+            .update_preferences(&owner, "label", &change)
+            .await
+            .unwrap();
+        assert!(matches!(&first, PreferenceResult::Applied(p) if p.revision == 1));
+        assert_eq!(
+            store
+                .update_preferences(&owner, "label", &change)
+                .await
+                .unwrap(),
+            first
+        );
+        assert!(matches!(
+            store
+                .update_preferences(&owner, "stale", &change)
+                .await
+                .unwrap(),
+            PreferenceResult::Conflict(_)
+        ));
+        assert_eq!(store.provider_accounts(&owner).await.unwrap(), registry);
+        assert_eq!(
+            store
+                .preferences("other-owner", "subscriptions")
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            0
+        );
+        let reset = PreferenceChange {
+            expected_revision: 1,
+            changes: json!({"legacy_labels":{}}),
+            ..change.clone()
+        };
+        assert!(matches!(
+            store
+                .update_preferences(&owner, "reset-labels", &reset)
+                .await
+                .unwrap(),
+            PreferenceResult::Applied(_)
+        ));
+        assert_eq!(
+            store
+                .preferences(&owner, "subscriptions")
+                .await
+                .unwrap()
+                .unwrap()
+                .values,
+            json!({"legacy_labels":{}})
+        );
+        // The exact historical result remains readable after the display changed.
+        assert_eq!(
+            store
+                .update_preferences(&owner, "label", &change)
+                .await
+                .unwrap(),
+            first
+        );
+    }
 
     #[allow(clippy::too_many_lines)] // Shared end-to-end persistence/replay contract for both databases.
     async fn contract(store: &Store) {
@@ -299,6 +389,16 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         contract(&store).await;
+        legacy_label_contract(&store).await;
+        let labels = PreferenceChange {
+            scope: "subscriptions".into(),
+            expected_revision: 0,
+            changes: json!({"legacy_labels":{"claude-code":"Claude · Lynx"}}),
+        };
+        store
+            .update_preferences("restart-owner", "persist-label", &labels)
+            .await
+            .unwrap();
         let change = PreferenceChange {
             scope: "about".into(),
             expected_revision: 0,
@@ -312,6 +412,22 @@ mod tests {
         let reopened = Store::connect(&url, dir.path().join("artifacts"))
             .await
             .unwrap();
+        assert_eq!(
+            reopened
+                .preferences("restart-owner", "subscriptions")
+                .await
+                .unwrap()
+                .unwrap()
+                .values,
+            labels.changes
+        );
+        assert!(
+            reopened
+                .preference_receipt("restart-owner", "persist-label")
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(
             reopened
                 .preferences("restart-owner", "about")
@@ -340,6 +456,43 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         contract(&store).await;
+        legacy_label_contract(&store).await;
+    }
+
+    #[test]
+    fn legacy_labels_are_bounded_display_metadata_only() {
+        for changes in [
+            json!({"legacy_labels":null}),
+            json!({"legacy_labels":[]}),
+            json!({"legacy_labels":{"claude-code":" "}}),
+            json!({"legacy_labels":{"claude-code":" padded "}}),
+            json!({"legacy_labels":{"claude-code":"a\nb"}}),
+            json!({"legacy_labels":{"claude-code":"界".repeat(43)}}),
+            json!({"legacy_labels":{"bad/provider":"Name"}}),
+            json!({"legacy_labels":{"CLAUDE":"Name"}}),
+            json!({"legacy_labels":{"claude-code":{"token":"secret"}}}),
+            json!({"legacy_labels":{},"enabled":true}),
+            json!({"usage_order":[]}),
+        ] {
+            assert!(!valid(&PreferenceChange {
+                scope: "subscriptions".into(),
+                expected_revision: 0,
+                changes
+            }));
+        }
+        let labels: serde_json::Map<String, Value> = (0..129)
+            .map(|i| (format!("provider-{i}"), json!("Label")))
+            .collect();
+        assert!(!valid(&PreferenceChange {
+            scope: "subscriptions".into(),
+            expected_revision: 0,
+            changes: json!({"legacy_labels":labels})
+        }));
+        assert!(!valid(&PreferenceChange {
+            scope: "about".into(),
+            expected_revision: 0,
+            changes: json!({"legacy_labels":{}})
+        }));
     }
 
     #[test]

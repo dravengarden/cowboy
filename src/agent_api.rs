@@ -132,6 +132,9 @@ export type AccountChange =
  | {type:"set_enabled";id:string;enabled:boolean}
  | {type:"set_default";provider_id:string;id:string};
 // IDs are controller-issued UUIDs; "default" selects the legacy account.
+// Legacy display names: list().display_preferences; edit through preferences.update
+// with scope:"subscriptions", its expected_revision, changes:{legacy_labels:{provider_id:label}}.
+// Replace the complete label map; never creates an identity or changes credentials/admission.
 // Machine and account are independent. Defaults apply to future sessions only.
 // Disable does not log out or stop existing sessions. Change its default first.
 // Explicit permanent Cowboy revocation: accounts.revoke {account_id,expected_revision}.
@@ -154,6 +157,10 @@ pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the 
 // Write: cowboy_execute({action:"preferences.update",operation,arguments:{scope:"about",
 // expected_revision,changes:{usage_order?:string[],machine_order?:string[]}}}).
 // Use stable choice IDs. Listed IDs first, others follow; [] resets, omitted fields stay.
+// preferences.get("subscriptions") returns {preferences:{scope,revision,values:{legacy_labels}}}.
+// Same update action with scope:"subscriptions", expected_revision and
+// changes:{legacy_labels:Record<string,string>}. Replace the full map; {} restores labels.
+// Provider IDs key the legacy "default" identity's display name, independently of session defaults.
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.
@@ -381,7 +388,7 @@ export interface Cowboy {
   accounts: {
     revocation_status(account_id:string): Promise<{status:"not_started"|"revoking"|"completed";account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
     transition_status(operation:string): Promise<{operation:string;stage:"planned"|"stop_confirmed"|"binding_committed"|"completed"|"unknown";evidence:"historical";worker_state:"not_observed"}>;
-    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};session_admission:string;session_providers:string[]}>;
+    list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}>;
     login_options(account_id:string,machine_id:string): Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
   };
 }

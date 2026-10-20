@@ -76,18 +76,23 @@ pub(super) async fn resolve_for_create(
 }
 
 pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &'static str> {
-    let registry = state
-        .store
-        .as_ref()
-        .ok_or("unavailable")?
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    let registry = store
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
+    // Display aliases have their own preference revision. A rename must not
+    // invalidate native bindings or change the serialized authority registry.
+    let display = store
+        .preferences(owner, "subscriptions")
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("unavailable")?;
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
     Ok(
-        json!({"registry":registry,"session_admission":if enabled {"enabled"} else {"not_enabled"},
+        json!({"registry":registry,"display_preferences":display,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {vec!["claude-code"]} else {vec![]}}),
     )
 }

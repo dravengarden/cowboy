@@ -7,6 +7,12 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
+import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
+
+function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
+  const state = useSessionSubscription(true, "claude-code");
+  return <SessionSubscription state={state} disabled={false} desktop={desktop} />;
+}
 
 export async function runSubscriptionsBrowserConformance(observe?: (surface: string, stage: string) => Promise<void>): Promise<string[]> {
   const checks: string[] = [];
@@ -31,8 +37,10 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   let root = createRoot(container);
   const tests: string[] = [];
   const data = { dataset: { dataset_id: "fixture", user_id: "subscription-fixture" }, session_admission: "not_enabled",
+    display_preferences: { scope: "subscriptions", revision: 0, values: { legacy_labels: {} as Record<string, string> } },
     registry: { revision: 0, accounts: [{ id: "account", provider_id: "claude-code", label: "Personal", enabled: true, revoking: false }], defaults: {} } };
   const writes: string[] = [];
+  const labelWrites: string[] = [];
   const lifecycleWrites: string[] = [];
   const loginKey = "cowboy:subscription-login:subscription-fixture:account";
   const revokeKey = "cowboy:subscription-revocation:subscription-fixture:account";
@@ -42,6 +50,14 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   let reject = false;
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
+    if (path === "/api/preferences" && init?.method === "PUT") {
+      labelWrites.push(String(init.body));
+      const input = JSON.parse(String(init.body));
+      if (input.dataset !== "fixture" || input.scope !== "subscriptions") throw new Error("wrong preference scope");
+      data.display_preferences = { scope: "subscriptions", revision: 1, values: input.changes };
+      if (labelWrites.length === 1) throw new Error("label committed but reply lost");
+      return Response.json({ status: "committed", preferences: data.display_preferences });
+    }
     if (path.includes("/revocation")) {
       if (init?.method === "POST") {
         lifecycleWrites.push(path);
@@ -85,10 +101,30 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name);
   const dialogButton = (name: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name);
   const check = (condition: boolean, label: string) => { if (!condition) throw new Error(label); tests.push(label); };
-  const render = () => flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}><SubscriptionManagement /></SurfaceContext.Provider></BrowserProductTheme>));
+  const render = () => flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}><SubscriptionPicker desktop={desktop} /><SubscriptionManagement /></SurfaceContext.Provider></BrowserProductTheme>));
   try {
     render();
     await until(() => Boolean(button("Disable") && !button("Disable")!.disabled));
+    const labelInput = [...container.querySelectorAll("input")].find((node) => node.value === "Existing account")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(labelInput, "Claude · Lynx");
+    labelInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await until(() => Boolean(button("Save name") && !button("Save name")!.disabled));
+    button("Save name")!.click();
+    await until(() => labelWrites.length === 1 && Boolean(button("Retry")));
+    check(Boolean(sessionStorage.getItem(key)), "lost legacy rename retains the frozen preference operation");
+    root.unmount(); root = createRoot(container); render();
+    await until(() => Boolean(button("Retry") && !button("Retry")!.disabled));
+    button("Retry")!.click();
+    await until(() => labelWrites.length === 2 && !sessionStorage.getItem(key));
+    check(labelWrites[0] === labelWrites[1] && writes.length === 0 && lifecycleWrites.length === 0 && data.registry.revision === 0,
+      "legacy rename retry does not mutate authority or invoke login");
+    await until(() => container.textContent!.includes("Account default · Claude · Lynx"));
+    data.display_preferences.values.legacy_labels["claude-code"] = "Claude · Remote Lynx";
+    data.display_preferences.revision++;
+    window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { subscriptions: 2 } }));
+    await until(() => container.textContent!.includes("Account default · Claude · Remote Lynx") &&
+      [...container.querySelectorAll("input")].some((node) => node.value === "Claude · Remote Lynx"));
+    check(true, "legacy rename updates both management and the open session picker");
     check(container.scrollWidth <= container.clientWidth, "mobile account controls fit available width");
     check(button("Use by default")!.disabled, "unavailable named runtime cannot become a GUI default");
     button("Disable")!.click();

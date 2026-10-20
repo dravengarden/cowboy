@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
+import { legacySubscriptionLabel, validLegacyLabels } from "./subscriptionDisplay";
 
 test("subscription labels obey UTF-8 byte limits and reject control characters", () => {
   for (const label of ["Personal Max", " 个 人 ", "界".repeat(42)]) assertEquals(validSubscriptionLabel(label), true);
@@ -19,6 +20,9 @@ test("persisted subscription retries reject malformed or expanded actions", () =
   const input = { operation: "same-operation", dataset: "dataset", expected_revision: 0,
     change: { type: "set_enabled", id: "account", enabled: false } };
   assertEquals(validPendingSubscription(input), true);
+  const legacy = { ...input, change: { type: "set_legacy_labels", labels: { "claude-code": "Claude · Lynx" } } };
+  assertEquals(validPendingSubscription(legacy), true);
+  assertEquals(validPendingSubscription({ ...legacy, change: { ...legacy.change, owner: "other" } }), false);
   for (const value of [null, { ...input, expected_revision: -1 }, { ...input, token: "secret" },
     { ...input, change: { ...input.change, enabled: "false" } }, { ...input, change: { type: "login" } }]) {
     assertEquals(validPendingSubscription(value), false);
@@ -29,7 +33,22 @@ test("subscription responses must belong to the owner and contain valid account 
   const input = { dataset: { dataset_id: "dataset", user_id: "owner" }, session_admission: "not_enabled",
     registry: { revision: 0, defaults: {}, accounts: [{ id: "account", provider_id: "codex", label: "Personal", enabled: true }] } };
   assertEquals(validSubscriptionSnapshot(input, "owner"), true);
+  const display = { scope: "subscriptions" as const, revision: 2, values: { legacy_labels: { "claude-code": "Claude · Lynx" } } };
+  assertEquals(validSubscriptionSnapshot({ ...input, display_preferences: display }, "owner"), true);
+  assertEquals(validSubscriptionSnapshot({ ...input, display_preferences: { ...display, revision: -1 } }, "owner"), false);
+  assertEquals(legacySubscriptionLabel(display, "claude-code"), "Claude · Lynx");
+  assertEquals(legacySubscriptionLabel(display, "codex"), "Existing account");
+  assertEquals(legacySubscriptionLabel(undefined, "claude-code"), "Existing account");
+  assertEquals(legacySubscriptionLabel(display, "constructor"), "Existing account");
   assertEquals(validSubscriptionSnapshot(input, "other"), false);
   assertEquals(validSubscriptionSnapshot({ ...input, registry: { ...input.registry, accounts: [null] } }, "owner"), false);
   assertEquals(validSubscriptionSnapshot({ ...input, registry: { ...input.registry, defaults: [] } }, "owner"), false);
+});
+
+test("legacy labels reject malformed provider maps and authority fields", () => {
+  for (const value of [null, [], { "claude-code": null }, { "claude-code": " padded " }, { "bad/provider": "Name" },
+    { "claude-code": "界".repeat(43) }, { "claude-code": "a\nb" }, { "claude-code": { token: "secret" } },
+    Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`provider-${index}`, "Name"]))]) {
+    assertEquals(validLegacyLabels(value), false);
+  }
 });

@@ -7,18 +7,22 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogin } from "./SubscriptionLogin";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
+import { legacySubscriptionLabel, type SubscriptionDisplay, validLegacyLabels, validSubscriptionDisplay, validSubscriptionLabel } from "./subscriptionDisplay";
+export { validSubscriptionLabel } from "./subscriptionDisplay";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean; revoking?: boolean }
 interface Snapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: Account[]; defaults: Record<string, string> };
+  display_preferences?: SubscriptionDisplay;
   session_admission: string;
   session_providers?: string[];
 }
 type Change = { type: "create"; provider_id: string; label: string }
   | { type: "rename"; id: string; label: string }
   | { type: "set_enabled"; id: string; enabled: boolean }
-  | { type: "set_default"; provider_id: string; id: string };
+  | { type: "set_default"; provider_id: string; id: string }
+  | { type: "set_legacy_labels"; labels: Record<string, string> };
 interface Pending { operation: string; dataset: string; expected_revision: number; change: Change }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -33,6 +37,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
   if (!owner || !record(value) || !record(value.dataset) || !record(value.registry)) return false;
   const { dataset, registry } = value;
   return dataset.user_id === owner && text(dataset.dataset_id) && revision(registry.revision) &&
+    (value.display_preferences === undefined || validSubscriptionDisplay(value.display_preferences)) &&
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
@@ -45,11 +50,13 @@ export function validPendingSubscription(value: unknown): value is Pending {
   if (Object.keys(value).some((key) => !["operation", "dataset", "expected_revision", "change"].includes(key))) return false;
   const change = value.change;
   const fields = change.type === "create" ? ["type", "provider_id", "label"]
+    : change.type === "set_legacy_labels" ? ["type", "labels"]
     : change.type === "rename" ? ["type", "id", "label"]
     : change.type === "set_enabled" ? ["type", "id", "enabled"]
     : change.type === "set_default" ? ["type", "provider_id", "id"] : [];
   if (fields.length === 0 || Object.keys(change).some((key) => !fields.includes(key))) return false;
   switch (change.type) {
+    case "set_legacy_labels": return validLegacyLabels(change.labels);
     case "create": return text(change.provider_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "rename": return text(change.id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "set_enabled": return text(change.id) && typeof change.enabled === "boolean";
@@ -58,17 +65,9 @@ export function validPendingSubscription(value: unknown): value is Pending {
   }
 }
 
-export function validSubscriptionLabel(value: string): boolean {
-  return Boolean(value.trim()) && new TextEncoder().encode(value.trim()).length <= 128 &&
-    !Array.from(value).some((character) => {
-      const code = character.codePointAt(0)!;
-      return code < 32 || (code >= 127 && code <= 159);
-    });
-}
-
 /** Only explicit domain rejections establish that this mutation did not commit. */
 export function subscriptionWriteRejected(status: number, code: string | undefined): boolean {
-  return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable"].includes(code ?? "");
+  return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences"].includes(code ?? "");
 }
 
 /** Metadata, native sign-in and revocation retain separate explicit actions. */
@@ -99,7 +98,8 @@ export function SubscriptionManagement(): React.JSX.Element {
       if (!validSubscriptionSnapshot(value, owner)) {
         throw new Error("Account changed. Reload before editing subscriptions.");
       }
-      setSnapshot((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id || value.registry.revision >= old.registry.revision ? value : old);
+      setSnapshot((old) => !old || old.dataset.dataset_id !== value.dataset.dataset_id ||
+        (value.registry.revision >= old.registry.revision && (value.display_preferences?.revision ?? 0) >= (old.display_preferences?.revision ?? 0)) ? value : old);
     } catch (cause) { if (live() && sequence === loading.current) setError(String(cause)); }
   }
   useEffect(() => {
@@ -117,7 +117,7 @@ export function SubscriptionManagement(): React.JSX.Element {
     void load();
     const refresh = (event: Event) => {
       const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
-      if (!scopes || Object.hasOwn(scopes, "provider_accounts")) void load();
+      if (!scopes || Object.hasOwn(scopes, "provider_accounts") || Object.hasOwn(scopes, "subscriptions")) void load();
     };
     window.addEventListener(PREFERENCES_CHANGED, refresh);
     return () => { alive.current = false; ++loading.current; window.removeEventListener(PREFERENCES_CHANGED, refresh); };
@@ -137,9 +137,14 @@ export function SubscriptionManagement(): React.JSX.Element {
       // replace an uncertain create with a second operation.
       sessionStorage.setItem(journalKey, JSON.stringify(input));
       setPending(input);
-      const response = await fetch("/api/provider-accounts", {
+      const legacy = input.change.type === "set_legacy_labels";
+      const body = input.change.type === "set_legacy_labels"
+        ? { operation: input.operation, dataset: input.dataset, scope: "subscriptions", expected_revision: input.expected_revision,
+          changes: { legacy_labels: input.change.labels } }
+        : input;
+      const response = await fetch(legacy ? "/api/preferences" : "/api/provider-accounts", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        signal: productSessionSignal(), body: JSON.stringify(input),
+        signal: productSessionSignal(), body: JSON.stringify(body),
       });
       const result = await response.json() as { status?: string; error?: { code?: string } };
       if (!live()) return;
@@ -149,6 +154,12 @@ export function SubscriptionManagement(): React.JSX.Element {
         if (input.change.type === "rename") {
           const id = input.change.id;
           setNames((old) => { const next = { ...old }; delete next[id]; return next; });
+        }
+        if (input.change.type === "set_legacy_labels") {
+          const saved = input.change.labels;
+          setNames((old) => Object.fromEntries(Object.entries(old).filter(([id, name]) =>
+            !id.startsWith("legacy:") || name.trim() !== saved[id.slice("legacy:".length)]
+          )));
         }
         await load();
       } else if (response.status === 409 && result.error?.code === "revision_conflict") {
@@ -167,15 +178,20 @@ export function SubscriptionManagement(): React.JSX.Element {
   }
   function save(change: Change) {
     if (!snapshot || pending || busy || !journalReady) return;
+    if (change.type === "set_legacy_labels" && !snapshot.display_preferences) return;
     void commit({ operation: crypto.randomUUID(), dataset: snapshot.dataset.dataset_id,
-      expected_revision: snapshot.registry.revision, change });
+      expected_revision: change.type === "set_legacy_labels" ? snapshot.display_preferences!.revision : snapshot.registry.revision, change });
   }
+  const legacyProviders = snapshot?.display_preferences ? [...new Set([
+    ...providers.map((entry) => entry.provider_id), ...snapshot.registry.accounts.map((account) => account.provider_id),
+    ...Object.keys(snapshot.display_preferences.values.legacy_labels),
+  ])] : [];
   const disabled = busy || Boolean(pending) || !snapshot || !journalReady;
   return <Stack spacing={1.5}>
     <Typography variant="subtitle1">Subscriptions</Typography>
     <Typography variant="body2" color="text.secondary">Manage subscriptions independently of Machines. Disabling blocks account access in Cowboy, including existing session bindings, but does not stop running processes or sign out. Re-enabling requires a new login.</Typography>
     {snapshot?.session_admission !== "enabled" && <Alert severity="info">Additional subscriptions cannot create sessions in this release. Account records can be prepared here.</Alert>}
-    {error && <Alert severity="warning" action={<Button disabled={busy} onClick={() => pending ? void commit(pending) : void load()}>Retry</Button>}>{error}</Alert>}
+    {error && <Alert severity="warning" action={<Button disabled={busy || (Boolean(pending) && (!snapshot || !journalReady))} onClick={() => pending ? void commit(pending) : void load()}>Retry</Button>}>{error}</Alert>}
     <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
       <TextField select label="Provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled} fullWidth size="small">
         {providers.map((entry) => <MenuItem key={entry.provider_id} value={entry.provider_id}>{entry.manifest.display.name}</MenuItem>)}
@@ -183,6 +199,19 @@ export function SubscriptionManagement(): React.JSX.Element {
       <TextField label="Account label" value={label} onChange={(event) => setLabel(event.target.value)} disabled={disabled} fullWidth size="small" />
       <Button disabled={disabled || !provider || !validSubscriptionLabel(label)} onClick={() => save({ type: "create", provider_id: provider, label: label.trim() })}>Add</Button>
     </Stack>
+    {legacyProviders.map((id) => {
+      const current = legacySubscriptionLabel(snapshot!.display_preferences, id);
+      const draft = names[`legacy:${id}`];
+      return <Box key={`legacy:${id}`} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <TextField size="small" label="Account label" value={draft ?? current} disabled={disabled} sx={{ flex: 1, minWidth: 120 }}
+            onChange={(event) => setNames((old) => ({ ...old, [`legacy:${id}`]: event.target.value }))} />
+          <Button disabled={disabled || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
+            onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save name</Button>
+          <Typography variant="caption" color="text.secondary">{id} · Existing account{!snapshot!.registry.defaults[id] ? " · Default" : ""}</Typography>
+        </Stack>
+      </Box>;
+    })}
     {snapshot?.registry.accounts.map((account) => <Box key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <TextField size="small" label="Account label" value={names[account.id] ?? account.label} disabled={disabled} sx={{ flex: 1, minWidth: 120 }} onChange={(event) => setNames((old) => ({ ...old, [account.id]: event.target.value }))} />
