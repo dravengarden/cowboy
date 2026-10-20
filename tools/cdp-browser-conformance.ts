@@ -18,7 +18,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "subscriptions": ["runSubscriptionsBrowserConformance", 36],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
   "loading-progress": ["runLoadingProgressBrowserConformance", 10],
-  "review-context": ["runReviewContextBrowserConformance", 7],
+  "review-context": ["runReviewContextBrowserConformance", 8],
   "info-metrics": ["runInfoMetricsBrowserConformance", 20],
   "about-layout": ["runAboutLayoutBrowserConformance", 10],
   "desktop-composer": ["runDesktopComposerBrowserConformance", 14],

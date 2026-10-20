@@ -56,7 +56,7 @@ import {
   shouldReservePagerStart,
   type MobileProduct,
 } from "../appPagerMotion";
-import { ReviewApp } from "../review/ReviewApp";
+import { MobileReviewPage } from "../review/MobileReviewPage";
 import { dismissMobileSoftwareKeyboardForSwipe } from "../../composer/mobileComposerFocus";
 
 const PRODUCT_STORAGE_KEY = "cowboy:mobile-product";
@@ -623,7 +623,7 @@ export function MobileProductShell({
               : "translate3d(100%, 0, 0)",
           }}
         >
-          <ReviewApp
+          <MobileReviewPage
             active={product === "review"}
             onDrawerOpenChange={onReviewDrawerOpenChange}
           />
