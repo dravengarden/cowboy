@@ -7,6 +7,12 @@ dependencies; the running UI intentionally connects to the Cowboy Controller.
 No Controller, Machine, Provider implementation or downloadable plugin UI is
 compiled into this thin client.
 
+Desktop links open in the system browser. Markdown provides native Desktop
+context-menu actions for opening and copying links; the shell also handles
+requests for a new window. Ordinary navigation remains available for account
+flows and embedded documents. New-window handling lives in the executable, so
+existing installations need a rebuilt app, as well as current Web assets.
+
 ## Source boundary
 
 - `tauri/`: independent Rust workspace and Cargo.lock, pinned Tauri dependencies,

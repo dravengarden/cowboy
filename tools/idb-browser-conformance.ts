@@ -197,11 +197,12 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
             headers: {
               "Content-Type": "text/html",
               "Content-Security-Policy":
-                // worker-src blob: lets the editor plugin sandbox (a srcdoc
+                // Same-origin workers exercise peer IndexedDB owners; blob:
+                // lets the editor plugin sandbox (a srcdoc
                 // frame inheriting this policy) start its Worker, as on the
                 // production App, which sends no CSP. Attachment previews use
                 // data/blob URLs and must exercise actual browser decoding.
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src blob:; img-src 'self' data: blob:",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data: blob:",
             },
           },
         );
@@ -304,7 +305,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "draft-documents"
         ? 12
         : suite === "desktop-composer"
-        ? 14
+        ? 15
         : suite === "code-buffer-cleanup"
         ? 7
         : suite === "code-buffers"

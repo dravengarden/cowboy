@@ -429,7 +429,7 @@ test("Tauri v2 internals open native-shell links with the URL argument", () => {
   }
 });
 
-test("only unmodified native primary clicks override anchor navigation", () => {
+test("native primary and modified clicks use the OS browser; browser anchors stay native", () => {
   const root = globalThis as typeof globalThis & {
     __TAURI_INTERNALS__?: { invoke: () => Promise<unknown> };
   };
@@ -449,9 +449,11 @@ test("only unmodified native primary clicks override anchor navigation", () => {
     if (!shouldRouteExternalClick(click)) {
       throw new Error("native primary click must use opener");
     }
-    if (shouldRouteExternalClick({ ...click, metaKey: true })) {
-      throw new Error("modified clicks must retain anchor semantics");
+    for (const modifier of ["metaKey", "ctrlKey", "shiftKey"]) {
+      assertEquals(shouldRouteExternalClick({ ...click, [modifier]: true }), true);
     }
+    assertEquals(shouldRouteExternalClick({ ...click, button: 2 }), false);
+    assertEquals(shouldRouteExternalClick({ ...click, defaultPrevented: true }), false);
   } finally {
     delete root.__TAURI_INTERNALS__;
   }

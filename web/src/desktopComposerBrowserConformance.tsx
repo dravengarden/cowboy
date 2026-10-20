@@ -1,5 +1,6 @@
 import { checkInputVim } from "./desktop/inputVimBrowserConformance";
 import { checkDeliveryPicker } from "./deliveryPickerBrowserConformance";
+import { checkNativeMarkdownLinks } from "./nativeMarkdownLinksBrowserConformance";
 import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
 import { checkDraftKeyboard } from "./desktop/draftKeyboardBrowserConformance";
 import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
@@ -616,6 +617,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkComposerDraftPersistence());
     results.push(await checkPendingPanelLayout());
     results.push(await checkPendingPreviewTouchDisclosure());
+    results.push(await checkNativeMarkdownLinks());
     results.push(await checkDraftDestinationDialog());
     flushSync(() => root.render(null));
     results.push(await checkDeliveryPicker());

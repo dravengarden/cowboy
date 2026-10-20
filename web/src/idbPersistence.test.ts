@@ -241,6 +241,103 @@ for (const mode of ["read", "write", "keys"] as const) {
   });
 }
 
+test("outbox retries one failed read after abort on a fresh connection and preserves pending mutations", async () => {
+  const factory = new FakeIndexedDb();
+  factory.autoTransactions = false;
+  const saved = {
+    base: { version: 3, value: "cached" },
+    pending: [
+      {
+        id: "pending",
+        client: "phone",
+        name: "set",
+        args: { value: "unsent" },
+      },
+    ],
+  };
+  factory.data.set("outbox", saved);
+  const owner = createIdbPersistenceOwner({ factory });
+  const outbox = owner.outbox<string>("outbox");
+  const result = outbox.load();
+  await microtasks();
+  const db = factory.databases[0]!;
+  const tx = db.transactions[0]!;
+  tx.requests[0]!.error = new DOMException(
+    "private browser details",
+    "UnknownError",
+  );
+  tx.requests[0]!.dispatchEvent(new Event("error"));
+  await microtasks();
+  assertEquals(factory.requests.length, 1); // wait for native abort, not request error
+  tx.finishAbort();
+  await microtasks();
+  assertEquals(db.closeCalls, 1);
+  assertEquals(factory.requests.length, 2);
+  const retry = factory.databases[1]!.transactions[0]!;
+  retry.requests[0]!.succeed(saved);
+  retry.complete();
+  const restored = await result;
+  assertEquals(restored, saved);
+  outbox.acceptLoadedSnapshot?.(restored);
+  assertEquals(factory.data.get("outbox"), saved);
+  await owner.dispose();
+});
+
+test("outbox bounds failed-read recovery and keeps writes fenced with private diagnostics", async () => {
+  const factory = new FakeIndexedDb();
+  factory.autoTransactions = false;
+  const owner = createIdbPersistenceOwner({ factory });
+  const outbox = owner.outbox("outbox");
+  const result = outbox.load();
+  const failed = assertRejects(
+    () => result,
+    IdbPersistenceError,
+    "request_failed",
+  );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await microtasks();
+    const tx = factory.databases[attempt]!.transactions[0]!;
+    tx.requests[0]!.error = new DOMException(
+      "private browser details",
+      "UnknownError",
+    );
+    tx.requests[0]!.dispatchEvent(new Event("error"));
+    tx.finishAbort();
+  }
+  const error = await failed;
+  assertEquals(error.nativeErrorName, "UnknownError");
+  assertEquals(error.message.includes("private"), false);
+  await assertRejects(
+    () => outbox.save({ base: { version: 0, value: null }, pending: [] }),
+    IdbPersistenceError,
+    "request_failed",
+  );
+  assertEquals(factory.requests.length, 2);
+  assertEquals(factory.data.has("outbox"), false);
+  await owner.dispose();
+});
+
+test("outbox retries a failed open without replacing its unread baseline", async () => {
+  const factory = new FakeIndexedDb();
+  factory.autoOpen = false;
+  factory.data.set("outbox", {
+    base: { version: 1, value: "keep" },
+    pending: [],
+  });
+  const owner = createIdbPersistenceOwner({ factory });
+  const result = owner.outbox("outbox").load();
+  await microtasks();
+  const request = factory.requests[0]!;
+  request.error = new DOMException("private details", "UnknownError");
+  request.dispatchEvent(new Event("error"));
+  await microtasks();
+  assertEquals(factory.requests.length, 2);
+  const retry = factory.requests[1]!;
+  retry.succeed(retry.result);
+  assertEquals(await result, factory.data.get("outbox"));
+  await owner.dispose();
+});
+
 test("IDB success followed by abort never reports a durable write", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;

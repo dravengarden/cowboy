@@ -108,6 +108,7 @@ interface Generation {
 // property otherwise makes its type parameter invariant in TypeScript.
 interface TransactionRequest<R> extends EventTarget {
   readonly result: R;
+  readonly error?: DOMException | null;
 }
 
 export function createIdbPersistenceOwner(
@@ -193,9 +194,9 @@ export function createIdbPersistenceOwner(
     generations.add(gen);
     current = gen; // own identity BEFORE calling the factory
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const reject = (code: IdbFailureCode): void => {
+    const reject = (code: IdbFailureCode, nativeError?: unknown): void => {
       clearTimeout(timer);
-      gen.ready.reject(new IdbPersistenceError(code));
+      gen.ready.reject(new IdbPersistenceError(code, nativeError));
       retire(gen);
     };
     let request: IDBOpenDBRequest;
@@ -207,9 +208,9 @@ export function createIdbPersistenceOwner(
         return gen;
       }
       request = browser.open(dbName, schemaVersion);
-    } catch {
+    } catch (error) {
       gen.nativeFinished = true;
-      reject("open_failed");
+      reject("open_failed", error);
       return gen;
     }
     const upgrade = (): void => {
@@ -258,7 +259,7 @@ export function createIdbPersistenceOwner(
     const error = (): void => {
       detachOpen();
       gen.nativeFinished = true;
-      reject("open_failed");
+      reject("open_failed", request.error);
     };
     const blocked = (): void => reject("open_blocked");
     request.addEventListener("upgradeneeded", upgrade);
@@ -273,10 +274,23 @@ export function createIdbPersistenceOwner(
     mode: IDBTransactionMode,
     make: (store: IDBObjectStore) => TransactionRequest<R>,
     follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R>,
+    recoverRead = false,
   ): Promise<R> => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const gen = open();
-      const db = await gen.ready.promise;
+      let db: IDBDatabase;
+      try {
+        db = await gen.ready.promise;
+      } catch (error) {
+        // Failed opens have already retired their native generation. Blocked
+        // or timed-out opens remain owned and must never spawn another queue.
+        if (
+          recoverRead && attempt === 0 &&
+          error instanceof IdbPersistenceError &&
+          error.code === "open_failed"
+        ) continue;
+        throw error;
+      }
       let transaction: IDBTransaction;
       try {
         transaction = db.transaction(storeName, mode);
@@ -291,84 +305,104 @@ export function createIdbPersistenceOwner(
       }
       gen.transactions.add(transaction);
       // No await between creating the transaction and enqueuing its request.
-      return new Promise<R>((resolve, reject) => {
-        let request: TransactionRequest<R> | undefined;
-        let result: R;
-        let hasResult = false;
-        let failure: IdbPersistenceError | undefined;
-        let following = follow;
-        const abortWith = (error: unknown): void => {
-          failure = error instanceof IdbPersistenceError
-            ? error
-            : new IdbPersistenceError("request_failed");
-          try {
-            transaction.abort();
-          } catch { /* retain lease until native terminal event */ }
-        };
-        const success = (): void => {
-          if (following) {
-            const next = following;
-            following = undefined;
-            request!.removeEventListener("success", success);
-            request!.removeEventListener("error", error);
+      try {
+        return await new Promise<R>((resolve, reject) => {
+          let request: TransactionRequest<R> | undefined;
+          let result: R;
+          let hasResult = false;
+          let failure: IdbPersistenceError | undefined;
+          let following = follow;
+          const abortWith = (error: unknown): void => {
+            failure = error instanceof IdbPersistenceError
+              ? error
+              : new IdbPersistenceError("request_failed", error);
             try {
-              // Enqueue the put synchronously in the get's success callback.
-              // No promise/await may split this read-modify-write transaction.
-              request = next(
-                request!.result,
-                transaction.objectStore(storeName),
-              );
-              request.addEventListener("success", success);
-              request.addEventListener("error", error);
-            } catch (error) {
-              abortWith(error);
+              transaction.abort();
+            } catch { /* retain lease until native terminal event */ }
+          };
+          const success = (): void => {
+            if (following) {
+              const next = following;
+              following = undefined;
+              request!.removeEventListener("success", success);
+              request!.removeEventListener("error", error);
+              try {
+                // Enqueue the put synchronously in the get's success callback.
+                // No promise/await may split this read-modify-write transaction.
+                request = next(
+                  request!.result,
+                  transaction.objectStore(storeName),
+                );
+                request.addEventListener("success", success);
+                request.addEventListener("error", error);
+              } catch (error) {
+                abortWith(error);
+              }
+              return;
             }
-            return;
-          }
-          result = request!.result;
-          hasResult = true;
-        };
-        const error = (): void => {
-          failure ??= new IdbPersistenceError("request_failed");
-          // Error can bubble before abort. Keep the lease until a terminal
-          // event, even if a browser/other listener prevents default abort.
-        };
-        const finish = (aborted: boolean): void => {
-          transaction.removeEventListener("complete", complete);
-          transaction.removeEventListener("abort", abort);
-          transaction.removeEventListener("error", error);
-          request?.removeEventListener("success", success);
-          request?.removeEventListener("error", error);
-          gen.transactions.delete(transaction);
-          if (
-            connectionLifetime === "transaction" && gen.transactions.size === 0
-          ) retire(gen);
-          else finishClose(gen);
-          if (aborted || failure || !hasResult) {
-            reject(
-              failure ??
-                new IdbPersistenceError(
-                  aborted ? "transaction_aborted" : "request_failed",
-                ),
+            result = request!.result;
+            hasResult = true;
+          };
+          const error = (): void => {
+            failure ??= new IdbPersistenceError(
+              "request_failed",
+              request?.error ?? transaction.error,
             );
-          } else resolve(result);
-        };
-        const complete = (): void => finish(false);
-        const abort = (): void => finish(true);
-        transaction.addEventListener("complete", complete);
-        transaction.addEventListener("abort", abort);
-        transaction.addEventListener("error", error);
-        try {
-          request = make(transaction.objectStore(storeName));
-          request.addEventListener("success", success);
-          request.addEventListener("error", error);
-        } catch (error) {
-          // No retries once a transaction exists, even after a clone failure.
-          // abort may itself reject an already-committing transaction: its
-          // eventual complete/abort still owns the outcome and the lease.
-          abortWith(error);
+            // Error can bubble before abort. Keep the lease until a terminal
+            // event, even if a browser/other listener prevents default abort.
+          };
+          const finish = (aborted: boolean): void => {
+            transaction.removeEventListener("complete", complete);
+            transaction.removeEventListener("abort", abort);
+            transaction.removeEventListener("error", error);
+            request?.removeEventListener("success", success);
+            request?.removeEventListener("error", error);
+            gen.transactions.delete(transaction);
+            if (
+              connectionLifetime === "transaction" &&
+              gen.transactions.size === 0
+            ) retire(gen);
+            else finishClose(gen);
+            if (aborted || failure || !hasResult) {
+              reject(
+                failure ??
+                  new IdbPersistenceError(
+                    aborted ? "transaction_aborted" : "request_failed",
+                    transaction.error,
+                  ),
+              );
+            } else resolve(result);
+          };
+          const complete = (): void => finish(false);
+          const abort = (): void => finish(true);
+          transaction.addEventListener("complete", complete);
+          transaction.addEventListener("abort", abort);
+          transaction.addEventListener("error", error);
+          try {
+            request = make(transaction.objectStore(storeName));
+            request.addEventListener("success", success);
+            request.addEventListener("error", error);
+          } catch (error) {
+            // No retries once a transaction exists, even after a clone failure.
+            // abort may itself reject an already-committing transaction: its
+            // eventual complete/abort still owns the outcome and the lease.
+            abortWith(error);
+          }
+        });
+      } catch (error) {
+        // Only an outbox's initial READ may retry, after the native transaction
+        // has terminated. Never replay writes or discard an unread baseline.
+        if (
+          recoverRead && mode === "readonly" && attempt === 0 &&
+          error instanceof IdbPersistenceError &&
+          (error.code === "request_failed" ||
+            error.code === "transaction_aborted")
+        ) {
+          retire(gen);
+          continue;
         }
-      });
+        throw error;
+      }
     }
     throw new IdbPersistenceError("transaction_failed");
   };
@@ -415,7 +449,8 @@ export function createIdbPersistenceOwner(
       return createOutboxPersistence<T>({
         assertActive: () => scope.assertActive(),
         own: (task) => scope.run(task),
-        load: () => run<unknown>("readonly", (store) => store.get(key)),
+        load: () =>
+          run<unknown>("readonly", (store) => store.get(key), undefined, true),
         update: async (merge) => {
           await run<unknown>(
             "readwrite",

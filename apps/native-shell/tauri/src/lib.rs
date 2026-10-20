@@ -11,6 +11,9 @@
 //
 // `mobile_entry_point` is the symbol the generated iOS/Android projects call;
 // on desktop `main.rs` calls `run()` directly.
+#[cfg(desktop)]
+mod links;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -19,6 +22,14 @@ pub fn run() {
         // the remote origin in capabilities/remote-haptics.json (the web side calls
         // `plugin:haptics|impact_feedback` via the injected IPC bridge).
         .plugin(tauri_plugin_haptics::init())
+        .setup(|app| {
+            let config = &app.config().app.windows[0];
+            let window = tauri::WebviewWindowBuilder::from_config(app, config)?;
+            #[cfg(desktop)]
+            let window = links::configure(window, app.handle().clone());
+            window.build()?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running cowboy native shell");
 }
