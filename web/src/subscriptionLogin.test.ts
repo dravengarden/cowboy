@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
+import { subscriptionSignInLink } from "./subscriptionSignInLink";
 
 const scope = { owner: "owner", dataset: "dataset", account: "account", provider: "claude-code" };
 const options: LoginOptions = { account_id: scope.account, provider_id: scope.provider, machine_id: "machine",
@@ -93,4 +94,67 @@ test("login readiness and cleanup completion reject mismatched or incomplete evi
   assert(validRevocationPending(input, "dataset"));
   assert(!validRevocationPending({ ...input, token: "secret" }, "dataset"));
   assert(!validRevocationPending(input, "other"));
+});
+
+test("agent login continuation restores only the original request and never restarts it", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.resume("request");
+  assertEquals(owner.snapshot.pending?.request, "request");
+  assertEquals(f.calls[0]!.path, "/api/provider-accounts/account/logins/request");
+  assert(f.calls.every((call) => !call.init?.method));
+  const restored = subscriptionLogin(scope, f.ports); restored.restore();
+  const reads = f.calls.length;
+  await restored.retry();
+  await restored.start(options, "native");
+  assertEquals(f.calls.length, reads);
+  await restored.check();
+  await restored.submit("one-time-code");
+  const post = f.calls.filter((call) => call.init?.method === "POST");
+  assertEquals(post.length, 1);
+  assertEquals(post[0]!.path, "/api/providers/claude-code/auth/request");
+  assert(![...f.values.values()].join().includes("one-time-code"));
+  f.setFetch(async () => Response.json({ status: "cancellation_requested", request_id: "request" }));
+  await restored.cancel();
+  assertEquals(f.calls.at(-1)!.path, "/api/provider-accounts/account/logins/request");
+  assertEquals(f.calls.at(-1)!.init?.method, "DELETE");
+  assertEquals(restored.snapshot.pending?.cancelling, true);
+});
+
+test("continuation cannot adopt a wrong owner, account, request or an uncertain reference", async () => {
+  for (const bad of [
+    { status: "active", request_id: "request", account_id: "other", provider_id: scope.provider, machine_id: "machine" },
+    { status: "active", request_id: "other", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" },
+    { status: "unknown", dispatch_reserved: false },
+  ]) {
+    const f = fixture(); f.setFetch(async () => Response.json(bad));
+    const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.resume("request");
+    assert(owner.snapshot.error); assertEquals(f.values.size, 0);
+    assert(!owner.snapshot.pending); assertEquals(owner.snapshot.events.length, 0);
+  }
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  f.setFetch(async () => { f.invalidate(); return Response.json({ status: "active", request_id: "request", account_id: scope.account, provider_id: scope.provider, machine_id: "machine" }); });
+  await owner.resume("request"); assertEquals(f.values.size, 0);
+});
+
+test("continuation preserves another pending sign-in and refuses mixed dispatch metadata", async () => {
+  const f = fixture();
+  const owner = subscriptionLogin(scope, f.ports); owner.restore(); await owner.start(options, "native");
+  const before = [...f.values.entries()]; const calls = f.calls.length;
+  await owner.resume("request");
+  assertEquals([...f.values.entries()], before); assertEquals(f.calls.length, calls);
+  f.values.set(before[0]![0], JSON.stringify({ ...JSON.parse(before[0]![1]), request: "request" }));
+  const invalid = subscriptionLogin(scope, f.ports); invalid.restore(); await invalid.resume("request");
+  assert(invalid.snapshot.error); assertEquals(f.calls.length, calls);
+});
+
+test("sign-in links contain only strict account and request references", () => {
+  const account = "fd376b94-c493-4d27-81da-67a1d154ca17";
+  const request = "provider-login-d1c970fe-2420-4d83-ab57-01ed5325a30e";
+  const hash = `#subscription-sign-in/${account}/${request}`;
+  assertEquals(subscriptionSignInLink(hash), { account, request });
+  for (const invalid of [`${hash}?code=secret`, `${hash}/extra`, hash.replace(account, "default"), hash.replace(request, "../other"), "#sessions/abc"]) {
+    assertEquals(subscriptionSignInLink(invalid), undefined);
+  }
 });

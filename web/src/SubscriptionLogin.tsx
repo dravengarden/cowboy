@@ -11,12 +11,12 @@ export function SubscriptionLogin({ scope, label, disabled }: { scope: LoginScop
   return <>
     <Button disabled={disabled} onClick={() => setOpen(true)}>Sign in on a Machine…</Button>
     <ConfirmSheet open={open} onClose={() => setOpen(false)} title={`${label} · Sign in`} wide>
-      {open && <Login scope={scope} onClose={() => setOpen(false)} />}
+      {open && <SubscriptionLoginForm scope={scope} onClose={() => setOpen(false)} />}
     </ConfirmSheet>
   </>;
 }
 
-function Login({ scope, onClose }: { scope: LoginScope; onClose: () => void }): React.JSX.Element {
+export function SubscriptionLoginForm({ scope, onClose, request }: { scope: LoginScope; onClose: () => void; request?: string }): React.JSX.Element {
   const machines = useStoreSelector((state) => state.machines);
   const [machine, setMachine] = useState("");
   const [options, setOptions] = useState<LoginOptions>();
@@ -35,12 +35,13 @@ function Login({ scope, onClose }: { scope: LoginScope; onClose: () => void }): 
   useEffect(() => {
     alive.current = true;
     owner.restore();
+    if (request) void owner.resume(request);
     if (owner.snapshot.pending) setMachine(owner.snapshot.pending.machine);
     return () => { alive.current = false; };
-  }, [owner]);
+  }, [owner, request]);
   useEffect(() => {
     setOptions(undefined); setMethod(""); setError("");
-    if (!machine) return;
+    if (!machine || request) return;
     const abort = new AbortController();
     void (async () => {
       try {
@@ -54,7 +55,7 @@ function Login({ scope, onClose }: { scope: LoginScope; onClose: () => void }): 
       } catch { if (!abort.signal.aborted && alive.current) setError("Could not load login readiness. Select the Machine again to retry."); }
     })();
     return () => abort.abort();
-  }, [machine, scope.account, scope.owner, scope.provider]);
+  }, [machine, request, scope.account, scope.owner, scope.provider]);
   // Observe only the current operation, at most once every two seconds for
   // five minutes while visible. No automatic POST, login restart, or vendor probe.
   useEffect(() => {
@@ -75,17 +76,18 @@ function Login({ scope, onClose }: { scope: LoginScope; onClose: () => void }): 
     cancelled: "Cancelled; cleanup is not confirmed", not_started: "Sign-in did not start",
   };
   return <Stack spacing={1.5}>
-    <Typography variant="body2">Choose where Claude Code stores this subscription’s native login. You can sign in separately on more Machines; session placement stays independent.</Typography>
-    <TextField select size="small" fullWidth label="Machine" value={view.pending?.machine ?? machine}
+    <Typography variant="body2">{request ? "Continue signing in with this subscription’s Claude account." : "Choose where Claude Code stores this subscription’s native login. You can sign in separately on more Machines; session placement stays independent."}</Typography>
+    {request && view.pending && <TextField size="small" fullWidth label="Machine" value={view.pending.machine} slotProps={{ input: { readOnly: true } }} />}
+    {!request && <TextField select size="small" fullWidth label="Machine" value={view.pending?.machine ?? machine}
       disabled={view.busy || Boolean(view.pending)} onChange={(event) => setMachine(event.target.value)}>
       <MenuItem value="" disabled>Select a Machine</MenuItem>
       {view.pending && !machines.some((entry) => entry.id === view.pending!.machine) && <MenuItem value={view.pending.machine}>{view.pending.machine} · unavailable</MenuItem>}
       {machines.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.connected}>{entry.display_name || entry.id}{entry.connected ? "" : " · offline"}</MenuItem>)}
-    </TextField>
+    </TextField>}
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
     {options?.native_profile && !view.pending && <Alert severity="success">A verified native login is available on this Machine.</Alert>}
     {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
-    {!view.pending && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
+    {!request && !view.pending && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
       {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available}>{entry.id}</MenuItem>)}
     </TextField>}
     {view.pending && <Typography role="status" variant="body2">{stateLabel[view.observation?.status ?? "unknown"] ?? "Sign-in needs reconciliation"}</Typography>}
@@ -100,10 +102,11 @@ function Login({ scope, onClose }: { scope: LoginScope; onClose: () => void }): 
       </Stack>}
     </>}
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-      {!view.pending && <Button variant="contained" disabled={view.busy || !options?.available || !method}
+      {!request && !view.pending && <Button variant="contained" disabled={view.busy || !options?.available || !method}
         onClick={() => { if (options) void owner.start(options, method); }}>Start sign-in</Button>}
       {view.pending && !done && <Button disabled={view.busy} onClick={() => void owner.check()}>Check status</Button>}
-      {view.pending && !view.pending.cancelling && view.error && <Button disabled={view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
+      {view.pending && !view.pending.request && !view.pending.cancelling && view.error && <Button disabled={view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
+      {request && !view.pending && <Button disabled={view.busy} onClick={() => void owner.resume(request)}>Check status</Button>}
       {view.pending && !done && <Button disabled={view.busy} onClick={() => void owner.cancel()}>{view.pending.cancelling ? "Retry cancellation" : "Cancel sign-in"}</Button>}
       {(done || view.observation?.status === "not_started") && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
     </Stack>

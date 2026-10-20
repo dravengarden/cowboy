@@ -117,6 +117,8 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // account_id,machine_id,provider_version,generation_digest,method}}).
 // Discover the exact installed release/method first. Native login needs current user intent.
 // Returns request_id/provider_id and status active|completed|inactive|cancelling|unknown|not_started.
+// continue_url opens the existing login in Cowboy for the owner to enter the authorization code.
+// It contains no credentials and starts no new login. Keep using the original MCP operation for receipts/cancel.
 // Receipt: cowboy_receipt({domain:"logins",operation}); same parent session only.
 // A durable dispatch reservation never permits redispatch on replay, even after restart.
 // unknown does not prove failure. Never switch operation/account to bypass uncertainty.

@@ -10471,6 +10471,7 @@ async fn serve_axum(
         .route("/api/provider-accounts/{account_id}/revocation", get(provider_accounts::lifecycle::http_status).post(provider_accounts::lifecycle::http_start).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/provider-accounts/{account_id}/revocation/reconcile", post(provider_accounts::lifecycle::http_resume).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/provider-accounts/login-operations/{operation}", get(provider_accounts::login::http_receipt).delete(provider_accounts::login::http_cancel))
+        .route("/api/provider-accounts/{account_id}/logins/{request}", get(provider_accounts::login::http_continue).delete(provider_accounts::login::http_continue_cancel))
         .route("/api/provider-accounts/{account_id}/login", get(provider_accounts::login::options).post(provider_accounts::login::start).layer(DefaultBodyLimit::max(16 * 1024)))
         .route("/api/preferences", put(preferences::update).layer(DefaultBodyLimit::max(64 * 1024)))
         .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
@@ -22511,6 +22512,12 @@ mod bootstrap_tests {
         for method in [Method::GET, Method::PUT] {
             assert_eq!(
                 classify_route(&method, "/api/provider-accounts"),
+                RouteAuth::ProductOperator
+            );
+        }
+        for method in [Method::GET, Method::DELETE] {
+            assert_eq!(
+                classify_route(&method, "/api/provider-accounts/account/logins/request"),
                 RouteAuth::ProductOperator
             );
         }

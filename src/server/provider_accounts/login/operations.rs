@@ -125,6 +125,7 @@ async fn observation(
     "provider_id":receipt.provider_id,"account_id":receipt.input.account_id,"machine_id":receipt.input.machine_id,
         "historical_grant":grant,"native_generation":receipt.native_generation,
         "native_binding_revision":receipt.native_binding_revision,
+    "continue_url":format!("/#subscription-sign-in/{}/{}", receipt.input.account_id.as_str(), receipt.request_id),
     "native_completion":receipt.native_completion.as_ref().map(|completion| json!({
         "state":"recorded", "generation":completion.profile.generation
     }))});

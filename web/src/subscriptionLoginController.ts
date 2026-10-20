@@ -7,9 +7,10 @@ export interface LoginOptions {
   methods: { id: string; available: boolean; reason: string | null }[];
   native_profile?: { generation: number } | null;
 }
-interface Pending extends LoginScope {
-  operation: string; machine: string; version: string; digest: string; method: string; cancelling: boolean;
-}
+type Pending = LoginScope & { machine: string; cancelling: boolean } & (
+  | { operation: string; version: string; digest: string; method: string; request?: never }
+  | { request: string; operation?: never; version?: never; digest?: never; method?: never }
+);
 export interface LoginObservation { status: string; request_id?: string; cancel_requested?: boolean }
 export interface LoginView {
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
@@ -34,9 +35,12 @@ export function loginLink(value: string): string | undefined {
   catch { return undefined; }
 }
 function restore(value: unknown, scope: LoginScope): Pending {
-  if (!object(value) || Object.keys(value).some((key) => !["owner", "dataset", "account", "provider", "operation", "machine", "version", "digest", "method", "cancelling"].includes(key)) ||
+  if (!object(value) || Object.keys(value).some((key) => !["owner", "dataset", "account", "provider", "operation", "machine", "version", "digest", "method", "cancelling", "request"].includes(key)) ||
     value.owner !== scope.owner || value.dataset !== scope.dataset || value.account !== scope.account || value.provider !== scope.provider ||
-    !id(value.operation) || !id(value.machine) || !text(value.version) || !text(value.digest) || !id(value.method) || typeof value.cancelling !== "boolean") {
+    !id(value.machine) || typeof value.cancelling !== "boolean" ||
+    (value.request !== undefined
+      ? !id(value.request) || ["operation", "version", "digest", "method"].some((key) => key in value)
+      : !id(value.operation) || !text(value.version) || !text(value.digest) || !id(value.method))) {
     throw new Error("Saved sign-in belongs to another account or dataset, or is invalid.");
   }
   return value as unknown as Pending;
@@ -81,14 +85,21 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       (value.account_id !== undefined && value.account_id !== pending.account) ||
       (value.provider_id !== undefined && value.provider_id !== pending.provider) ||
       (value.machine_id !== undefined && value.machine_id !== pending.machine) ||
+      (pending.request !== undefined && value.request_id !== pending.request) ||
       (state.observation?.request_id && value.request_id && state.observation.request_id !== value.request_id)) {
       throw new Error("Sign-in response does not match this operation.");
     }
     publish({ observation: value as unknown as LoginObservation, events: [] });
   }
+  const receiptPath = (pending: Pending) => pending.request
+    ? `/api/provider-accounts/${scope.account}/logins/${pending.request}`
+    : `/api/provider-accounts/login-operations/${pending.operation}`;
   async function check(pending: Pending) {
-    const value = await request(`/api/provider-accounts/login-operations/${pending.operation}`);
+    const value = await request(receiptPath(pending));
     observe(value, pending);
+    await readEvents(pending);
+  }
+  async function readEvents(pending: Pending) {
     const observation = state.observation;
     if (observation?.status === "active" && observation.request_id && !observation.cancel_requested && !pending.cancelling) {
       const events = await request(`/api/providers/${scope.provider}/auth/${observation.request_id}`);
@@ -103,6 +114,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     } finally { publish({ busy: false }); }
   }
   async function send(pending: Pending) {
+    if (pending.request) throw new Error("Continue this existing sign-in with Check status. It cannot be restarted here.");
     if (pending.cancelling) throw new Error("Cancellation is pending. Check status to reconcile this attempt.");
     const value = await request(`/api/provider-accounts/${scope.account}/login`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -121,6 +133,20 @@ export function subscriptionLogin(scope: LoginScope, ports: {
         ready = true;
       } catch { publish({ error: "Saved sign-in could not be read. No new login will start." }); }
     },
+    resume(reference: string) { return run(async () => {
+      if (!id(reference)) throw new Error("Invalid sign-in reference.");
+      if (state.pending) {
+        if (state.pending.request !== reference) throw new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
+        await check(state.pending);
+        return;
+      }
+      const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
+      if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
+      const pending: Pending = { ...scope, request: reference, machine: value.machine_id, cancelling: value.cancel_requested === true };
+      observe(value, pending);
+      save(pending); // Only a verified reference is persisted; never a new dispatch selection.
+      await readEvents(pending);
+    }); },
     start(options: LoginOptions, method: string) { return run(async () => {
       if (state.pending) throw new Error("Reconcile the existing sign-in first.");
       options = loginOptions(options, scope, options.machine_id);
@@ -136,7 +162,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       if (!state.pending) return;
       const pending = { ...state.pending, cancelling: true };
       save(pending);
-      observe(await request(`/api/provider-accounts/login-operations/${pending.operation}`, { method: "DELETE" }), pending);
+      observe(await request(receiptPath(pending), { method: "DELETE" }), pending);
     }); },
     submit(code: string) { return run(async () => {
       const pending = state.pending; const observation = state.observation;

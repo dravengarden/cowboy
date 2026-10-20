@@ -8,6 +8,7 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
+import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
   const state = useSessionSubscription(true, "claude-code");
@@ -44,6 +45,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
   const lifecycleWrites: string[] = [];
   const loginKey = "cowboy:subscription-login:subscription-fixture:account";
   const revokeKey = "cowboy:subscription-revocation:subscription-fixture:account";
+  const handoffAccount = "fd376b94-c493-4d27-81da-67a1d154ca17";
+  const handoffRequest = "provider-login-d1c970fe-2420-4d83-ab57-01ed5325a30e";
+  const handoffKey = `cowboy:subscription-login:subscription-fixture:${handoffAccount}`;
   sessionStorage.removeItem(loginKey); sessionStorage.removeItem(revokeKey);
   let cleanup = false;
   let conflict = false;
@@ -197,6 +201,48 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     dialogButton("Revoke on all Machines")!.click();
     await until(() => document.body.textContent!.includes("offline-machine") && Boolean(dialogButton("Retry pending cleanup")));
     check(!sessionStorage.getItem(revokeKey) && !dialogButton("Retry same revocation"), "concurrent revocation adopts the original cleanup without retrying a rejected plan");
+    root.unmount(); root = createRoot(container); sessionStorage.removeItem(handoffKey);
+    const handoffReads: string[] = [];
+    const handoffWrites: string[] = [];
+    let signedIn = false;
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url); handoffReads.push(path);
+      if (path === "/api/provider-accounts") return Response.json({ ...data,
+        registry: { ...data.registry, accounts: [{ id: handoffAccount, label: "Claude · Otter", provider_id: "claude-code", enabled: true }] } });
+      if (init?.method === "POST") {
+        if (path !== `/api/providers/claude-code/auth/${handoffRequest}`) throw new Error("handoff dispatched another login");
+        handoffWrites.push(path); signedIn = true;
+      }
+      if (path === `/api/provider-accounts/${handoffAccount}/logins/${handoffRequest}`) return Response.json({
+        status: signedIn ? "completed" : "active", request_id: handoffRequest, account_id: handoffAccount, provider_id: "claude-code", machine_id: "ovh",
+      });
+      if (path === `/api/providers/claude-code/auth/${handoffRequest}`) return Response.json({ request_id: handoffRequest, events: [{
+        event: "login_challenge", request_id: handoffRequest, provider: "claude-code", verification_url: "https://claude.ai/oauth/authorize?state=private-handoff",
+        expires_at_ms: Date.now() + 60_000, input_required: true,
+      }] });
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+    const handoffRender = () => flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}>
+      <SubscriptionSignInHandoff hash={`#subscription-sign-in/${handoffAccount}/${handoffRequest}`} />
+    </SurfaceContext.Provider></BrowserProductTheme>));
+    handoffRender();
+    await until(() => document.body.textContent!.includes("Open Claude sign-in"));
+    check(document.body.textContent!.includes("Claude · Otter") && handoffWrites.length === 0 &&
+      !dialogButton("Start sign-in"), "agent link opens the verified subscription without dispatching a new login");
+    const handoffInput = document.querySelector<HTMLInputElement>('input[type="password"]')!;
+    check(Boolean(handoffInput) && !sessionStorage.getItem(handoffKey)!.includes("private-handoff"), "handoff keeps authorization material out of recovery storage");
+    await observe?.(surface, "handoff");
+    const currentHandoffInput = document.querySelector<HTMLInputElement>('input[type="password"]')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(currentHandoffInput, "private-code");
+    currentHandoffInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await until(() => Boolean(dialogButton("Continue") && !dialogButton("Continue")!.disabled));
+    dialogButton("Continue")!.click();
+    await until(() => document.body.textContent!.includes("Signed in on this Machine"));
+    check(handoffWrites.length === 1 && !sessionStorage.getItem(handoffKey)!.includes("private-code"), "handoff submits the code directly to the original request");
+    root.unmount(); root = createRoot(container); handoffRender();
+    await until(() => document.body.textContent!.includes("Signed in on this Machine"));
+    check(handoffWrites.length === 1 && handoffReads.filter((path) => path.includes("/logins/")).length >= 2 &&
+      !document.querySelector('a[href^="https://claude.ai/oauth/"]'), "reopening a completed handoff reads its receipt without restarting authorization");
     return tests;
-  } finally { root.unmount(); container.remove(); for (const item of [key, loginKey, revokeKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
+  } finally { root.unmount(); container.remove(); for (const item of [key, loginKey, revokeKey, handoffKey]) sessionStorage.removeItem(item); globalThis.fetch = realFetch; document.documentElement.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse); }
 }

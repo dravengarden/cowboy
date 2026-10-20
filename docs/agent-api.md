@@ -501,6 +501,17 @@ the existing owner-checked authentication events, code submission and cancel
 routes. It neither rotates accounts nor falls back to default authentication.
 This interactive login is separate from metadata mutation.
 
+Login and receipt responses include a relative `continue_url`. Resolve it
+against the Cowboy origin and give it to the user to continue the same login
+on Desktop or Mobile. The fragment contains only account and request IDs, not
+authorization links or codes. Product login is still required. The owner-checked
+`GET /api/provider-accounts/{account_id}/logins/{request_id}` resolves the
+original durable operation across CLI and MCP namespaces; `DELETE` requests
+cancellation of that same operation. Neither route starts another native login.
+The page verifies the current account/dataset before reading the challenge,
+stores only recovery metadata and submits the code directly to Cowboy. Keep
+using the original parent-scoped MCP operation for MCP receipt/cancel calls.
+
 Settings exposes the same flow on Desktop and Mobile. Select a Machine and
 start sign-in explicitly; the authorization page belongs to the Provider.
 The UI retains only the original operation ID and exact account/Machine/release

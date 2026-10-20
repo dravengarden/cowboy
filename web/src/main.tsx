@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense, useEffect } from "react";
+import { lazy, StrictMode, Suspense, useEffect, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
@@ -34,6 +34,7 @@ import { installBrowserDevice } from "./browserDevice";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 import { lowPriorityInterval } from "./network/bandwidth";
+import { subscribeSignInLocation, subscriptionSignInLocation } from "./subscriptionSignInLink";
 
 installBrowserDevice();
 
@@ -51,6 +52,10 @@ initializeAppIcons();
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
   return { default: module.DesktopApp };
+});
+const SubscriptionSignInHandoff = lazy(async () => {
+  const module = await import("./SubscriptionSignInHandoff");
+  return { default: module.SubscriptionSignInHandoff };
 });
 const MobileApp = lazy(async () => {
   // WebKit can retain a failed module record across same-window navigations.
@@ -90,6 +95,7 @@ function Root(): React.JSX.Element {
     return () => globalThis.clearTimeout(settled);
   }, []);
   const deviceAuthorizationActive = captureDeviceAuthorizationFromLocation();
+  const subscriptionSignIn = useSyncExternalStore(subscribeSignInLocation, subscriptionSignInLocation, () => "");
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
     : <MobileApp themeMode={mode} onSetThemeMode={setMode} />;
@@ -106,7 +112,7 @@ function Root(): React.JSX.Element {
       <AppErrorBoundary>
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
-            <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
+            <Suspense fallback={<BootSkeleton />}>{subscriptionSignIn ? <SubscriptionSignInHandoff key={subscriptionSignIn} hash={subscriptionSignIn} /> : app}</Suspense>
             <DocumentNotifications />
             <EditorExtensionsDialog />
           </DeviceAuthorizationRoute>
