@@ -392,11 +392,27 @@ impl PluginRuntime {
         Self::activate_releases(storage, &releases, true).await
     }
 
-    #[allow(clippy::too_many_lines)] // One transaction stages every authority and generation before migration.
+    #[cfg(test)]
     pub(crate) async fn activate_releases(
         storage: &PluginStorage,
         releases: &[crate::plugin_catalog::CatalogHostRelease],
         allow_bootstrap: bool,
+    ) -> Result<Self> {
+        Self::activate_selected(
+            storage,
+            releases,
+            allow_bootstrap,
+            &std::collections::BTreeSet::new(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_lines)] // One transaction stages every authority and generation before migration.
+    pub(crate) async fn activate_selected(
+        storage: &PluginStorage,
+        releases: &[crate::plugin_catalog::CatalogHostRelease],
+        allow_bootstrap: bool,
+        disabled: &std::collections::BTreeSet<String>,
     ) -> Result<Self> {
         let mut runtime = Self::empty();
         let released_plugin_ids = releases
@@ -414,7 +430,10 @@ impl PluginRuntime {
         }
         let mut default_specs = BTreeMap::<String, PluginHostSpec>::new();
         for host in BUNDLED_HOSTS {
-            if !allow_bootstrap || !bundled_fallback_allowed(&release_authority_ids, host.id) {
+            if disabled.contains(host.id)
+                || !allow_bootstrap
+                || !bundled_fallback_allowed(&release_authority_ids, host.id)
+            {
                 continue;
             }
             let files = bundled_files(host);
@@ -446,6 +465,10 @@ impl PluginRuntime {
             default_specs.insert(host.id.to_owned(), spec);
         }
         for release in releases {
+            ensure!(
+                !disabled.contains(&release.entry.plugin_id),
+                "disabled Plugin in activation candidate"
+            );
             let Some(bundle) = release.host_bundle.as_ref() else {
                 continue;
             };

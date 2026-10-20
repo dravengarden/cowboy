@@ -203,17 +203,22 @@ pub(in crate::server) async fn read_one(
     // A read neither takes the database admission write lock nor binds a cache
     // generation. Delayed reads cannot erase a newer login's observation.
     let entry = cache.data.lock().snapshot(&target.completion);
+    let budget = state.usage.limiter.view(
+        &target.provider,
+        &crate::usage::limiter::Limiter::account_key(owner, id.as_str()),
+        now_ms(),
+    );
     value["usage"] = json!(entry.usage);
     if value["usage"].is_object() {
         value["usage"]["refresh"] = json!({
             "last_attempt_at_ms":entry.last_attempt_at_ms,
-            "manual_refresh_after_ms":entry.last_attempt_at_ms.saturating_add(300_000),
-            "next_auto_refresh_at_ms":entry.last_attempt_at_ms.saturating_add(300_000),
+            "manual_refresh_after_ms":budget.next_allowed_ms,
+            "next_auto_refresh_at_ms":budget.next_allowed_ms,
             "stale":entry.error.is_some(),
         });
     }
-    value["last_attempt_at_ms"] = json!(entry.last_attempt_at_ms);
-    value["next_refresh_at_ms"] = json!(entry.last_attempt_at_ms.saturating_add(300_000));
+    value["last_attempt_at_ms"] = json!(budget.last_attempt_ms);
+    value["next_refresh_at_ms"] = json!(budget.next_allowed_ms);
     if let Some(code) = entry.error {
         value["reason"] = json!(code);
         value["message"] = json!(error_message(code));
@@ -262,6 +267,8 @@ pub(in crate::server) async fn refresh_one(
     let cache = state.usage.native.entry(owner, id.as_str());
     let collection = Arc::clone(&cache.collection).lock_owned().await;
     let target = target(state, owner, id).await?;
+    let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
+    let mut permit = None;
     let due = state
         .store
         .as_ref()
@@ -269,7 +276,14 @@ pub(in crate::server) async fn refresh_one(
         .with_native_login_binding(owner, &target.operation, &target.completion, || {
             let mut entry = cache.data.lock();
             entry.bind(&target.completion);
-            let due = entry.due(now_ms());
+            let due = entry.due(now_ms())
+                && match state.usage.limiter.start(&target.provider, &key, now_ms()) {
+                    Ok(value) => {
+                        permit = Some(value);
+                        true
+                    }
+                    Err(_) => false,
+                };
             if due {
                 entry.last_attempt_at_ms = now_ms();
             }
@@ -284,10 +298,24 @@ pub(in crate::server) async fn refresh_one(
     // query's result while still charging its shared refresh budget.
     let state = Arc::clone(state);
     let owner = owner.to_owned();
+    let id = id.as_str().to_owned();
     tokio::spawn(async move {
-        let _collection = collection;
+        state.hub.broadcast_account_usage_changed(&owner);
         let result = collect(&state, &owner, &target).await;
+        let outcome = match &result {
+            Ok(_) => crate::usage::limiter::Outcome::Success,
+            Err("native_usage_authentication_required") => {
+                crate::usage::limiter::Outcome::Authentication
+            }
+            Err(_) => crate::usage::limiter::Outcome::Failure,
+        };
         cache.data.lock().finish(&target.completion, result);
+        if let Some(permit) = permit {
+            permit.finish(outcome, now_ms());
+        }
+        drop(collection);
+        state.hub.broadcast_account_usage_changed(&owner);
+        tracing::debug!(account_id = id, "native account usage refresh settled");
     })
     .await
     .map_err(|_| "native_usage_unavailable")
@@ -397,6 +425,7 @@ fn response(result: Result<Value, &'static str>) -> Response {
 /// Bounded serial collection avoids simultaneously launching one CLI per account.
 pub(in crate::server) async fn run(state: Arc<AppState>) {
     loop {
+        let mut candidates = Vec::new();
         if let Some(store) = &state.store
             && let Ok(users) = store.list_users().await
         {
@@ -407,10 +436,26 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
                         .iter()
                         .filter(|account| account.available())
                     {
-                        let _ = refresh_one(&state, &user.id, &account.id).await;
+                        candidates.push((user.id.clone(), account.id.clone()));
                     }
                 }
             }
+        }
+        // Oldest first prevents a low Provider budget from always favouring
+        // the first accounts in registry order.
+        candidates.sort_by_key(|(owner, id)| {
+            state
+                .usage
+                .limiter
+                .view(
+                    "",
+                    &crate::usage::limiter::Limiter::account_key(owner, id.as_str()),
+                    now_ms(),
+                )
+                .last_attempt_ms
+        });
+        for (owner, id) in candidates {
+            let _ = refresh_one(&state, &owner, &id).await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }

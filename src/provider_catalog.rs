@@ -70,6 +70,9 @@ mod service_catalog {
         ) -> Result<Self> {
             let mut embedded = BTreeMap::new();
             for &(expected_id, source) in EMBEDDED_SOURCES {
+                if !plugin_catalog.plugin_enabled(expected_id) {
+                    continue;
+                }
                 let source: StandardProviderSource = serde_json::from_str(source)
                     .with_context(|| format!("decoding embedded Provider {expected_id}"))?;
                 let package = build_package(source.compile()?)?;
@@ -153,6 +156,7 @@ mod service_catalog {
             if let Some(root) = self.legacy_root.as_deref() {
                 load_legacy_catalog(root, &mut next)?;
             }
+            next.retain(|(id, _, _), _| self.plugin_catalog.plugin_enabled(id));
             let count = next.len();
             *self.external.write() = next;
             Ok(count)

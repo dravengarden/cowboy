@@ -168,6 +168,10 @@ tool, rather than copying the SDK or relying on an ambient compiler.
 
 ## Dependency-closure release rule
 
+Release 3.60.2 records state-sync-idb 1.8.2 for the already-committed source
+whose digest differed from the 1.8.1 record. No Plugin depends on that package;
+this metadata correction changes no Plugin pins or runtime behavior.
+
 `components/registry.json` remains append-only. Schema-2 entries (through 2.9.0)
 still enforce strictly increasing versions for every Plugin between adjacent
 releases. Schema 3 appends a separate, unchanged 3.0.0 migration baseline before

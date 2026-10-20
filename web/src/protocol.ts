@@ -408,6 +408,7 @@ export type Outbound =
   // The Controller's account usage snapshot, sent whenever it or its refresh
   // state changes so every client shows the same values and progress.
   | { type: "usage"; snapshot: import("./usageLimits").UsageSnapshot }
+  | { type: "account_usage_changed"; owner_user_id: string }
   // Agent calls this session's agent waits for a person to approve; null
   // once nothing waits. Re-sent while it waits (see callApproval.ts).
   | {

@@ -123,6 +123,11 @@ pub(crate) fn prepare_controller_hosts(
         "CoreSecurity requires a durable database"
     );
     let mut catalog = PluginCatalog::inspect(&args.data_dir, args.plugin_catalog_dir.clone())?;
+    let config = crate::config::load(
+        crate::config::Scope::Service,
+        &crate::config::Scope::Service.path_in(&args.data_dir),
+    )?;
+    catalog.configure_disabled(config.get(&crate::config::schema::PLUGIN_DISABLED))?;
     let legacy = load_legacy_oidc_provider(
         args.product_auth_enabled,
         args.cardea_oidc_config.as_deref(),

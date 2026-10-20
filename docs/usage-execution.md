@@ -49,7 +49,69 @@ The Web API uses `GET /api/usage/executors` and operator-authorized
 Automatic). Viewers can inspect settings but cannot change them. The dedicated
 `usage_execution_machines` table belongs to usage, independently of authentication
 settings. Writes serialize with active refreshes; a slow collector can delay a
-save. Successful changes clear the previous route's refresh cooldown.
+save. Changing the route preserves the durable account and Provider budgets.
+
+## Shared collection budget
+
+Service configuration owns four live settings:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `usage.provider_window` | `2m` | Rolling window shared by all accounts of one Provider |
+| `usage.requests_per_window` | `2` | Maximum collector starts in that window |
+| `usage.account_interval` | `5m` | Minimum time between starts for one account |
+| `usage.failure_backoff_max` | `1h` | Maximum failure backoff; authentication failures wait this long |
+
+Starts are evenly spaced (one minute with these defaults), with at most one
+active collector per Provider. The oldest named account is tried first.
+Anthropic's Service account and named native accounts share the same Provider
+budget; account observations remain isolated by owner, account and native login.
+OpenAI, DeepSeek and xAI have independent Provider budgets. Passive ACP usage,
+context/cost events and reads of cached observations consume no collection budget.
+
+Manual refresh, HTTP, CLI, MCP and background polling use the same admission.
+Reservations are fsynced before dispatch to `usage-rate-limits.json` beside the
+Service usage cache. Changing Machine, login generation or restarting the
+Controller cannot reset a reservation. A missing ledger waits five minutes;
+an invalid/unwritable ledger fails closed and logs an operator diagnostic.
+Failure/cancellation spends budget. Account failures back off for 10, 20, 40,
+then 60 minutes; Provider failures also pause other accounts (4, 8, 16… minutes,
+capped at the configured maximum). Authentication failures affect their account.
+There is no immediate retry loop. A caller disconnect does not cancel the
+Service-owned collection.
+
+The counted unit is a **collector invocation**, not opaque native CLI HTTP.
+Current Claude and Grok collectors can additionally read reset/credit details;
+Codex uses native account/quota RPCs. Their internal authentication/HTTP is owned
+by the Provider CLI. These controls bound Cowboy's collection starts; they do
+not claim a published subscription polling allowance or guarantee against an
+account restriction. Provider API rate limits are separate from this polling
+policy. See [Anthropic rate limits](https://platform.claude.com/docs/en/api/rate-limits),
+[OpenAI retry guidance](https://help.openai.com/en/articles/5955604-troubleshooting-api-rate-limits-and-429-errors),
+[DeepSeek rate limits](https://api-docs.deepseek.com/quick_start/rate_limit/) and
+[xAI rate limits](https://docs.x.ai/developers/rate-limits).
+
+Web clients share one cache reader per owner. Refresh start and completion
+invalidate that owner's native usage across connected clients; Service usage
+continues through its shared snapshot broadcast. A slow HTTP snapshot cannot
+overwrite a newer push. About, Desktop and Session Settings project the same
+account observation. Desktop labels each account separately and keeps secondary
+details collapsed inside the account's card.
+
+## Retiring a Provider
+
+`plugins.disabled = ["gemini"]` in the Service configuration excludes those exact
+Plugin IDs from Catalog and Provider discovery, login/session admission and
+host activation, including bootstrap fallback. Validate through `cowboy config
+check`; this setting takes effect on Controller restart. Configuration schema
+and edits are exposed by the existing CLI/MCP configuration surfaces.
+
+First remove an idle Plugin from the Service's Machine membership declaration,
+run bounded Operator convergence, and inspect the uninstall receipts. Then
+apply the disable setting and activate the Controller. Disabling does not stop
+existing workers, delete conversations, erase credentials or rewrite immutable
+published package history. Retained sources continue to test historical
+compatibility; they are not exposed as available Providers on a disabled Service.
 
 ## Verification
 

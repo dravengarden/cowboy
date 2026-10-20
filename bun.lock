@@ -54,7 +54,7 @@
     },
     "components/state-sync-idb": {
       "name": "@cowboy/state-sync-idb",
-      "version": "1.8.1",
+      "version": "1.8.2",
       "peerDependencies": {
         "@cowboy/state-store": "2.1.1",
         "@cowboy/state-sync": "1.5.1",

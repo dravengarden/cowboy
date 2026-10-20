@@ -1566,6 +1566,9 @@ pub enum Outbound {
     /// The Controller's account usage snapshot, including which accounts are
     /// refreshing. Sent whenever it changes so every client shows one state.
     Usage { snapshot: serde_json::Value },
+    /// Owner-scoped invalidation of native account observations and progress.
+    /// Clients share one cached read; no credentials enter this notification.
+    AccountUsageChanged { owner_user_id: String },
     /// Agent calls a session's agent is waiting for a person to approve, or
     /// `None` once nothing waits. Re-sent while the agent keeps asking, so a
     /// reconnecting client recovers it; it expires after `ttl_ms` otherwise.
@@ -2176,6 +2179,12 @@ impl Hub {
     /// Publish the current account usage snapshot to every client.
     pub fn broadcast_usage(&self, snapshot: serde_json::Value) {
         self.fanout(Outbound::Usage { snapshot });
+    }
+
+    pub fn broadcast_account_usage_changed(&self, owner: &str) {
+        self.fanout(Outbound::AccountUsageChanged {
+            owner_user_id: owner.to_owned(),
+        });
     }
 
     /// Publish one authoritative Machine registry revision over the existing

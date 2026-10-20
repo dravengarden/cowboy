@@ -1937,6 +1937,7 @@ impl Bridge {
             | Outbound::ConnectionProbe { .. }
             | Outbound::SyncPatch { .. }
             | Outbound::Usage { .. }
+            | Outbound::AccountUsageChanged { .. }
             | Outbound::CallApproval { .. }
             | Outbound::Settings { .. } => {}
         }
@@ -2362,6 +2363,7 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         | Outbound::SyncPatch { .. }
         | Outbound::Settings { .. }
         | Outbound::Usage { .. }
+        | Outbound::AccountUsageChanged { .. }
         | Outbound::CallApproval { .. }
         | Outbound::CommandResult { .. }
         | Outbound::Error { .. } => {}

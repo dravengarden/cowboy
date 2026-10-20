@@ -676,7 +676,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
   const sessions = useStoreSelector((state) => state.sessions);
   const native = useNativeAccountUsage(accounts.data?.registry.revision);
   useProviderCatalog();
-  const refreshing = usageRefreshing(snapshot);
+  const refreshing = usageRefreshing(snapshot) || native.accounts.some((account) => account.refreshing);
   const [execution, setExecution] = useState<UsageExecutionSettings | null>(
     null,
   );

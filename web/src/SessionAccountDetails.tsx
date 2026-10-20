@@ -3,6 +3,7 @@ import { Alert, Box, Button, Collapse, Divider, LinearProgress, Stack, Typograph
 import type { SessionMeta } from "./protocol";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { sessionAccountQuota } from "./usageAccounts";
 import { sessionProviderUsageRows } from "./sessionSettingsPresentation";
@@ -14,13 +15,14 @@ import { providerName } from "./providerPresentation";
  * the Service credential editor or consume its Provider-wide quota collector. */
 export function SessionAccountDetails({ session }: { session: SessionMeta }): React.JSX.Element {
   const { data, error } = useSubscriptionAccounts();
+  const native = useNativeAccountUsage(data?.registry.revision);
   const machines = useStoreSelector((state) => state.machines);
   const sessions = useStoreSelector((state) => state.sessions);
   const [manage, setManage] = useState(false);
   const clock = useCallClock();
   const account = sessionAccountIdentity(data, session);
   const scoped = data?.dataset.user_id === session.owner_user_id ? data : undefined;
-  const quota = account.named ? sessionAccountQuota(null, scoped, sessions, session) : undefined;
+  const quota = account.named ? sessionAccountQuota(null, scoped, sessions, session, native.accounts) : undefined;
   const rows = quota && quota.observed_at_ms > 0 ? sessionProviderUsageRows(quota, clock) : [];
   const machine = machines.find((item) => item.id === session.machine_id)?.display_name || session.machine_id || "Local";
   return <Stack spacing={0.75} data-session-account={account.id} sx={{ py: 0.75 }}>
@@ -35,6 +37,7 @@ export function SessionAccountDetails({ session }: { session: SessionMeta }): Re
       <Typography variant="caption" color="text.secondary">
         {providerName(session.provider, session.provider_version, session.provider_generation_digest)}
         {session.provider_version ? ` · v${session.provider_version}` : ""}
+        {native.accounts.some((item) => item.account_id === account.id && item.refreshing) ? " · Refreshing…" : ""}
       </Typography>
       {scoped && !account.available && <Typography variant="caption" color="warning.main">{account.description}</Typography>}
       {rows.length ? rows.map((row) => <Box key={row.id}>

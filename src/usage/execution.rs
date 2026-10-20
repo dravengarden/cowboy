@@ -163,7 +163,8 @@ impl UsageService {
             configured.remove(account);
         }
         *self.execution_machines.write() = configured;
-        // The next explicit refresh must not reuse the previous route's cooldown.
+        // Discard route-specific display scheduling. Durable account and
+        // Provider admission budgets survive this placement change.
         if let Some(provider) = self
             .snapshot
             .lock()

@@ -41,6 +41,7 @@ test("native observations remain account scoped, support refresh and preserve pl
   assertEquals(cards[1].statusLabel, undefined);
   assertEquals(cards[1].collector, undefined); // Native quota never exposes Service reset/placement.
   assertEquals(cards[0].usage, snapshot.providers[0]);
+  assertEquals(sessionAccountQuota(snapshot, registry, [session], session, [observed]), observed.usage);
   for (const wrong of [{ ...observed, account_id: "lynx" }, { ...observed, provider_id: "codex" }]) {
     assertEquals(registeredUsageAccounts(snapshot, registry, [], [wrong])[1].usage.rate_limits, undefined);
   }

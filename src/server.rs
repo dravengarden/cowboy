@@ -1459,6 +1459,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&plugin_catalog),
         Arc::clone(&machine_control),
     )
+    .with_config(service_config.clone())
     .with_runtime_restrictions(Arc::clone(&runtime_restrictions));
     usage.restore_execution_settings().await?;
     let runtime_router = RuntimeRouter::new();
@@ -20447,6 +20448,7 @@ fn connect_bootstrap(
 /// array or reveal another user's document titles.
 fn fanout_sends_shared_frame(principal: &ProductPrincipal, outbound: &Outbound) -> bool {
     principal.sees_every_session()
+        && !matches!(outbound, Outbound::AccountUsageChanged { .. })
         && !matches!(outbound, Outbound::SyncPatch { state, .. } if principal_owned_sync_state(state))
 }
 
@@ -20461,6 +20463,9 @@ fn project_outbound(
     message: Outbound,
 ) -> Option<Outbound> {
     match message {
+        Outbound::AccountUsageChanged { ref owner_user_id } => {
+            (principal.user_id == *owner_user_id).then_some(message)
+        }
         Outbound::Sessions { sessions } => Some(Outbound::Sessions {
             sessions: sessions
                 .into_iter()
@@ -22551,6 +22556,22 @@ mod bootstrap_tests {
         };
         assert_eq!(value, serde_json::json!({"about":5}));
         assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_usage_invalidations_are_private_even_for_global_observers() {
+        let hub = Hub::new();
+        let owner = test_owner_principal();
+        for id in ["owner", "other"] {
+            let event = Outbound::AccountUsageChanged {
+                owner_user_id: id.into(),
+            };
+            assert!(!fanout_sends_shared_frame(&owner, &event));
+            assert_eq!(
+                project_outbound(&hub, &owner, &HashSet::new(), event).is_some(),
+                id == "owner"
+            );
+        }
     }
 
     #[test]

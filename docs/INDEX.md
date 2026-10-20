@@ -225,7 +225,7 @@ primary phone/desktop product path.
 - [`releases/anthropic-usage-timeout-2026-10-01.md`](releases/anthropic-usage-timeout-2026-10-01.md) — OVH preparation root cause, host-only repair and three real account queries
 - [`releases/matrix-workspaces-2026-10-01.md`](releases/matrix-workspaces-2026-10-01.md) — Hierarchical picker, mapped remote tasks, latency samples and accepted releases
 
-- [`usage-execution.md`](usage-execution.md) — Durable account usage Machine selection, CLI and failure behavior
+- [`usage-execution.md`](usage-execution.md) — Shared quota budgets, per-account cache and loading, durable Machine selection, and Provider retirement
 
 - [`releases/message-retry-retention-2026-10-01.md`](releases/message-retry-retention-2026-10-01.md) — Premature delivery confirmation repair, retry retention and OVH Provider diagnostics
 - [`releases/ovh-trusted-ssh-2026-10-01.md`](releases/ovh-trusted-ssh-2026-10-01.md) — Normal-account OVH SSH authority, Luna development tasks and Grok quota blocker

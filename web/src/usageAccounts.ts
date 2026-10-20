@@ -24,13 +24,14 @@ export function sessionAccountQuota(
   accounts: SubscriptionSnapshot | undefined,
   sessions: readonly SessionMeta[],
   session: SessionMeta | undefined,
+  observations: readonly NativeAccountUsage[] = [],
 ): ProviderUsage | undefined {
   if (!session) return undefined;
   if (!session.provider_account_id || session.provider_account_id === "default") {
     return providerUsage(snapshot, session.provider, session.provider_version, session.provider_generation_digest);
   }
   if (session.owner_user_id !== accounts?.dataset.user_id) return undefined;
-  return registeredUsageAccounts(null, accounts, sessions).find((card) => card.id === session.provider_account_id &&
+  return registeredUsageAccounts(null, accounts, sessions, observations).find((card) => card.id === session.provider_account_id &&
     accounts?.registry.accounts.some((account) => account.id === card.id && account.provider_id === session.provider))?.usage;
 }
 

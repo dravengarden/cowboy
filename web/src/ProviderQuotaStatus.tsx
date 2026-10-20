@@ -19,6 +19,7 @@ import { lowPriorityInterval } from "./network/bandwidth";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { sessionAccountQuota } from "./usageAccounts";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
 
 const USAGE_POLL_MS = 60_000;
 
@@ -56,6 +57,7 @@ export function ProviderQuotaStatus({
   const session = sessions.find((item) => item.id === sessionId && item.provider === provider);
   const serviceAccount = Boolean(session && (!session.provider_account_id || session.provider_account_id === "default"));
   const { data: accounts } = useSubscriptionAccounts();
+  const native = useNativeAccountUsage(accounts?.registry.revision);
   const [clock, setClock] = useState(() => Date.now());
 
   useEffect(() => {
@@ -82,21 +84,26 @@ export function ProviderQuotaStatus({
   }, []);
 
   const usage = useMemo(
-    () => sessionAccountQuota(snapshot, accounts, sessions, session),
-    [catalog, accounts, session, sessions, snapshot],
+    () => sessionAccountQuota(snapshot, accounts, sessions, session, native.accounts),
+    [catalog, accounts, session, sessions, snapshot, native.accounts],
   );
   const exhausted = useMemo(
     () => exhaustedAccountUsageLimits(usage, clock),
     [clock, usage],
   );
   const account = serviceAccount ? providerUsageAccount(provider, providerVersion, providerDigest) : undefined;
-  const refreshing = account !== undefined && usageRefreshing(snapshot, account);
+  const named = native.accounts.find((item) => item.account_id === session?.provider_account_id);
+  const refreshing = account !== undefined ? usageRefreshing(snapshot, account) : named?.refreshing ?? false;
   const refresh = useCallback(async (): Promise<void> => {
+    if (named?.available) {
+      await native.refresh(named.account_id);
+      return;
+    }
     if (!account) {
       throw new Error("Usage is unavailable for this session's Provider.");
     }
     await requestUsageRefresh(account);
-  }, [account]);
+  }, [account, named, native.refresh]);
 
   if (exhausted.length === 0) return null;
   const activeTurn = status === "busy";
@@ -161,7 +168,7 @@ export function ProviderQuotaStatus({
               : "Sending now may wait until the provider makes capacity available."}
           </Typography>
         </Box>
-        {serviceAccount && (
+        {(serviceAccount || named?.available) && (
           <NetworkIconButton
             aria-label="Refresh provider usage"
             size="small"

@@ -18,9 +18,17 @@ pub const ACCOUNT_NATIVE_CLAUDE_LOGIN: Key<bool> =
     Key::new(Scope::Service, "accounts.native_claude_login");
 pub const ACCOUNT_NATIVE_CLAUDE_SESSIONS: Key<bool> =
     Key::new(Scope::Service, "accounts.native_claude_sessions");
+pub const USAGE_PROVIDER_WINDOW: Key<Duration> = Key::new(Scope::Service, "usage.provider_window");
+pub const USAGE_REQUESTS_PER_WINDOW: Key<i64> =
+    Key::new(Scope::Service, "usage.requests_per_window");
+pub const USAGE_ACCOUNT_INTERVAL: Key<Duration> =
+    Key::new(Scope::Service, "usage.account_interval");
+pub const USAGE_FAILURE_BACKOFF_MAX: Key<Duration> =
+    Key::new(Scope::Service, "usage.failure_backoff_max");
 
 pub const PLUGIN_GENERATION_RETENTION_INTERVAL: Key<Duration> =
     Key::new(Scope::Service, "plugins.generation_retention_interval");
+pub const PLUGIN_DISABLED: Key<Vec<String>> = Key::new(Scope::Service, "plugins.disabled");
 pub const PLUGIN_URGENT_RETENTION_COOLDOWN: Key<Duration> =
     Key::new(Scope::Service, "plugins.urgent_retention_cooldown");
 pub const PLUGIN_CATALOG_KEEP_RELEASES: Key<i64> =
@@ -48,6 +56,43 @@ pub const SESSIONS_MEMORY_RECLAIM_MIN_IDLE: Key<Duration> =
     Key::new(Scope::Service, "sessions.memory_reclaim_min_idle");
 
 pub static SERVICE_FIELDS: &[Field] = &[
+    Field {
+        key: "usage.provider_window",
+        kind: Kind::Duration {
+            min: Duration::from_mins(2),
+            max: Duration::from_hours(1),
+        },
+        default: Value::Duration(Duration::from_mins(2)),
+        reload: Reload::Live,
+        doc: "Rolling admission window shared by every account of one usage Provider.\nAll Service quota collectors, manual and automatic, use this durable budget.\nPassive session usage and reads of cached values do not consume it.",
+    },
+    Field {
+        key: "usage.requests_per_window",
+        kind: Kind::Integer { min: 1, max: 10 },
+        default: Value::Integer(2),
+        reload: Reload::Live,
+        doc: "Maximum quota collector invocations per Provider window across all accounts.\nStarts are evenly spaced; only one collector per Provider runs at a time.\nNative CLIs own internal HTTP; this is not a model-inference request limit.",
+    },
+    Field {
+        key: "usage.account_interval",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(1),
+        },
+        default: Value::Duration(Duration::from_mins(5)),
+        reload: Reload::Live,
+        doc: "Minimum interval between quota queries for the same account, including\nfailures and manual refresh. Changing Machine or login does not reset it.",
+    },
+    Field {
+        key: "usage.failure_backoff_max",
+        kind: Kind::Duration {
+            min: Duration::from_hours(1),
+            max: Duration::from_hours(24),
+        },
+        default: Value::Duration(Duration::from_hours(1)),
+        reload: Reload::Live,
+        doc: "Maximum exponential backoff after quota collection failures.\nAuthentication failures wait this long; cached reads remain available.",
+    },
     Field {
         key: "accounts.native_claude_sessions",
         kind: Kind::Bool,
@@ -81,6 +126,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(6)),
         reload: Reload::Live,
         doc: "How often the Controller asks every connected Device to retire Plugin\ngenerations that no open, hibernated or unpurged session pins.",
+    },
+    Field {
+        key: "plugins.disabled",
+        kind: Kind::Identifiers { max_items: 128 },
+        default: Value::Patterns(std::borrow::Cow::Borrowed(&[])),
+        reload: Reload::Restart,
+        doc: "Plugin IDs excluded from the Service Catalog, Provider discovery and host\nactivation. Also blocks new installations and login/session admission.\nUninstall idle Machine installations separately; history and credentials are retained.",
     },
     Field {
         key: "plugins.urgent_retention_cooldown",

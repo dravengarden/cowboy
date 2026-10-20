@@ -160,6 +160,7 @@ pub(crate) struct PluginCatalog {
     roots: Vec<PathBuf>,
     plugin_dir: crate::plugin_dir::PluginDir,
     host_policy: HostActivationPolicy,
+    disabled: std::collections::BTreeSet<String>,
 }
 
 impl PluginCatalog {
@@ -233,6 +234,7 @@ impl PluginCatalog {
             roots,
             plugin_dir,
             host_policy: HostActivationPolicy::default(),
+            disabled: std::collections::BTreeSet::new(),
         })
     }
 
@@ -241,7 +243,28 @@ impl PluginCatalog {
         for (index, root) in self.roots.iter().enumerate() {
             load_catalog_root(root, &mut next, index > 0)?;
         }
+        next.retain(|(id, _, _), _| self.plugin_enabled(id));
         Ok(next)
+    }
+
+    pub(crate) fn plugin_enabled(&self, id: &str) -> bool {
+        !self.disabled.contains(id)
+    }
+
+    pub(crate) fn configure_disabled(&mut self, ids: Vec<String>) -> Result<()> {
+        ensure!(
+            self.state.read().runtime.is_none(),
+            "Plugin disable policy is immutable after startup"
+        );
+        self.disabled = ids.into_iter().collect();
+        self.embedded
+            .retain(|(id, _), _| !self.disabled.contains(id));
+        let external = self.load_external()?;
+        *self.state.write() = Arc::new(CatalogSnapshot {
+            external,
+            runtime: None,
+        });
+        Ok(())
     }
 
     /// Set the immutable startup policy before the Catalog is shared. This
@@ -366,10 +389,11 @@ impl PluginCatalog {
             .iter()
             .map(|release| release.entry.plugin_id.clone())
             .collect();
-        let mut runtime = crate::plugin_runtime::PluginRuntime::activate_releases(
+        let mut runtime = crate::plugin_runtime::PluginRuntime::activate_selected(
             storage,
             &releases,
             self.host_policy.source == HostSourcePolicy::Bootstrap,
+            &self.disabled,
         )
         .await?;
         if let Some(previous) = current.runtime.as_deref() {
@@ -401,10 +425,11 @@ impl PluginCatalog {
             .iter()
             .map(|release| release.entry.plugin_id.clone())
             .collect();
-        let mut runtime = crate::plugin_runtime::PluginRuntime::activate_releases(
+        let mut runtime = crate::plugin_runtime::PluginRuntime::activate_selected(
             storage,
             &releases,
             self.host_policy.source == HostSourcePolicy::Bootstrap,
+            &self.disabled,
         )
         .await?;
         if let Some(previous) = current.runtime.as_deref() {
@@ -1043,6 +1068,48 @@ mod tests {
                 .catalog_dir()
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_stays_out_of_catalog_and_bootstrap_hosts_after_refresh() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = PluginCatalog::open(root.path(), None).unwrap();
+        assert!(
+            catalog
+                .entries()
+                .iter()
+                .any(|entry| entry.plugin_id == "gemini")
+        );
+        catalog.configure_disabled(vec!["gemini".into()]).unwrap();
+        let storage =
+            crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
+        let runtime = catalog.activate_runtime(&storage).await.unwrap();
+        assert!(runtime.default_host("gemini").is_none());
+        assert!(
+            !catalog
+                .entries()
+                .iter()
+                .any(|entry| entry.plugin_id == "gemini")
+        );
+        catalog.refresh_with_runtime(&storage).await.unwrap();
+        assert!(catalog.runtime().unwrap().default_host("gemini").is_none());
+        assert!(catalog.configure_disabled(Vec::new()).is_err());
+        let catalog = Arc::new(catalog);
+        let providers =
+            crate::provider_catalog::ProviderCatalog::open(root.path(), catalog).unwrap();
+        assert!(
+            !providers
+                .entries()
+                .iter()
+                .any(|entry| entry.provider_id == "gemini")
+        );
+        assert!(
+            providers
+                .entries()
+                .iter()
+                .any(|entry| entry.provider_id == "codex")
+        );
+        assert!(providers.latest_package("gemini").is_none());
     }
 
     struct ReaderFixture(PathBuf);

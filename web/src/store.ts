@@ -25,7 +25,8 @@ import { createSyncShutdown } from "./syncShutdown";
 import { createReplica, type ReplicaTail } from "./replica";
 import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
 import { deriveSyncStatus, type SyncStatus, type SyncStatusInput } from "./syncStatus";
-import { ProductSessionEndEvent } from "./productSessionEnd";
+import { ProductSessionEndEvent, productSessionSignal } from "./productSessionEnd";
+import { productSyncPrincipal } from "./productSyncIdentity";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { actionErrorMessage } from "./actionErrorMessage";
 import {
@@ -1605,9 +1606,13 @@ function handle(msg: Outbound): void {
       // Usage is pushed only when it changes; read the current value once per
       // connection so a reconnecting client is never stale.
       void loadUsageSnapshot().catch(() => undefined);
+      window.dispatchEvent(new CustomEvent("cowboy:account-usage-changed", { detail: productSyncPrincipal() }));
       break;
     case "usage":
       setState({ ...state, usage: msg.snapshot });
+      break;
+    case "account_usage_changed":
+      window.dispatchEvent(new CustomEvent("cowboy:account-usage-changed", { detail: msg.owner_user_id }));
       break;
     case "call_approval":
       receiveCallApproval(msg.session_id, msg.approval);
@@ -5835,16 +5840,28 @@ export function useStoreSelector<T>(
 // The Controller owns usage values and refresh progress; every surface reads
 // this one store value so a refresh started on any device shows everywhere.
 
+let usageRead: Promise<void> | undefined;
+
 /** Read the current usage snapshot into the shared store. On failure the
  *  last value stays; the next broadcast or read replaces it. */
 export async function loadUsageSnapshot(signal?: AbortSignal): Promise<void> {
-  const usage = await readUsage(signal);
-  setState({ ...state, usage });
+  if (signal?.aborted) return;
+  if (usageRead) return usageRead;
+  const before = state.usage;
+  const lifetime = productSessionSignal();
+  usageRead = (async () => {
+    const usage = await readUsage(lifetime);
+    // A pushed start/result is newer than an HTTP read already in flight.
+    if (!lifetime.aborted && state.usage === before) setState({ ...state, usage });
+  })().finally(() => { usageRead = undefined; });
+  return usageRead;
 }
 
 /** Ask the Controller to refresh one account (or all). Returns once the
  *  request is accepted; progress and results arrive as broadcasts. */
 export async function requestUsageRefresh(accountProvider?: string): Promise<void> {
+  const before = state.usage;
+  const lifetime = productSessionSignal();
   const usage = await startUsageRefresh(accountProvider);
-  setState({ ...state, usage });
+  if (!lifetime.aborted && state.usage === before) setState({ ...state, usage });
 }

@@ -12,6 +12,12 @@ import type { ServiceMetrics } from "./InfoRuntimeMetrics";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { SessionMeta } from "./protocol";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
+
+function SharedUsageObserver(): React.JSX.Element {
+  const native = useNativeAccountUsage();
+  return <output data-shared-native-observer hidden>{JSON.stringify(native.accounts)}</output>;
+}
 
 export async function runInfoMetricsBrowserConformance(
   keepFixture = false,
@@ -331,6 +337,7 @@ export async function runInfoMetricsBrowserConformance(
             <CssBaseline />
             <ProductAuthGate>
               <InfoContent desktop={desktop} />
+              <SharedUsageObserver />
             </ProductAuthGate>
           </BrowserProductTheme>
         </SurfaceProvider>,
@@ -480,6 +487,19 @@ export async function runInfoMetricsBrowserConformance(
       "background named quota replaces its own session fallback without changing the Service account");
     check(!!accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') &&
       !accountCard("otter")!.textContent?.includes("Usage query Machine"), "named refresh is available while Machine metadata starts collapsed");
+    const quotaReads = () => requests.filter((path) => path === "GET /api/provider-accounts/usage").length;
+    const beforePush = quotaReads();
+    nativeUsage[0]!.refreshing = true;
+    socket!.onmessage?.({ data: JSON.stringify({ type: "account_usage_changed", owner_user_id: "info-fixture" }) });
+    await until(() => (accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') as HTMLButtonElement)?.disabled === true);
+    check(container.querySelector("[data-shared-native-observer]")!.textContent!.includes('"refreshing":true'),
+      "a remote account refresh updates every mounted usage consumer");
+    check(quotaReads() === beforePush + 1, "shared consumers coalesce one cache read for a pushed refresh");
+    nativeUsage[0]!.refreshing = false;
+    socket!.onmessage?.({ data: JSON.stringify({ type: "account_usage_changed", owner_user_id: "info-fixture" }) });
+    await until(() => (accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') as HTMLButtonElement)?.disabled === false);
+    check(!container.querySelector("[data-shared-native-observer]")!.textContent!.includes('"refreshing":true'),
+      "completion clears shared loading without focus or manual refresh");
     accounts.registry.accounts[0]!.enabled = false;
     changed();
     await until(() => accountCard("otter")?.textContent?.includes("DISABLED") === true);

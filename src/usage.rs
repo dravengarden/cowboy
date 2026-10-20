@@ -23,6 +23,7 @@ use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 
 mod execution;
+pub(crate) mod limiter;
 pub(crate) mod native;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
@@ -128,6 +129,7 @@ impl std::error::Error for ResetError {}
 #[derive(Clone)]
 pub struct UsageService {
     pub(crate) native: native::Cache,
+    pub(crate) limiter: limiter::Limiter,
     bindings: UsageBindingSource,
     machine_control: Arc<crate::machine_control::MachineControl>,
     store: Option<crate::store::Store>,
@@ -231,6 +233,11 @@ impl UsageService {
         align_snapshot_bindings(&mut snapshot, &initial_bindings);
         Self {
             native: native::Cache::default(),
+            limiter: limiter::Limiter::new(
+                cache_path
+                    .as_ref()
+                    .map(|path| path.with_file_name("usage-rate-limits.json")),
+            ),
             bindings,
             machine_control,
             store,
@@ -244,6 +251,11 @@ impl UsageService {
             execution_machines: Arc::default(),
             runtime_restrictions: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_config(mut self, config: crate::config::Handle) -> Self {
+        self.limiter = self.limiter.with_config(config);
+        self
     }
 
     pub(crate) fn with_runtime_restrictions(
@@ -552,13 +564,58 @@ impl UsageService {
     /// Collect one claimed account outside any lock, then fold its result into
     /// the shared snapshot and release the claim.
     async fn collect_and_store(&self, binding: &PluginUsageSpec) {
+        let key = limiter::Limiter::account_key("service", &binding.account);
+        let permit = match self.limiter.start(&binding.account, &key, now_ms()) {
+            Ok(permit) => permit,
+            Err(budget) => {
+                let mut snapshot = self.snapshot.lock().await;
+                if let Some(usage) = snapshot
+                    .providers
+                    .iter_mut()
+                    .find(|usage| usage.provider == binding.account)
+                {
+                    usage.refresh = Some(ProviderRefreshState {
+                        last_attempt_at_ms: budget.last_attempt_ms,
+                        manual_refresh_after_ms: budget.next_allowed_ms,
+                        next_auto_refresh_at_ms: budget.next_allowed_ms,
+                        stale: usage.refresh.as_ref().is_some_and(|state| state.stale),
+                    });
+                }
+                self.persist_snapshot(&snapshot);
+                self.in_flight.lock().remove(&binding.account);
+                self.notify();
+                return;
+            }
+        };
         let attempt = self.collect_binding(binding).await;
         let completed_at_ms = now_ms();
+        let outcome = if matches!(attempt.status, "available" | "exhausted") {
+            limiter::Outcome::Success
+        } else if classify_usage_failure(attempt.error.as_deref().unwrap_or(""))
+            == UsageFailureKind::Authentication
+        {
+            limiter::Outcome::Authentication
+        } else {
+            limiter::Outcome::Failure
+        };
+        permit.finish(outcome, completed_at_ms);
+        let budget = self.limiter.view(&binding.account, &key, completed_at_ms);
         let bindings = self.bindings.current();
         {
             let mut snapshot = self.snapshot.lock().await;
             align_snapshot_bindings(&mut snapshot, &bindings);
             reconcile_provider_attempt(&mut snapshot, attempt, completed_at_ms, &bindings);
+            if let Some(refresh) = snapshot
+                .providers
+                .iter_mut()
+                .find(|usage| usage.provider == binding.account)
+                .and_then(|usage| usage.refresh.as_mut())
+            {
+                refresh.manual_refresh_after_ms =
+                    refresh.manual_refresh_after_ms.max(budget.next_allowed_ms);
+                refresh.next_auto_refresh_at_ms =
+                    refresh.next_auto_refresh_at_ms.max(budget.next_allowed_ms);
+            }
             update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
             self.persist_snapshot(&snapshot);
         }
@@ -641,17 +698,25 @@ impl UsageService {
         // Subprocess collectors are comparatively heavy. Background refreshes
         // run them one after another so RSS peaks do not stack. Manual refresh
         // keeps the concurrent path.
-        if low_peak {
-            for binding in &claimed {
-                self.collect_and_store(binding).await;
-            }
-        } else {
-            futures::future::join_all(
-                claimed
-                    .iter()
-                    .map(|binding| self.collect_and_store(binding)),
-            )
-            .await;
+        if !claimed.is_empty() {
+            let this = self.clone();
+            // The Service owns dispatch, even if an HTTP caller disconnects.
+            // Otherwise a dropped request can strand its in-flight marker.
+            let task = tokio::spawn(async move {
+                if low_peak {
+                    for binding in &claimed {
+                        this.collect_and_store(binding).await;
+                    }
+                } else {
+                    futures::future::join_all(
+                        claimed
+                            .iter()
+                            .map(|binding| this.collect_and_store(binding)),
+                    )
+                    .await;
+                }
+            });
+            let _ = task.await;
         }
         // Callers that wait observe any collection another request started.
         if !low_peak {
@@ -721,7 +786,10 @@ impl UsageService {
             return Ok(self.snapshot().await);
         }
         for claimed in self.claim_due(vec![binding], policy).await {
-            self.collect_and_store(&claimed).await;
+            let this = self.clone();
+            tokio::spawn(async move {
+                this.collect_and_store(&claimed).await;
+            });
         }
         // A collection another client started is joined, not repeated.
         self.wait_settled(&[provider.to_owned()]).await;

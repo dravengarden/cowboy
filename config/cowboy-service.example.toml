@@ -3,6 +3,26 @@
 # Validate edits with `cowboy config check --scope service`; see docs/configuration.md.
 schema = 1
 
+[usage]
+# Rolling admission window shared by every account of one usage Provider.
+# All Service quota collectors, manual and automatic, use this durable budget.
+# Passive session usage and reads of cached values do not consume it.
+# duration string such as "6h", from 2m to 1h; applies live.
+# provider_window = "2m"
+# Maximum quota collector invocations per Provider window across all accounts.
+# Starts are evenly spaced; only one collector per Provider runs at a time.
+# Native CLIs own internal HTTP; this is not a model-inference request limit.
+# integer from 1 to 10; applies live.
+# requests_per_window = 2
+# Minimum interval between quota queries for the same account, including
+# failures and manual refresh. Changing Machine or login does not reset it.
+# duration string such as "6h", from 5m to 1h; applies live.
+# account_interval = "5m"
+# Maximum exponential backoff after quota collection failures.
+# Authentication failures wait this long; cached reads remain available.
+# duration string such as "6h", from 1h to 1d; applies live.
+# failure_backoff_max = "1h"
+
 [accounts]
 # Allow new named Claude sessions with an admitted native login.
 # Does not start logins or bypass Machine, release, identity or runtime checks.
@@ -24,6 +44,11 @@ schema = 1
 # generations that no open, hibernated or unpurged session pins.
 # duration string such as "6h", from 10m to 7d; applies live.
 # generation_retention_interval = "6h"
+# Plugin IDs excluded from the Service Catalog, Provider discovery and host
+# activation. Also blocks new installations and login/session admission.
+# Uninstall idle Machine installations separately; history and credentials are retained.
+# array of at most 128 distinct lowercase slug identifiers; needs a restart.
+# disabled = []
 # Minimum time between extra retention passes for one Device whose
 # available disk is below its declared `disk.low_watermark`.
 # duration string such as "6h", from 5m to 7d; applies live.

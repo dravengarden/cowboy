@@ -6,6 +6,8 @@ import {
   Box,
   Button,
   ButtonBase,
+  Collapse,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -85,7 +87,6 @@ import { setProductSessionAlertHost } from "../auth/productSessionAlertHost";
 import { setProductCapacityAlertHost } from "../capacity/productCapacityAlertHost";
 import {
   acceptedScheduleTime,
-  accountProviderLabel,
   fullResetTime,
   type JsonRecord,
   nearestAvailableResetCredit,
@@ -98,7 +99,6 @@ import {
   relativeUpdateTime,
   scheduledResetCountdown,
   shortResetTime,
-  usageCardProviders,
   usageLimits,
   usagePluginId,
   usageRefreshing,
@@ -118,9 +118,12 @@ import {
   type UsageBalanceWidget,
   usageWidgetHasBalance,
   type UsageWidgetProvider,
-  usageWidgetProviders,
+  usageWidgetForAccount,
   type UsageWidgetWindow,
 } from "../usageWidget";
+import { useSubscriptionAccounts } from "../subscriptionAccounts";
+import { useNativeAccountUsage } from "../nativeAccountUsage";
+import { registeredUsageAccounts, type UsageAccountCard } from "../usageAccounts";
 import { DesktopModal } from "./DesktopModal";
 import {
   DESKTOP_INSET_RADIUS,
@@ -312,8 +315,10 @@ function usageWindowColumn(
 }
 
 function UsageProviderSummary(
-  { provider, first, now }: {
+  { provider, first, now, account, refreshing }: {
     provider: UsageWidgetProvider;
+    account: UsageAccountCard;
+    refreshing: boolean;
     first: boolean;
     /** The strip's 30s tick, passed in rather than read from the clock at
      *  render: a countdown that silently depends on when React happened to
@@ -344,6 +349,9 @@ function UsageProviderSummary(
   return (
     <Box
       data-usage-provider={provider.kind}
+      data-usage-account={account.id}
+      title={`${account.title}${refreshing ? " · Refreshing…" : ""}`}
+      aria-label={`${account.title}${refreshing ? " · Refreshing" : ""}`}
       sx={{
         // Every segment hugs its own text. The density decision still reserves
         // each kind's budget, so a segment may use less but never more; past
@@ -379,9 +387,10 @@ function UsageProviderSummary(
               fontWeight={700}
               noWrap
             >
-              {provider.label}
+              {account.title.split(" · ").at(-1)}
             </Typography>
           )}
+          {index === 0 && refreshing && <CircularProgress size={10} aria-label="Refreshing usage" />}
           <Typography
             variant="caption"
             fontWeight={800}
@@ -806,37 +815,50 @@ function DesktopUsageExtras(
 }
 
 function DesktopProviderUsage({
-  usage,
+  account,
   schedule,
   onUsageChanged,
+  onRefresh,
+  refreshing,
 }: {
-  usage: ProviderUsage;
+  account: UsageAccountCard;
   schedule: { fire_at_ms: number } | undefined;
   onUsageChanged: () => Promise<void>;
+  onRefresh: (() => Promise<void>) | undefined;
+  refreshing: boolean;
 }): React.JSX.Element {
+  const usage = account.usage;
+  const [details, setDetails] = useState(false);
   const limits = usageLimits(usage);
   const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
   const refreshLabel = providerUsageRefreshLabel(usage);
   const usageContext = providerUsageSlotContext(usage, {
-    showTitle: true,
+    showTitle: false,
     limits,
     resetsLabel: (resetsAt) =>
       resetsAt === undefined ? undefined : `Resets ${fullResetTime(resetsAt)}`,
     emptyMessage: providerUsageErrorMessage(
       usage,
-      "This provider has not exposed account limits.",
+      account.emptyMessage ?? "This account has not exposed usage yet.",
     ),
   });
   return (
-    <Stack spacing={1.25} data-usage-provider-section={usage.provider}>
+    <Stack spacing={1.25} data-usage-provider-section={usage.provider} data-usage-account={account.id}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center">
+        <Box>
+          <Typography variant="subtitle2" fontWeight={750}>{account.title}</Typography>
+          {account.subtitle && <Typography variant="caption" color="text.secondary">{account.subtitle}</Typography>}
+        </Box>
+        {onRefresh && <NetworkButton size="small" disabled={refreshing} networkAction={onRefresh}
+          startIcon={refreshing ? <CircularProgress size={14} /> : <Refresh fontSize="small" />}>
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </NetworkButton>}
+      </Stack>
       <PluginSlot
         pluginId={usagePluginId(usage.provider)}
         slot="provider.usage"
         context={usageContext}
       >
-        <Typography variant="subtitle2" fontWeight={750}>
-          {accountProviderLabel(usage.provider)}
-        </Typography>
         {refreshLabel && (
           <Typography variant="caption" color="warning.main">
             {refreshLabel}
@@ -864,18 +886,24 @@ function DesktopProviderUsage({
             </Typography>
           </Stack>
         ))}
-        <ProviderUsageCredits rows={usageContext.creditDetails} />
         {limits.length === 0 && !hasResetCredit && (
           <Typography variant="body2" color="text.secondary">
             {usageContext.emptyMessage}
           </Typography>
         )}
       </PluginSlot>
-      <DesktopUsageExtras
-        usage={usage}
-        schedule={schedule}
-        onUsageChanged={onUsageChanged}
-      />
+      <Button size="small" aria-expanded={details} onClick={() => setDetails((value) => !value)}
+        sx={{ alignSelf: "flex-start" }}>{details ? "Hide details" : "Details"}</Button>
+      <Collapse in={details}>
+        <ProviderUsageCredits rows={usageContext.creditDetails} />
+        {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
+        {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
+        {account.collector && <DesktopUsageExtras
+          usage={usage}
+          schedule={schedule}
+          onUsageChanged={onUsageChanged}
+        />}
+      </Collapse>
     </Stack>
   );
 }
@@ -1209,7 +1237,10 @@ export function DesktopTopBarControls({
   // The Controller owns usage and its refresh progress; every device reads
   // the same pushed snapshot, so a refresh started anywhere shows here.
   const snapshot = useStoreSelector((state) => state.usage);
-  const refreshing = usageRefreshing(snapshot);
+  const sessions = useStoreSelector((state) => state.sessions);
+  const accounts = useSubscriptionAccounts();
+  const native = useNativeAccountUsage(accounts.data?.registry.revision);
+  const refreshing = usageRefreshing(snapshot) || native.accounts.some((account) => account.refreshing);
   const [clock, setClock] = useState(() => Date.now());
   // How much width the toolbar actually has. Measured on the scroller App.tsx
   // owns, because that element is the viewport this strip must fit inside — the
@@ -1293,8 +1324,10 @@ export function DesktopTopBarControls({
     .map((_, index) => String(index + 1))
     .join("/");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
-    await (manual ? requestUsageRefresh() : loadUsageSnapshot());
-  }, []);
+    await (manual ? Promise.all([requestUsageRefresh(),
+      ...native.accounts.filter((account) => account.available).map((account) => native.refresh(account.account_id))])
+      : loadUsageSnapshot());
+  }, [native.accounts, native.refresh]);
   useEffect(() => {
     void loadUsage(false).catch(() => undefined);
   }, []);
@@ -1526,14 +1559,12 @@ export function DesktopTopBarControls({
   // snapshot alone, stayed hidden until the next snapshot (never, without a
   // manual refresh). Recompute on every Catalog observation as well.
   const { catalog } = useProviderCatalog();
-  const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [
-    catalog,
-    snapshot,
-  ]);
-  const usageProviders = useMemo(() => usageCardProviders(snapshot), [
-    catalog,
-    snapshot,
-  ]);
+  const usageAccounts = useMemo(() => registeredUsageAccounts(snapshot, accounts.data, sessions, native.accounts),
+    [catalog, snapshot, accounts.data, sessions, native.accounts]);
+  const widgetProviders = usageAccounts.flatMap((account) => {
+    const provider = usageWidgetForAccount(account.usage);
+    return provider ? [{ account, provider }] : [];
+  });
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = timelineState.availableCommands;
   const compactAction = useMemo(
@@ -1758,7 +1789,7 @@ export function DesktopTopBarControls({
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
   const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
-    (width, provider) =>
+    (width, { provider }) =>
       width +
       (usageWidgetHasBalance(provider)
         ? USAGE_BALANCE_SEGMENT_WIDTH_PX
@@ -2002,10 +2033,12 @@ export function DesktopTopBarControls({
                   overflow: "hidden",
                 }}
               >
-                {widgetProviders.map((provider, index) => (
+                {widgetProviders.map(({ account, provider }, index) => (
                   <UsageProviderSummary
-                    key={provider.kind}
+                    key={account.id}
+                    account={account}
                     provider={provider}
+                    refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
                     first={index === 0}
                     now={clock}
                   />
@@ -2102,12 +2135,15 @@ export function DesktopTopBarControls({
           <Divider />
           {usagePanel === "logs" ? <UsageLogs dense /> : (
             <>
-              {usageProviders.map((provider, index) => (
-                <Stack key={provider.provider} spacing={1.25}>
+              {usageAccounts.map((account, index) => (
+                <Stack key={account.id} spacing={1.25}>
                   {index > 0 && <Divider />}
                   <DesktopProviderUsage
-                    usage={provider}
-                    schedule={usageResetSchedule(snapshot, provider)}
+                    account={account}
+                    schedule={account.collector ? usageResetSchedule(snapshot, account.usage) : undefined}
+                    refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
+                    onRefresh={account.collector ? () => requestUsageRefresh(account.collector)
+                      : account.native?.available ? () => native.refresh(account.id) : undefined}
                     onUsageChanged={() =>
                       loadUsage(false)}
                   />
@@ -2118,7 +2154,7 @@ export function DesktopTopBarControls({
                   Loading usage…
                 </Typography>
               )}
-              {snapshot !== null && usageProviders.length === 0 && (
+              {snapshot !== null && usageAccounts.length === 0 && (
                 <Typography variant="body2" color="text.secondary">
                   No account providers have exposed usage yet.
                 </Typography>
