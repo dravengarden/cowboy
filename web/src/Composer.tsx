@@ -202,6 +202,10 @@ import {
 } from "./mobileComposerSurface";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
+import {
+  SessionContextCue,
+  useAnnouncedSessionContext,
+} from "./SessionContextCue";
 import { PermissionOverlay } from "./PermissionOverlay";
 import { useApprovalDockOwns } from "./approvalDockStore";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";
@@ -1116,6 +1120,13 @@ export function ComposerWorkspace({
     mobileKeyboardDismissed,
   );
   const preparing = status === "starting";
+  // The context cue strip hides while the mobile keyboard owns the screen, so
+  // the placeholder repeats that the next message starts a new agent.
+  const linkedContext = useAnnouncedSessionContext(sessionId);
+  const messagePlaceholder = linkedContext?.next_agent &&
+      linkedContext.revision !== linkedContext.applied_revision
+    ? "Message the new agent…"
+    : "Message the agent…";
   const queue = useStoreSelector((snapshot) =>
     snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
   );
@@ -2020,6 +2031,7 @@ export function ComposerWorkspace({
           a prompt open while its native retry loop waits for a reset, so surface
           the known exhausted window even though no transcript error exists. */
       }
+      <SessionContextCue sessionId={sessionId} desktop={desktop} />
       <ProviderQuotaStatus
         sessionId={sessionId}
         provider={provider}
@@ -2604,7 +2616,7 @@ export function ComposerWorkspace({
               commands={(): AvailableCommand[] => availableCommands}
               placeholder={preparing
                 ? "You can start typing while this session prepares…"
-                : "Message the agent…"}
+                : messagePlaceholder}
               // Vim is desktop-only — never load it on touch (no physical keyboard /
               // modal editing). ComposerEditor also gates the actual vim import on a
               // fine pointer, so this is belt-and-suspenders.
@@ -3405,7 +3417,7 @@ export function ComposerWorkspace({
           onPasteClipboardImages={pasteClipboardImages}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
-          placeholder="Message the agent…"
+          placeholder={messagePlaceholder}
           sendable={sendable}
           attachmentsSlot={fullscreenTrayAttachments.length > 0
             ? (

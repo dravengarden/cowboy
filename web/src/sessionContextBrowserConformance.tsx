@@ -6,6 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
+import { SessionContextCue } from "./SessionContextCue";
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
@@ -299,6 +300,7 @@ export async function runSessionContextBrowserConformance(
           >
             {state.lastError?.message}
           </output>
+          <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
           {desktop ? <SessionContextSettings session={sessions[0]!} /> : (
             <Sheet
               open
@@ -593,6 +595,19 @@ export async function runSessionContextBrowserConformance(
           sessions[0]!.provider_account_id === "default",
         `${mode}: changing the next account preserves the current binding`,
       );
+      await until(() =>
+        Boolean(
+          document.querySelector('[data-session-context-cue="pending_agent"]')
+            ?.textContent?.includes("Claude · Mink"),
+        )
+      );
+      check(
+        Boolean(
+          document.querySelector('[data-session-context-cue="pending_agent"]')
+            ?.textContent?.includes("Claude · Mink"),
+        ),
+        `${mode}: the composer cue names the pending agent's subscription`,
+      );
       button("Context & next agent").click();
       await until(() => Boolean(button("Cancel pending changes")));
       check(
@@ -631,6 +646,17 @@ export async function runSessionContextBrowserConformance(
         writes.filter((write) => write.url.endsWith("/send")).length === 2 &&
           sessions[0]!.status === "exited",
         `${mode}: sending preserves the original agent`,
+      );
+      await until(() =>
+        Boolean(
+          document.querySelector('[data-session-context-cue="continued_in"]'),
+        )
+      );
+      check(
+        Boolean(
+          document.querySelector('[data-session-context-cue="continued_in"]'),
+        ),
+        `${mode}: the original session links to where it continued`,
       );
       context = {
         ...context,

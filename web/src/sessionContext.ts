@@ -115,6 +115,12 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
   return read;
 }
 
+/** Whether the Service has announced context for this session. Ordinary
+ * sessions never fetch context; consumers re-check on CONTEXT_CHANGED. */
+export function contextConfigured(id: string): boolean {
+  return configured.has(id) || sends.has(id);
+}
+
 export function announceContext(id: string): void {
   invalidateRead(id);
   globalThis.dispatchEvent?.(new CustomEvent(CONTEXT_CHANGED, { detail: id }));

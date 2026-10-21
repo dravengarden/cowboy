@@ -23,6 +23,14 @@ starting a worker. **Discard** leaves stored choices unchanged. The current
 agent and its identity remain intact. Saved choices show their pending state;
 **Cancel pending changes** removes the pending configuration.
 
+While choices are pending, a one-line cue above the Composer says what the
+next message does ("starts a new agent · Claude · Mink", or how many sessions
+it links) with **Cancel**, and the input placeholder reads "Message the new
+agent…" so the cue survives the mobile keyboard hiding auxiliary rows. After a
+handoff the original session shows "continued in a new agent · Open" and the
+destination shows "Context from SOURCE · Open", so both directions are one tap.
+Sessions without announced context render and fetch nothing for this cue.
+
 On mobile, **Context from sessions** opens a separate sheet above Settings or
 New Session. It opens without focusing an input; search raises the keyboard
 only when chosen. Search stays above the scrolling results and **Done** stays
