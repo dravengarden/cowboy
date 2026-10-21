@@ -2882,6 +2882,23 @@ impl Hub {
         );
     }
 
+    /// Queue the parent's notice that one of its opted-in managed calls ended.
+    /// An idle parent starts a turn; a busy one sees it at its next turn. The
+    /// call-scoped id makes a repeated notice a no-op.
+    pub fn submit_call_notice(&self, session_id: &str, call_id: &str, text: String) {
+        self.submit_inner(
+            session_id,
+            text,
+            Vec::new(),
+            Some(format!(
+                "{}{call_id}",
+                crate::agent_model::CALL_NOTICE_PREFIX
+            )),
+            false,
+            false,
+        );
+    }
+
     pub(crate) fn is_managed_child(&self, session_id: &str) -> bool {
         self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.meta
@@ -6162,10 +6179,10 @@ impl Hub {
         }
         // A human (or any non-wakeup) submit resets the scheduler's runaway guard
         // — the autonomous-fire streak only counts unattended iterations.
-        if !cmid
-            .as_deref()
-            .is_some_and(|c| c.starts_with(crate::scheduler::WAKEUP_PREFIX))
-        {
+        if !cmid.as_deref().is_some_and(|c| {
+            c.starts_with(crate::scheduler::WAKEUP_PREFIX)
+                || c.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+        }) {
             self.notify_human_turn(session_id);
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
@@ -6329,7 +6346,9 @@ impl Hub {
     /// are deliberately reusable and never participate in delivery dedupe.
     /// A human/API prompt, not a scheduler, retry or managed-call prompt.
     pub(crate) fn is_authored_cmid(cmid: &str) -> bool {
-        Self::is_client_cmid(cmid) && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
+        Self::is_client_cmid(cmid)
+            && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
+            && !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
     }
 
     fn is_client_cmid(cmid: &str) -> bool {
@@ -8840,6 +8859,18 @@ mod core_tests {
         assert!(hub.remove_queued_by_cmid("s", "acp-1"));
         assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
         assert!(!hub.remove_queued_by_cmid("s", "acp-1"));
+    }
+
+    #[test]
+    fn a_repeated_call_notice_queues_once_and_is_not_an_authored_prompt() {
+        let hub = hub_with_session("parent");
+        hub.submit_call_notice("parent", "call-1", "done".to_owned());
+        hub.submit_call_notice("parent", "call-1", "done".to_owned());
+        assert_eq!(hub.session_info("parent").unwrap().queue_count, 1);
+        hub.submit_call_notice("parent", "call-2", "done".to_owned());
+        assert_eq!(hub.session_info("parent").unwrap().queue_count, 2);
+        assert!(!Hub::is_authored_cmid("call-notice:call-1"));
+        hub.submit_call_notice("missing", "call-1", "done".to_owned());
     }
 
     #[test]

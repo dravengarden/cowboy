@@ -9,6 +9,9 @@ use super::{Conversation, Purpose, Request, lifecycle::Record};
 pub const TASK: &str = "review_task";
 pub const BASE: &str = "review_base";
 pub const REUSE: &str = "review_reuse";
+/// Label value `parent` asks the Controller to queue one completion notice
+/// into the parent session instead of the parent polling `calls.wait`.
+pub const NOTIFY: &str = "notify";
 
 pub fn valid_base(base: &str) -> bool {
     matches!(base.len(), 40 | 64) && base.bytes().all(|byte| byte.is_ascii_hexdigit())

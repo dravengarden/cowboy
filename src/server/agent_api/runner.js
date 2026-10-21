@@ -61,10 +61,49 @@ for (const name of ["log", "info", "warn", "error", "debug"]) {
   }
 })();
 
+// Paged lists return {items-key, cursor}; agents habitually treat them as
+// arrays. Non-enumerable delegates keep the JSON shape unchanged while
+// `.map`, `.filter`, `for...of` and `.length` reach the primary array.
+const LIST_KEYS = {
+  "calls.list": ["calls"],
+  "machines.list": ["machines"],
+  "usage.list": ["accounts"],
+  "control.list": ["operations", "domains"],
+};
+const ARRAY_METHODS = [
+  "map",
+  "filter",
+  "find",
+  "findIndex",
+  "some",
+  "every",
+  "forEach",
+  "reduce",
+  "flatMap",
+  "slice",
+  "includes",
+  "at",
+];
+function listLike(op, value) {
+  const key = LIST_KEYS[op]?.find((key) => Array.isArray(value?.[key]));
+  if (!key) return value;
+  const items = value[key];
+  const hidden = (name, descriptor) =>
+    Object.defineProperty(value, name, { enumerable: false, ...descriptor });
+  for (const name of ARRAY_METHODS) {
+    if (!(name in value)) {
+      hidden(name, { value: (...args) => items[name](...args) });
+    }
+  }
+  hidden("length", { get: () => items.length });
+  hidden(Symbol.iterator, { value: () => items[Symbol.iterator]() });
+  return value;
+}
+
 function call(op, args) {
   const id = next++;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve: (value) => resolve(listLike(op, value)), reject });
     out({ id, op, args });
   });
 }

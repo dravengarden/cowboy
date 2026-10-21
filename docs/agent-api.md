@@ -173,7 +173,25 @@ arguments the broker received plus the help topic to consult. A misspelled
 namespace or method throws `unknown_operation` listing the valid names instead
 of an engine `TypeError`. A help request may carry `timeout_ms`; the MCP server
 reports which field was wrong in malformed tool arguments. `help:"actions"`
-points to the `accounts` and `preferences` topics instead of embedding them. Each broker operation
+points to the `accounts` and `preferences` topics instead of embedding them. Paged
+list objects from `calls.list`, `machines.list`, `usage.list` and
+`control.list` keep their JSON shape but also expose non-enumerable array
+methods (`map`, `filter`, `find`, iteration, `length`) over their primary list.
+
+### Completion notices
+
+`calls.start` and `review.start` accept `notify:true`. When that call reaches a
+terminal state, the Controller queues one `[Cowboy] Managed call … finished`
+prompt into the parent session through the ordinary next-turn queue: an idle
+parent starts a turn, a busy parent sees it at its next turn, and a paused queue
+holds it. The prompt's call-scoped id (`call-notice:<call_id>`) deduplicates
+repeats, records a Cowboy origin rather than a human one, and never resets the
+scheduler's unattended-turn guard. A parent that is closing or gone gets none.
+The agent should end its turn instead of polling `calls.wait`, then read
+`calls.result`. The notice is sent by the Controller runner that observes the
+terminal transition; a Controller crash in that instant can lose it, so
+`calls.inspect` remains the authority. The option is opt-in: an agent that
+already polls would otherwise spend an extra turn. Each broker operation
 rechecks the live parent and, for owned sessions, the active product account. A
 long-running read cannot continue using an owner snapshot after the parent
 closes or its account is disabled.
