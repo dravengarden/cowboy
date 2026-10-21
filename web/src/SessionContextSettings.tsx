@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -29,15 +29,42 @@ import {
 } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { ConfirmSheet } from "./Sheet";
+import {
+  closeSessionSettings,
+  requestComposerFocus,
+  SESSION_NEW_AGENT_EVENT,
+  takeNewAgentRequest,
+} from "./sessionSettingsOpen";
 
 export function SessionContextSettings(
   { session }: { session: SessionMeta },
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const [startNewAgent, setStartNewAgent] = useState(false);
+  const section = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const pending = data && data.revision !== data.applied_revision;
+  useEffect(() => {
+    const take = () => {
+      if (!takeNewAgentRequest(session.id)) return;
+      setStartNewAgent(true);
+      setOpen(true);
+    };
+    take();
+    document.addEventListener(SESSION_NEW_AGENT_EVENT, take);
+    return () => document.removeEventListener(SESSION_NEW_AGENT_EVENT, take);
+  }, [session.id]);
+  useEffect(() => {
+    if (open && startNewAgent) {
+      section.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, startNewAgent]);
   return (
-    <Box data-session-context sx={{ minWidth: 0, pb: open ? 2 : 0 }}>
+    <Box
+      ref={section}
+      data-session-context
+      sx={{ minWidth: 0, pb: open ? 2 : 0 }}
+    >
       <Button
         startIcon={<LinkOutlined />}
         endIcon={
@@ -45,7 +72,10 @@ export function SessionContextSettings(
         }
         aria-expanded={open}
         aria-keyshortcuts="Enter"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setStartNewAgent(false);
+          setOpen(!open);
+        }}
         sx={{ justifyContent: "flex-start", textTransform: "none" }}
       >
         Context & next agent{pending
@@ -76,14 +106,24 @@ export function SessionContextSettings(
           )}
           {data && (
             <ContextEditor
-              key={session.id}
+              key={`${session.id}:${startNewAgent}`}
               session={session}
               observed={data}
-              onSaved={() => {
+              startNewAgent={startNewAgent}
+              onSaved={(staged) => {
                 void reload();
                 setOpen(false);
+                setStartNewAgent(false);
+                // A staged choice applies to the next message: go write it.
+                if (staged) {
+                  closeSessionSettings(session.id);
+                  requestComposerFocus(session.id);
+                }
               }}
-              onCancel={() => setOpen(false)}
+              onCancel={() => {
+                setOpen(false);
+                setStartNewAgent(false);
+              }}
             />
           )}
         </Stack>
@@ -93,10 +133,11 @@ export function SessionContextSettings(
 }
 
 function ContextEditor(
-  { session, observed, onSaved, onCancel }: {
+  { session, observed, startNewAgent = false, onSaved, onCancel }: {
     session: SessionMeta;
     observed: SessionContext;
-    onSaved: () => void;
+    startNewAgent?: boolean;
+    onSaved: (staged: boolean) => void;
     onCancel: () => void;
   },
 ): React.JSX.Element {
@@ -104,8 +145,17 @@ function ContextEditor(
   const changedElsewhere = observed.revision !== snapshot.revision ||
     observed.applied_revision !== snapshot.applied_revision ||
     observed.delivery?.operation !== snapshot.delivery?.operation;
-  const [sources, setSources] = useState(snapshot.sources);
-  const [fresh, setFresh] = useState(Boolean(snapshot.next_agent));
+  // "Continue in new agent" opens with the current session linked.
+  const startFresh = startNewAgent && !snapshot.next_agent &&
+    snapshot.revision === snapshot.applied_revision;
+  const [sources, setSources] = useState(() =>
+    startFresh && !snapshot.sources.includes(session.id)
+      ? [session.id, ...snapshot.sources].slice(0, 32)
+      : snapshot.sources
+  );
+  const [fresh, setFresh] = useState(
+    Boolean(snapshot.next_agent) || startFresh,
+  );
   const [advanced, setAdvanced] = useState(false);
   const [inheritSettings, setInheritSettings] = useState(
     snapshot.next_agent?.inherit_settings ?? true,
@@ -185,7 +235,7 @@ function ContextEditor(
         sources: clear ? [] : sources,
         next_agent: clear ? null : nextAgent,
       });
-      onSaved();
+      onSaved(!clear && (Boolean(nextAgent) || sources.length > 0));
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Could not save context",
@@ -461,7 +511,7 @@ function ContextEditor(
                 })
                   .then(() => {
                     setResolving(false);
-                    onSaved();
+                    onSaved(false);
                   })
                   .catch((cause: unknown) =>
                     setError(

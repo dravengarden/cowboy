@@ -7,6 +7,11 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { SessionContextCue } from "./SessionContextCue";
+import {
+  CLOSE_SESSION_SETTINGS_EVENT,
+  COMPOSER_FOCUS_EVENT,
+  requestNewAgent,
+} from "./sessionSettingsOpen";
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
@@ -725,6 +730,45 @@ export async function runSessionContextBrowserConformance(
         context.sources.length === 0 && !context.next_agent &&
           context.revision === context.applied_revision,
         `${mode}: cancelling pending context clears only the staged configuration`,
+      );
+      const surfaceEvents: string[] = [];
+      const recordSurface = (event: Event) => surfaceEvents.push(event.type);
+      document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
+      document.addEventListener(COMPOSER_FOCUS_EVENT, recordSurface);
+      requestNewAgent(sessions[0]!.id);
+      const freshChecked = () =>
+        container.querySelector<HTMLInputElement>(
+          '[data-context-editor] input[type="checkbox"]',
+        )?.checked === true;
+      await until(() =>
+        freshChecked() &&
+        container.querySelectorAll("[data-context-editor] .MuiChip-root")
+            .length >= 1
+      );
+      check(
+        freshChecked() &&
+          container.querySelectorAll("[data-context-editor] .MuiChip-root")
+              .length >= 1,
+        `${mode}: the session menu opens a new agent with this session linked`,
+      );
+      await until(() =>
+        Boolean(button("Save changes")) && !button("Save changes").disabled
+      );
+      button("Save changes").click();
+      await until(() => surfaceEvents.includes(COMPOSER_FOCUS_EVENT));
+      check(
+        surfaceEvents.includes(CLOSE_SESSION_SETTINGS_EVENT) &&
+          surfaceEvents.includes(COMPOSER_FOCUS_EVENT) &&
+          Boolean(context.next_agent),
+        `${mode}: saving a new agent closes settings and returns to the composer`,
+      );
+      document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
+      document.removeEventListener(COMPOSER_FOCUS_EVENT, recordSurface);
+      button("Context & next agent").click();
+      await until(() => Boolean(button("Cancel pending changes")));
+      button("Cancel pending changes").click();
+      await until(() =>
+        !context.next_agent && context.revision === context.applied_revision
       );
       flushSync(() => root.render(null));
       const workspace = sessions[0]!.workspace_id;

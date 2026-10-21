@@ -1,6 +1,11 @@
 import { desktopSize } from "../surface/desktopSize";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
-import { OPEN_SESSION_SETTINGS_EVENT, sessionSettingsEventMatches } from "../sessionSettingsOpen";
+import {
+  CLOSE_SESSION_SETTINGS_EVENT,
+  OPEN_SESSION_SETTINGS_EVENT,
+  pendingSessionSettings,
+  sessionSettingsEventMatches,
+} from "../sessionSettingsOpen";
 import {
   alpha,
   Box,
@@ -1228,8 +1233,18 @@ export function DesktopTopBarControls({
     const openSettings = (event: Event): void => {
       if (sessionSettingsEventMatches(event, sessionId)) setOpenSurface("config");
     };
+    const closeSettings = (event: Event): void => {
+      if (sessionSettingsEventMatches(event, sessionId)) {
+        setOpenSurface((current) => current === "config" ? null : current);
+      }
+    };
+    if (pendingSessionSettings(sessionId)) setOpenSurface("config");
     document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
-    return () => document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
+    document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, closeSettings);
+    return () => {
+      document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, openSettings);
+      document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, closeSettings);
+    };
   }, [sessionId]);
   const usageOpen = openSurface === "usage";
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");

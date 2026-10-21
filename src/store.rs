@@ -8889,6 +8889,7 @@ struct SessionRow {
 impl SessionRow {
     fn into_meta(self, account_id: crate::provider_account::ProviderAccountId) -> SessionMeta {
         SessionMeta {
+            continued_from: None,
             id: self.id,
             provider: self.provider,
             provider_version: self.provider_version,
@@ -8949,6 +8950,7 @@ mod storage_contract_tests {
 
     pub(super) fn session(id: &str) -> SessionMeta {
         SessionMeta {
+            continued_from: None,
             id: id.to_owned(),
             provider: "codex".to_owned(),
             provider_version: String::new(),

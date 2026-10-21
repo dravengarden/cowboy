@@ -349,7 +349,10 @@ import { sessionExecution } from "./sessionExecution";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import {
+  CLOSE_SESSION_SETTINGS_EVENT,
+  COMPOSER_FOCUS_EVENT,
   OPEN_SESSION_SETTINGS_EVENT,
+  pendingSessionSettings,
   type SessionSettingsFocus,
   sessionSettingsFocusFromEvent,
   sessionSettingsEventMatches,
@@ -1131,6 +1134,15 @@ export function ComposerWorkspace({
     snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
   );
   const editorRef = useRef<ComposerEditorHandle>(null);
+  useEffect(() => {
+    const focus = (event: Event): void => {
+      if (!sessionSettingsEventMatches(event, sessionId)) return;
+      // Let the closing settings surface release focus first.
+      globalThis.setTimeout(() => editorRef.current?.focusEnd(), 0);
+    };
+    document.addEventListener(COMPOSER_FOCUS_EVENT, focus);
+    return () => document.removeEventListener(COMPOSER_FOCUS_EVENT, focus);
+  }, [sessionId]);
   const {
     text,
     setText,
@@ -6409,9 +6421,21 @@ export function SessionControls({
       setSheetFocus(sessionSettingsFocusFromEvent(event));
       setSheetOpen(true);
     };
+    const onClose = (event: Event): void => {
+      if (sessionSettingsEventMatches(event, sessionId)) setSheetOpen(false);
+    };
+    // A request made from another session's menu arrives before this mounts.
+    const pending = pendingSessionSettings(sessionId);
+    if (pending) {
+      setSheetFocus(pending);
+      setSheetOpen(true);
+    }
     document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
-    return () =>
+    document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, onClose);
+    return () => {
       document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
+      document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, onClose);
+    };
   }, [touchInput, sessionId]);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";

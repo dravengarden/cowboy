@@ -23,6 +23,14 @@ starting a worker. **Discard** leaves stored choices unchanged. The current
 agent and its identity remain intact. Saved choices show their pending state;
 **Cancel pending changes** removes the pending configuration.
 
+The session menu (mobile long press, Desktop session actions with `A`) offers
+**Continue in new agent…**: it opens that session's settings with the new agent
+selected and the session linked. Saving a staged choice closes settings and
+focuses the Composer, so the next step is writing the message. A continuation
+keeps its source's title and shows a **Continued** badge in the session list;
+the mark is the persisted `session_continued_from:<id>` setting projected as
+`continued_from` on the session.
+
 While choices are pending, a one-line cue above the Composer says what the
 next message does ("starts a new agent · Claude · Mink", or how many sessions
 it links) with **Cancel**, and the input placeholder reads "Message the new

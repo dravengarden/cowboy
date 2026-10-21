@@ -112,6 +112,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
     use crate::core::{SessionMeta, SessionOrigin, Status};
 
     let mut meta = SessionMeta {
+        continued_from: None,
         id: "sess-1".to_owned(),
         provider: "codex".to_owned(),
         provider_version: String::new(),

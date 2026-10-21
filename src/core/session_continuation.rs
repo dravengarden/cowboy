@@ -128,6 +128,14 @@ impl Hub {
                 )?;
             }
         }
+        self.set_setting(
+            format!(
+                "{}{destination}",
+                super::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            ),
+            json!(source),
+        );
+        self.set_continued_from(destination, Some(source.to_owned()));
         self.rename_session(destination, source_meta.title);
         Ok(())
     }
@@ -314,6 +322,32 @@ mod tests {
         assert_eq!(
             hub.sync_value("mobile-review:target")["directory"],
             "session::target"
+        );
+        assert_eq!(
+            hub.session_info("target")
+                .unwrap()
+                .meta
+                .continued_from
+                .as_deref(),
+            Some("source")
+        );
+        // The mark is a persisted setting, projected again after a restart.
+        let key = format!(
+            "{}target",
+            super::super::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+        );
+        let restored = Hub::new();
+        session(&restored, "target", "me");
+        restored.load_settings(vec![(key.clone(), hub.setting(&key).unwrap())]);
+        restored.restore_continuations();
+        assert_eq!(
+            restored
+                .session_info("target")
+                .unwrap()
+                .meta
+                .continued_from
+                .as_deref(),
+            Some("source")
         );
         // An explicit choice of another session remains that choice.
         hub.place_continuation("pinned", "next", true, &actor)

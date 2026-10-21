@@ -20,6 +20,8 @@ pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
 pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 /// The prompt that carries a session's linked context; the session id follows.
 pub const SESSION_CONTEXT_CARRIER_PREFIX: &str = "session_context_carrier:";
+/// The session a continuation was created from; the destination id follows.
+pub const SESSION_CONTINUED_FROM_PREFIX: &str = "session_continued_from:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
 pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_update:";
 /// Agent tools defaults for one agent kind; the agent id follows.
@@ -42,6 +44,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_DELIVERY_HOLD_PREFIX,
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
+            SESSION_CONTINUED_FROM_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
@@ -70,6 +73,7 @@ pub(crate) fn examples() -> Vec<String> {
         format!("{SESSION_DELIVERY_HOLD_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
+        format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),

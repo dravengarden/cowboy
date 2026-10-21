@@ -442,6 +442,10 @@ pub struct ProviderUpdateOffer {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
+    /// The session this one continues as a new agent. Persisted as the
+    /// `session_continued_from:` setting and restored onto the projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<String>,
     /// Resolved once at creation; independent of runtime Machine and auth generation.
     #[serde(default)]
     pub provider_account_id: crate::provider_account::ProviderAccountId,
@@ -3359,6 +3363,7 @@ impl Hub {
             owner_username,
         } = registration;
         SessionMeta {
+            continued_from: None,
             id: id.clone(),
             provider,
             provider_account_id,
@@ -3513,6 +3518,7 @@ impl Hub {
                 settings_keys::SESSION_DELIVERY_HOLD_PREFIX,
                 settings_keys::SESSION_CONTEXT_PREFIX,
                 settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
+                settings_keys::SESSION_CONTINUED_FROM_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -3527,6 +3533,38 @@ impl Hub {
     /// Rename a session. Updates the in-memory `title`, persists, and
     /// re-broadcasts the session list so every connected surface sees the
     /// new label. Unknown ids are silently ignored (matches `set_status`).
+    /// Mark `session_id` as continuing `source` (or restore that mark).
+    pub(crate) fn set_continued_from(&self, session_id: &str, source: Option<String>) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.meta.continued_from == source {
+                return;
+            }
+            s.meta.continued_from = source;
+        }
+        self.broadcast_sessions();
+    }
+
+    /// Project persisted continuation marks after settings and sessions load.
+    pub(crate) fn restore_continuations(&self) {
+        for meta in self.session_list() {
+            let key = format!(
+                "{}{}",
+                settings_keys::SESSION_CONTINUED_FROM_PREFIX,
+                meta.id
+            );
+            if let Some(source) = self
+                .setting(&key)
+                .and_then(|value| value.as_str().map(str::to_owned))
+            {
+                self.set_continued_from(&meta.id, Some(source));
+            }
+        }
+    }
+
     pub fn rename_session(&self, session_id: &str, title: String) {
         {
             let mut sessions = self.inner.sessions.lock();
@@ -8053,6 +8091,7 @@ mod runtime_reconciliation_tests {
     pub(super) fn restored_busy(id: &str) -> RestoredSession {
         RestoredSession {
             meta: SessionMeta {
+                continued_from: None,
                 id: id.to_owned(),
                 provider: "codex".to_owned(),
                 provider_version: String::new(),

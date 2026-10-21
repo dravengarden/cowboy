@@ -1390,6 +1390,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // missing worker become Interrupted.
             hub.restore_reconciling_runtime(restored);
             crate::session_context::restore_announcements(&hub);
+            hub.restore_continuations();
             hub.set_artifacts(store.artifacts());
             tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.

@@ -91,6 +91,7 @@ import {
     DriveFileMoveOutlined,
     DriveFileRenameOutline,
     ExpandLess,
+    ForkRightOutlined,
     ExpandMore,
     FolderOpenOutlined,
     FolderOutlined,
@@ -138,7 +139,9 @@ import { SessionUpdateBadge } from "./SessionUpdateBadge";
 import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
-import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
+import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
+import { requestNewAgent } from "./sessionSettingsOpen";
+import { isManagedChild } from "./managedCalls";
 import {
     SessionCacheGlyph,
     SessionObligationBadge,
@@ -2222,6 +2225,18 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
+                                    {s.continued_from && (
+                                        // A continuation keeps its source's title; this tells the
+                                        // adjacent pair apart without renaming either session.
+                                        <Chip
+                                            data-session-continued
+                                            size="small"
+                                            variant="outlined"
+                                            label="Continued"
+                                            title="Continues an earlier session with a new agent"
+                                            sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
+                                        />
+                                    )}
                                     <SessionUpdateBadge session={s} />
                                     <SessionObligationBadge sessionId={s.id} />
                                     <SessionProjectionBadge sessionId={s.id} />
@@ -2439,6 +2454,22 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
+                {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                    <MenuItem
+                        data-session-continue-new-agent
+                        onClick={(): void => {
+                            const row = menuAnchor.row;
+                            setMenuAnchor(null);
+                            requestPickSession(row.id, row);
+                            requestNewAgent(row.id);
+                        }}
+                    >
+                        <ListItemIcon>
+                            <ForkRightOutlined fontSize="medium" />
+                        </ListItemIcon>
+                        <ListItemText primary="Continue in new agent…" secondary="Another subscription or Provider" />
+                    </MenuItem>
+                )}
                 {menuAnchor && tree.folderOf.get(menuAnchor.row.id) && (
                     <MenuItem onClick={(): void => {
                         moveItem({ kind: "session", id: menuAnchor.row.id }, null);
@@ -2569,6 +2600,12 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
                                 <Kbd keys="M" />
                             </Button>
+                            {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                                <Button data-session-shortcut="a" data-session-continue-new-agent fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewAgent(row.id); }} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue in new agent…</Box>
+                                    <Kbd keys="A" />
+                                </Button>
+                            )}
                             <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Reload</Box>
                                 <Kbd keys="L" />
