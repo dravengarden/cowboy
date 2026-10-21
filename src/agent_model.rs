@@ -103,6 +103,10 @@ pub enum Event {
 pub(crate) const LEGACY_AUTO_CONTINUE_PREFIX: &str = "__cont__";
 pub(crate) const SCHED_PREFIX: &str = "__sched__";
 pub const WAKEUP_PREFIX: &str = "__wake__";
+/// A Controller notice telling a parent that its opted-in managed call ended.
+/// It is a client-style id so the Hub deduplicates a repeated notice against
+/// the queue, recent dispatches and the transcript.
+pub const CALL_NOTICE_PREFIX: &str = "call-notice:";
 
 #[cfg(test)]
 mod usage_tests {

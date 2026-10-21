@@ -182,6 +182,7 @@ async fn drive(state: &Arc<AppState>, parent: &str, call: &str) {
         };
         if record.state.terminal() {
             settle(state, &record);
+            notify_parent(state, &record);
             return;
         }
         // A deleted or closing parent stops its owned active calls.
@@ -1097,6 +1098,50 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
 }
 
 /// Release a finished child's worker; its transcript and workspace stay.
+/// Queue the parent's opted-in completion notice. A parent that is gone or
+/// closing gets none; the Hub's call-scoped id absorbs a repeated notice.
+fn notify_parent(state: &AppState, record: &Record) {
+    if record
+        .labels
+        .get(crate::managed_calls::review::NOTIFY)
+        .is_none_or(|value| value != "parent")
+    {
+        return;
+    }
+    let parent = &record.placement.parent_session_id;
+    if state
+        .hub
+        .session_info(parent)
+        .is_none_or(|info| info.meta.closing)
+    {
+        return;
+    }
+    state
+        .hub
+        .submit_call_notice(parent, &record.call_id, call_notice(record));
+}
+
+fn call_notice(record: &Record) -> String {
+    let title = record
+        .labels
+        .get("title")
+        .map(|title| format!(" ({title})"))
+        .unwrap_or_default();
+    let error = record
+        .error
+        .as_ref()
+        .map(|error| format!(", error {}", error.code))
+        .unwrap_or_default();
+    format!(
+        "[Cowboy] Managed call {}{title} finished: {}{error}. Read it with cowboy_read: \
+         cowboy.calls.result(\"{}\",{{offset:0,chars:4000}}). A running, failed or partial \
+         review is never evidence of a clean review.",
+        record.call_id,
+        record.state.code(),
+        record.call_id
+    )
+}
+
 fn settle(state: &AppState, record: &Record) {
     if state.supervisor.has_live_worker(&record.child_session_id) {
         let _ = state.supervisor.hibernate_session(&record.child_session_id);
@@ -1226,6 +1271,13 @@ mod tests {
         failed.error = Some(CallError::new("launch_timeout", None));
         assert!(ledger.advance(&original, &failed).await.unwrap());
         assert_eq!(source_failure(&failed).code, "launch_timeout");
+        let notice = call_notice(&failed);
+        assert!(
+            notice.contains(&format!("Managed call {} ", failed.call_id))
+                && notice.contains("finished: failed, error launch_timeout")
+                && notice.contains(&format!("cowboy.calls.result(\"{}\"", failed.call_id)),
+            "{notice}"
+        );
         failed.state = State::Cancelled;
         failed.error = None;
         assert_eq!(source_failure(&failed).code, "review_source_cancelled");

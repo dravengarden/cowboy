@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_model::{LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX};
+use crate::agent_model::{
+    CALL_NOTICE_PREFIX, LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +64,9 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
         }
         Some(value) if value.starts_with(WAKEUP_PREFIX) || value.starts_with(SCHED_PREFIX) => {
             PromptOrigin::cowboy("schedule")
+        }
+        Some(value) if value.starts_with(CALL_NOTICE_PREFIX) => {
+            PromptOrigin::cowboy("managed_call")
         }
         _ => PromptOrigin::human_composer(),
     }
@@ -257,6 +262,10 @@ mod tests {
         assert_eq!(
             origin_from_cmid(Some("__wake__abc")),
             PromptOrigin::cowboy("schedule")
+        );
+        assert_eq!(
+            origin_from_cmid(Some("call-notice:call-1")),
+            PromptOrigin::cowboy("managed_call")
         );
         assert_eq!(
             origin_from_cmid(Some("cmid-1")),

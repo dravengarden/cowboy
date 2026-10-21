@@ -43,6 +43,8 @@ struct CallInput {
     base: Option<String>,
     #[serde(default)]
     fresh: bool,
+    #[serde(default)]
+    notify: bool,
 }
 
 fn auto() -> String {
@@ -101,6 +103,9 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
     }
     if let Some(reason) = input.reason {
         labels.insert("selection_reason", reason);
+    }
+    if input.notify {
+        labels.insert(crate::managed_calls::review::NOTIFY, "parent".to_owned());
     }
     let mut output = json!({"format":"text"});
     if let (Some(task), Some(base)) = (input.task, input.base) {
@@ -822,6 +827,16 @@ mod tests {
         assert!(request.instruction.contains("check ownership"));
         assert_eq!(request.labels["title"], "Ownership review");
         assert_eq!(request.labels["selection_reason"], "Ample model quota");
+        assert!(!request.labels.contains_key("notify"));
+        let Action::Start { request, .. } = call_action(
+            "calls.start",
+            json!({"instruction":"inspect","notify":true}),
+            "op",
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(request.labels["notify"], "parent");
         assert!(matches!(
             request.access,
             crate::managed_calls::Access::ReadOnly

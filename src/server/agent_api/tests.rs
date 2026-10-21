@@ -359,6 +359,7 @@ impl Host for FakeHost {
             "session.info" => Ok(json!({"id":"parent-1","status":"busy","queued":2})),
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
+            "machines.list" => Ok(json!({"machines":[{"id":"a"},{"id":"b"}],"next":null})),
             "api.help" => {
                 only_keys(&args, &["topic"])?;
                 crate::agent_api::help(arg_str(&args, "topic")?).ok_or("invalid_help".into())
@@ -684,4 +685,27 @@ fn operation_errors_keep_codes_and_split_details() {
     let long = format!("{{\"x\":\"{}\"}}", "é".repeat(1000));
     let value = call_error("sessions.info", &long, "invalid_argument".into());
     assert!(value["message"].as_str().unwrap().chars().count() < 420);
+}
+
+#[tokio::test]
+async fn paged_lists_iterate_like_arrays_without_changing_their_json() {
+    let Some(value) = run(
+        r#"
+        const list = await cowboy.machines.list();
+        return { ids: list.map((m) => m.id), spread: [...list].length, length: list.length,
+          found: list.find((m) => m.id === "b")?.id, json: JSON.parse(JSON.stringify(list)) };
+        "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        value["value"],
+        json!({"ids":["a","b"],"spread":2,"length":2,"found":"b",
+            "json":{"machines":[{"id":"a"},{"id":"b"}],"next":null}}),
+        "{value}"
+    );
 }
