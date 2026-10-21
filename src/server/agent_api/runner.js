@@ -69,18 +69,40 @@ function call(op, args) {
   });
 }
 
+// A misspelled operation otherwise surfaces as an engine TypeError
+// ("x is not a function") that names no valid alternative.
+const PASSTHROUGH = new Set(["then", "toJSON", "constructor"]);
+const strict = (object, path, hint) =>
+  new Proxy(object, {
+    get(target, key, receiver) {
+      if (typeof key !== "string" || key in target || PASSTHROUGH.has(key)) {
+        return Reflect.get(target, key, receiver);
+      }
+      const error = new Error(
+        `${path}.${key} does not exist; ${path} has: ${
+          Object.keys(target).join(", ")
+        }${hint}`,
+      );
+      error.code = "unknown_operation";
+      throw error;
+    },
+  });
 const namespace = (name, methods) =>
-  Object.freeze(Object.fromEntries(
-    Object.entries(methods).map(([method, shape]) => [
-      method,
-      (...values) => call(`${name}.${method}`, shape(...values)),
-    ]),
-  ));
+  strict(
+    Object.freeze(Object.fromEntries(
+      Object.entries(methods).map(([method, shape]) => [
+        method,
+        (...values) => call(`${name}.${method}`, shape(...values)),
+      ]),
+    )),
+    `cowboy.${name}`,
+    "",
+  );
 const none = () => ({});
 const id = (id) => ({ id });
 const callId = (call_id) => ({ call_id });
 const query = (q) => q ?? {};
-const cowboy = Object.freeze({
+const cowboy = strict(Object.freeze({
   control: namespace("control", {
     list: (domain) => domain === undefined ? {} : ({ domain }),
     describe: (name) => ({ name }),
@@ -152,7 +174,7 @@ const cowboy = Object.freeze({
     list: query,
     read: (id, q) => ({ ...q, id }),
   }),
-});
+}), "cowboy", "; help is cowboy.api.help(topic)");
 
 function failure(error, code) {
   return {

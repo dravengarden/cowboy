@@ -130,23 +130,18 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
         Value::Null => json!({}),
         // The tag selects the action; a tool argument never may.
         Value::Object(map) if !map.contains_key("kind") => arguments.clone(),
-        _ => return Err("invalid arguments".into()),
+        _ => return Err("arguments must be a JSON object without `kind`".into()),
     };
     let mut tagged = arguments;
     if name == "cowboy_read" && tagged.get("help").is_some() {
-        if tagged.as_object().is_none_or(|map| map.len() != 1) {
-            return Err("invalid help arguments".into());
+        let topic = help_topic(&tagged).ok_or(HELP_USAGE)?;
+        if !topic
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            || topic.len() > 64
+        {
+            return Err("invalid help topic".into());
         }
-        let topic = tagged["help"]
-            .as_str()
-            .filter(|topic| {
-                !topic.is_empty()
-                    && topic.len() <= 64
-                    && topic
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-            })
-            .ok_or("invalid help topic")?;
         return Ok(Action::AgentRead {
             code: format!(
                 "return await cowboy.api.help({});",
@@ -166,7 +161,7 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
                 .as_str()
                 .is_none_or(|id| !crate::managed_calls::valid_id(id))
         {
-            return Err("invalid receipt arguments".into());
+            return Err("receipt takes exactly `domain` and `operation` IDs".into());
         }
         return Ok(Action::AgentInvoke {
             action: "receipts.get".into(),
@@ -180,12 +175,27 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
         "cowboy_execute" => "agent_invoke",
         _ => return Err(format!("unknown tool {name}")),
     });
-    let action: Action =
-        serde_json::from_value(tagged).map_err(|_| "invalid arguments".to_owned())?;
+    let action: Action = serde_json::from_value(tagged).map_err(|error| {
+        // Serde names the offending field or type, never another caller's data.
+        format!("invalid arguments: {error}")
+    })?;
     action
         .validate()
         .map_err(|error| format!("invalid arguments: {error}"))?;
     Ok(action)
+}
+
+const HELP_USAGE: &str =
+    "help takes one topic string and optional timeout_ms; send code in a separate call";
+
+/// A help request's topic. `timeout_ms` is tolerated because agents attach it
+/// to every read; `code`, `language` and `format` make the request ambiguous.
+fn help_topic(arguments: &Value) -> Option<&str> {
+    let map = arguments.as_object()?;
+    if map.keys().any(|key| key != "help" && key != "timeout_ms") {
+        return None;
+    }
+    map["help"].as_str().filter(|topic| !topic.is_empty())
 }
 
 /// One compact text block: the gateway envelope minus its wire schema.
@@ -270,14 +280,11 @@ async fn handle(
                 ));
             }
             if name == "cowboy_read" && params["arguments"].get("help").is_some() {
-                let args = &params["arguments"];
-                let topic = args
-                    .as_object()
-                    .filter(|v| v.len() == 1)
-                    .and_then(|_| args["help"].as_str());
-                let mut reply = match topic {
+                let mut reply = match help_topic(&params["arguments"]) {
                     Some(topic) => discover(topic).await,
-                    None => json!({"state":"error","error":{"code":"invalid_help"}}),
+                    None => {
+                        json!({"state":"error","error":{"code":"invalid_help","message":HELP_USAGE}})
+                    }
                 };
                 if !actions && let Some(value) = reply.get_mut("value") {
                     value["available_actions"] = json!([]);
@@ -289,9 +296,9 @@ async fn handle(
             }
             let action = match action(name, params.get("arguments").unwrap_or(&Value::Null)) {
                 Ok(action) => action,
-                Err(_) => {
+                Err(message) => {
                     return Ok(tool_result(
-                        json!({"state":"error","error":{"code":"invalid_argument"}}),
+                        json!({"state":"error","error":{"code":"invalid_argument","message":message}}),
                     ));
                 }
             };
@@ -312,8 +319,11 @@ async fn handle(
 }
 
 async fn discover(topic: &str) -> Value {
-    let Ok(action) = action("cowboy_read", &json!({"help":topic})) else {
-        return json!({"state":"error","error":{"code":"invalid_help"}});
+    let action = match action("cowboy_read", &json!({"help":topic})) {
+        Ok(action) => action,
+        Err(message) => {
+            return json!({"state":"error","error":{"code":"invalid_help","message":message}});
+        }
     };
     let Ok(context) = wiring() else {
         return json!({"state":"error","error":{"code":"context_unavailable"}});
@@ -647,6 +657,13 @@ mod tests {
         assert!(
             matches!(help, Action::AgentRead {code,..} if code == "return await cowboy.api.help(\"future_topic\");")
         );
+        // Agents attach timeout_ms to every read; help still runs, and
+        // malformed reads say what was wrong instead of a bare code.
+        assert!(action("cowboy_read", &json!({"help":"calls","timeout_ms":15000})).is_ok());
+        let err = action("cowboy_read", &json!({"code":"return 1","revision":"abc"})).unwrap_err();
+        assert!(err.contains("unknown field `revision`"), "{err}");
+        let err = action("cowboy_read", &json!({})).unwrap_err();
+        assert!(err.contains("missing field `code`"), "{err}");
         let unavailable = handle("tools/call", &json!({"name":"cowboy_execute","arguments":{"action":"review.start","arguments":{},"operation":"test"}}), old).await.unwrap();
         assert_eq!(unavailable["isError"], true);
         for arguments in [

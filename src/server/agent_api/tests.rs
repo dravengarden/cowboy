@@ -359,6 +359,10 @@ impl Host for FakeHost {
             "session.info" => Ok(json!({"id":"parent-1","status":"busy","queued":2})),
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
+            "api.help" => {
+                only_keys(&args, &["topic"])?;
+                crate::agent_api::help(arg_str(&args, "topic")?).ok_or("invalid_help".into())
+            }
             "documents.read" => Ok(json!({"body": "x".repeat(MAX_REPLY_BYTES)})),
             "accounts.transition_status" => {
                 only_keys(&args, &["operation"])?;
@@ -615,4 +619,69 @@ async fn budgets_and_failures_are_explicit() {
     .await
     .unwrap();
     assert_eq!(value["value"], json!({"/tmp":"ENOSPC","/dev":"EROFS"}));
+}
+
+#[tokio::test]
+async fn failed_calls_name_the_operation_and_what_was_received() {
+    let Some(value) = run(
+        r#"
+        const out = {};
+        try { await cowboy.api.help({topic:"calls"}); }
+        catch (e) { out.argument = [e.code, e.message]; }
+        try { await cowboy.sessions.get("s"); } catch (e) { out.method = [e.code, e.message]; }
+        try { await cowboy.help("calls"); } catch (e) { out.root = [e.code, e.message]; }
+        out.passthrough = [typeof cowboy.then, typeof cowboy.sessions.toJSON];
+        return out;
+        "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    let out = &value["value"];
+    assert_eq!(out["argument"][0], "invalid_argument", "{value}");
+    let message = out["argument"][1].as_str().unwrap();
+    assert!(
+        message.starts_with("api.help: invalid_argument; received {")
+            && message.contains(r#"{"topic":{"topic":"calls"}}"#)
+            && message.contains(r#"cowboy_read({help:"index"})"#),
+        "{message}"
+    );
+    assert_eq!(out["method"][0], "unknown_operation");
+    let message = out["method"][1].as_str().unwrap();
+    assert!(message.starts_with("cowboy.sessions.get does not exist;") && message.contains("info"));
+    assert_eq!(out["root"][0], "unknown_operation");
+    assert!(
+        out["root"][1]
+            .as_str()
+            .unwrap()
+            .contains("cowboy.api.help(topic)")
+    );
+    assert_eq!(out["passthrough"], json!(["undefined", "undefined"]));
+}
+
+#[test]
+fn operation_errors_keep_codes_and_split_details() {
+    let value = call_error(
+        "control.read",
+        "{}",
+        "http_400: unknown field `window`".into(),
+    );
+    assert_eq!(value["code"], "http_400");
+    assert_eq!(
+        value["message"],
+        "control.read: http_400: unknown field `window`"
+    );
+    let value = call_error("api.help", r#"{"topic":"plugins"}"#, "invalid_help".into());
+    assert!(
+        value["message"]
+            .as_str()
+            .unwrap()
+            .contains("topics: session, sessions")
+    );
+    let long = format!("{{\"x\":\"{}\"}}", "é".repeat(1000));
+    let value = call_error("sessions.info", &long, "invalid_argument".into());
+    assert!(value["message"].as_str().unwrap().chars().count() < 420);
 }

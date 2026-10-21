@@ -167,7 +167,13 @@ tool-call updates fold into their call, thoughts are omitted and text is
 truncated per item. `calls.*` uses the exact managed-call dispatcher, minus the
 CLI-only `schema` and `next` fields; a program can observe calls but not start
 or cancel them. `calls.wait` is clamped to the program's remaining budget. A
-failed operation throws an `Error` whose `code` is stable. Each broker operation
+failed operation throws an `Error` whose `code` is stable; its bounded `message`
+names the operation and, for `invalid_argument`/`not_found`, echoes the
+arguments the broker received plus the help topic to consult. A misspelled
+namespace or method throws `unknown_operation` listing the valid names instead
+of an engine `TypeError`. A help request may carry `timeout_ms`; the MCP server
+reports which field was wrong in malformed tool arguments. `help:"actions"`
+points to the `accounts` and `preferences` topics instead of embedding them. Each broker operation
 rechecks the live parent and, for owned sessions, the active product account. A
 long-running read cannot continue using an owner snapshot after the parent
 closes or its account is disabled.

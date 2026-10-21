@@ -959,7 +959,26 @@ async fn response_value(response: axum::response::Response, write: bool) -> Resu
     } else if status.is_success() {
         Ok(value)
     } else {
-        Err(format!("http_{}", status.as_u16()))
+        // The handler's rejection (for example an unknown query field) is the
+        // only actionable part; the broker splits it into a bounded message.
+        let detail = match &value {
+            Value::String(text) => text.clone(),
+            Value::Null => String::new(),
+            other => other.get("error").map_or_else(
+                || other.to_string(),
+                |error| {
+                    error
+                        .as_str()
+                        .map_or_else(|| error.to_string(), str::to_owned)
+                },
+            ),
+        };
+        let detail: String = detail.chars().take(300).collect();
+        Err(if detail.trim().is_empty() {
+            format!("http_{}", status.as_u16())
+        } else {
+            format!("http_{}: {}", status.as_u16(), detail.trim())
+        })
     }
 }
 

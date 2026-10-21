@@ -220,6 +220,22 @@ export type DraftChange =
 // Document receipt returns committed + document_id, or unknown. A replay never edits twice.
 "#;
 
+/// Topics advertised by `help:"index"`; `review` and `receipts` alias `actions`.
+pub const HELP_TOPICS: &[&str] = &[
+    "session",
+    "sessions",
+    "usage",
+    "calls",
+    "machines",
+    "configuration",
+    "documents",
+    "preferences",
+    "control",
+    "accounts",
+    "read",
+    "actions",
+];
+
 pub fn help(topic: &str) -> Option<serde_json::Value> {
     use serde_json::json;
     let mut value = match topic {
@@ -228,7 +244,7 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         ),
         "index" => Some(json!({"api":API_VERSION,"read":READ_OPERATIONS,
             "actions":INVOKE_OPERATIONS.iter().filter(|op| **op != "receipts.get").collect::<Vec<_>>(),
-            "help":["session","sessions","usage","calls","machines","configuration","documents","preferences","control","accounts","read","actions"],"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
+            "help":HELP_TOPICS,"example":"return (await cowboy.sessions.list({query:'review'})).map(s=>({id:s.id,status:s.status}));"})),
         "accounts" => {
             Some(json!({"api":API_VERSION,"types":([ACCOUNTS_READ_SDK,ACCOUNTS_SDK].concat())}))
         }
@@ -258,7 +274,11 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,DOCUMENTS_SDK].concat())}),
         ),
         "actions" | "review" | "receipts" => Some(
-            json!({"api":API_VERSION,"types":ACTION_SDK,"preferences":PREFERENCES_SDK,"accounts":ACCOUNTS_SDK}),
+            // Account and preference actions live in their own topics; embedding
+            // them here more than tripled the most common review discovery.
+            json!({"api":API_VERSION,"types":ACTION_SDK,
+                "preferences":"preferences.update: cowboy_read({help:\"preferences\"})",
+                "accounts":"accounts.* actions and logins: cowboy_read({help:\"accounts\"})"}),
         ),
         _ => None,
     }?;
@@ -535,6 +555,10 @@ mod tests {
         );
         assert!(SDK.len() < 14 * 1024);
         assert!(serde_json::to_vec(&help("read").unwrap()).unwrap().len() < MAX_RESULT_BYTES);
+        // Review discovery is the most frequent action help; account and
+        // preference declarations are separate topics.
+        let actions = serde_json::to_vec(&help("actions").unwrap()).unwrap().len();
+        assert!(actions < 4096, "actions help: {actions} UTF-8 bytes");
     }
 
     #[test]

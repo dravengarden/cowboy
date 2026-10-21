@@ -1158,10 +1158,11 @@ impl Sandbox {
                     json!({"id": id, "error": {"code": "call_limit"}})
                 } else {
                     let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
+                    let echo = args.to_string();
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     match host.call(op, args, remaining).await {
                         Ok(value) => json!({"id": id, "ok": value}),
-                        Err(code) => json!({"id": id, "error": {"code": code}}),
+                        Err(code) => json!({"id": id, "error": call_error(op, &echo, code)}),
                     }
                 };
                 let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
@@ -1200,6 +1201,47 @@ impl Sandbox {
     }
 }
 
+/// A failed operation keeps its stable code and gains a bounded message that
+/// names the operation and, for argument errors, what the broker received.
+/// Without it agents retried the same malformed call under a bare code.
+fn call_error(op: &str, echo: &str, error: String) -> Value {
+    // An operation may append "code: detail"; the code alone stays stable.
+    let (code, detail) = match error.split_once(": ") {
+        Some((code, detail)) => (code.to_owned(), format!(": {}", bounded(detail, 300))),
+        None => (error, String::new()),
+    };
+    let hint = match code.as_str() {
+        "invalid_argument" | "not_found" => {
+            let namespace = op
+                .split('.')
+                .next()
+                .filter(|namespace| crate::agent_api::HELP_TOPICS.contains(namespace))
+                .unwrap_or("index");
+            format!(
+                "; received {}; see cowboy_read({{help:\"{namespace}\"}})",
+                bounded(echo, 300)
+            )
+        }
+        "invalid_help" => format!("; topics: {}", crate::agent_api::HELP_TOPICS.join(", ")),
+        "unknown_operation" => "; discover names with cowboy.control.list(domain)".to_owned(),
+        "page_required" => {
+            "; pass an explicit limit and continue from the returned cursor".to_owned()
+        }
+        "text_window_required" => {
+            "; pass {offset:0,chars:1000} (max 4000) and continue from range.next".to_owned()
+        }
+        _ => String::new(),
+    };
+    json!({"code": code, "message": format!("{op}: {code}{detail}{hint}")})
+}
+
+fn bounded(text: &str, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
 fn finish(done: bool, mut frame: Value) -> Value {
     let logs = frame
         .get("logs")
@@ -1211,7 +1253,8 @@ fn finish(done: bool, mut frame: Value) -> Value {
         let size = serde_json::to_vec(&result).map_or(usize::MAX, |bytes| bytes.len());
         if size > MAX_RESULT_BYTES {
             json!({"schema":1,"state":"error","error":{"code":"result_too_large","bytes":size,
-                "limit":MAX_RESULT_BYTES}})
+                "limit":MAX_RESULT_BYTES,
+                "message":"return a projection: map to the needed fields or pass a smaller limit"}})
         } else {
             json!({"schema":1,"state":"ok","value":result})
         }
