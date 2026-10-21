@@ -58,25 +58,28 @@ async fn main() -> anyhow::Result<()> {
     let root = args.socket.parent().unwrap_or(std::path::Path::new("."));
     let logs = cowboy::logs::init(cowboy::logs::directory(root), context)?.track_outcome();
     logs.finish(
-        cowboy::worker::run(WorkerArgs {
-            socket: args.socket,
-            session_id: args.session_id,
-            provider: args.provider,
-            provider_version: args.provider_version,
-            provider_generation_digest: args.provider_generation_digest,
-            provider_account_id: args.provider_account_id.clone(),
-            provider_auth_generation: args.provider_auth_generation,
-            cwd: args.cwd,
-            resume: args.resume,
-            system: args.system,
-            generation: args.generation,
-            worker_epoch: args.worker_epoch,
-            fallback_for: args.fallback_for,
-            execution_binding: args
-                .execution_binding
-                .map(|value| serde_json::from_str(&value))
-                .transpose()?,
-        })
+        cowboy::worker::until_terminated(
+            args.session_id.clone(),
+            cowboy::worker::run(WorkerArgs {
+                socket: args.socket,
+                session_id: args.session_id,
+                provider: args.provider,
+                provider_version: args.provider_version,
+                provider_generation_digest: args.provider_generation_digest,
+                provider_account_id: args.provider_account_id.clone(),
+                provider_auth_generation: args.provider_auth_generation,
+                cwd: args.cwd,
+                resume: args.resume,
+                system: args.system,
+                generation: args.generation,
+                worker_epoch: args.worker_epoch,
+                fallback_for: args.fallback_for,
+                execution_binding: args
+                    .execution_binding
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()?,
+            }),
+        )?
         .await,
     )
 }

@@ -462,6 +462,29 @@ fn generated_epoch() -> String {
     format!("{}-{now}", std::process::id())
 }
 
+/// Runs `worker` until it ends or the process receives SIGTERM. A Machine
+/// hibernates an idle systemd worker by stopping its unit; returning here
+/// lets the caller's log guard flush queued evidence and record a clean stop
+/// within the unit's stop timeout, where the default action lost both. The
+/// unit's control group ends the Provider processes.
+/// The handler is installed before this returns, so a signal that arrives
+/// before the first poll is not lost.
+pub fn until_terminated(
+    session: String,
+    worker: impl std::future::Future<Output = Result<()>>,
+) -> Result<impl std::future::Future<Output = Result<()>>> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            result = worker => result,
+            _ = terminate.recv() => {
+                tracing::info!(event_name = "cowboy.worker.terminated", %session, "worker stopped by SIGTERM");
+                Ok(())
+            }
+        }
+    })
+}
+
 /// Run one detached worker until its ACP session and acknowledged outbox have
 /// both drained.
 pub async fn run(args: WorkerArgs) -> Result<()> {
@@ -1207,6 +1230,17 @@ fn command_ack(
 mod tests {
     use super::*;
     use tokio::net::UnixListener;
+
+    #[tokio::test]
+    async fn sigterm_ends_a_running_worker_cleanly() {
+        let stopped = until_terminated("sess-test".into(), std::future::pending()).unwrap();
+        rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::TERM)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), stopped)
+            .await
+            .expect("SIGTERM did not end the worker")
+            .unwrap();
+    }
 
     #[test]
     fn managed_read_only_blocks_configuration_at_worker_admission_and_projection() {
