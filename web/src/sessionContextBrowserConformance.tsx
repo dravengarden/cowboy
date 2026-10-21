@@ -1,11 +1,12 @@
 /** Product components with isolated HTTP/socket fixtures; no Provider calls. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { CssBaseline } from "@mui/material";
+import { Box, CssBaseline, Divider, Typography } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
+import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { frontPrompt, submitPrompt, useStore } from "./store";
@@ -27,6 +28,7 @@ export async function runSessionContextBrowserConformance(
     "Current",
     "API decisions",
     "Mobile findings",
+    ...Array.from({ length: 36 }, (_, index) => `History ${index + 1}`),
   ].map((title, index) => ({
     id: `context-fixture-${index}`,
     title,
@@ -70,6 +72,7 @@ export async function runSessionContextBrowserConformance(
   } as MachineSummary;
   let context: SessionContext;
   let sendFailure: number | null = null;
+  let parentDismissals = 0;
   const writes: { url: string; body: Record<string, unknown> }[] = [];
   class Socket {
     static active: Socket[] = [];
@@ -142,7 +145,10 @@ export async function runSessionContextBrowserConformance(
           sources: body.sources as string[],
           next_agent: body.next_agent as SessionContext["next_agent"],
           revision: context.revision + 1,
-          delivery: null,
+          applied_revision:
+            !(body.sources as string[]).length && !body.next_agent
+              ? context.revision + 1
+              : context.applied_revision,
         };
       }
       return Response.json(context);
@@ -220,9 +226,16 @@ export async function runSessionContextBrowserConformance(
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((
       button,
     ) => button.textContent?.includes(text))!;
-  const openChoices = async () => {
+  const openChoices = async (desktop: boolean) => {
+    if (!desktop) {
+      button("Context from sessions").click();
+      await until(() =>
+        document.querySelector("[data-context-choices]") !== null
+      );
+      return;
+    }
     const input = container.querySelector<HTMLInputElement>(
-      'input[role="combobox"]',
+      '[data-context-picker] input[role="combobox"]',
     )!;
     input.focus();
     input.dispatchEvent(
@@ -234,6 +247,33 @@ export async function runSessionContextBrowserConformance(
     [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((
       option,
     ) => option.textContent?.includes(text))!;
+  const closeChoices = async (desktop: boolean) => {
+    if (desktop) {
+      const input = container.querySelector<HTMLInputElement>(
+        "[data-context-picker] input",
+      )!;
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      input.blur();
+    } else {
+      [...document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] button',
+      )]
+        .find((button) => button.textContent === "Done")!.click();
+    }
+    await until(() => document.querySelector('[role="listbox"]') === null);
+  };
+  const searchChoices = async (query: string) => {
+    const input = document.querySelector<HTMLInputElement>(
+      '[aria-label="Search context sessions"]',
+    )!;
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+      .call(input, query);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  };
   function Fixture({ desktop }: { desktop: boolean }) {
     const state = useStore();
     return (
@@ -259,7 +299,24 @@ export async function runSessionContextBrowserConformance(
           >
             {state.lastError?.message}
           </output>
-          <SessionContextSettings session={sessions[0]!} />
+          {desktop ? <SessionContextSettings session={sessions[0]!} /> : (
+            <Sheet
+              open
+              cover
+              forceSheet
+              title="Session settings"
+              onClose={() => {
+                parentDismissals++;
+              }}
+            >
+              <Box sx={{ py: 2 }}>
+                <SessionContextSettings session={sessions[0]!} />
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="overline">Session</Typography>
+                <Typography>{sessions[0]!.title}</Typography>
+              </Box>
+            </Sheet>
+          )}
         </BrowserProductTheme>
       </SurfaceContext.Provider>
     );
@@ -280,6 +337,7 @@ export async function runSessionContextBrowserConformance(
         max_sources: 32,
       };
       writes.length = 0;
+      parentDismissals = 0;
       for (const socket of Socket.active) {
         socket.publish({ type: "sessions", sessions });
       }
@@ -287,6 +345,7 @@ export async function runSessionContextBrowserConformance(
         desktop ? 680 : 360
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
+      await until(() => Boolean(button("Context & next agent")));
       button("Context & next agent").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
@@ -295,13 +354,146 @@ export async function runSessionContextBrowserConformance(
         writes.length === 0,
         `${mode}: opening context starts no agent or writes`,
       );
-      await openChoices();
-      option("API decisions").click();
-      await openChoices();
-      option("Mobile findings").click();
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      check(
+        !button("Save changes") && !button("Cancel pending"),
+        `${mode}: unchanged empty settings have no save or reset action`,
       );
+      await openChoices(desktop);
+      if (!desktop) {
+        const panel = document.querySelector<HTMLElement>(
+          "[data-context-choices]",
+        )!;
+        check(
+          document.activeElement === panel && !container.contains(panel),
+          "mobile: nested picker escapes the settings scroller without opening an input",
+        );
+        await until(() =>
+          !panel.closest("[data-obsidian-sheet]")!.hasAttribute(
+            "data-detent-moving",
+          )
+        );
+        await observe?.("mobile-picker");
+        const searchTop =
+          panel.querySelector("input")!.getBoundingClientRect().top;
+        await searchChoices("Mink");
+        await until(() =>
+          document.querySelectorAll('[role="option"]').length === 1
+        );
+        check(
+          Boolean(option("API decisions")),
+          "mobile: search finds the account as well as the session title",
+        );
+        check(
+          Math.abs(
+            panel.querySelector("input")!.getBoundingClientRect().top -
+              searchTop,
+          ) < 1,
+          "mobile: filtering results does not move the search field",
+        );
+        await searchChoices("no matching context");
+        check(
+          Boolean(
+            document.querySelector("[data-context-choices]")?.textContent
+              ?.includes("No matching sessions"),
+          ),
+          "mobile: empty search has a visible result",
+        );
+        await searchChoices("");
+        const input = panel.querySelector("input")!;
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            isComposing: true,
+            bubbles: true,
+          }),
+        );
+        check(
+          document.activeElement === input && panel.isConnected,
+          "mobile: composition keys never dismiss the search or picker",
+        );
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+        check(
+          document.activeElement === panel && panel.isConnected,
+          "mobile: Escape leaves search before dismissing the picker",
+        );
+        input.focus();
+        const oldInset = document.documentElement.style.getPropertyValue(
+          "--kb-inset",
+        );
+        document.documentElement.style.setProperty("--kb-inset", "280px");
+        try {
+          const body = panel.parentElement!;
+          const search = panel.querySelector("input")!;
+          const dialog = panel.closest('[role="dialog"]')!;
+          const done = [...dialog.querySelectorAll("button")].find((button) =>
+            button.textContent === "Done"
+          )!;
+          await until(() => !dialog.hasAttribute("data-detent-moving"));
+          body.scrollTop = body.scrollHeight;
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          check(
+            body.scrollTop > 0 &&
+              search.getBoundingClientRect().top >=
+                body.getBoundingClientRect().top - 1,
+            "mobile: long results scroll while search remains visible",
+          );
+          check(
+            done.getBoundingClientRect().bottom <=
+                window.innerHeight - 280 + 1 &&
+              done.getBoundingClientRect().top >= 0,
+            "mobile: Done stays above the simulated software keyboard",
+          );
+          await observe?.("mobile-keyboard");
+          body.scrollTop = 0;
+        } finally {
+          if (oldInset) {
+            document.documentElement.style.setProperty("--kb-inset", oldInset);
+          } else document.documentElement.style.removeProperty("--kb-inset");
+        }
+        const order = () =>
+          [...document.querySelectorAll('[role="option"]')].map((row) =>
+            row.textContent
+          ).join("\n");
+        const initialOrder = order();
+        option("History 17").click();
+        await until(() =>
+          option("History 17").getAttribute("aria-selected") === "true"
+        );
+        check(
+          order() === initialOrder,
+          "mobile: selecting a later row does not move results under the pointer",
+        );
+        option("History 17").click();
+        await until(() =>
+          option("History 17").getAttribute("aria-selected") === "false"
+        );
+        const done = [
+          ...panel.closest('[role="dialog"]')!.querySelectorAll("button"),
+        ].find((button) => button.textContent === "Done")!;
+        done.focus();
+        done.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+        await until(() => !document.querySelector("[data-context-choices]"));
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        check(
+          parentDismissals === 0 &&
+            document.activeElement === button("Context from sessions"),
+          "mobile: Escape on the footer closes only the picker and restores the trigger",
+        );
+        await openChoices(desktop);
+      }
+      option("API decisions").click();
+      await until(() =>
+        option("API decisions")?.getAttribute("aria-selected") === "true"
+      );
+      option("Mobile findings").click();
+      await until(() =>
+        option("Mobile findings")?.getAttribute("aria-selected") === "true"
+      );
+      await closeChoices(desktop);
       await until(() =>
         container.querySelectorAll(".MuiChip-root").length === 2
       );
@@ -313,7 +505,12 @@ export async function runSessionContextBrowserConformance(
         !container.textContent?.includes("credentials"),
         `${mode}: context UI exposes no credential controls`,
       );
-      button("Use on next message").click();
+      check(
+        writes.length === 0 && Boolean(button("Save changes")),
+        `${mode}: choosing sources changes only the unsaved form`,
+      );
+      await observe?.(`${mode}-links`);
+      button("Save changes").click();
       await until(() =>
         context.revision === 1 &&
         !container.querySelector("[data-context-editor]")
@@ -326,6 +523,10 @@ export async function runSessionContextBrowserConformance(
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );
+      check(
+        !button("Save changes") && Boolean(button("Cancel pending changes")),
+        `${mode}: saved selection shows pending state and a distinct cancel action`,
+      );
       container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
         .click();
       await until(() =>
@@ -335,7 +536,9 @@ export async function runSessionContextBrowserConformance(
         container.querySelectorAll(".MuiChip-root").length === 3,
         `${mode}: fresh agent defaults to linking the current session`,
       );
-      await until(() => !button("Use on next message").disabled);
+      await until(() =>
+        Boolean(button("Save changes")) && !button("Save changes").disabled
+      );
       container.querySelector<HTMLElement>(
         '[data-session-subscription] [role="combobox"]',
       )!
@@ -345,7 +548,7 @@ export async function runSessionContextBrowserConformance(
       await until(() => Boolean(option("Claude · Mink")));
       option("Claude · Mink").click();
       await observe?.(`${mode}-selection`);
-      button("Use on next message").click();
+      button("Save changes").click();
       await until(() =>
         context.revision === 2 &&
         !container.querySelector("[data-context-editor]")
@@ -359,6 +562,15 @@ export async function runSessionContextBrowserConformance(
           sessions[0]!.provider_account_id === "default",
         `${mode}: changing the next account preserves the current binding`,
       );
+      button("Context & next agent").click();
+      await until(() => Boolean(button("Cancel pending changes")));
+      check(
+        !button("Save changes"),
+        `${mode}: loading a saved agent is not an unsaved edit`,
+      );
+      await observe?.(`${mode}-pending`);
+      button("Context & next agent").click();
+      await until(() => !container.querySelector("[data-context-editor]"));
       await frontPrompt(sessions[0]!.id, "", []);
       check(
         writes.length === 2,
@@ -414,6 +626,12 @@ export async function runSessionContextBrowserConformance(
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );
+      await openChoices(desktop);
+      option("Mobile findings").click();
+      await until(() =>
+        option("Mobile findings")?.getAttribute("aria-selected") === "true"
+      );
+      await closeChoices(desktop);
       context = { ...context, revision: context.revision + 1 };
       window.dispatchEvent(
         new CustomEvent(PREFERENCES_CHANGED, {
@@ -424,13 +642,32 @@ export async function runSessionContextBrowserConformance(
         Boolean(container.textContent?.includes("changed on another device"))
       );
       check(
-        button("Use on next message").disabled,
+        button("Save changes").disabled,
         `${mode}: concurrent edits do not overwrite an open form`,
       );
       await observe?.(`${mode}-conflict`);
       check(
         container.scrollWidth <= container.clientWidth + 1,
         `${mode}: controls fit the available width`,
+      );
+      const writeCount = writes.length;
+      button("Discard").click();
+      await until(() => !container.querySelector("[data-context-editor]"));
+      check(
+        writes.length === writeCount,
+        `${mode}: discarding a local edit never changes stored context`,
+      );
+      button("Context & next agent").click();
+      await until(() => Boolean(button("Cancel pending changes")));
+      button("Cancel pending changes").click();
+      await until(() =>
+        !container.querySelector("[data-context-editor]") &&
+        writes.length > writeCount
+      );
+      check(
+        context.sources.length === 0 && !context.next_agent &&
+          context.revision === context.applied_revision,
+        `${mode}: cancelling pending context clears only the staged configuration`,
       );
       flushSync(() => root.render(null));
     }

@@ -80,6 +80,8 @@ export interface ObsidianSheetProps {
   readonly actions?: ReactNode | undefined;
   readonly ariaLabel?: string | undefined;
   readonly floatingDismiss?: boolean | undefined;
+  /** Pickers keep a stable canvas while filtering their results. */
+  readonly fill?: boolean | undefined;
 }
 
 export function ObsidianSheet({
@@ -90,6 +92,7 @@ export function ObsidianSheet({
   actions,
   ariaLabel,
   floatingDismiss = false,
+  fill = false,
 }: ObsidianSheetProps): ReactNode {
   const theme = useTheme();
   const surfaceColor = theme.palette.background.default;
@@ -316,6 +319,7 @@ export function ObsidianSheet({
   // indicator is padded inside. No side gap: a hairline inset around a
   // tall picker reads as an uneven frame.
   const bottom = `calc(${inset} + var(--kb-inset, 0px))`;
+  const maxHeight = `calc(${String(OBSIDIAN_SHEET_MAX_FRACTION * 100)}dvh - ${inset} - var(--kb-inset, 0px))`;
 
   return (
     <>
@@ -364,7 +368,8 @@ export function ObsidianSheet({
           left: inset,
           right: inset,
           bottom,
-          maxHeight: `calc(${String(OBSIDIAN_SHEET_MAX_FRACTION * 100)}dvh - ${inset} - var(--kb-inset, 0px))`,
+          maxHeight,
+          height: fill ? maxHeight : undefined,
           zIndex: z + 1,
           willChange: "transform",
           contain: "layout paint",
@@ -429,7 +434,7 @@ export function ObsidianSheet({
         <Box
           ref={bodyRef}
           sx={{
-            flex: "0 1 auto",
+            flex: fill ? "1 1 auto" : "0 1 auto",
             minHeight: 0,
             overflowY: "auto",
             WebkitOverflowScrolling: "touch",

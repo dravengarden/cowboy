@@ -13,10 +13,19 @@ Configuration and the empty-session configuration workspace.
 
 Selecting **Start with a new agent** initially includes the current session as a
 source. Users may select other sessions or remove every source. They choose a
-Provider installation, subscription, project and optional preset. **Use on next
-message** saves these choices without creating, stopping or starting a worker.
-The current agent and its identity remain intact. **Clear selection** removes
-the pending selection.
+Provider installation, subscription, project and optional preset. **Save changes**
+appears only after an edit and saves these choices without creating, stopping or
+starting a worker. **Discard** leaves stored choices unchanged. The current
+agent and its identity remain intact. Saved choices show their pending state;
+**Cancel pending changes** removes the pending configuration.
+
+On mobile, **Context from sessions** opens a separate sheet above Settings or
+New Session. It opens without focusing an input; search raises the keyboard
+only when chosen. Search stays above the scrolling results and **Done** stays
+above the keyboard. Selection, including **Clear**, edits only the owning form;
+closing the picker retains those edits. Desktop retains searchable keyboard
+multiselect. Both show selected sessions with account labels, enforce the
+32-source limit and let users remove unavailable sources.
 
 The next explicit send checks the saved revision and current authorization. A
 fresh-agent transition requires the source to be idle with no queued prompts or

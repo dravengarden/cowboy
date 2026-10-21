@@ -37,7 +37,7 @@ export function SessionContextSettings(
   const { data, error, reload } = useSessionContext(session.id);
   const pending = data && data.revision !== data.applied_revision;
   return (
-    <Box data-session-context sx={{ minWidth: 0 }}>
+    <Box data-session-context sx={{ minWidth: 0, pb: open ? 2 : 0 }}>
       <Button
         startIcon={<LinkOutlined />}
         endIcon={
@@ -83,6 +83,7 @@ export function SessionContextSettings(
                 void reload();
                 setOpen(false);
               }}
+              onCancel={() => setOpen(false)}
             />
           )}
         </Stack>
@@ -92,10 +93,11 @@ export function SessionContextSettings(
 }
 
 function ContextEditor(
-  { session, observed, onSaved }: {
+  { session, observed, onSaved, onCancel }: {
     session: SessionMeta;
     observed: SessionContext;
     onSaved: () => void;
+    onCancel: () => void;
   },
 ): React.JSX.Element {
   const [snapshot] = useState(observed);
@@ -104,6 +106,9 @@ function ContextEditor(
     observed.delivery?.operation !== snapshot.delivery?.operation;
   const [sources, setSources] = useState(snapshot.sources);
   const [fresh, setFresh] = useState(Boolean(snapshot.next_agent));
+  // Catalog hydration temporarily clears placement fields. Only user changes
+  // to these fields can make an already-saved target dirty.
+  const [agentEdited, setAgentEdited] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [resolving, setResolving] = useState(false);
@@ -133,24 +138,34 @@ function ContextEditor(
   useEffect(() => {
     if (provider === defaults.provider) subscription.select(account);
   }, [provider, fresh, account]);
+  const nextAgent = fresh
+    ? {
+      provider,
+      provider_account_id: subscription.value,
+      machine_id: placement.machineId,
+      runtime_machine_id: placement.runtimeMachineId || null,
+      cwd: placement.project?.projectId || "",
+      preset: preset || null,
+    }
+    : null;
+  const changed = sources.length !== snapshot.sources.length ||
+    sources.some((id, index) => id !== snapshot.sources[index]) ||
+    Boolean(nextAgent) !== Boolean(snapshot.next_agent) ||
+    (agentEdited && nextAgent &&
+      (Object.keys(nextAgent) as (keyof typeof nextAgent)[]).some(
+        (key) => nextAgent[key] !== snapshot.next_agent?.[key],
+      ));
+  const pending = snapshot.revision !== snapshot.applied_revision;
+  const locked = saving || changedElsewhere || Boolean(unresolved);
   const save = async (clear = false) => {
-    if (saving || unresolved) return;
+    if (locked) return;
     setSaving(true);
     setError("");
     try {
       await saveSessionContext(session.id, {
         revision: snapshot.revision,
         sources: clear ? [] : sources,
-        next_agent: !clear && fresh
-          ? {
-            provider,
-            provider_account_id: subscription.value,
-            machine_id: placement.machineId,
-            runtime_machine_id: placement.runtimeMachineId || null,
-            cwd: placement.project?.projectId || "",
-            preset: preset || null,
-          }
-          : null,
+        next_agent: clear ? null : nextAgent,
       });
       onSaved();
     } catch (cause) {
@@ -201,6 +216,7 @@ function ContextEditor(
         </Alert>
       )}
       <FormControlLabel
+        sx={{ mr: 0 }}
         control={
           <Checkbox
             checked={fresh}
@@ -217,30 +233,45 @@ function ContextEditor(
             }}
           />
         }
-        label="Start with a new agent"
+        label={
+          <Box>
+            <Typography variant="body2">Start with a new agent</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {fresh ? "Starts on your next message" : "Keep the current agent"}
+            </Typography>
+          </Box>
+        }
       />
       {fresh && (
         <>
-          <Typography variant="body2" color="text.secondary">
-            Choose the next Provider and account. Your current agent stays until
-            you send.
-          </Typography>
           <WorkspacePicker
             label="Project"
             entries={placement.projects}
             value={placement.project?.value || ""}
-            onChange={placement.selectProject}
+            onChange={(value) => {
+              setAgentEdited(true);
+              placement.selectProject(value);
+            }}
           />
           <AiInstallationPicker
             installations={placement.installations}
             value={placement.installation?.value || ""}
-            onChange={placement.selectInstallation}
+            onChange={(value) => {
+              setAgentEdited(true);
+              placement.selectInstallation(value);
+            }}
             helperText={placement.error || (placement.loading
               ? "Checking available installations…"
               : "Choose where the new agent runs.")}
           />
           <SessionSubscription
-            state={subscription}
+            state={{
+              ...subscription,
+              select: (value) => {
+                setAgentEdited(true);
+                subscription.select(value);
+              },
+            }}
             disabled={saving}
             desktop={desktop}
           />
@@ -248,7 +279,10 @@ function ContextEditor(
             provider={provider}
             presets={presets}
             value={preset}
-            onChange={setPreset}
+            onChange={(value) => {
+              setAgentEdited(true);
+              setPreset(value);
+            }}
             helperText={validPreset
               ? "Applied before the new agent’s first prompt"
               : "Choose an available preset for this agent"}
@@ -265,27 +299,42 @@ function ContextEditor(
         disabled={saving || Boolean(unresolved)}
         exclude={fresh ? undefined : session.id}
       />
-      <Typography variant="caption" color="text.secondary">
-        You can change or clear this selection before sending.
-      </Typography>
       {error && <Alert severity="error">{error}</Alert>}
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-        <Button
-          variant="contained"
-          disabled={saving || changedElsewhere || Boolean(unresolved) ||
-            (fresh &&
-              (!placement.ready || !subscription.allowed || !validPreset))}
-          onClick={() => void save()}
-        >
-          Use on next message
-        </Button>
-        <Button
-          disabled={saving || changedElsewhere || Boolean(unresolved)}
-          onClick={() => void save(true)}
-        >
-          Clear selection
-        </Button>
-      </Stack>
+      {changed
+        ? (
+          <Stack spacing={1} data-context-changes>
+            <Typography variant="caption" color="text.secondary">
+              Unsaved changes · Apply on your next message
+            </Typography>
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              <Button
+                variant="contained"
+                disabled={locked || (fresh &&
+                  (!placement.ready || !subscription.allowed || !validPreset))}
+                onClick={() => void save()}
+              >
+                {saving ? "Saving…" : "Save changes"}
+              </Button>
+              <Button disabled={saving} onClick={onCancel}>Discard</Button>
+            </Stack>
+          </Stack>
+        )
+        : pending && !unresolved
+        ? (
+          <Stack spacing={0.5}>
+            <Typography variant="caption" color="text.secondary">
+              Saved · Applies on your next message
+            </Typography>
+            <Button
+              disabled={locked}
+              onClick={() => void save(true)}
+              sx={{ alignSelf: "flex-start" }}
+            >
+              Cancel pending changes
+            </Button>
+          </Stack>
+        )
+        : null}
       <ConfirmSheet
         open={resolving}
         onClose={() => setResolving(false)}
