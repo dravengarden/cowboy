@@ -17,6 +17,8 @@ import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
 import { copyDraftToSession } from "./documents/transfer";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
+import { newSessionPreset } from "./newSessionPreset";
+import { SessionPresetPicker } from "./SessionPresetPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
 import { AiInstallationPicker, installationCapacity } from "./AiInstallationPicker";
@@ -2938,7 +2940,6 @@ export function CreateDialog({
     const directoryDefaults = resolveFolderDefaults(sessionDirectories, directory || null);
     const placement = useProjectPlacement(open && !folderOnly, machines, directoryDefaults.values);
     const [presetOverride, setPresetOverride] = useState<string | undefined>();
-    const selectedPreset = presetOverride ?? directoryDefaults.values.preset ?? "";
     const fullInstallation = placement.installations.find((installation) => installation.full);
     const machineId = placement.machineId;
     const cwd = placement.project?.projectId ?? "";
@@ -2951,7 +2952,7 @@ export function CreateDialog({
     const [focusZone, setFocusZone] = useState<"tabs" | "text" | "other">("text");
     // Session and Folder share one Sessions-tree location: both place an
     // item in the same tree, so switching between them keeps the choice.
-    const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories), [sessionDirectories]);
+    const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories, true), [sessionDirectories]);
     const [folderName, setFolderName] = useState("");
     const [folderDefaults, setFolderDefaults] = useState<FolderDefaults>({});
     const [folderDefaultsExpanded, setFolderDefaultsExpanded] = useState(false);
@@ -2971,6 +2972,7 @@ export function CreateDialog({
         active_work_items: [],
     } : undefined;
     const selectedProviderEntry = placement.installation?.entry;
+    const selectedPreset = newSessionPreset(provider, selectedProviderEntry?.manifest.configuration.presets ?? [], directoryDefaults.values.preset, presetOverride);
     const selectedInstalledProvider = placement.installation?.installed;
     const presetAvailable = !selectedPreset || Boolean(selectedProviderEntry?.manifest.configuration.presets.some((preset) => `${provider}/${preset.id}` === selectedPreset));
     const providerAvailable = (candidate: string): boolean => Boolean(candidate && placement.ready && candidate === provider);
@@ -3378,15 +3380,12 @@ export function CreateDialog({
                         <Typography variant="caption" color="text.secondary">
                             Git projects open in a session worktree. Other directories are shared in place.
                         </Typography>
-                        <TextField select label="Model and reasoning preset" value={selectedPreset} onChange={(event): void => setPresetOverride(event.target.value)} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"}>
-                            <MenuItem value="">Agent default</MenuItem>
-                            {selectedPreset && !selectedProviderEntry?.manifest.configuration.presets.some((preset) => `${provider}/${preset.id}` === selectedPreset) && <MenuItem value={selectedPreset}>{selectedPreset} · Unavailable or incompatible</MenuItem>}
-                            {selectedProviderEntry?.manifest.configuration.presets.map((preset) => <MenuItem key={preset.id} value={`${provider}/${preset.id}`}>{preset.name} · {preset.detail}</MenuItem>)}
-                        </TextField>
+                        <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
                         {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
                             <TextField
                                 select
                                 label="Durable work item"
+                                slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
                                 value={workItemId}
                                 onChange={(e): void => setWorkItemId(e.target.value)}
                                 helperText="Optional · resumes durable context in the selected Provider runtime"

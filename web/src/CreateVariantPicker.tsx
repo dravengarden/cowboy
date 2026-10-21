@@ -75,7 +75,7 @@ export function DraftCreationDirectory({ value, onChange }: {
 }): React.JSX.Element {
   const folders = useStoreSelector((snapshot) => snapshot.sessionFolders);
   const choices = useMemo(
-    () => sessionDirectoryChoices(folders),
+    () => sessionDirectoryChoices(folders, true),
     [folders],
   );
   return (
@@ -89,7 +89,7 @@ export function DraftCreationDirectory({ value, onChange }: {
         onChange={onChange}
       />
       <Typography variant="caption" color="text.secondary">
-        Leave empty for the top level. Drafts are independent documents; no
+        Global is the top level. Drafts are independent documents; no
         project, computer or AI installation is needed.
       </Typography>
     </>

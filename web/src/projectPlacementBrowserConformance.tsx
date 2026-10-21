@@ -19,6 +19,7 @@ import { createSessionFolder, removeSessionFolder, setSessionFolderDefault } fro
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { runDirectoryUxBrowserChecks } from "./directoryUxBrowserChecks";
+import { runNewSessionDefaultsBrowserChecks } from "./newSessionDefaultsBrowserChecks";
 export { renderDirectoryUxPreview } from "./directoryUxBrowserChecks";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
@@ -479,7 +480,10 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         unavailableBadge.querySelector("svg") !== null,
       "unavailable executor retains the target badge with a visible warning",
     );
+    await runNewSessionDefaultsBrowserChecks();
     return [
+      "creation defaults are selected on desktop",
+      "creation defaults are selected on mobile",
       "project before installed AI",
       "runtime without mirror directories",
       "Codex and Claude selectable at full worker capacity",

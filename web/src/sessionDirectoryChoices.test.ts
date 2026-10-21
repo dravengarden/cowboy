@@ -30,6 +30,9 @@ test("session directory choices contain only folders; empty placement remains Gl
   assertEquals(choices.map((choice) => choice.value), ["parent", "child"]);
   assertEquals(choices[1].hierarchyPath, ["Work", "Cowboy"]);
   assertEquals(sessionDirectoryChoices({ folders: [], placement: {} }), []);
+  assertEquals(sessionDirectoryChoices(folders, true).map((choice) => [choice.value, choice.label]), [
+    ["", "Global"], ["parent", "Work"], ["child", "Work/Cowboy"],
+  ]);
   const session = { id: "new", workspace_name: "cowboy" } as SessionMeta;
   assertEquals(effectiveSessionFolder(session, folders), "parent");
   assertEquals(
