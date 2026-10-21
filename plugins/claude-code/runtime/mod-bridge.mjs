@@ -216,7 +216,7 @@ export async function startModBridge(
             answer(400, { deny: "Invalid execution call" });
             return;
           }
-          answer(200, await tools.mcpRead(call.id, call.afterSeq, 25000));
+          answer(200, await tools.mcpRead(call.id, call.afterSeq));
           return;
         }
         await tools.mcpStop(call.id);
