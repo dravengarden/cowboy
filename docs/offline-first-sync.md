@@ -744,6 +744,14 @@ media boxes, records scroll offsets, strips scripts and event handlers, and
 serialises only the CSS rules that can still match. A capture of a real mobile
 session is about 113 KB: 25 KB markup, 75 KB CSS, 13 KB `@font-face`.
 
+Snapshot format 2 replaces textareas, inputs, contenteditable regions and whole
+CodeMirror editors with empty boxes of the same dimensions. Editable text and
+attachment widgets belong to the live draft, which can change after capture;
+replaying them would briefly show already-sent content on the next open. The
+loader rejects format 1, including its synchronous hint, so existing saved
+screens cannot replay that content after this update. Live draft persistence
+and restoration are independent of this presentation cache.
+
 Cache Storage cannot answer inside the first frame, so a document that simply
 painted the skeleton and replaced it a moment later would read as a flash —
 placeholder shapes appearing and then being swapped for content is exactly the

@@ -3,12 +3,14 @@
 // §Boot presentation). The capture itself needs a live document and is
 // verified in the browser.
 import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { test } from "bun:test";
 import { assert, assertEquals, assertFalse } from "@std/assert";
 import {
   BOOT_SNAPSHOT_CACHE,
   BOOT_SNAPSHOT_HINT_KEY,
   BOOT_SNAPSHOT_URL,
+  BOOT_SNAPSHOT_VERSION,
   BOOT_SURFACE_KEY,
   BOOT_THEME_KEY,
   classTokens,
@@ -100,6 +102,7 @@ test("index.html's inline loader and this module agree", async () => {
   assert(html.includes(JSON.stringify(BOOT_THEME_KEY)), BOOT_THEME_KEY);
   assert(html.includes(JSON.stringify(BOOT_SURFACE_KEY)), BOOT_SURFACE_KEY);
   assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_HINT_KEY)), BOOT_SNAPSHOT_HINT_KEY);
+  assert(html.includes(`snap.v !== ${BOOT_SNAPSHOT_VERSION}`), "snapshot format version");
   // The document must never be left on a bare canvas: every path that
   // declines the saved screen has to bring the skeleton back.
   assert(html.includes("boot-restoring"), "boot-restoring class");
@@ -160,4 +163,29 @@ test("snapshot handover retains font rules until the live lazy CSS arrives", asy
   const reading = await readFile(new URL("./readingSettings.ts", import.meta.url), "utf8");
   const faces = reading.slice(reading.indexOf("export function useReadingFontFaces"));
   assert(faces.includes("useLayoutEffect"), "font family must be selected before first paint");
+});
+
+test("the document declines old snapshots before showing stale editor text", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const source = html.slice(html.indexOf("window.__cowboyBootEligible = (snap) => {"));
+  const predicate = source.slice(0, source.indexOf("\n        };")) + "\n};";
+  const window: { __cowboyBootEligible?: (snapshot: unknown) => boolean } = {};
+  runInNewContext(predicate, {
+    window,
+    URLSearchParams,
+    location: { search: "", pathname: "/" },
+    localStorage: {
+      getItem: (key: string) => key === "cowboy:auth-status-cache"
+        ? JSON.stringify({ me: { user_id: "fixture-user" }, expiresAt: null }) : null,
+    },
+    innerWidth: 390,
+    innerHeight: 844,
+    matchMedia: () => ({ matches: false }),
+  });
+  const snapshot = {
+    v: BOOT_SNAPSHOT_VERSION, user: "fixture-user", width: 390, height: 844,
+    savedAt: Date.now(), sessionId: null, themeMode: "system", scheme: "light",
+  };
+  assert(window.__cowboyBootEligible!(snapshot));
+  assertFalse(window.__cowboyBootEligible!({ ...snapshot, v: 1 }));
 });

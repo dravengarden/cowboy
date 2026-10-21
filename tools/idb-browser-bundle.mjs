@@ -23,7 +23,7 @@ if (
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
   suite !== "loading-progress" &&
-  suite !== "subscriptions" && suite !== "client-update"
+  suite !== "subscriptions" && suite !== "client-update" && suite !== "boot-snapshot"
 ) {
   throw new Error("unknown suite");
 }
@@ -105,7 +105,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "client-update"
+        suite === "boot-snapshot"
+          ? "../web/src/bootSnapshotBrowserConformance.ts"
+          : suite === "client-update"
           ? "../web/src/clientUpdateBrowserFixture.tsx"
           : suite === "desktop-viewport"
           ? "../web/src/desktopViewportBrowserConformance.tsx"
