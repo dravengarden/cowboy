@@ -423,7 +423,7 @@
         // very flash this is meant to prevent.
         window.__cowboyBootEligible = (snap) => {
           try {
-            if (!snap || snap.v !== 1) return false;
+            if (!snap || snap.v !== 2) return false;
             const search = new URLSearchParams(location.search);
             if (search.has("cowboy-recover") || location.pathname !== "/") return false;
             const identity = JSON.parse(localStorage.getItem("cowboy:auth-status-cache") || "null");

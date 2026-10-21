@@ -14,6 +14,7 @@ const endpoint = process.argv.slice(2)[0] ?? "";
 const suite = process.argv.slice(2)[1] ?? "desktop-composer";
 const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
+  "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
   "client-update": ["runClientUpdateFixture", 8],
   "subscriptions": ["runSubscriptionsBrowserConformance", 131],
   "session-context": ["runSessionContextBrowserConformance", 28],
@@ -31,7 +32,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 4],
   "tool-inspector": ["runToolInspectorBrowserConformance", 12],
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
-  "project-placement": ["runProjectPlacementBrowserConformance", 11],
+  "project-placement": ["runProjectPlacementBrowserConformance", 13],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
   "dormant-session": ["runDormantSessionBrowserConformance", 21],
 };

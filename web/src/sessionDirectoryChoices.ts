@@ -9,8 +9,9 @@ import type { WorkspaceEntry } from "./workspaceHierarchy";
 /** Session filing is separate from the source project and execution directory. */
 export function sessionDirectoryChoices(
   value: SessionFoldersValue,
+  includeGlobal = false,
 ): WorkspaceEntry[] {
-  return buildSessionTree([], value, new Set()).rows.flatMap((row) => {
+  const folders = buildSessionTree([], value, new Set()).rows.flatMap((row) => {
     if (row.kind !== "folder") return [];
     const folder = row.folder;
     const path = [...folderAncestors(value, folder.id).reverse(), folder.id]
@@ -22,4 +23,7 @@ export function sessionDirectoryChoices(
       hierarchyPath: path,
     }];
   });
+  return includeGlobal
+    ? [{ value: "", label: "Global", help: "Top level" }, ...folders]
+    : folders;
 }

@@ -13,6 +13,8 @@
 // snapshot and must never open the product socket.
 
 export const BOOT_SNAPSHOT_CACHE = "cowboy-boot-snapshot-v1";
+/** Version 2 excludes editable content; version 1 can replay already-sent text. */
+export const BOOT_SNAPSHOT_VERSION = 2;
 export const BOOT_SNAPSHOT_URL = "/__boot/snapshot.json";
 /** What the document can learn about the saved screen SYNCHRONOUSLY, before
  *  Cache Storage answers: enough to decide whether one is coming, so the
@@ -28,7 +30,7 @@ const INLINE_IMAGE_MAX_CHARS = 65_536;
 const VIEWPORT_MARGIN_PX = 64;
 
 export interface BootSnapshot {
-  readonly v: 1;
+  readonly v: typeof BOOT_SNAPSHOT_VERSION;
   readonly user: string;
   readonly sessionId: string | null;
   readonly width: number;
@@ -139,8 +141,10 @@ export function outsideViewport(
 
 const REMOVED_NODES = "script, style, link, meta, base, noscript, template, " +
   "[data-mobile-sync-pill], [data-boot-exclude]";
-/** Live or scripted content: keep the space it occupied, drop the element. */
-const BOXED_NODES = new Set(["IFRAME", "OBJECT", "EMBED", "CANVAS", "VIDEO", "AUDIO"]);
+/** Live, editable or scripted content: keep its space, never its old contents. */
+const BOXED_NODES = new Set([
+  "IFRAME", "OBJECT", "EMBED", "CANVAS", "VIDEO", "AUDIO", "TEXTAREA", "INPUT",
+]);
 
 function restingScreen(root: HTMLElement): boolean {
   // Sheets, dialogs and menus portal to <body>; their presence means open.
@@ -178,7 +182,10 @@ function pinBox(copy: HTMLElement, box: DOMRect): void {
 function freeze(original: Element, copy: Element, width: number, height: number): void {
   if (!(original instanceof HTMLElement) || !(copy instanceof HTMLElement)) return;
   const box = original.getBoundingClientRect();
-  if (BOXED_NODES.has(original.tagName)) {
+  if (
+    BOXED_NODES.has(original.tagName) || original.isContentEditable ||
+    original.classList.contains("cm-editor")
+  ) {
     const placeholder = document.createElement("div");
     placeholder.className = copy.className;
     placeholder.style.cssText = copy.style.cssText;
@@ -202,12 +209,7 @@ function freeze(original: Element, copy: Element, width: number, height: number)
       `${String(Math.round(original.scrollTop))},${String(Math.round(original.scrollLeft))}`,
     );
   }
-  if (original instanceof HTMLTextAreaElement) {
-    copy.textContent = original.value;
-  } else if (original instanceof HTMLInputElement) {
-    if (original.type === "password") copy.removeAttribute("value");
-    else copy.setAttribute("value", original.value);
-  } else if (original instanceof HTMLImageElement) {
+  if (original instanceof HTMLImageElement) {
     // Pin the box so a slow or missing image cannot reflow the picture.
     pinBox(copy, box);
     if (original.src.startsWith("data:") && original.src.length > INLINE_IMAGE_MAX_CHARS) {
@@ -319,7 +321,7 @@ export async function captureBootSnapshot(context: BootSnapshotContext): Promise
       if (restorableHtmlStyle(name)) htmlStyle.push([name, style.getPropertyValue(name).trim()]);
     }
     const snapshot: BootSnapshot = {
-      v: 1,
+      v: BOOT_SNAPSHOT_VERSION,
       user: context.user,
       sessionId: context.sessionId,
       width: globalThis.innerWidth,

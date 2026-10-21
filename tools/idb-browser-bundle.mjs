@@ -24,7 +24,7 @@ if (
   suite !== "info-metrics" && suite !== "review-context" &&
   suite !== "loading-progress" &&
   suite !== "subscriptions" && suite !== "client-update" &&
-  suite !== "session-context"
+  suite !== "session-context" && suite !== "boot-snapshot"
 ) {
   throw new Error("unknown suite");
 }
@@ -110,6 +110,8 @@ await build({
       entry: new URL(
         suite === "session-context"
           ? "../web/src/sessionContextBrowserConformance.tsx"
+          : suite === "boot-snapshot"
+          ? "../web/src/bootSnapshotBrowserConformance.ts"
           : suite === "client-update"
           ? "../web/src/clientUpdateBrowserFixture.tsx"
           : suite === "desktop-viewport"

@@ -5,9 +5,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
-  MenuItem,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import { ExpandMore, LinkOutlined } from "@mui/icons-material";
@@ -24,6 +22,7 @@ import {
 import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker } from "./AiInstallationPicker";
+import { SessionPresetPicker } from "./SessionPresetPicker";
 import {
   SessionSubscription,
   useSessionSubscription,
@@ -245,26 +244,15 @@ function ContextEditor(
             disabled={saving}
             desktop={desktop}
           />
-          <TextField
-            select
-            fullWidth
-            label="Model and reasoning preset"
+          <SessionPresetPicker
+            provider={provider}
+            presets={presets}
             value={preset}
-            onChange={(event) => setPreset(event.target.value)}
-            error={!validPreset}
-          >
-            <MenuItem value="">Agent default</MenuItem>
-            {!validPreset && (
-              <MenuItem disabled value={preset}>
-                {preset} · Unavailable
-              </MenuItem>
-            )}
-            {presets.map((entry) => (
-              <MenuItem key={entry.id} value={`${provider}/${entry.id}`}>
-                {entry.name}
-              </MenuItem>
-            ))}
-          </TextField>
+            onChange={setPreset}
+            helperText={validPreset
+              ? "Applied before the new agent’s first prompt"
+              : "Choose an available preset for this agent"}
+          />
           <Typography variant="caption" color="text.secondary">
             The original conversation and files stay here. Git projects use a
             new worktree; uncommitted files are not copied.
