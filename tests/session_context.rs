@@ -356,7 +356,7 @@ async fn refused_fresh_agent_records_failure_and_releases_its_destination_fence(
     let context_url = format!("{base}/api/sessions/source/context");
     let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
         "revision":0,"sources":["source"],"next_agent":{
-            "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
+            "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project","inherit_settings":false
         }
     })).send().await.unwrap();
     assert_eq!(saved.status(), 200, "{}", saved.text().await.unwrap());
@@ -391,4 +391,48 @@ async fn refused_fresh_agent_records_failure_and_releases_its_destination_fence(
         .await
         .unwrap();
     assert_eq!(clear.status(), 200);
+}
+
+#[tokio::test]
+async fn inheritance_preflight_refusal_creates_no_destination_or_context_reservation() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+    let context_url = format!("{base}/api/sessions/source/context");
+    let saved = fixture.request(reqwest::Method::PUT, &context_url).json(&json!({
+        "revision":0,"sources":["source"],"next_agent":{
+            "provider":"codex","provider_account_id":"default","machine_id":"offline-fixture","cwd":"missing-project"
+        }
+    })).send().await.unwrap();
+    assert_eq!(saved.status(), 200);
+    let receipt = fixture
+        .request(reqwest::Method::POST, &format!("{context_url}/send"))
+        .json(&json!({"revision":1,"operation":"preflight-refused","text":"continue"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(receipt["state"], "failed");
+    let id = receipt["session_id"].as_str().unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sessions WHERE id=?1")
+            .bind(id)
+            .fetch_one(&fixture.store)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM settings WHERE key=?1")
+            .bind(format!("session_context:{id}"))
+            .fetch_one(&fixture.store)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture.get(&context_url).await["delivery"]["state"],
+        "failed"
+    );
 }

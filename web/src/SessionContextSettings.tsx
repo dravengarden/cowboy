@@ -106,6 +106,10 @@ function ContextEditor(
     observed.delivery?.operation !== snapshot.delivery?.operation;
   const [sources, setSources] = useState(snapshot.sources);
   const [fresh, setFresh] = useState(Boolean(snapshot.next_agent));
+  const [advanced, setAdvanced] = useState(false);
+  const [inheritSettings, setInheritSettings] = useState(
+    snapshot.next_agent?.inherit_settings ?? true,
+  );
   // Catalog hydration temporarily clears placement fields. Only user changes
   // to these fields can make an already-saved target dirty.
   const [agentEdited, setAgentEdited] = useState(false);
@@ -146,6 +150,7 @@ function ContextEditor(
       runtime_machine_id: placement.runtimeMachineId || null,
       cwd: placement.project?.projectId || "",
       preset: preset || null,
+      inherit_settings: inheritSettings,
     }
     : null;
   const changed = sources.length !== snapshot.sources.length ||
@@ -153,7 +158,11 @@ function ContextEditor(
     Boolean(nextAgent) !== Boolean(snapshot.next_agent) ||
     (agentEdited && nextAgent &&
       (Object.keys(nextAgent) as (keyof typeof nextAgent)[]).some(
-        (key) => nextAgent[key] !== snapshot.next_agent?.[key],
+        (key) =>
+          nextAgent[key] !==
+            (key === "inherit_settings"
+              ? snapshot.next_agent?.inherit_settings ?? true
+              : snapshot.next_agent?.[key]),
       ));
   const pending = snapshot.revision !== snapshot.applied_revision;
   const locked = saving || changedElsewhere || Boolean(unresolved);
@@ -220,7 +229,7 @@ function ContextEditor(
         control={
           <Checkbox
             checked={fresh}
-            disabled={saving || Boolean(unresolved)}
+            disabled={locked}
             onChange={(_, checked) => {
               setFresh(checked);
               if (checked) {
@@ -235,34 +244,30 @@ function ContextEditor(
         }
         label={
           <Box>
-            <Typography variant="body2">Start with a new agent</Typography>
+            <Typography variant="body2">Continue with a new agent</Typography>
             <Typography variant="caption" color="text.secondary">
-              {fresh ? "Starts on your next message" : "Keep the current agent"}
+              {fresh
+                ? "Opens beside this session on your next message"
+                : "Keep the current agent"}
             </Typography>
           </Box>
         }
       />
       {fresh && (
         <>
-          <WorkspacePicker
-            label="Project"
-            entries={placement.projects}
-            value={placement.project?.value || ""}
-            onChange={(value) => {
-              setAgentEdited(true);
-              placement.selectProject(value);
-            }}
-          />
           <AiInstallationPicker
             installations={placement.installations}
             value={placement.installation?.value || ""}
             onChange={(value) => {
               setAgentEdited(true);
+              if (
+                placement.installations.find((item) => item.value === value)
+                  ?.provider !== provider
+              ) setPreset("");
               placement.selectInstallation(value);
             }}
-            helperText={placement.error || (placement.loading
-              ? "Checking available installations…"
-              : "Choose where the new agent runs.")}
+            helperText={placement.error ||
+              (placement.loading ? "Checking available installations…" : "")}
           />
           <SessionSubscription
             state={{
@@ -274,23 +279,95 @@ function ContextEditor(
             }}
             disabled={saving}
             desktop={desktop}
+            helperText=""
           />
-          <SessionPresetPicker
-            provider={provider}
-            presets={presets}
-            value={preset}
-            onChange={(value) => {
-              setAgentEdited(true);
-              setPreset(value);
-            }}
-            helperText={validPreset
-              ? "Applied before the new agent’s first prompt"
-              : "Choose an available preset for this agent"}
-          />
-          <Typography variant="caption" color="text.secondary">
-            The original conversation and files stay here. Git projects use a
-            new worktree; uncommitted files are not copied.
-          </Typography>
+          <Box data-context-inheritance>
+            <Typography variant="body2" color="text.secondary">
+              {placement.project?.name || session.workspace_name ||
+                "Current project"}
+              {" · Same folder"}
+              {inheritSettings ? " · Inherit settings" : " · Agent defaults"}
+            </Typography>
+            <Button
+              size="small"
+              endIcon={
+                <ExpandMore
+                  sx={{ transform: advanced ? "rotate(180deg)" : undefined }}
+                />
+              }
+              aria-expanded={advanced}
+              onClick={() => setAdvanced(!advanced)}
+              sx={{ px: 0, textTransform: "none" }}
+            >
+              {advanced ? "Fewer options" : "More options"}
+            </Button>
+          </Box>
+          {!placement.loading && !placement.error && !placement.project && (
+            <Alert
+              severity="warning"
+              action={
+                <Button onClick={() => setAdvanced(true)}>
+                  Choose project
+                </Button>
+              }
+            >
+              Choose a project in More options before saving.
+            </Alert>
+          )}
+          {advanced && (
+            <Stack spacing={1.5} data-context-advanced>
+              <WorkspacePicker
+                label="Project"
+                entries={placement.projects}
+                value={placement.project?.value || ""}
+                onChange={(value) => {
+                  setAgentEdited(true);
+                  placement.selectProject(value);
+                }}
+              />
+              <FormControlLabel
+                sx={{ mr: 0 }}
+                control={
+                  <Checkbox
+                    checked={inheritSettings}
+                    disabled={locked}
+                    onChange={(_, checked) => {
+                      setAgentEdited(true);
+                      setInheritSettings(checked);
+                    }}
+                  />
+                }
+                label="Inherit compatible settings"
+              />
+              <SessionPresetPicker
+                provider={provider}
+                presets={presets}
+                value={preset}
+                onChange={(value) => {
+                  setAgentEdited(true);
+                  setPreset(value);
+                }}
+                defaultLabel={inheritSettings && provider === session.provider
+                  ? "Inherit current model & reasoning"
+                  : "Agent default"}
+                helperText={validPreset
+                  ? ""
+                  : "Choose an available preset for this agent"}
+              />
+              <Typography variant="caption" color="text.secondary">
+                {inheritSettings
+                  ? "Copies compatible Provider settings and session overrides. Memory and Calls follow defaults where unset. A preset overrides model and reasoning. "
+                  : "Uses the selected agent’s defaults. "}
+                Git projects get a new worktree. Uncommitted files stay in this
+                session.
+              </Typography>
+            </Stack>
+          )}
+          {!validPreset && !advanced && (
+            <Alert severity="warning">
+              Open More options to choose a compatible preset.
+            </Alert>
+          )}
         </>
       )}
       <SessionContextPicker

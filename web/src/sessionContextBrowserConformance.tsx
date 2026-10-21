@@ -539,6 +539,22 @@ export async function runSessionContextBrowserConformance(
       await until(() =>
         Boolean(button("Save changes")) && !button("Save changes").disabled
       );
+      check(
+        !container.querySelector("[data-context-advanced]") &&
+          container.querySelector("[data-context-inheritance]")?.textContent
+              ?.includes("Same folder") === true,
+        `${mode}: continuation inherits placement and settings without expanding extra fields`,
+      );
+      button("More options").click();
+      await until(() =>
+        Boolean(container.querySelector("[data-context-advanced]"))
+      );
+      check(
+        container.querySelector("[data-context-advanced]")?.textContent
+          ?.includes("Inherit current model & reasoning") === true,
+        `${mode}: advanced preset defaults to current model and reasoning`,
+      );
+      button("Fewer options").click();
       container.querySelector<HTMLElement>(
         '[data-session-subscription] [role="combobox"]',
       )!
@@ -559,6 +575,7 @@ export async function runSessionContextBrowserConformance(
       );
       check(
         context.next_agent?.provider_account_id === "mink" &&
+          context.next_agent.inherit_settings === true &&
           sessions[0]!.provider_account_id === "default",
         `${mode}: changing the next account preserves the current binding`,
       );
@@ -670,6 +687,34 @@ export async function runSessionContextBrowserConformance(
         `${mode}: cancelling pending context clears only the staged configuration`,
       );
       flushSync(() => root.render(null));
+      const workspace = sessions[0]!.workspace_id;
+      delete sessions[0]!.workspace_id;
+      flushSync(() => root.render(<Fixture desktop={desktop} />));
+      await until(() => Boolean(button("Context & next agent")));
+      button("Context & next agent").click();
+      await until(() =>
+        Boolean(container.querySelector("[data-context-editor]"))
+      );
+      container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+        .click();
+      await until(() => Boolean(button("Choose project")));
+      check(
+        button("Save changes").disabled &&
+          container.textContent?.includes(
+              "Choose a project in More options",
+            ) === true,
+        `${mode}: missing inherited project explains why saving is disabled`,
+      );
+      button("Choose project").click();
+      await until(() =>
+        Boolean(container.querySelector("[data-context-advanced]"))
+      );
+      check(
+        Boolean(container.querySelector("[data-context-advanced]")),
+        `${mode}: missing project action exposes the field`,
+      );
+      flushSync(() => root.render(null));
+      if (workspace !== undefined) sessions[0]!.workspace_id = workspace;
     }
   } finally {
     root.unmount();

@@ -77,8 +77,9 @@ export function useSessionSubscription(active: boolean, provider: string) {
   };
 }
 
-export function SessionSubscription({ state, disabled, desktop }: {
+export function SessionSubscription({ state, disabled, desktop, helperText }: {
   state: ReturnType<typeof useSessionSubscription>; disabled: boolean; desktop: boolean;
+  helperText?: string;
 }): React.JSX.Element {
   const accounts = state.data?.registry.accounts.filter((account) => account.provider_id === state.provider) ?? [];
   const defaultId = state.data?.registry.defaults[state.provider] ?? "default";
@@ -97,7 +98,7 @@ export function SessionSubscription({ state, disabled, desktop }: {
         slotProps={{ select: { displayEmpty: true, renderValue: () => selected?.label ?? placeholder }, inputLabel: { shrink: true } }}
         value={selectedId} disabled={disabled || (!state.data && !state.error)}
         error={state.error || Boolean(state.data && !state.allowed)}
-        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? "Account unavailable" : "Independent of the selected Machine."}
+        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? "Account unavailable" : helperText ?? "Independent of the selected Machine."}
         onChange={(event) => state.select(event.target.value)}>
         {!selected && <MenuItem value={selectedId} disabled>{placeholder}</MenuItem>}
         {choices.map((account) => <MenuItem key={account.id} value={account.id} disabled={Boolean(account.reason)}>

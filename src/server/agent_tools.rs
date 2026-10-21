@@ -427,6 +427,29 @@ pub(super) fn effective(state: &AppState, session: &crate::core::SessionMeta) ->
     hub_effective(&state.hub, session)
 }
 
+/// Copy explicit preferences while preserving links to the destination's defaults.
+/// Explicit target restrictions remain restrictive across a family change.
+pub(super) fn continuation_settings(mut current: SessionTools, provider: &str) -> SessionTools {
+    if let Some(targets) = &mut current.calls.targets {
+        let had_targets = !targets.is_empty();
+        targets.retain(|target| !same_family(&target.agent, provider));
+        if had_targets && targets.is_empty() {
+            current.calls.enabled = Some(false);
+        }
+    }
+    if current.calls.default.as_ref().is_some_and(|default| {
+        same_family(default, provider)
+            || current
+                .calls
+                .targets
+                .as_ref()
+                .is_some_and(|targets| !valid_default(default, targets))
+    }) {
+        current.calls.default = None;
+    }
+    current
+}
+
 fn hub_effective(hub: &crate::core::Hub, session: &crate::core::SessionMeta) -> AgentTools {
     hub_agent_defaults(hub, &session.provider)
         .0
@@ -800,6 +823,40 @@ pub(super) async fn configure_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuation_keeps_memory_and_review_choices_without_widening_call_targets() {
+        let current: SessionTools = serde_json::from_value(json!({"schema":1,"matrix":{"tools":false,"recall":false},"calls":{"targets":[{"agent":"codex","preset":"astra-max"}],"review":{"claude":["opus"]}}})).unwrap();
+        let same = continuation_settings(current.clone(), "claude-code");
+        assert!(same.validate());
+        assert_eq!(same, current);
+        let cross = continuation_settings(current, "codex");
+        assert!(cross.validate());
+        let effective = AgentTools::builtin("codex")
+            .overlay(&cross)
+            .for_caller("codex");
+        assert!(!effective.memory.tools && !effective.memory.recall);
+        assert!(!effective.calls.enabled);
+        assert!(effective.calls.targets.is_empty());
+        assert_eq!(effective.calls.review.claude, vec!["opus"]);
+    }
+
+    #[test]
+    fn continuation_keeps_default_policy_links_live() {
+        let current = SessionTools {
+            schema: SCHEMA,
+            ..SessionTools::default()
+        };
+        for provider in ["claude-code", "codex"] {
+            let copied = continuation_settings(current.clone(), provider);
+            assert_eq!(copied, current);
+            let mut defaults = AgentTools::builtin(provider);
+            assert!(!defaults.clone().overlay(&copied).calls.targets.is_empty());
+            defaults.calls.enabled = false;
+            defaults.memory.recall = false;
+            assert_eq!(defaults.clone().overlay(&copied), defaults);
+        }
+    }
 
     #[test]
     fn memory_switches_keep_the_matrix_wire_key_and_accept_memory() {

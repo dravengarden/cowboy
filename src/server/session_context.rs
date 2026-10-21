@@ -4,6 +4,8 @@ use super::*;
 use crate::core::SessionInfo;
 use crate::session_context::{Context, Delivery, Injection, NextAgent, Source};
 
+mod inheritance;
+
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.
 type ContextLocks = std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>;
@@ -391,11 +393,14 @@ async fn prepare_target(
     id: &str,
     context: &Context,
     delivery: &Delivery,
-    title: &str,
 ) -> Result<(), String> {
     let target_id = &delivery.session_id;
     if let Some(target) = &context.next_agent {
         validate_target(target)?;
+        let source = owned(state, &auth.principal, id)?.meta;
+        inheritance::preflight(state, auth, &source, target).await?;
+        let actor = folder_actor(state, &auth.principal);
+        state.hub.continuation_folder(id, &actor)?;
         save(
             state,
             target_id,
@@ -426,7 +431,15 @@ async fn prepare_target(
         if !response.status().is_success() {
             return Err(creation_error(response).await);
         }
-        state.hub.rename_session(target_id, title.to_owned());
+        current_authority(state, auth)?;
+        let source = owned(state, &auth.principal, id)?.meta;
+        let destination = owned(state, &auth.principal, target_id)?.meta;
+        if target.inherit_settings {
+            inheritance::apply(state, &source, &destination, target)?;
+        }
+        state
+            .hub
+            .place_continuation(id, target_id, target.inherit_settings, &actor)?;
     }
     current_authority(state, auth)?;
     owned(state, &auth.principal, id)?;
@@ -455,7 +468,15 @@ async fn preparation_failed(
     error: String,
 ) -> Result<(), String> {
     delivery.state = "failed".into();
-    delivery.error = Some(error);
+    delivery.error = Some(
+        if delivery.session_id != id && state.hub.session_info(&delivery.session_id).is_some() {
+            format!(
+                "{error} A destination was created but no message was sent. Inspect or delete that session before retrying."
+            )
+        } else {
+            error
+        },
+    );
     if delivery.session_id != id
         && state
             .hub
@@ -529,9 +550,7 @@ async fn deliver(
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
 
-    if let Err(error) =
-        prepare_target(&state, &auth, &id, &context, &delivery, &info.meta.title).await
-    {
+    if let Err(error) = prepare_target(&state, &auth, &id, &context, &delivery).await {
         preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
         return Ok(delivery);
     }
@@ -642,6 +661,7 @@ mod tests {
         let base = serde_json::json!({"provider":"claude-code","provider_account_id":"default","machine_id":"ovh","cwd":"project"});
         let target: NextAgent = serde_json::from_value(base.clone()).unwrap();
         assert!(validate_target(&target).is_ok());
+        assert!(target.inherit_settings);
         let mut with_credentials = base;
         with_credentials["credentials"] = serde_json::json!("secret");
         assert!(serde_json::from_value::<NextAgent>(with_credentials).is_err());

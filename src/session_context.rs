@@ -14,6 +14,13 @@ pub struct NextAgent {
     pub runtime_machine_id: Option<String>,
     #[serde(default)]
     pub preset: Option<String>,
+    /// Copy compatible user configuration at send time, never native identity.
+    #[serde(default = "inherit_settings_default")]
+    pub inherit_settings: bool,
+}
+
+const fn inherit_settings_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

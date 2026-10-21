@@ -11,9 +11,13 @@ New Session has an optional **Context from sessions** multiselect. Existing
 sessions expose **Context & next agent** in mobile settings, desktop Run
 Configuration and the empty-session configuration workspace.
 
-Selecting **Start with a new agent** initially includes the current session as a
-source. Users may select other sessions or remove every source. They choose a
-Provider installation, subscription, project and optional preset. **Save changes**
+Selecting **Continue with a new agent** initially includes the current session as a
+source. Users may select other sessions or remove every source. The current
+project, execution Machine, runtime Machine and subscription are preselected.
+Only installation and subscription are shown initially; **More options** exposes
+project, the optional preset and **Inherit compatible settings** (on by default).
+For the same Provider, an empty preset means inherit current model and reasoning.
+**Save changes**
 appears only after an edit and saves these choices without creating, stopping or
 starting a worker. **Discard** leaves stored choices unchanged. The current
 agent and its identity remain intact. Saved choices show their pending state;
@@ -33,6 +37,36 @@ native background work. It creates a separate Cowboy session through ordinary
 account and placement admission, then sends the message once and opens that
 destination. The original conversation, native identity, account binding and
 files remain available. Linking context alone does not replace an agent.
+
+The continuation keeps its source's title and effective sidebar folder, including
+explicit Global placement and project-bound folders. It is inserted immediately
+after the source in both the session order and the mixed session/Draft order.
+These changes use the shared Service sync state and persist across devices. The
+folder is copied as placement, not passed as new directory defaults that could
+override the source's selections.
+
+At send time, inheritance copies compatible Provider configuration, explicit
+Memory/Calls/reviewer choices, the send policy, automatic Provider updates and
+the Zed browsing-directory override. Same-Provider options must be declared by
+the target's signed contract, including its versioned permission interface; a
+different release only accepts values present in its signed defaults/presets.
+Restrictive permissions require the same Provider release and permission
+contract: an incompatible target refuses the send rather than resetting them.
+Cross-Provider model and permission identifiers are never guessed. Explicit
+target presets override model/reasoning without widening inherited permissions.
+Unset Memory/Calls fields keep following the destination's agent defaults,
+including later Owner changes. Calls with explicit targets are filtered by the
+destination's ordinary family restrictions without introducing new targets;
+the destination Provider's call limits still apply. If no explicit target remains
+compatible, Calls are disabled until reconfigured. Disabling inheritance keeps
+the destination's defaults while retaining title, folder and adjacent placement.
+Queue contents, Pause, one-shot approvals, pending operations, native identities
+and credentials are never copied. Later source edits do not change the new agent.
+
+Compatibility and folder access are checked before a destination or worktree is
+created, then checked again against its actual admitted generation. A concurrent
+change can still fail after creation; the failed receipt explicitly identifies
+the unsent destination for inspection or deletion, and never retries the message.
 
 Git projects follow normal isolated-worktree creation. Other registered
 directories retain their existing sharing rules. This feature does not copy or
@@ -115,7 +149,8 @@ reuse across accounts, or imitation of another account's identity.
 - `GET /api/sessions/{id}/context` reads links, revision and the last receipt.
 - `PUT /api/sessions/{id}/context` takes `{revision,sources,next_agent?}`.
   `next_agent` contains `provider`, `provider_account_id`, `machine_id`, trusted
-  project ID `cwd`, optional `runtime_machine_id` and `preset`.
+  project ID `cwd`, optional `runtime_machine_id`, `preset` and
+  `inherit_settings` (defaults to `true`).
 - `POST /api/sessions/{id}/context/send` takes
   `{revision,operation,text,content?}`. Keep `operation` stable after
   uncertainty.

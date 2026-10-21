@@ -2,12 +2,20 @@ import { MenuItem, TextField } from "@mui/material";
 import type { SessionPreset } from "./newSessionPreset";
 
 export function SessionPresetPicker(
-  { provider, presets, value, onChange, helperText }: {
+  {
+    provider,
+    presets,
+    value,
+    onChange,
+    helperText,
+    defaultLabel = "Agent default",
+  }: {
     provider: string;
     presets: readonly SessionPreset[];
     value: string;
     onChange: (value: string) => void;
     helperText: string;
+    defaultLabel?: string;
   },
 ): React.JSX.Element {
   return (
@@ -22,7 +30,7 @@ export function SessionPresetPicker(
       onChange={(event) => onChange(event.target.value)}
       helperText={helperText}
     >
-      <MenuItem value="">Agent default</MenuItem>
+      <MenuItem value="">{defaultLabel}</MenuItem>
       {value &&
         !presets.some((preset) => `${provider}/${preset.id}` === value) &&
         <MenuItem value={value}>{value} · Unavailable or incompatible

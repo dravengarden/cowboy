@@ -28,6 +28,7 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
 mod review_defaults;
+mod session_continuation;
 pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
 mod product_permissions;
 pub(crate) use product_permissions::ProductPermissionObservation;

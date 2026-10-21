@@ -12,6 +12,7 @@ export interface NextAgent {
   runtime_machine_id: string | null;
   cwd: string;
   preset: string | null;
+  inherit_settings?: boolean;
 }
 export interface ContextDelivery {
   operation: string;

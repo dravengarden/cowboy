@@ -144,6 +144,44 @@ fn project_arg(args: &serde_json::Value) -> Result<Option<String>, String> {
 }
 
 impl SessionFolders {
+    /// Match the sidebar's visible folders, preserving absent vs explicit Global.
+    /// Visibility never grants mutation: an untouchable match is an error.
+    pub(crate) fn effective_folder(
+        &self,
+        session: &str,
+        actor: &FolderActor,
+        project: Option<&str>,
+    ) -> Result<Option<Option<String>>, String> {
+        let visible = |folder: &&SessionFolder| {
+            actor.sees_all
+                || folder.owner_user_id.is_none()
+                || folder.owner_user_id == actor.user_id
+        };
+        if let Some(placed) = self.placement.get(session) {
+            if placed == TOP_LEVEL {
+                return Ok(Some(None));
+            }
+            if let Some(folder) = self
+                .folders
+                .iter()
+                .filter(visible)
+                .find(|folder| folder.id == *placed)
+            {
+                self.touchable(actor, &folder.id)?;
+                return Ok(Some(Some(placed.clone())));
+            }
+        }
+        let folder = self
+            .folders
+            .iter()
+            .filter(visible)
+            .find(|folder| project.is_some() && folder.project.as_deref() == project);
+        if let Some(folder) = folder {
+            self.touchable(actor, &folder.id)?;
+        }
+        Ok(folder.map(|folder| Some(folder.id.clone())))
+    }
+
     /// Resolve only within the owning user's tree, with provenance and cycle protection.
     pub fn resolve_defaults(
         &self,
