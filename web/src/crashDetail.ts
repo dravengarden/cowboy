@@ -76,7 +76,7 @@ export function hideLiveCrashDuplicate(
   let end = items.length;
   while (end > 0) {
     const item = items[end - 1];
-    if (item?.kind !== "lifecycle" || item.status !== "crashed") break;
+    if (item?.kind !== "lifecycle" || item.status !== "crashed" || item.recovered) break;
     if (
       item.detail && crashDetail && !crashDetailsMatch(item.detail, crashDetail)
     ) {

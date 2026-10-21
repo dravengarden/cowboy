@@ -72,6 +72,16 @@ test("a live crash bar hides the matching trailing lifecycle row", () => {
   assertEquals(hideLiveCrashDuplicate(items, "running", jsonDump), items);
 });
 
+test("a recurrent crash does not hide its earlier recovery record", () => {
+  const recovered: RenderItem = {
+    kind: "lifecycle", status: "crashed", detail: jsonDump, key: "1", recovered: true,
+  };
+  const active: RenderItem = {
+    kind: "lifecycle", status: "crashed", detail: jsonDump, key: "3",
+  };
+  assertEquals(hideLiveCrashDuplicate([recovered, active], "crashed", jsonDump), [recovered]);
+});
+
 const overlaySource = await readFile(
   new URL("./TurnStatusOverlay.tsx", import.meta.url), "utf8",
 );

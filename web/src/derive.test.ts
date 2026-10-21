@@ -131,6 +131,122 @@ test("derive collapses repeated terminal lifecycle projections", () => {
   }
 });
 
+test("a recovered runtime keeps its diagnostic without keeping an active error", () => {
+  const failed: Envelope[] = [{
+    session_id: "s1",
+    seq: 0,
+    kind: "lifecycle",
+    status: "crashed",
+    detail:
+      "Execution environment is unavailable; the original environment has been retained",
+  }];
+  const original = derive(failed)[0];
+  for (const status of ["starting", "exited"] as const) {
+    const item = derive([...failed, {
+      session_id: "s1",
+      seq: 1,
+      kind: "lifecycle",
+      status,
+      detail: null,
+    }])[0];
+    if (item?.kind !== "lifecycle" || item.recovered) {
+      throw new Error("an attempted start is not recovery");
+    }
+  }
+  for (const status of ["running", "busy"] as const) {
+    const timeline = linkTimeline([...failed, {
+      session_id: "s1",
+      seq: 1,
+      kind: "lifecycle",
+      status,
+      detail: null,
+    }], failed);
+    const item = derive(timeline)[0];
+    if (
+      item?.kind !== "lifecycle" || !item.recovered ||
+      item.detail !== failed[0]!.detail
+    ) {
+      throw new Error(
+        "a live worker must mark the original diagnostic as recovered",
+      );
+    }
+    if (
+      item === original || original?.kind !== "lifecycle" || original.recovered
+    ) {
+      throw new Error(
+        "recovery must update the row without mutating cached history",
+      );
+    }
+  }
+});
+
+test("a new crash after recovery is a separate active failure", () => {
+  const items = derive(([
+    ["crashed", "workspace unavailable"],
+    ["running", null],
+    ["crashed", "workspace unavailable"],
+  ] as const).map(([status, detail], seq): Envelope => ({
+    session_id: "s1",
+    seq,
+    kind: "lifecycle",
+    status,
+    detail,
+  })));
+  if (
+    items.length !== 2 || items[0]?.kind !== "lifecycle" ||
+    !items[0].recovered ||
+    items[1]?.kind !== "lifecycle" || items[1].recovered
+  ) {
+    throw new Error("a recurrent failure must not merge into a recovered row");
+  }
+});
+
+test("runtime recovery never completes a failed turn or an interrupted tool", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool",
+        title: "Pending tool",
+        status: "in_progress",
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "turn_end",
+      stop_reason: "error: Native turn failed",
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "lifecycle",
+      status: "crashed",
+      detail: "Native turn failed",
+    },
+    {
+      session_id: "s1",
+      seq: 4,
+      kind: "lifecycle",
+      status: "running",
+      detail: null,
+    },
+  ]);
+  const failure = items.find((item) => item.kind === "lifecycle");
+  const tool = items.find((item) => item.kind === "tool");
+  if (
+    failure?.kind !== "lifecycle" || !failure.turnFailure ||
+    failure.recovered || tool?.kind !== "tool" || tool.status !== "interrupted"
+  ) {
+    throw new Error(
+      "runtime health does not prove a failed turn or unfinished tool succeeded",
+    );
+  }
+});
+
 test("Codex compact command and completion drive the compact state", () => {
   const requested: Envelope[] = [{
     session_id: "s1",

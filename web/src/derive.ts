@@ -74,7 +74,7 @@ export type RenderItem = { key: string } & (
       resolved: boolean;
       chosen: string | null;
     }
-  | { kind: "lifecycle"; status: Status; detail: string | null; turnFailure?: boolean }
+  | { kind: "lifecycle"; status: Status; detail: string | null; turnFailure?: boolean; recovered?: boolean }
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
   | { kind: "cleared"; at: number }
@@ -145,7 +145,7 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         a.chosen === b.chosen && Object.is(a.options, b.options);
     case "lifecycle":
       return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail &&
-        a.turnFailure === b.turnFailure;
+        a.turnFailure === b.turnFailure && a.recovered === b.recovered;
     case "cleared":
       return b.kind === "cleared" && a.at === b.at;
   }
@@ -360,6 +360,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const permIndex = new Map<string, number>();
   // toolCallId -> index of the permission marker that asked for it.
   const permByTool = new Map<string, number>();
+  const runtimeFailures = new Set<Extract<RenderItem, { kind: "lifecycle" }>>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
   let cursor: {
@@ -536,6 +537,17 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
       }
       case "lifecycle": {
+        // Starting/idle alone does not prove recovery. A later live worker does;
+        // preserve the original diagnostic without presenting an active fault.
+        // Interrupted turns/tools remain interrupted even after runtime recovery.
+        if (env.status === "running" || env.status === "busy") {
+          for (const failure of runtimeFailures) {
+            if (failure.status === "crashed" && !failure.turnFailure) {
+              failure.recovered = true;
+            }
+          }
+          runtimeFailures.clear();
+        }
         if (env.status === "crashed" || env.status === "interrupted") {
           settleOutstandingTools(items, "interrupted");
         }
@@ -547,6 +559,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           const previous = items.at(-1);
           if (
             previous?.kind === "lifecycle" &&
+            !previous.recovered &&
             (previous.status === env.status || previous.turnFailure) &&
             (previous.detail === env.detail || previous.detail === null ||
               env.detail === null ||
@@ -555,8 +568,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (env.detail !== null) previous.detail = env.detail;
             previous.status = env.status;
             previous.key = String(env.seq);
+            if (env.status === "crashed" && !previous.turnFailure) runtimeFailures.add(previous);
           } else {
-            items.push({ kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq) });
+            const failure: Extract<RenderItem, { kind: "lifecycle" }> = {
+              kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq),
+            };
+            items.push(failure);
+            if (env.status === "crashed") runtimeFailures.add(failure);
           }
         }
         break;

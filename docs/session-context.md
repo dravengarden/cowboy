@@ -140,6 +140,15 @@ remain uncertain until their existing receipt is observed. Unreadable stored
 context remains closed to sending: restore the compatible Controller or verified
 storage rather than discard an operation whose effects cannot be established.
 
+Asynchronous execution-environment preparation may still fail after a context
+send has been accepted into the queue. Its existing recovery loop observes the
+same session identity. The Controller retains the Machine's typed refusal reason
+in diagnostics and reports the affected Machine and retry state. A later
+`running` or `busy` event folds the earlier runtime error into **Session recovered**
+with its original detail available; `starting` alone does not prove recovery.
+Failed turns and interrupted tools retain their failure state. Folding a
+recovered error does not retry a message or transfer it to another session.
+
 This is account isolation, not a guarantee against Provider enforcement. There
 is no quota-triggered account rotation, credential rewriting, native-thread
 reuse across accounts, or imitation of another account's identity.

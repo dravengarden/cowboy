@@ -47,6 +47,7 @@ import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
   Bedtime,
   ChatBubbleOutline,
+  CheckCircleOutline,
   CleaningServices,
   Close,
   CloudUpload,
@@ -3080,6 +3081,19 @@ const ItemView = memo(function ItemView({
     case "permission":
       return <PermissionCard item={item} />;
     case "lifecycle": {
+      if (item.recovered) {
+        return (
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ color: "text.secondary" }}>
+            <CheckCircleOutline fontSize="medium" />
+            <Box component="details" data-runtime-recovered sx={{ minWidth: 0, fontSize: "0.75rem" }}>
+              <Box component="summary" sx={{ cursor: "pointer" }}>Session recovered</Box>
+              <Typography variant="caption" component="div" sx={{ mt: 0.5, overflowWrap: "anywhere", whiteSpace: "pre-wrap", maxHeight: "30vh", overflow: "auto" }}>
+                Earlier error: {item.detail ?? "The session stopped unexpectedly."}
+              </Typography>
+            </Box>
+          </Stack>
+        );
+      }
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
       // amber record that stays in the log after the session resumes; crashes are
       // red. Clean exits are session chrome, not a transcript event.
@@ -3193,7 +3207,7 @@ function latestCrashDetail(items: RenderItem[]): string | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (
-      item?.kind === "lifecycle" && item.status === "crashed" && item.detail
+      item?.kind === "lifecycle" && item.status === "crashed" && !item.recovered && item.detail
     ) {
       return item.detail;
     }
@@ -3369,7 +3383,7 @@ function itemProgressSignature(
         item.chosen ?? ""
       }`;
     case "lifecycle":
-      return `${count}:${item.key}:lifecycle:${item.status}`;
+      return `${count}:${item.key}:lifecycle:${item.status}:${item.recovered ?? false}`;
     case "cleared":
       return `${count}:${item.key}:cleared:${item.at}`;
   }

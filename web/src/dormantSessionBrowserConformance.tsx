@@ -22,6 +22,7 @@ import type { ConfigOption, Envelope, SessionMeta } from "./protocol";
 
 export async function runDormantSessionBrowserConformance(
   keepFixture = false,
+  capture?: (stage: string) => Promise<void>,
 ): Promise<string[]> {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
@@ -239,7 +240,7 @@ export async function runDormantSessionBrowserConformance(
                   sessionId={session.id}
                   provider={session.provider}
                   cwd={session.cwd}
-                  status="exited"
+                  status={session.status}
                   timeline={state.timelines.get(session.id) ?? []}
                   loading={false}
                   connected={state.connected}
@@ -249,10 +250,15 @@ export async function runDormantSessionBrowserConformance(
                   ? (
                     <DesktopTopBarControls
                       sessionId={session.id}
-                      status="exited"
+                      status={session.status}
                     />
                   )
-                  : <SessionControls sessionId={session.id} status="exited" />}
+                  : (
+                    <SessionControls
+                      sessionId={session.id}
+                      status={session.status}
+                    />
+                  )}
               </Box>
             </DesktopCommandProvider>
           </DesktopWorkspaceProvider>
@@ -590,6 +596,94 @@ export async function runDormantSessionBrowserConformance(
       document.body.textContent?.includes("Larger model"),
       "Desktop can configure the sleeping session too",
     );
+    const detail =
+      "Execution environment is unavailable; the original environment has been retained";
+    for (const surface of ["mobile", "desktop"] as const) {
+      desktop = surface === "desktop";
+      session.status = "crashed";
+      const seq = surface === "mobile" ? 20 : 30;
+      const row = () => container.querySelector(`[data-key='${seq}']`);
+      timeline = [...timeline, {
+        session_id: session.id,
+        seq: seq - 1,
+        kind: "update",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: "Continue" },
+        },
+      }, {
+        session_id: session.id,
+        seq,
+        kind: "lifecycle",
+        status: "crashed",
+        detail,
+      }];
+      const publish = () =>
+        socket!.publish({
+          type: "snapshot",
+          session_id: session.id,
+          events: timeline,
+          reached_start: true,
+        });
+      publish();
+      flushSync(() => root.render(<Fixture key={`recovery-${surface}`} />));
+      await until(
+        () =>
+          [...container.querySelectorAll("[role='status']")].some((status) =>
+            status.textContent?.includes(detail)
+          ),
+        "preparation failure missing",
+      );
+      check(
+        !row()?.querySelector("[data-runtime-recovered]"),
+        `${surface}: an unresolved preparation failure stays visible`,
+      );
+      timeline = [...timeline, {
+        session_id: session.id,
+        seq: seq + 1,
+        kind: "lifecycle",
+        status: "starting",
+        detail: null,
+      }];
+      session.status = "starting";
+      publish();
+      flushSync(() => root.render(<Fixture key={`starting-${surface}`} />));
+      await until(() => row() !== null, "starting runtime error missing");
+      check(
+        !row()?.querySelector("[data-runtime-recovered]"),
+        `${surface}: starting alone does not claim recovery`,
+      );
+      session.status = "running";
+      timeline = [...timeline, {
+        session_id: session.id,
+        seq: seq + 2,
+        kind: "lifecycle",
+        status: "running",
+        detail: null,
+      }];
+      publish();
+      flushSync(() => root.render(<Fixture key={`recovered-${surface}`} />));
+      await until(
+        () => row()?.querySelector("[data-runtime-recovered]") != null,
+        "recovered runtime missing",
+      );
+      const recovered = row()!.querySelector<HTMLDetailsElement>(
+        "[data-runtime-recovered]",
+      )!;
+      check(
+        !recovered.open &&
+          recovered.querySelector("summary")?.textContent ===
+            "Session recovered",
+        `${surface}: confirmed recovery folds the historical error`,
+      );
+      recovered.querySelector("summary")!.click();
+      await capture?.(`${surface}-recovered`);
+      check(
+        recovered.open && recovered.textContent?.includes(detail),
+        `${surface}: recovered details retain the original diagnostic`,
+      );
+      recovered.querySelector("summary")!.click();
+    }
     if (keepFixture) {
       desktop = false;
       flushSync(() => root.render(<Fixture key="mobile-preview" />));

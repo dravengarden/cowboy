@@ -6,8 +6,8 @@ use super::super::{
     resolve_machine_workspace, resolve_provider_generation,
 };
 use crate::core::Status;
-use crate::execution_environment::{ExecutionBinding, PreparationV1};
-use crate::machine_protocol::execution::{Action, ExecutorInventory, Request, Response};
+use crate::execution_environment::{BindingV1, ExecutionBinding, PreparationV1};
+use crate::machine_protocol::execution::{Action, ExecutorInventory, Refusal, Request, Response};
 use crate::machine_protocol::{MachineCapacity, MachineWorkspace, PluginInventory};
 use axum::{
     Json,
@@ -499,7 +499,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
     if !durable {
         return Err("Execution preparation has not reached durable storage".into());
     }
-    let Response::Prepared { binding } = call(
+    let response = call(
         state,
         &intent.machine_id,
         Action::Prepare {
@@ -508,13 +508,8 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
             runtime: intent.runtime.clone(),
         },
     )
-    .await?
-    else {
-        return Err(
-            "Execution environment is unavailable; the original environment has been retained"
-                .into(),
-        );
-    };
+    .await?;
+    let binding = prepared_response(session_id, &intent.machine_id, response)?;
     let mut resolved_source = None;
     if !intent.accepts(&binding) {
         let mut alias_intent = intent.clone();
@@ -582,6 +577,51 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
                 resolved_source.as_deref(),
             )
         })
+}
+
+fn prepared_response(
+    session_id: &str,
+    machine_id: &str,
+    response: Response,
+) -> Result<BindingV1, String> {
+    match response {
+        Response::Prepared { binding } => Ok(binding),
+        Response::Refused { reason } => {
+            // Retain the closed, content-free Machine reason. Debug on Response
+            // intentionally hides its payload, so logging that alone loses it.
+            tracing::warn!(
+                session = session_id,
+                machine = machine_id,
+                ?reason,
+                "execution preparation refused"
+            );
+            let detail = match reason {
+                Refusal::Unavailable => "The execution Machine is not ready",
+                Refusal::InvalidRequest => "The execution Machine rejected the preparation request",
+                Refusal::IdentityMismatch => {
+                    "The execution environment does not match the selected workspace or runtime"
+                }
+                Refusal::WorkspaceUnavailable => "The selected workspace could not be prepared",
+                Refusal::EnvironmentLost => "The execution environment could not be verified",
+                Refusal::PreparationFailed => "The execution Machine could not finish preparation",
+                Refusal::Capacity => "The execution Machine has reached its environment capacity",
+            };
+            Err(format!(
+                "{detail} ({machine_id}). This session is retained; Cowboy will retry preparation."
+            ))
+        }
+        other => {
+            tracing::warn!(
+                session = session_id,
+                machine = machine_id,
+                response = ?other,
+                "unexpected execution preparation response"
+            );
+            Err(format!(
+                "The execution Machine returned an unexpected preparation response ({machine_id}). This session is retained; Cowboy will retry preparation."
+            ))
+        }
+    }
 }
 
 /// Removing the runtime alone cannot prove remote jobs stopped. Retain the
@@ -661,4 +701,50 @@ pub(in crate::server) fn delete(state: &AppState, session_id: &str) -> Result<()
         hub.set_closing(&session_id, false);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+
+    #[test]
+    fn preparation_preserves_the_binding_and_distinguishes_machine_refusals() {
+        let binding = crate::execution_environment::fixture().decode().unwrap();
+        assert_eq!(
+            prepared_response(
+                "session",
+                "target",
+                Response::Prepared {
+                    binding: binding.clone()
+                }
+            ),
+            Ok(binding)
+        );
+        let reasons = [
+            Refusal::Unavailable,
+            Refusal::InvalidRequest,
+            Refusal::IdentityMismatch,
+            Refusal::WorkspaceUnavailable,
+            Refusal::EnvironmentLost,
+            Refusal::PreparationFailed,
+            Refusal::Capacity,
+        ];
+        let messages: std::collections::HashSet<_> = reasons
+            .into_iter()
+            .map(|reason| {
+                let message = prepared_response("session", "target", Response::Refused { reason })
+                    .unwrap_err();
+                assert!(message.contains("(target)"));
+                assert!(message.contains("retry preparation"));
+                assert!(!message.contains("original environment"));
+                message
+            })
+            .collect();
+        assert_eq!(messages.len(), reasons.len());
+        assert!(
+            prepared_response("session", "target", Response::Closed)
+                .unwrap_err()
+                .contains("unexpected")
+        );
+    }
 }
