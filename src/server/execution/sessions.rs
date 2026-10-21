@@ -132,6 +132,10 @@ pub(in crate::server) async fn availability(
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct CreateRequest {
     #[serde(default)]
+    context_sources: Vec<String>,
+    #[serde(skip)]
+    pub(in crate::server) reserved_id: Option<String>,
+    #[serde(default)]
     provider: String,
     #[serde(default)]
     provider_account_id: Option<crate::provider_account::ProviderAccountId>,
@@ -182,6 +186,11 @@ async fn create_checked(
 ) -> Result<crate::core::SessionMeta, String> {
     use super::super::folder_defaults::{self, value};
     use crate::session_folders::defaults::DefaultKey;
+    super::super::session_context::validate_sources(
+        state,
+        &authenticated.principal,
+        &request.context_sources,
+    )?;
     let defaults = folder_defaults::resolve(
         state,
         &authenticated.principal,
@@ -310,7 +319,9 @@ async fn create_checked(
     if !accepts(&generation.behavior, &executor) {
         return Err("This installed Provider cannot run tools in the selected environment".into());
     }
-    let session_id = state.supervisor.reserve_session_id();
+    let session_id = request
+        .reserved_id
+        .unwrap_or_else(|| state.supervisor.reserve_session_id());
     let Response::RuntimePrepared { runtime: location } = call(
         state,
         &runtime.id,
@@ -358,6 +369,18 @@ async fn create_checked(
         },
         product_session_owner(state.product_auth_enabled, &authenticated.principal),
     )?;
+    super::super::session_context::initialize(
+        state,
+        &authenticated.principal,
+        &session_id,
+        request.context_sources,
+        request
+            .initial_prompt
+            .as_ref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|_| format!("execution-initial:{session_id}")),
+    )
+    .await?;
     provider_accounts::registration::register(state, registration).await?;
     folder_defaults::apply_created(
         state,
@@ -382,6 +405,7 @@ async fn create_checked(
             "preparing the workspace",
         );
     }
+    super::super::session_context::initialized(state, &session_id).await?;
     schedule(state, &session_id);
     state
         .hub

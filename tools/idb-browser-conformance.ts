@@ -30,11 +30,13 @@ if (
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
-  suite !== "subscriptions"
+  suite !== "subscriptions" && suite !== "session-context"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "subscriptions"
+const entry = suite === "session-context"
+  ? "runSessionContextBrowserConformance"
+  : suite === "subscriptions"
   ? "runSubscriptionsBrowserConformance"
   : suite === "review-context"
   ? "runReviewContextBrowserConformance"
@@ -272,7 +274,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "sign-in"
+      (suite === "session-context"
+        ? 28
+        : suite === "sign-in"
         ? 5
         : suite === "session-move" || suite === "editor-plugin-sandbox"
         ? 4

@@ -18,6 +18,7 @@ mod memory_reclaim;
 mod secure_transport;
 mod send_delivery;
 mod session_configuration;
+mod session_context;
 mod session_create_replay;
 mod session_maintenance;
 mod session_provider_updates;
@@ -1388,6 +1389,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // one bounded reconnect window to prove ownership; only then may a
             // missing worker become Interrupted.
             hub.restore_reconciling_runtime(restored);
+            crate::session_context::restore_announcements(&hub);
             hub.set_artifacts(store.artifacts());
             tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.
@@ -10752,6 +10754,8 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
+        .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
+        .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
         .route("/api/sessions/{id}/delivery-options", get(send_delivery::options))
         .route("/api/sessions/{id}/delivery-policy", put(send_delivery::set_policy))
@@ -16583,6 +16587,13 @@ async fn api_session_prompt(
     Path(session_id): Path<String>,
     Json(req): Json<SessionPromptRequest>,
 ) -> Response {
+    if crate::session_context::pending(&state.hub, &session_id) {
+        return (
+            StatusCode::CONFLICT,
+            "Context changes are pending; use sessions.context_send with its revision",
+        )
+            .into_response();
+    }
     use crate::send_delivery::SendDelivery;
     let delivery = match SendDelivery::resolve(req.delivery, req.force, req.front) {
         Ok(delivery) => delivery,
@@ -16672,6 +16683,11 @@ async fn api_session_prompt(
 /// observe the authoritative preparation lifecycle on the destination page.
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
+    #[serde(default)]
+    context_sources: Vec<String>,
+    /// Only the durable context transition may reserve a creation identity.
+    #[serde(skip)]
+    reserved_id: Option<String>,
     #[serde(default)]
     provider: String,
     #[serde(default)]
@@ -16941,6 +16957,10 @@ async fn api_new_session(
     if !principal.role.at_least(crate::admin::AdminRole::Operator) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if let Err(error) = session_context::validate_sources(&state, &principal, &req.context_sources)
+    {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
     use crate::session_folders::defaults::DefaultKey;
     let defaults = match folder_defaults::resolve(&state, &principal, req.folder_id.as_deref()) {
         Ok(value) => value,
@@ -17021,12 +17041,14 @@ async fn api_new_session(
             )
                 .into_response();
         }
-        let request = serde_json::from_value(serde_json::json!({
+        let mut request: execution::sessions::CreateRequest = serde_json::from_value(serde_json::json!({
             "provider": req.provider, "machine_id": req.machine_id, "runtime_machine_id": runtime,
             "cwd": req.cwd.unwrap_or_default(), "origin": req.origin, "initial_prompt": req.initial_prompt,
             "folder_id": req.folder_id, "preset": req.preset,
             "provider_account_id": provider_account_id,
+            "context_sources": req.context_sources,
         })).expect("typed creation request");
+        request.reserved_id = req.reserved_id;
         return execution::sessions::create(State(state), Extension(authenticated), Json(request))
             .await;
     }
@@ -17048,7 +17070,9 @@ async fn api_new_session(
             .into_response();
     }
     let mut cwd = req.cwd;
-    let session_id = state.supervisor.reserve_session_id();
+    let session_id = req
+        .reserved_id
+        .unwrap_or_else(|| state.supervisor.reserve_session_id());
     if web_session_is_missing_machine(&req.machine_id, &req.origin) {
         return (
             StatusCode::CONFLICT,
@@ -17182,6 +17206,20 @@ async fn api_new_session(
             Ok(registration) => registration,
             Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
         };
+        if let Err(error) = session_context::initialize(
+            &state,
+            &principal,
+            &session_id,
+            req.context_sources,
+            req.initial_prompt
+                .as_ref()
+                .filter(|text| !text.trim().is_empty())
+                .map(|_| format!("initial:{session_id}")),
+        )
+        .await
+        {
+            return (StatusCode::CONFLICT, error).into_response();
+        }
         if let Err(error) = provider_accounts::registration::register(&state, registration).await {
             return (StatusCode::CONFLICT, error).into_response();
         }
@@ -17209,6 +17247,9 @@ async fn api_new_session(
                 Some(format!("initial:{session_id}")),
             );
             session_maintenance::wait(&state.hub, &session_id, "preparing the workspace");
+        }
+        if let Err(error) = session_context::initialized(&state, &session_id).await {
+            return (StatusCode::CONFLICT, error).into_response();
         }
         tokio::spawn(async move {
             let result = prepare_state
@@ -17303,6 +17344,20 @@ async fn api_new_session(
         )
             .into_response();
     }
+    if let Err(error) = session_context::initialize(
+        &state,
+        &principal,
+        &session_id,
+        req.context_sources,
+        req.initial_prompt
+            .as_ref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|_| format!("initial:{session_id}")),
+    )
+    .await
+    {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
     match state.supervisor.new_session_on_with_id(
         &session_id,
         &req.provider,
@@ -17325,7 +17380,11 @@ async fn api_new_session(
                 .filter(|prompt| !prompt.trim().is_empty())
                 && let Err(message) = state.supervisor.send(
                     &session_id,
-                    AgentCommand::Prompt(vec![ContentBlock::from(prompt)], None, None),
+                    AgentCommand::Prompt(
+                        vec![ContentBlock::from(prompt)],
+                        Some(format!("initial:{session_id}")),
+                        None,
+                    ),
                 )
             {
                 state.hub.set_status(
@@ -17333,6 +17392,14 @@ async fn api_new_session(
                     crate::agent_model::Status::Crashed,
                     Some(format!("Initial prompt failed: {message}")),
                 );
+                return (
+                    StatusCode::CONFLICT,
+                    "Initial prompt failed; inspect session context before retrying",
+                )
+                    .into_response();
+            }
+            if let Err(error) = session_context::initialized(&state, &session_id).await {
+                return (StatusCode::CONFLICT, error).into_response();
             }
             (
                 StatusCode::CREATED,
@@ -21425,6 +21492,20 @@ fn handle_command(
                 CommandOutcome::Rejected,
                 "view-only system session: input is disabled",
             );
+        }
+        return false;
+    }
+    if let Some(sid) = &session_id_for_err
+        && matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
+        && crate::session_context::pending(&state.hub, sid)
+    {
+        let message = "Context changes are pending. Send with the current context revision or cancel those changes.";
+        if let Some(cmid) = &authored_cmid {
+            state
+                .hub
+                .command_result(sid, cmid, CommandOutcome::Rejected, message);
+        } else {
+            state.hub.broadcast_error(Some(sid.clone()), message.into());
         }
         return false;
     }

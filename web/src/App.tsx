@@ -351,6 +351,7 @@ import {
 } from "./desktop/DesktopEmbeddedControl";
 import { DesktopPanel } from "./desktop/DesktopPanel";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { SessionContextPicker } from "./SessionContextPicker";
 import {
     controlPlaneConnection,
     getActiveSessionId,
@@ -2962,6 +2963,7 @@ export function CreateDialog({
     const { catalog: folderCatalog, error: folderCatalogError } = useProviderCatalog(open && variant === "folder");
     const closeLevel = (): void => { if (editingFolderDefault) setFolderDefaultField(null); else onClose(); };
     const [workItemId, setWorkItemId] = useState("");
+    const [contextSources, setContextSources] = useState<string[]>([]);
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
     const selectedWorkspace: WorkspaceChoice | undefined = placement.project ? {
@@ -3006,6 +3008,7 @@ export function CreateDialog({
         setFolderDefaultsExpanded(false);
         setFolderDefaultField(null);
         setWorkItemId("");
+        setContextSources([]);
         setCreating(false);
         setCreateError("");
         const t = globalThis.setTimeout(() => {
@@ -3099,6 +3102,7 @@ export function CreateDialog({
                     body: JSON.stringify({
                         provider,
                         provider_account_id: subscription.value || undefined,
+                        context_sources: contextSources,
                         machine_id: machineId,
                         runtime_machine_id: placement.runtimeMachineId,
                         cwd,
@@ -3375,6 +3379,7 @@ export function CreateDialog({
                                 : "No ready AI installation can use this project. Check Machines in Settings."}
                         />
                         <SessionSubscription state={subscription} disabled={creating} desktop={desktop} />
+                        <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
                         <Typography variant="caption" color="text.secondary">
                             Git projects open in a session worktree. Other directories are shared in place.
                         </Typography>
@@ -4245,6 +4250,8 @@ export function App({
     useEffect(() => {
         const onPickRequest = (event: Event): void => {
             const id = pickSessionDetail(event);
+            const created = (event as CustomEvent<{ session?: SessionMeta }>).detail?.session;
+            if (created?.id === id) setPendingCreatedSession(created);
             if (id !== null) pick(id);
         };
         globalThis.addEventListener(PICK_SESSION_EVENT, onPickRequest);

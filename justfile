@@ -118,6 +118,10 @@ provider-ui-browser-conformance BROWSER:
 provider-management-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" provider-management' conformance "{{BROWSER}}"
 
+# Real context selection, first-send admission UI and cross-device edit conflicts.
+session-context-browser-conformance BROWSER THEME="light":
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" session-context "$2"' conformance "{{BROWSER}}" "{{THEME}}"
+
 # Core buffer owner: real development StrictMode, no Review/native activation.
 code-buffer-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" code-buffers' conformance "{{BROWSER}}"

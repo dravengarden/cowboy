@@ -3,7 +3,13 @@ targets = ["x86_64-unknown-linux-gnu"]
 all-features = true
 
 [advisories]
-ignore = []
+# 0.26.11 contains no certificates: its entire implementation re-exports
+# parent::TLS_SERVER_ROOTS from webpki-roots 1.x. The lock now resolves 1.0.10,
+# which removes the distrusted root (rustls/webpki-roots#133). The advisory's
+# broad <1.0.10 range also matches this harmless compatibility crate. The bans
+# below keep this exception bounded to that exact shim plus patched 1.x.
+# Delete the exception and bans when SQLx stops depending on 0.26.11.
+ignore = [{ id = "RUSTSEC-2026-0381", reason = "Exact 0.26.11 re-export shim uses patched webpki-roots >=1.0.10; all other affected versions are denied below" }]
 
 [licenses]
 allow = [
@@ -29,6 +35,10 @@ ignore = true
 multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
+deny = [
+  { name = "webpki-roots", version = "<0.26.11" },
+  { name = "webpki-roots", version = ">0.26.11, <1.0.10" },
+]
 # WebAuthn 0.5 still requires base64 0.21; the current HTTP stack uses 0.23.
 # Permit only this exact legacy codec, keeping its advisory/license checks.
 # PNG 0.18 decodes with miniz_oxide 0.8; flate2 already requires 0.9.

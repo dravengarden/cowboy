@@ -1861,11 +1861,24 @@ pub struct Hub {
     inner: std::sync::Arc<HubInner>,
 }
 
+pub(crate) struct ContextEditGuard {
+    hub: Hub,
+    id: String,
+}
+
+impl Drop for ContextEditGuard {
+    fn drop(&mut self) {
+        self.hub.inner.context_edits.lock().remove(&self.id);
+        self.hub.try_drain(&self.id);
+    }
+}
+
 /// Unanswered client-set config values of one session, with when each was set.
 type InFlightConfig = HashMap<String, (serde_json::Value, std::time::Instant)>;
 
 struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
+    context_edits: Mutex<HashSet<String>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
     product_permissions: Mutex<product_permissions::Observations>,
@@ -2088,6 +2101,7 @@ impl Hub {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
+                context_edits: Mutex::new(HashSet::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 config_in_flight: Mutex::new(HashMap::new()),
@@ -2859,6 +2873,7 @@ impl Hub {
             Vec::new(),
             Some(format!("{MANAGED_CALL_CMID_PREFIX}{call_id}")),
             true,
+            false,
         );
     }
 
@@ -3495,6 +3510,7 @@ impl Hub {
                 settings_keys::SESSION_QUEUE_PAUSED_PREFIX,
                 settings_keys::SESSION_DELIVERY_POLICY_PREFIX,
                 settings_keys::SESSION_DELIVERY_HOLD_PREFIX,
+                settings_keys::SESSION_CONTEXT_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -3526,7 +3542,8 @@ impl Hub {
         self.broadcast_sessions();
     }
 
-    /// Run `f` while holding the internal settings mutex. Callers must not await.
+    /// Run `f` while holding the internal settings mutex. Callers must not await
+    /// or lock sessions: queue admission orders sessions before settings.
     pub fn with_settings_mut<R>(
         &self,
         f: impl FnOnce(&mut HashMap<String, serde_json::Value>) -> R,
@@ -3598,6 +3615,39 @@ impl Hub {
             Self::commit_setting_locked(settings, key.clone(), value.clone())
         });
         self.publish_setting(key, value, snapshot);
+    }
+
+    /// Close the queue admission race before awaiting a durable context edit.
+    /// Messages arriving during the write remain queued, including schedules.
+    pub(crate) fn begin_context_edit(
+        &self,
+        id: &str,
+        allow_queued: bool,
+    ) -> Result<ContextEditGuard, String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(id).ok_or("Session unavailable")?;
+        if (!allow_queued && !session.queue.is_empty())
+            || session.dispatch_pending.is_some()
+            || session.delivery_hold.is_some()
+        {
+            return Err("Wait for the current submission, or clear the pending context to release queued messages".into());
+        }
+        if !self.inner.context_edits.lock().insert(id.to_owned()) {
+            return Err("A context edit is already being saved".into());
+        }
+        Ok(ContextEditGuard {
+            hub: self.clone(),
+            id: id.to_owned(),
+        })
+    }
+
+    fn context_allows_dispatch(&self, id: &str, cmid: Option<&str>) -> bool {
+        !self.inner.context_edits.lock().contains(id)
+            && crate::session_context::allows_dispatch(self, id, cmid)
+    }
+
+    pub(crate) fn context_state_changed(&self, id: &str) {
+        self.try_drain(id);
     }
 
     pub(crate) fn set_resource_wait(&self, session_id: &str, reason: Option<String>) {
@@ -5774,6 +5824,7 @@ impl Hub {
                 return false;
             };
             if s.delivery_hold.as_deref() != Some(operation)
+                || !self.context_allows_dispatch(session_id, Some(operation))
                 || s.meta.status != Status::Running
                 || s.in_flight
                 || s.dispatch_pending.is_some()
@@ -5835,6 +5886,9 @@ impl Hub {
                 return;
             }
             if s.queue.is_empty() {
+                return;
+            }
+            if !self.context_allows_dispatch(session_id, s.queue[0].cmid.as_deref()) {
                 return;
             }
             // ANY message being edited pauses the WHOLE auto-drain — not just when
@@ -6020,7 +6074,20 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
-        self.submit_inner(session_id, text, content, cmid, false);
+        self.submit_inner(session_id, text, content, cmid, false, false);
+    }
+
+    /// The admitted bootstrap precedes messages queued while its intent was
+    /// being persisted. It still respects Pause and never interrupts a turn.
+    pub(crate) fn submit_context(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: String,
+    ) {
+        self.submit_inner(session_id, text, content, Some(cmid), false, true);
+        self.drain_head(session_id, true, false);
     }
 
     fn submit_inner(
@@ -6030,6 +6097,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
         managed: bool,
+        front: bool,
     ) {
         // One controller owns a managed child conversation: its parent call.
         if !managed && self.is_managed_child(session_id) {
@@ -6064,7 +6132,12 @@ impl Hub {
                 .map(str::to_owned);
             if duplicate.is_some() {
                 // fall through to the addressed confirmation below
-            } else if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
+            } else if wired
+                && !s.meta.paused
+                && Self::ready(s, true)
+                && s.queue.is_empty()
+                && self.context_allows_dispatch(session_id, cmid.as_deref())
+            {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
@@ -6078,13 +6151,18 @@ impl Hub {
                 });
             } else {
                 let id = self.next_qid();
-                s.queue.push(QueuedMessage {
+                let message = QueuedMessage {
                     id,
                     text,
                     content,
                     cmid,
                     schedule: None,
-                });
+                };
+                if front {
+                    s.queue.insert(0, message);
+                } else {
+                    s.queue.push(message);
+                }
             }
         }
         if let Some(cmid) = duplicate {
@@ -6140,13 +6218,18 @@ impl Hub {
         {
             let mut sessions = self.inner.sessions.lock();
             let s = sessions.get_mut(session_id)?;
+            let context_allows = self.context_allows_dispatch(session_id, cmid.as_deref());
             duplicate = cmid
                 .as_deref()
                 .filter(|c| Self::prompt_already_accepted(s, c))
                 .map(str::to_owned);
             if duplicate.is_some() {
                 // fall through to the addressed confirmation below
-            } else if wired && Self::ready(s, true) && s.queue.is_empty() {
+            } else if wired
+                && Self::ready(s, true)
+                && s.queue.is_empty()
+                && self.context_allows_dispatch(session_id, cmid.as_deref())
+            {
                 // Idle + nothing queued → straight dispatch, identical to submit.
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
@@ -6174,7 +6257,7 @@ impl Hub {
                         schedule: None,
                     },
                 );
-                interrupt = interrupt_on_busy;
+                interrupt = interrupt_on_busy && context_allows;
             }
         }
         if let Some(cmid) = duplicate {
@@ -6679,7 +6762,12 @@ impl Hub {
             {
                 return;
             }
-            if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
+            if wired
+                && !s.meta.paused
+                && Self::ready(s, true)
+                && s.queue.is_empty()
+                && self.context_allows_dispatch(session_id, cmid.as_deref())
+            {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
@@ -8760,6 +8848,104 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
+        let hub = hub_with_session("context-hold");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("context-hold", Status::Running, None);
+        let guard = hub.begin_context_edit("context-hold", false).unwrap();
+        // Simulate a scheduler racing the durable preference write.
+        hub.submit(
+            "context-hold",
+            "wake".into(),
+            vec![],
+            Some("__wakeup-test".into()),
+        );
+        assert!(rx.try_recv().is_err());
+        hub.load_settings(vec![(
+            crate::session_context::key("context-hold"),
+            serde_json::json!({"revision":1,"applied_revision":0}),
+        )]);
+        drop(guard);
+        hub.add_draft(
+            "context-hold",
+            "draft".into(),
+            vec![],
+            Some("draft-id".into()),
+        );
+        hub.activate_all_drafts("context-hold");
+        hub.add_draft(
+            "context-hold",
+            "scheduled".into(),
+            vec![],
+            Some("scheduled-id".into()),
+        );
+        let id = hub.queue_and_drafts("context-hold", |_| true).unwrap().1[0]
+            .id
+            .clone();
+        hub.fire_scheduled_draft("context-hold", &id);
+        assert!(!hub.force_submit(
+            "context-hold",
+            "front".into(),
+            vec![],
+            Some("front-id".into()),
+            true
+        ));
+        for _ in 0..3 {
+            hub.drain_now("context-hold");
+            hub.try_drain("context-hold");
+        }
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            queue_texts(&hub, "context-hold"),
+            vec!["front", "wake", "draft", "scheduled"]
+        );
+        // Clearing remains possible with a held queue and releases it once.
+        let guard = hub.begin_context_edit("context-hold", true).unwrap();
+        hub.load_settings(vec![(
+            crate::session_context::key("context-hold"),
+            serde_json::json!({"revision":2,"applied_revision":2}),
+        )]);
+        drop(guard);
+        assert_eq!(rx.try_recv().unwrap().text, "front");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn context_bootstrap_precedes_racing_queue_without_unpausing_it() {
+        let hub = hub_with_session("context-first");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("context-first", Status::Running, None);
+        hub.set_paused("context-first", true);
+        hub.load_settings(vec![(crate::session_context::key("context-first"), serde_json::json!({
+            "revision":2,"applied_revision":2,"delivery":{"operation":"first","fingerprint":"hash","session_id":"context-first","state":"preparing"},
+            "injection":{"cmid":"context-first-message","sources":[]}
+        }))]);
+        hub.submit(
+            "context-first",
+            "racing message".into(),
+            vec![],
+            Some("racing".into()),
+        );
+        hub.submit_context(
+            "context-first",
+            "bootstrap".into(),
+            vec![],
+            "context-first-message".into(),
+        );
+        assert_eq!(
+            queue_texts(&hub, "context-first"),
+            vec!["bootstrap", "racing message"]
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(hub.session_info("context-first").unwrap().meta.paused);
+        hub.drain_now("context-first");
+        assert_eq!(rx.try_recv().unwrap().text, "bootstrap");
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

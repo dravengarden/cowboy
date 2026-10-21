@@ -1,0 +1,144 @@
+# Linked session context and fresh agents
+
+Cowboy can link up to 32 owned sessions as context for either an existing agent
+or a new session. Provider and subscription changes create a new native agent.
+Reasoning, permissions and other supported live settings keep their existing
+configuration path.
+
+## User flow
+
+New Session has an optional **Context from sessions** multiselect. Existing
+sessions expose **Context & next agent** in mobile settings, desktop Run
+Configuration and the empty-session configuration workspace.
+
+Selecting **Start with a new agent** initially includes the current session as a
+source. Users may select other sessions or remove every source. They choose a
+Provider installation, subscription, project and optional preset. **Use on next
+message** saves these choices without creating, stopping or starting a worker.
+The current agent and its identity remain intact. **Clear selection** removes
+the pending selection.
+
+The next explicit send checks the saved revision and current authorization. A
+fresh-agent transition requires the source to be idle with no queued prompts or
+native background work. It creates a separate Cowboy session through ordinary
+account and placement admission, then sends the message once and opens that
+destination. The original conversation, native identity, account binding and
+files remain available. Linking context alone does not replace an agent.
+
+Git projects follow normal isolated-worktree creation. Other registered
+directories retain their existing sharing rules. This feature does not copy or
+move uncommitted work. The bootstrap tells the destination to inspect original
+worktree state and reconcile relevant changes explicitly. Selected source
+sessions are not stopped, modified or granted new access by a link.
+
+## Context and token costs
+
+The Service adds one bounded preamble to the admitted message, containing only
+source IDs, history cursor boundaries and instructions for reading Cowboy MCP.
+The user message remains a normal user message in the UI. Sources are
+inspectable in Context; full native transcripts are never copied into another
+account.
+
+The destination discovers session APIs on demand and reads relevant recent
+history, decisions, outstanding work and tool evidence. Full-event continuation
+and server search remain available when needed. It does not automatically walk
+links recursively, summarize the entire history or invoke another model.
+Subsequent messages do not repeat the preamble. Cross-account/provider prompt
+cache reuse is not assumed.
+
+Historical content supplies evidence, not authorization. The current user
+message wins. Source ownership is checked at selection, send, prompt dispatch
+and the existing MCP history-read boundary. A deleted or inaccessible source
+cannot silently become another owner's context. Titles never enter the
+bootstrap.
+
+## Persistence and concurrency
+
+The DB-backed `session_context:<id>` preference stores a monotonically
+increasing revision, ordered source IDs, an optional closed target specification
+and the last send receipt. It is restored across Controller restarts and
+announced only to the owner's connected clients. A stale edit or send is
+rejected. Native credentials, auth homes, cookies, native session IDs and
+environment overrides are not accepted as target settings.
+
+Accepting a send advances the preference revision as well as its applied
+revision. Another device cannot save a pre-send editor over that result. Later
+edits retain the last terminal receipt, so a lost response can still be
+observed. Returning to the original session permits ordinary messages there; the
+accepted send opens the destination. After a lost reply or page reload, the
+first attempted resend observes that receipt and opens the destination once,
+with an explanatory notice, instead of duplicating the message. Returning to the
+original session then permits a deliberate new message there.
+
+A send reserves its operation and destination before creation. A duplicate with
+the same operation and payload observes that receipt; another payload cannot
+reuse the operation. Source and destination mutation locks protect first-send
+admission. The destination is fenced before its session becomes visible, so
+another tab cannot race its bootstrap. Ordinary WS/API submission and steering
+cannot bypass a pending context choice.
+
+The queue also holds scheduled wakeups, activated drafts and manual drain
+requests while context is pending. Saving a preference closes queue admission
+under the same Hub lock before awaiting storage. Messages arriving during that
+write remain queued. Clearing context is allowed with a held queue and releases
+it under the normal Pause policy. A bootstrap precedes messages queued during
+its preparation, while continuing to respect Pause.
+
+`accepted` means admitted to Cowboy's normal prompt/queue lifecycle, not that
+the model answered. A failure during preparation preserves the old session.
+`preparing` or `unknown` after a lost response or restart is observation-only;
+it never automatically retries a creation or sends the message again. Inspect
+the destination and its transcript. **Resolve interrupted send** acknowledges
+the exact operation and clears only the pending preference, preserving the
+destination and its files. It does not cancel a running operation or resend.
+Known preparation refusals are recorded as `failed`, with a readable reason, and
+release any dormant destination's context fence. Failures after submission
+remain uncertain until their existing receipt is observed. Unreadable stored
+context remains closed to sending: restore the compatible Controller or verified
+storage rather than discard an operation whose effects cannot be established.
+
+This is account isolation, not a guarantee against Provider enforcement. There
+is no quota-triggered account rotation, credential rewriting, native-thread
+reuse across accounts, or imitation of another account's identity.
+
+## HTTP, MCP and CLI
+
+- `GET /api/sessions/{id}/context` reads links, revision and the last receipt.
+- `PUT /api/sessions/{id}/context` takes `{revision,sources,next_agent?}`.
+  `next_agent` contains `provider`, `provider_account_id`, `machine_id`, trusted
+  project ID `cwd`, optional `runtime_machine_id` and `preset`.
+- `POST /api/sessions/{id}/context/send` takes
+  `{revision,operation,text,content?}`. Keep `operation` stable after
+  uncertainty.
+- Both session creation APIs accept `context_sources`.
+
+The existing four-tool MCP surface exposes `sessions.context`,
+`sessions.context_set`, `sessions.context_send` and the extended
+`sessions.create` in its on-demand control catalog. Use
+`cowboy.control.read("sessions.context", {session_id})` and `control.apply`
+through `cowboy_execute`. The authenticated CLI uses the same HTTP contracts:
+
+```sh
+cowboy api GET /api/sessions/SESSION/context
+cowboy api PUT /api/sessions/SESSION/context --data - < context.json
+cowboy api POST /api/sessions/SESSION/context/send --data - < message.json
+```
+
+For explicit recovery, `context_set` additionally accepts `resolve_operation`
+with empty sources and no target after inspecting the exact receipt. There are
+no new resident MCP tools.
+
+## Ownership and rollout
+
+Native agents continue to own execution and native memory. Cowboy owns the
+residual cross-provider UI, immutable account/placement admission and access to
+its own stored conversations. The narrow extension is one prompt preamble plus
+existing MCP session reads. Claude and Codex use this same adapter-backed
+contract; no follower-specific transcript importer is introduced. Native
+cross-provider context links with equivalent ownership and receipt semantics
+would replace the local bootstrap.
+
+This change belongs to Controller and Web. It does not change the Machine or
+worker wire format and must not trigger worker-generation maintenance. Activate
+the Controller before the Web that consumes these endpoints. Source checks and
+browser fixture checks are distinct from deployment acceptance.

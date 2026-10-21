@@ -16,6 +16,7 @@ import {
   type PromptOrigin,
   resolvePromptOrigin,
   samePromptOrigin,
+  stripLinkedSessionContext,
 } from "./promptOrigin";
 
 export {
@@ -390,7 +391,12 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const role = u.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
             if (role === "assistant") userCmid = undefined;
             else if (env.cmid !== undefined) userCmid = env.cmid;
-            const chunk = chunkOf(u);
+            let chunk = chunkOf(u);
+            if (role === "user" && chunk?.type === "text") {
+              const text = stripLinkedSessionContext(chunk.text, userCmid);
+              if (!text && text !== chunk.text) break;
+              if (text !== chunk.text) chunk = { ...chunk, text };
+            }
             if (!chunk) break;
             if (
               role === "user" &&

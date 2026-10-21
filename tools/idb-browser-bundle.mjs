@@ -23,7 +23,8 @@ if (
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
   suite !== "loading-progress" &&
-  suite !== "subscriptions" && suite !== "client-update"
+  suite !== "subscriptions" && suite !== "client-update" &&
+  suite !== "session-context"
 ) {
   throw new Error("unknown suite");
 }
@@ -56,7 +57,8 @@ await build({
         suite === "session-maintenance" || suite === "dormant-session" ||
         suite === "about-layout" || suite === "info-metrics" ||
         suite === "loading-progress" || suite === "review-context" ||
-        suite === "subscriptions" || suite === "client-update"
+        suite === "subscriptions" || suite === "client-update" ||
+        suite === "session-context"
         ? "development"
         : "production",
     ),
@@ -100,12 +102,15 @@ await build({
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "dormant-session" || suite === "info-metrics" ||
         suite === "review-context" || suite === "loading-progress" ||
-        suite === "client-update" || suite === "subscriptions"
+        suite === "client-update" || suite === "subscriptions" ||
+        suite === "session-context"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "client-update"
+        suite === "session-context"
+          ? "../web/src/sessionContextBrowserConformance.tsx"
+          : suite === "client-update"
           ? "../web/src/clientUpdateBrowserFixture.tsx"
           : suite === "desktop-viewport"
           ? "../web/src/desktopViewportBrowserConformance.tsx"

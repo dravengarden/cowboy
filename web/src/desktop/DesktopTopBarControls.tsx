@@ -76,6 +76,7 @@ import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import { SessionToolsSection } from "../AgentToolsPanel";
+import { SessionContextSettings } from "../SessionContextSettings";
 import { ProviderUpdateDialog } from "../ProviderUpdateDialog";
 import {
   providerUpdateScheduleText,
@@ -2002,6 +2003,7 @@ export function DesktopTopBarControls({
           </Box>
           <Box sx={{ px: 2.25, pb: 1.75 }}>
             <SessionToolsSection sessionId={sessionId} />
+            {session && <SessionContextSettings session={session} />}
           </Box>
         </Box>
       </DesktopModal>

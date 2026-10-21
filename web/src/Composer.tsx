@@ -183,6 +183,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { ManagedCallsDock } from "./ManagedCallsDock";
 import { SessionToolsSection } from "./AgentToolsPanel";
+import { SessionContextSettings } from "./SessionContextSettings";
 import { isManagedChild } from "./managedCalls";
 import {
   mobileComposerFocusMotion,
@@ -7077,6 +7078,7 @@ function ComposerSheet({
         <>
           <Divider />
           <SessionToolsSection sessionId={session.id} />
+          <SessionContextSettings session={session} />
         </>
       )}
       {session && (

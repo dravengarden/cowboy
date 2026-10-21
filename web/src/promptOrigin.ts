@@ -17,6 +17,13 @@ export const HUMAN_COMPOSER_ORIGIN: PromptOrigin = {
 
 const SYSTEM_REMINDER_OPEN = /<system-reminder\b/i;
 
+/** Cowboy's bounded bootstrap is inspectable in Context, not a second user
+ * message. The delivery id and exact wrapper distinguish it from user text. */
+export function stripLinkedSessionContext(text: string, cmid: string | undefined): string {
+  if (!cmid || !/^(context-|initial:|execution-initial:)/.test(cmid)) return text;
+  return text.replace(/^<system-reminder>\nLinked Cowboy sessions: [\s\S]*?<\/system-reminder>\s*/, "");
+}
+
 export function stripSystemReminderBlocks(text: string): string {
   return text.replace(
     /<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi,

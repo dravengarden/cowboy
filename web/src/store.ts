@@ -109,6 +109,7 @@ import { notifyHaptic } from "./haptic";
 import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
+import { ContextNavigationNotice, requireCurrentAgentContext, sendWithContext } from "./sessionContext";
 
 const telemetryOperations = new ClientOperations(
   startClientSpan,
@@ -5220,6 +5221,9 @@ export async function currentTurnPrompt(
       "The current turn is unavailable. Queue this message instead.",
     );
   }
+  try { await requireCurrentAgentContext(sessionId); } catch (error) {
+    contextSendError(sessionId, error);
+  }
   const { captureDeliveryTarget } = await import("./currentTurnDelivery");
   const captured = target ?? await captureDeliveryTarget(sessionId);
   const cmid = newCmid();
@@ -5242,13 +5246,32 @@ export async function currentTurnPrompt(
   }
 }
 
-export function submitPrompt(
+function contextSendError(sessionId: string, error: unknown): never {
+  setState({ ...state, lastError: {
+    seq: ++errorSeq,
+    sessionId: error instanceof ContextNavigationNotice ? error.sessionId : sessionId,
+    severity: error instanceof ContextNavigationNotice ? "info" : "error",
+    message: error instanceof Error ? error.message : "Could not send with the selected context",
+  } });
+  throw error;
+}
+
+async function sendWithContextNotice(sessionId: string, text: string, content: unknown[]): Promise<boolean> {
+  try {
+    return await sendWithContext(sessionId, text, content);
+  } catch (error) {
+    contextSendError(sessionId, error);
+  }
+}
+
+export async function submitPrompt(
   sessionId: string,
   text: string,
   attachments: Attachment[] = [],
 ): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
+  if (await sendWithContextNotice(sessionId, trimmed, contentOf(trimmed, attachments))) return;
   // Predict the daemon's path so the optimistic row lands in the right place: it
   // DISPATCHES (→ a chat bubble) only when the session is dispatchable AND
   // nothing is queued; otherwise it QUEUES (→ a queue row). A wrong guess
@@ -5276,9 +5299,10 @@ export function submitPrompt(
  *  the rest of the queue. On an idle / empty-queue session there's nothing to
  *  jump ahead of, so it's just a normal send. Mirrors forcePrompt minus the
  *  interrupt. */
-export function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
+export async function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
+  if (await sendWithContextNotice(sessionId, trimmed, contentOf(trimmed, attachments))) return;
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);

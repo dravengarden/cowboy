@@ -271,6 +271,21 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/delivery-options",
             get(web::send_delivery::options),
         ),
+        "sessions.context" => (
+            "GET",
+            "/api/sessions/{session_id}/context",
+            get(web::session_context::get),
+        ),
+        "sessions.context_set" => (
+            "PUT",
+            "/api/sessions/{session_id}/context",
+            put(web::session_context::set),
+        ),
+        "sessions.context_send" => (
+            "POST",
+            "/api/sessions/{session_id}/context/send",
+            post(web::session_context::send),
+        ),
         "queue.policy_set" => (
             "PUT",
             "/api/sessions/{session_id}/delivery-policy",

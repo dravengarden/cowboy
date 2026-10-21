@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import { ExpandMore } from "@mui/icons-material";
 import { SessionToolsSection } from "./AgentToolsPanel";
+import { SessionContextSettings } from "./SessionContextSettings";
 import { desktopSize } from "./surface/desktopSize";
 import { useNetworkActionState } from "./NetworkActionFeedback";
 import { isManagedChild } from "./managedCalls";
@@ -341,6 +342,7 @@ export function SessionStartSettings(
           <SessionToolsSection sessionId={sessionId} disabled={!connected} />
         )}
       </Box>
+      {session && <SessionContextSettings session={session} />}
     </Box>
   );
 }

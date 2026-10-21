@@ -629,10 +629,12 @@ impl Supervisor {
                     ));
                     return Err("detached runtime does not support completion capture".to_owned());
                 }
-                let content = blocks
-                    .into_iter()
-                    .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
-                    .collect();
+                let content = crate::session_context::prompt_content(
+                    &self.hub,
+                    session_id,
+                    cmid.as_deref(),
+                    blocks,
+                )?;
                 let session = self.start_session(session_id)?;
                 if self.is_dormant(&runtime, session_id) {
                     // Project Starting at once, as an open used to, so the

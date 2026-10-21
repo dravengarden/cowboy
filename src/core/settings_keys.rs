@@ -17,6 +17,7 @@ pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
 pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
+pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
 pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_update:";
 /// Agent tools defaults for one agent kind; the agent id follows.
@@ -37,6 +38,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_QUEUE_PAUSED_PREFIX,
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
+            SESSION_CONTEXT_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
@@ -63,6 +65,7 @@ pub(crate) fn examples() -> Vec<String> {
         format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_POLICY_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_HOLD_PREFIX}sess-1"),
+        format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),

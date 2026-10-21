@@ -82,6 +82,9 @@ pub(super) fn begin(
     target: Option<&crate::send_delivery::DeliveryTarget>,
     next_checkpoint: bool,
 ) -> Result<crate::remote_runtime::SteeringDelivery, String> {
+    if crate::session_context::pending(&state.hub, session) {
+        return Err("Context changes are pending. Wait for this turn to finish, then send normally, or cancel those changes.".into());
+    }
     let blocks = build_prompt_blocks(text, content).ok_or("empty prompt")?;
     let fences = state.plugin_lifecycle_fences.read();
     if let Some(refusal) = provider_fence_key_for_session(&state.hub, session)

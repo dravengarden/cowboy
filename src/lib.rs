@@ -195,6 +195,8 @@ pub mod send_delivery;
 mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod service_identity;
+#[cfg(feature = "full")]
+pub mod session_context;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod session_deletion_admission;
 #[cfg(feature = "full")]
