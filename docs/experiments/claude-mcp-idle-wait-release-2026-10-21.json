@@ -1,0 +1,89 @@
+{
+  "schema": "cowboy.claude-mcp-idle-wait-release/v1",
+  "date": "2026-10-21",
+  "source_commit": "effc8d15",
+  "plugin": "claude-code",
+  "previous_version": "3.20.1",
+  "version": "3.20.2",
+  "package_digest": "sha256:7d713322e670b1b3740afef921542a55e6e5fb3d3e1ea7e67e106fb994b5c2ff",
+  "artifact_digest": "sha256:275813a18026ca665deea5f1fcb79b234a7f4cc6c9f508f83452bae2573294d9",
+  "contract_fingerprint": "sha256:81528550045f10498304afbbbca7d26a4820eb547608b4160044df8d3bee0dcc",
+  "component_release": "3.60.0",
+  "publisher": "cowboy-first-party",
+  "supported_platforms": [
+    {
+      "os": "linux",
+      "architecture": "x86_64"
+    },
+    {
+      "os": "macos",
+      "architecture": "aarch64"
+    }
+  ],
+  "native_pins": {
+    "claude_cli": "2.1.302",
+    "claude_agent_acp": "0.93.0",
+    "executor": "0.159.3"
+  },
+  "motivation": {
+    "machine": "ovh",
+    "window": "24 h to 2026-10-21T14:30Z",
+    "execution_calls": 192078,
+    "process_read_calls": 176830,
+    "process_read_overhead_ms_p50_p90_p99": [
+      203,
+      509,
+      1206
+    ],
+    "local_log_bytes_from_tool_overhead": "143.9 MB of 195,640 records",
+    "cause": "every idle stdio MCP server re-read the target once per 25 s notification wait bound"
+  },
+  "change": [
+    "an idle MCP server waits 300 s on the executor's process notifications, which the event cursor delivers without loss while the connection lives",
+    "a write to the server still ends that wait 25 s later with a read when no notification arrived, so a lost reply costs no more than before"
+  ],
+  "gates": {
+    "claude_remote_check": "passed (345 runtime tests, dprint, typecheck, remote impact)",
+    "check_compact": "passed on effc8d15",
+    "remote_impact": [
+      "claude-remote-check",
+      "claude-worker (all phases)",
+      "claude-managed"
+    ],
+    "claude_worker": {
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "scope": "full",
+      "checks": 95,
+      "claude_sha256": "60d7eb7f12fbb28a52533fe8be5884097403562aa02dc73991a021c7067e29a5",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+    },
+    "claude_managed": {
+      "schema": "cowboy.claude-managed-execution-conformance/v1",
+      "accepted": true,
+      "checks": 7
+    }
+  },
+  "publication": {
+    "catalog_release_state": "ready",
+    "published_at": "2026-10-21T15:37:00.629Z",
+    "urls_rehashed": true
+  },
+  "installation": {
+    "machine": "ovh",
+    "operation_id": "ovh-claude-code-3-20-2-converge",
+    "http_status": 204,
+    "generation_digest": "sha256:275813a18026ca665deea5f1fcb79b234a7f4cc6c9f508f83452bae2573294d9",
+    "rollback_generation_digest": "sha256:536aa2815832815dcf1db27f751ab64df2a1447229d44c244d47a198c5d454b9"
+  },
+  "live_acceptance": {
+    "session": "temporary OVH runtime / Hawk execution Claude session, deleted afterwards",
+    "mcp_tool_call": "mcp__cowboy__cowboy_status completed",
+    "mcp_servers": 6,
+    "observed": "after the post-write rechecks (25 s after each startup write) no process/read for 295 s, then one read per server at the 300 s bound; 3.20.1 sessions read each idle server every 25 s"
+  },
+  "not_changed": [
+    "existing sessions keep their pinned generation; no live session was reloaded",
+    "other Machines remain on 3.20.1 until converged"
+  ]
+}
