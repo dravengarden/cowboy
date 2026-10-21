@@ -1811,6 +1811,46 @@ test("an MCP notification during the wait is read at once", async (t) => {
   assert.ok(Date.now() - started < 1000);
 });
 
+test("a request written to an idle MCP server bounds its reply wait", async (t) => {
+  const { tools, connection } = await fixture(t);
+  connection.listeners = new Set();
+  tools.state.mcp.server = {};
+  tools.mcpReplyWaitMs = 30;
+  let reads = 0;
+  tools.mcpCall = async (method) => {
+    if (method === "process/write") return { status: "accepted" };
+    assert.equal(method, "process/read");
+    reads++;
+    // The reply is there, but its notification never arrives.
+    return reads === 1
+      ? { chunks: [], exited: false, closed: false, exitCode: null }
+      : {
+        chunks: [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("{}").toString("base64"),
+        }],
+        exited: false,
+        closed: false,
+        exitCode: null,
+      };
+  };
+  const started = Date.now();
+  // The default idle bound: only the write's recheck ends this wait.
+  const pending = tools.mcpRead("server", null);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await tools.mcpWrite("server", "e30="), "accepted");
+  const result = await pending;
+  assert.equal(reads, 2);
+  assert.equal(result.afterSeq, 1);
+  assert.ok(Date.now() - started < 2000);
+  // A stopped server leaves no wait registry behind.
+  tools.mcpCall = async () => ({});
+  tools.save = async (change) => change();
+  await tools.mcpStop("server");
+  assert.equal(tools.mcpWakes.has("server"), false);
+});
+
 test("cksum digests match the target's POSIX cksum", () => {
   for (const text of ["", "a", "line\n".repeat(70000), "会话🦅"]) {
     const bytes = Buffer.from(text);

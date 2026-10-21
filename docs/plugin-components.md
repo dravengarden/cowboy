@@ -153,6 +153,11 @@ native `prompt.context`; any runtime Git section is removed from
 remain unchanged. This is a runtime change requiring packaged acceptance,
 unlike the preceding 3.19.37 source-test update.
 
+Claude Code 3.20.2 independently lengthens an idle stdio MCP server's
+notification wait from 25 s to 300 s; a write still re-reads after 25 s
+without a notification. Native pins and component release 3.60.0 are
+unchanged. It is a runtime change requiring packaged acceptance.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source

@@ -22,6 +22,16 @@ import { projectConfigDirectories } from "./mcp.mjs";
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
 const MCP_CALLS = 4;
+// An idle MCP server's output arrives through the executor's notifications,
+// which the event cursor delivers without loss while the connection lives
+// (a gap closes it, waking every wait). Its bound only covers a notification
+// lost anyway, so an idle server reads once per this bound. At 25 s, OVH's
+// idle servers were 92% of its execution calls (177,000 reads a day).
+const MCP_IDLE_WAIT_MS = 300000;
+// A request written to the server is answered through such a notification;
+// if none ends the wait this long after the write, it reads again, so a
+// lost reply costs no more than it did with the former 25 s bound.
+const MCP_REPLY_WAIT_MS = 25000;
 // Native shows at most this many characters of Bash output inline.
 const INLINE_OUTPUT = 30000;
 // A foreground command's output is persisted up to this bound (what Read can
@@ -2843,10 +2853,21 @@ export class WorkspaceTools {
           chunk: data,
           writeId,
         });
-        if (result.status !== "starting" || attempt >= 50) return result.status;
+        if (result.status !== "starting" || attempt >= 50) {
+          if (result.status === "accepted") this.mcpRecheckLater(id);
+          return result.status;
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     });
+  }
+
+  // Ends the server's idle wait MCP_REPLY_WAIT_MS after a write, so it reads
+  // again. A reply that already arrived costs one more read per request.
+  mcpRecheckLater(id) {
+    setTimeout(() => {
+      for (const wake of this.mcpWakes?.get(id) ?? []) wake();
+    }, this.mcpReplyWaitMs ?? MCP_REPLY_WAIT_MS).unref?.();
   }
 
   // An idle process costs no executor calls: read without waiting; with
@@ -2883,16 +2904,20 @@ export class WorkspaceTools {
   // instead of reading again: the caller's next call reads first anyway, so
   // a lost notification still costs at most one bound, and an idle process
   // costs one read per bound instead of two.
-  async notifiedRead(id, waitMs, read, { quiet = false } = {}) {
+  // A function added to `wakes` ends the wait as a notification would.
+  async notifiedRead(id, waitMs, read, { quiet = false, wakes } = {}) {
     // Listen before reading, so output arriving in between still wakes it.
     let listener;
     let timer;
+    let wake;
     const notified = new Promise((resolve) => {
       listener = (frame) => {
         if (frame.method === "closed" || frame.params?.processId === id) {
           resolve(true);
         }
       };
+      wake = () => resolve(true);
+      wakes?.add(wake);
       timer = setTimeout(() => resolve(false), waitMs);
       this.connection.listeners?.add(listener);
     });
@@ -2904,13 +2929,17 @@ export class WorkspaceTools {
     } finally {
       clearTimeout(timer);
       this.connection.listeners?.delete(listener);
+      wakes?.delete(wake);
     }
   }
 
-  async mcpRead(id, afterSeq, waitMs) {
+  async mcpRead(id, afterSeq, waitMs = MCP_IDLE_WAIT_MS) {
     if (!Object.hasOwn(this.state.mcp, id)) {
       throw new Error("MCP process does not belong to this session");
     }
+    this.mcpWakes ??= new Map();
+    let wakes = this.mcpWakes.get(id);
+    if (!wakes) this.mcpWakes.set(id, wakes = new Set());
     // An idle MCP server is the steady state of every session: its relay
     // asks again as soon as this returns, so a quiet bound skips the second
     // read. Over the cross-border link that halves the idle polling, which
@@ -2925,7 +2954,7 @@ export class WorkspaceTools {
           maxBytes: MAX_OUTPUT * 16,
           waitMs: 0,
         }),
-      { quiet: true },
+      { quiet: true, wakes },
     );
     if (result === null) {
       return { chunks: [], afterSeq, closed: false, exitCode: null };
@@ -2990,6 +3019,7 @@ export class WorkspaceTools {
         )
       ) throw error;
     }
+    this.mcpWakes?.delete(id);
     await this.save(() => {
       const previous = this.state.mcp;
       const { [id]: _stopped, ...rest } = previous;
