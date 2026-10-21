@@ -542,8 +542,17 @@ export async function runSessionContextBrowserConformance(
       check(
         !container.querySelector("[data-context-advanced]") &&
           container.querySelector("[data-context-inheritance]")?.textContent
-              ?.includes("Same folder") === true,
+              ?.includes("Same sidebar folder") === true,
         `${mode}: continuation inherits placement and settings without expanding extra fields`,
+      );
+      check(
+        container.querySelector("[data-context-files]")?.textContent
+          ?.includes("uncommitted changes stay with this session") === true,
+        `${mode}: inheritance explains that files are not copied`,
+      );
+      check(
+        Boolean(container.querySelector("[data-context-same-agent]")),
+        `${mode}: an identical target explains that live settings change in place`,
       );
       button("More options").click();
       await until(() =>
@@ -563,6 +572,11 @@ export async function runSessionContextBrowserConformance(
         );
       await until(() => Boolean(option("Claude · Mink")));
       option("Claude · Mink").click();
+      await until(() => !container.querySelector("[data-context-same-agent]"));
+      check(
+        !container.querySelector("[data-context-same-agent]"),
+        `${mode}: another subscription needs no in-place hint`,
+      );
       await observe?.(`${mode}-selection`);
       button("Save changes").click();
       await until(() =>

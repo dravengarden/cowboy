@@ -124,6 +124,7 @@ pub(super) async fn initialize(
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
             sources: snapshots,
+            after: state.hub.next_event_seq(id),
         }),
         ..Context::default()
     };
@@ -570,6 +571,7 @@ async fn deliver(
     target_context.injection = Some(Injection {
         cmid: cmid.clone(),
         sources,
+        after: state.hub.next_event_seq(&target_id),
     });
     if let Err(error) = save(&state, &target_id, &target_context).await {
         preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
@@ -581,6 +583,11 @@ async fn deliver(
         .hub
         .submit_context(&target_id, request.text, request.content, cmid);
     delivery.state = "accepted".into();
+    // Dispatch may already have moved the injection to the first human prompt.
+    // Record acceptance without restoring the pre-dispatch binding.
+    if let Some(current) = crate::session_context::read(&state.hub, &target_id)?.injection {
+        target_context.injection = Some(current);
+    }
     if target_id != id {
         target_context.delivery = Some(delivery.clone());
         save(&state, &target_id, &target_context).await?;

@@ -2781,6 +2781,15 @@ impl Hub {
     /// The newest event sequence already assigned in a session, used as a
     /// managed call's cursor before its prompt is submitted.
     #[must_use]
+    /// Sequence the next event in this session will receive.
+    pub fn next_event_seq(&self, session_id: &str) -> Option<u64> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|s| s.next_seq)
+    }
+
     pub fn last_event_seq(&self, session_id: &str) -> Option<u64> {
         self.inner
             .sessions
@@ -3645,6 +3654,61 @@ impl Hub {
     fn context_allows_dispatch(&self, id: &str, cmid: Option<&str>) -> bool {
         !self.inner.context_edits.lock().contains(id)
             && crate::session_context::allows_dispatch(self, id, cmid)
+    }
+
+    /// Linked context belongs to the first human prompt that reaches the agent.
+    /// The bootstrap row can leave the queue undispatched (removed, cleared or
+    /// overtaken by a front insert). Rebind before that dispatch, so the links
+    /// are neither lost nor applied twice. Only a proven-undelivered injection
+    /// moves: its prompt was never dispatched and the retained log covers
+    /// every event since the send without a user echo.
+    fn context_rebind(
+        &self,
+        id: &str,
+        s: &Session,
+        cmid: Option<&str>,
+    ) -> Option<(String, serde_json::Value)> {
+        let cmid = cmid.filter(|cmid| {
+            Self::is_client_cmid(cmid) && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
+        })?;
+        let mut context = crate::session_context::read(self, id).ok()?;
+        let injection = context.injection.as_mut()?;
+        let after = injection.after?;
+        if injection.cmid == cmid || injection.sources.is_empty() {
+            return None;
+        }
+        let covered = s.reached_start
+            || s.log
+                .first()
+                .map_or(s.next_seq <= after, |entry| entry.seq <= after);
+        if !covered
+            || s.dispatched_cmids
+                .iter()
+                .any(|seen| seen.cmid == injection.cmid)
+            || s.log
+                .iter()
+                .any(|entry| entry.seq >= after && is_user_message_chunk(entry))
+        {
+            return None;
+        }
+        tracing::info!(
+            session = id,
+            from = %injection.cmid,
+            to = cmid,
+            "linked context moved to the first dispatched prompt"
+        );
+        cmid.clone_into(&mut injection.cmid);
+        Some((
+            crate::session_context::key(id),
+            serde_json::to_value(&context).expect("context serializes"),
+        ))
+    }
+
+    /// Persist a rebind before its prompt reaches the dispatcher.
+    fn publish_context_rebind(&self, rebind: Option<(String, serde_json::Value)>) {
+        if let Some((key, value)) = rebind {
+            self.set_setting(key, value);
+        }
     }
 
     pub(crate) fn context_state_changed(&self, id: &str) {
@@ -5905,15 +5969,21 @@ impl Hub {
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
+            let rebind = self.context_rebind(session_id, s, head.cmid.as_deref());
             Self::note_dispatched(s, head.cmid.as_deref());
-            DispatchReq {
-                ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
-                session_id: session_id.to_owned(),
-                text: head.text,
-                content: head.content,
-                cmid: head.cmid,
-            }
+            (
+                DispatchReq {
+                    ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
+                    session_id: session_id.to_owned(),
+                    text: head.text,
+                    content: head.content,
+                    cmid: head.cmid,
+                },
+                rebind,
+            )
         };
+        let (req, rebind) = req;
+        self.publish_context_rebind(rebind);
         self.emit_pending(session_id);
         self.send_dispatch(req);
     }
@@ -6031,6 +6101,19 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        let original = content.len();
+        let content =
+            crate::session_context::without_preamble(self, session_id, cmid.as_deref(), content);
+        // Runtime returns join every text block; drop the preamble's line too.
+        let text = if content.len() < original {
+            content
+                .iter()
+                .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            text
+        };
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -6118,6 +6201,7 @@ impl Hub {
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
+        let mut rebind = None;
         let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
@@ -6142,6 +6226,7 @@ impl Hub {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
+                rebind = self.context_rebind(session_id, s, cmid.as_deref());
                 Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -6170,6 +6255,7 @@ impl Hub {
             self.confirm_delivered(session_id, &cmid);
             return;
         }
+        self.publish_context_rebind(rebind);
         match dispatch {
             // Dispatched straight through — never touched a list, so no flicker
             // of the prompt appearing-then-leaving the queue.
@@ -6214,6 +6300,7 @@ impl Hub {
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
+        let mut rebind = None;
         let mut interrupt = false;
         let duplicate;
         {
@@ -6235,6 +6322,7 @@ impl Hub {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 s.dispatch_pending = Some(s.in_flight_epoch);
+                rebind = self.context_rebind(session_id, s, cmid.as_deref());
                 Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
                     ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
@@ -6265,6 +6353,7 @@ impl Hub {
             self.confirm_delivered(session_id, &cmid);
             return None;
         }
+        self.publish_context_rebind(rebind);
         match dispatch {
             Some(req) => self.send_dispatch(req),
             None => self.emit_pending(session_id),

@@ -111,6 +111,38 @@ pub struct ResetResult {
     pub credit_id: Option<String>,
 }
 
+/// A Provider-paced admission held for one reset attempt. Dropping an unused
+/// reservation keeps its charged start but records no Provider failure.
+pub(crate) struct ResetReservation {
+    account: String,
+    permit: Option<limiter::Permit>,
+}
+
+impl ResetReservation {
+    fn take(&mut self, account: &str) -> std::result::Result<limiter::Permit, ResetError> {
+        if self.account != account {
+            return Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!("usage reset binding changed; no reset was sent"),
+            });
+        }
+        self.permit.take().ok_or_else(|| ResetError {
+            call_may_have_reached_provider: false,
+            credit_id: None,
+            source: anyhow::anyhow!("usage reset reservation was already used"),
+        })
+    }
+}
+
+impl Drop for ResetReservation {
+    fn drop(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            permit.finish(limiter::Outcome::Unused, now_ms());
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ResetError {
     pub call_may_have_reached_provider: bool,
@@ -824,6 +856,63 @@ impl UsageService {
         idempotency_key: &str,
         expected_credit_id: Option<&str>,
     ) -> std::result::Result<ResetResult, ResetError> {
+        self.consume_reset_with(provider, idempotency_key, expected_credit_id, None)
+            .await
+    }
+
+    /// Reserve a paced reset before an irreversible one-shot claim, so pacing
+    /// can only delay a scheduled reset and never discard it.
+    pub(crate) fn reserve_reset(
+        &self,
+        provider: &str,
+    ) -> std::result::Result<ResetReservation, ResetError> {
+        let bindings = self.bindings.current();
+        let binding = bindings
+            .iter()
+            .find(|candidate| candidate.reset.as_deref() == Some(provider))
+            .ok_or_else(|| ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!("provider does not support usage resets"),
+            })?;
+        let key = limiter::Limiter::account_key("service", &binding.account);
+        self.limiter
+            .start_action(&binding.account, &key, now_ms())
+            .map(|permit| ResetReservation {
+                account: binding.account.clone(),
+                permit: Some(permit),
+            })
+            .map_err(|budget| ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!(
+                    "Usage requests to this Provider are paced; no reset was sent. Try again in {} seconds.",
+                    (budget.retry_at_ms(now_ms()) - now_ms()).max(1_000) / 1_000
+                ),
+            })
+    }
+
+    pub(crate) async fn consume_reserved_reset(
+        &self,
+        reservation: ResetReservation,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> std::result::Result<ResetResult, ResetError> {
+        self.consume_reset_with(provider, idempotency_key, None, Some(reservation))
+            .await
+    }
+
+    async fn consume_reset_with(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        expected_credit_id: Option<&str>,
+        reservation: Option<ResetReservation>,
+    ) -> std::result::Result<ResetResult, ResetError> {
+        let mut reservation = match reservation {
+            Some(reservation) => reservation,
+            None => self.reserve_reset(provider)?,
+        };
         let _guard = self.reset_lock.lock().await;
         let bindings = self.bindings.current();
         let Some(binding) = bindings
@@ -837,7 +926,10 @@ impl UsageService {
             });
         };
         if !binding.reset_argv.is_empty() {
-            return consume_plugin_reset(
+            // A reset runs the collector's native usage read and private
+            // subscription calls. It shares the Provider's request pacing.
+            let permit = reservation.take(&binding.account)?;
+            let result = consume_plugin_reset(
                 binding,
                 idempotency_key,
                 expected_credit_id,
@@ -845,6 +937,19 @@ impl UsageService {
                 &self.machine_control,
             )
             .await;
+            // A refused or changed reset is an answer, not an outage. Only
+            // authentication failures back off; pacing still bounds retries.
+            let outcome = match &result {
+                Err(error)
+                    if classify_usage_failure(&error.source.to_string())
+                        == UsageFailureKind::Authentication =>
+                {
+                    limiter::Outcome::Authentication
+                }
+                _ => limiter::Outcome::Success,
+            };
+            permit.finish(outcome, now_ms());
+            return result;
         }
         Err(ResetError {
             call_may_have_reached_provider: false,

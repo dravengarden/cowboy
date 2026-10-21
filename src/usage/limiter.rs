@@ -65,6 +65,8 @@ impl Budget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Success,
+    /// A reserved start that sent nothing; keep its charge, change no backoff.
+    Unused,
     Failure,
     Authentication,
     LocalFailure,
@@ -142,10 +144,17 @@ impl Limiter {
     }
 
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
-        self.budget(&self.inner.lock(), provider, account, now)
+        self.budget(&self.inner.lock(), provider, account, now, true)
     }
 
-    fn budget(&self, state: &State, provider: &str, account: &str, now: i64) -> Budget {
+    fn budget(
+        &self,
+        state: &State,
+        provider: &str,
+        account: &str,
+        now: i64,
+        polling: bool,
+    ) -> Budget {
         let config = self.config.current();
         let window = super::duration_ms(config.get(&schema::USAGE_PROVIDER_WINDOW));
         let count = config.get(&schema::USAGE_REQUESTS_PER_WINDOW);
@@ -153,10 +162,16 @@ impl Limiter {
         let slot = state.durable.accounts.get(account);
         let mut next = slot
             .map_or(0, |slot| {
-                slot.next_allowed_ms
-                    .max(slot.last_attempt_ms.saturating_add(super::duration_ms(
-                        config.get(&schema::USAGE_ACCOUNT_INTERVAL),
-                    )))
+                if polling {
+                    slot.next_allowed_ms
+                        .max(slot.last_attempt_ms.saturating_add(super::duration_ms(
+                            config.get(&schema::USAGE_ACCOUNT_INTERVAL),
+                        )))
+                } else if slot.failures > 0 {
+                    slot.next_allowed_ms
+                } else {
+                    0
+                }
             })
             .max(state.durable.startup_after_ms);
         if let Some(backoff) = state.durable.provider_backoff.get(provider) {
@@ -188,8 +203,26 @@ impl Limiter {
 
     /// Charges failed and cancelled attempts too. Persist before dispatch.
     pub fn start(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
+        self.start_with(provider, account, now, true)
+    }
+
+    /// A confirmed usage action (a reset) is a user write, not a poll. It
+    /// shares the Provider window, spacing, failure backoff and single active
+    /// collector, but not the account polling interval a preceding refresh
+    /// just started. It still delays that account's next poll.
+    pub fn start_action(&self, provider: &str, account: &str, now: i64) -> Result<Permit, Budget> {
+        self.start_with(provider, account, now, false)
+    }
+
+    fn start_with(
+        &self,
+        provider: &str,
+        account: &str,
+        now: i64,
+        polling: bool,
+    ) -> Result<Permit, Budget> {
         let mut state = self.inner.lock();
-        let budget = self.budget(&state, provider, account, now);
+        let budget = self.budget(&state, provider, account, now, polling);
         if now < budget.next_allowed_ms {
             return Err(budget);
         }
@@ -200,9 +233,11 @@ impl Limiter {
         starts.push(now);
         let slot = next.accounts.entry(account.into()).or_default();
         slot.last_attempt_ms = now;
-        slot.next_allowed_ms = now.saturating_add(super::duration_ms(
-            self.config.get(&schema::USAGE_ACCOUNT_INTERVAL),
-        ));
+        slot.next_allowed_ms = slot
+            .next_allowed_ms
+            .max(now.saturating_add(super::duration_ms(
+                self.config.get(&schema::USAGE_ACCOUNT_INTERVAL),
+            )));
         if !self.save(&next) {
             state.failed_closed = true;
             return Err(Budget {
@@ -228,6 +263,7 @@ impl Limiter {
         let slot = state.durable.accounts.entry(account.into()).or_default();
         match outcome {
             Outcome::Success => slot.failures = 0,
+            Outcome::Unused => {}
             Outcome::Failure | Outcome::Authentication | Outcome::LocalFailure => {
                 slot.failures = slot.failures.saturating_add(1);
                 let backoff = if matches!(outcome, Outcome::Authentication) {
@@ -258,7 +294,7 @@ impl Limiter {
                         .min(max_backoff),
                 );
             }
-            Outcome::Authentication | Outcome::LocalFailure => {}
+            Outcome::Authentication | Outcome::LocalFailure | Outcome::Unused => {}
         }
         if !self.save(&state.durable) {
             state.failed_closed = true;
@@ -502,5 +538,25 @@ mod tests {
             limiter.view("anthropic", "new", 1000).next_allowed_ms,
             241_000
         );
+    }
+
+    #[test]
+    fn confirmed_actions_share_provider_pacing_but_not_the_polling_interval() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "lynx", 1000)
+            .unwrap()
+            .finish(Outcome::Success, 2000);
+        // One minute spacing applies to every Provider start, including a reset.
+        assert!(limiter.start_action("anthropic", "lynx", 30_000).is_err());
+        let permit = limiter.start_action("anthropic", "lynx", 61_000).unwrap();
+        // Still a single active request per Provider.
+        assert!(limiter.start_action("anthropic", "mink", 122_000).is_err());
+        permit.finish(Outcome::Success, 62_000);
+        // The action delays the account's next poll; it does not reset it.
+        assert!(limiter.view("anthropic", "lynx", 62_000).next_allowed_ms >= 361_000);
+        // Two starts per window still hold across polls and actions.
+        assert!(limiter.start_action("anthropic", "mink", 100_000).is_err());
+        assert!(limiter.start_action("anthropic", "mink", 121_000).is_ok());
     }
 }

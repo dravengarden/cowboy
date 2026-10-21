@@ -84,9 +84,35 @@ There is no immediate retry loop. A caller disconnect does not cancel the
 Service-owned admission transaction or collection.
 
 The counted unit is a **collector invocation**, not opaque native CLI HTTP.
-Current Claude and Grok collectors can additionally read reset/credit details;
-Codex uses native account/quota RPCs. Their internal authentication/HTTP is owned
-by the Provider CLI. These controls bound Cowboy's collection starts; they do
+Audited per invocation (no collector retries internally; each direct request has
+a timeout within the collector's deadline):
+
+| Provider | Native CLI work (opaque HTTP) | Direct HTTP sent by the signed collector |
+| --- | --- | --- |
+| Anthropic | `claude auth status`, `get_usage` control request | up to 3: `/api/oauth/usage`, `/api/oauth/profile`, prepaid credits |
+| OpenAI | Codex app-server `account/read` (no token refresh), `account/rateLimits/read`, `account/usage/read` | none |
+| DeepSeek | none | one local gateway `/provider-info` request per lane (2); the gateway owns its upstream balance request |
+| xAI | Grok `_x.ai/billing` | up to 2: `/rest/subscriptions`, `GetRemainingResets` |
+
+With the defaults, a Provider therefore receives at most two collector
+invocations per two minutes, so at most 6 direct Anthropic and 4 direct xAI
+requests in that window, plus the native CLI's own requests. Direct enrichment
+failures (including HTTP 429) are discarded without retry; they do not trigger
+Provider backoff, and the next attempt still waits for the account interval.
+`Retry-After` is not read by the current collectors, so the configured pacing
+is the only delay. Native CLI requests, token refresh and their retries are not
+bounded by Cowboy beyond the invocation count.
+
+A confirmed or scheduled usage reset runs the same collector with its native
+usage read, the reset preflight and the reset request. It takes a start from the
+same Provider window, spacing and single-active-collector rule, and delays the
+account's next poll, but it does not wait for that account's polling interval.
+A paced reset is refused before any Provider call ("no reset was sent"). A
+scheduled reset reserves its start before any one-shot claim, so pacing only
+delays it. A refused or changed reset records no failure backoff; an
+authentication failure does.
+
+These controls bound Cowboy's collection starts; they do
 not claim a published subscription polling allowance or guarantee against an
 account restriction. Provider API rate limits are separate from this polling
 policy. See [Anthropic rate limits](https://platform.claude.com/docs/en/api/rate-limits),

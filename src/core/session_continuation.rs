@@ -109,7 +109,16 @@ impl Hub {
         )?;
         if inherit_settings {
             let review = self.sync_value(&format!("mobile-review:{source}"));
-            if let Some(directory) = review.get("directory") {
+            // "This session's worktree" means the destination's own worktree;
+            // copying the source reference would browse the old files.
+            let own = serde_json::json!(format!("session::{source}"));
+            if let Some(directory) = review.get("directory").map(|directory| {
+                if *directory == own {
+                    serde_json::json!(format!("session::{destination}"))
+                } else {
+                    directory.clone()
+                }
+            }) {
                 self.sync_apply_as_locked(
                     actor,
                     &format!("mobile-review:{destination}"),
@@ -278,6 +287,41 @@ mod tests {
                 .is_err()
         );
         assert_eq!(hub.sync_value("folders"), before);
+    }
+
+    #[test]
+    fn a_self_referencing_browse_directory_follows_the_new_worktree() {
+        let hub = Hub::new();
+        for id in ["source", "target", "pinned", "third", "next"] {
+            session(&hub, id, "me");
+        }
+        let actor = FolderActor {
+            user_id: Some("me".into()),
+            sees_all: false,
+        };
+        for (source, directory) in [("source", "session::source"), ("pinned", "session::third")] {
+            hub.sync_apply_as(
+                &actor,
+                &format!("mobile-review:{source}"),
+                "directory".into(),
+                "setDirectory",
+                &json!({ "directory": directory }),
+            )
+            .unwrap();
+        }
+        hub.place_continuation("source", "target", true, &actor)
+            .unwrap();
+        assert_eq!(
+            hub.sync_value("mobile-review:target")["directory"],
+            "session::target"
+        );
+        // An explicit choice of another session remains that choice.
+        hub.place_continuation("pinned", "next", true, &actor)
+            .unwrap();
+        assert_eq!(
+            hub.sync_value("mobile-review:next")["directory"],
+            "session::third"
+        );
     }
 
     #[test]

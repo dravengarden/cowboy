@@ -47,7 +47,9 @@ override the source's selections.
 
 At send time, inheritance copies compatible Provider configuration, explicit
 Memory/Calls/reviewer choices, the send policy, automatic Provider updates and
-the Zed browsing-directory override. Same-Provider options must be declared by
+the Zed browsing-directory override. A source override naming its own
+worktree (`session::SOURCE`) becomes the destination's own worktree; a project
+or another session stays the explicit choice. Same-Provider options must be declared by
 the target's signed contract, including its versioned permission interface; a
 different release only accepts values present in its signed defaults/presets.
 Restrictive permissions require the same Provider release and permission
@@ -73,6 +75,40 @@ directories retain their existing sharing rules. This feature does not copy or
 move uncommitted work. The bootstrap tells the destination to inspect original
 worktree state and reconcile relevant changes explicitly. Selected source
 sessions are not stopped, modified or granted new access by a link.
+
+## What changes in place
+
+Audited against the pinned adapters (`claude-agent-acp` 0.93.0,
+`codex-acp` 2.2.2) and Cowboy's execution binding. Live settings use the
+existing session configuration path (`set_config_option`, MCP
+`sessions.configure`, `cowboy api`); a saved value is also replayed on the next
+launch of a dormant agent.
+
+| Setting | Claude | Codex | Path |
+| --- | --- | --- | --- |
+| Model, reasoning/effort, fast mode | Applied to the running query | Stored; next `turn/start` | In place |
+| Permission/approval mode | Applied to the running query | Stored; next `turn/start` | In place |
+| Memory, Calls, reviewers, send policy, auto-update, Zed browsing folder | Cowboy preferences | Cowboy preferences | In place |
+| Subscription (for example Claude · Lynx → Claude · Mink) | — | — | New agent |
+| Provider (Claude ↔ Codex) | — | — | New agent |
+| Project, execution Machine, isolated worktree | — | — | New agent |
+| Runtime Machine | — | — | New agent |
+
+Credentials and native session state are never moved between subscriptions or
+runtime Machines. A renewed login of the *same* subscription on the same
+Machine is the explicit account transition (`accounts.transition_plan` /
+`accounts.transition_reconcile`, see [agent API](agent-api.md)); it stops the
+worker and rebinds the session to the newer login without starting a worker,
+and is not a subscription switch. The native agent cwd is a private runtime entry, while tools
+execute in the bound target worktree; the binding is created once per session.
+Re-binding a live session to another project would need tool fencing, a new
+binding revision and re-projected project guidance at the worker's construction
+boundary (see [execution environments](execution-environments.md#session-identity-and-routing)).
+That is Machine/worker-generation work, so project changes use a new agent. A
+shell `cd` or editing the Zed browsing folder changes neither binding. Choosing a
+new agent whose Provider, subscription, project and Machines all match the
+current agent is allowed for a fresh conversation; the editor states that
+model, reasoning and permissions can change in place instead.
 
 ## Context and token costs
 
@@ -148,6 +184,17 @@ in diagnostics and reports the affected Machine and retry state. A later
 with its original detail available; `starting` alone does not prove recovery.
 Failed turns and interrupted tools retain their failure state. Folding a
 recovered error does not retry a message or transfer it to another session.
+
+The links belong to the first human prompt that reaches the agent, not only to
+the queued bootstrap row. If that row leaves the queue undispatched (removed,
+cleared by an edit) or a front insert overtakes it, the first dispatched client
+prompt carries the preamble instead, and the overtaken row is later sent as an
+ordinary message. The move happens only when the Hub can prove delivery has not
+occurred: the bound prompt was never dispatched and the retained transcript
+covers every event since the send without a user echo. Receipts recorded
+before this rule keep exact binding. A runtime that returns an undelivered
+prompt requeues the user's content without the preamble, so its retry receives
+exactly one copy.
 
 This is account isolation, not a guarantee against Provider enforcement. There
 is no quota-triggered account rotation, credential rewriting, native-thread

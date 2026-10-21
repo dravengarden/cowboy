@@ -1536,6 +1536,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                         // the one-shot timer before any provider call so a
                         // crash or ambiguous response cannot consume a later
                         // reset on an automatic retry.
+                        // Pacing may delay a due reset; reserve it before an
+                        // irreversible claim so pacing never discards it.
+                        let reservation = match usage.reserve_reset(provider) {
+                            Ok(reservation) => reservation,
+                            Err(error) => {
+                                tracing::debug!(%error, %provider, "scheduled provider reset waits for usage pacing");
+                                continue;
+                            }
+                        };
                         let claim_before = usage.reset_claims_before_attempt(provider);
                         if claim_before {
                             let Some(store) = store.as_ref() else {
@@ -1565,7 +1574,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                 )
                                 .await;
                         }
-                        match usage.consume_nearest_reset(provider, &key, None).await {
+                        match usage
+                            .consume_reserved_reset(reservation, provider, &key)
+                            .await
+                        {
                             Ok(result) => {
                                 tracing::info!(%provider, outcome = %result.outcome, "scheduled provider reset finished");
                                 if let Some(store) = store.as_ref() {

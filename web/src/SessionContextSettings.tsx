@@ -153,6 +153,15 @@ function ContextEditor(
       inherit_settings: inheritSettings,
     }
     : null;
+  // Model, reasoning and permissions are live configuration of this agent.
+  // Only another Provider, subscription, project or Machine needs a new one.
+  const sameAgent = Boolean(nextAgent) &&
+    nextAgent?.provider === session.provider &&
+    nextAgent.provider_account_id ===
+      (session.provider_account_id || "default") &&
+    nextAgent.cwd === (session.workspace_id || "") &&
+    nextAgent.machine_id === (execution.machineId || null) &&
+    (nextAgent.runtime_machine_id || session.machine_id) === session.machine_id;
   const changed = sources.length !== snapshot.sources.length ||
     sources.some((id, index) => id !== snapshot.sources[index]) ||
     Boolean(nextAgent) !== Boolean(snapshot.next_agent) ||
@@ -285,8 +294,18 @@ function ContextEditor(
             <Typography variant="body2" color="text.secondary">
               {placement.project?.name || session.workspace_name ||
                 "Current project"}
-              {" · Same folder"}
+              {" · Same sidebar folder"}
               {inheritSettings ? " · Inherit settings" : " · Agent defaults"}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="p"
+              data-context-files
+            >
+              Settings are inherited, files are not: Git projects start a new
+              worktree, and uncommitted changes stay with this session. The new
+              agent is asked to inspect them before editing.
             </Typography>
             <Button
               size="small"
@@ -302,6 +321,17 @@ function ContextEditor(
               {advanced ? "Fewer options" : "More options"}
             </Button>
           </Box>
+          {sameAgent && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              data-context-same-agent
+            >
+              Same Provider, subscription, project and Machine. Model, reasoning
+              and permissions change in this agent from Run Configuration; a new
+              agent only starts a fresh conversation.
+            </Typography>
+          )}
           {!placement.loading && !placement.error && !placement.project && (
             <Alert
               severity="warning"
@@ -356,10 +386,8 @@ function ContextEditor(
               />
               <Typography variant="caption" color="text.secondary">
                 {inheritSettings
-                  ? "Copies compatible Provider settings and session overrides. Memory and Calls follow defaults where unset. A preset overrides model and reasoning. "
-                  : "Uses the selected agent’s defaults. "}
-                Git projects get a new worktree. Uncommitted files stay in this
-                session.
+                  ? "Copies compatible Provider settings and session overrides. Memory and Calls follow defaults where unset. A preset overrides model and reasoning."
+                  : "Uses the selected agent’s defaults."}
               </Typography>
             </Stack>
           )}
