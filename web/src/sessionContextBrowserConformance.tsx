@@ -122,6 +122,10 @@ export async function runSessionContextBrowserConformance(
         outbox_contract: "atomic-delta-v1",
       });
     }
+    if (url.endsWith("/hibernate")) {
+      writes.push({ url, body: {} });
+      return new Response(null, { status: 204 });
+    }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       writes.push({ url, body });
@@ -662,6 +666,38 @@ export async function runSessionContextBrowserConformance(
           document.querySelector('[data-session-context-cue="continued_in"]'),
         ),
         `${mode}: the original session links to where it continued`,
+      );
+      // An idle original agent can be hibernated straight from the cue.
+      const idle = { ...sessions[0]!, status: "running" as const };
+      Socket.active.at(-1)?.publish({
+        type: "sessions",
+        sessions: [idle, ...sessions.slice(1)],
+      });
+      Socket.active.at(-1)?.publish({
+        type: "machines",
+        machines: [{ ...machine, capabilities: { hibernation: true } }],
+        resync: true,
+      });
+      await until(() =>
+        Boolean(document.querySelector("[data-context-cue-hibernate]"))
+      );
+      document.querySelector<HTMLButtonElement>("[data-context-cue-hibernate]")!
+        .click();
+      await until(() =>
+        writes.some((write) => write.url.endsWith("/hibernate"))
+      );
+      check(
+        writes.filter((write) => write.url.endsWith("/hibernate")).length === 1,
+        `${mode}: the original idle agent can be hibernated from the cue`,
+      );
+      Socket.active.at(-1)?.publish({ type: "sessions", sessions });
+      Socket.active.at(-1)?.publish({
+        type: "machines",
+        machines: [machine],
+        resync: true,
+      });
+      await until(() =>
+        !document.querySelector("[data-context-cue-hibernate]")
       );
       context = {
         ...context,

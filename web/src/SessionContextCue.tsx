@@ -15,6 +15,8 @@ import { requestPickSession } from "./sessionPickRequest";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity } from "./accountIdentity";
 import { contextCue } from "./contextCue";
+import { useStoreSelector } from "./store";
+import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 
 /** Context for one session, read only after the Service announced it. */
 export function useAnnouncedSessionContext(
@@ -42,12 +44,21 @@ export function SessionContextCue(
   const context = useAnnouncedSessionContext(sessionId);
   const { data: accounts } = useSubscriptionAccounts();
   const [busy, setBusy] = useState(false);
+  const [hibernateError, setHibernateError] = useState("");
+  const session = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === sessionId)
+  );
+  const machines = useStoreSelector((state) => state.machines);
   const cue = contextCue(
     sessionId,
     context,
     (provider, account) => accountIdentity(accounts, provider, account).label,
   );
   if (!cue || !context) return null;
+  // The original agent usually goes idle after a handoff; offer to free its
+  // worker without stopping anything automatically.
+  const canHibernate = cue.kind === "continued_in" && session !== undefined &&
+    hibernateAvailability(session, machines) === "ready";
   const pending = cue.kind === "pending_agent" || cue.kind === "pending_links";
   const text = cue.kind === "pending_agent"
     ? `Your next message starts a new agent · ${cue.label}`
@@ -136,10 +147,34 @@ export function SessionContextCue(
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={text}
+          title={hibernateError || text}
         >
-          {text}
+          {hibernateError || text}
         </Typography>
+        {canHibernate && (
+          <Button
+            size="small"
+            disabled={busy}
+            data-context-cue-hibernate
+            title="Free this agent's memory; it resumes when you send here again"
+            onClick={() => {
+              setBusy(true);
+              setHibernateError("");
+              void hibernateSession(sessionId)
+                .catch((error: unknown) =>
+                  setHibernateError(
+                    error instanceof Error
+                      ? error.message
+                      : "Could not hibernate",
+                  )
+                )
+                .finally(() => setBusy(false));
+            }}
+            sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
+          >
+            Hibernate
+          </Button>
+        )}
         <Button
           size="small"
           disabled={busy}

@@ -29,7 +29,11 @@ selected and the session linked. Saving a staged choice closes settings and
 focuses the Composer, so the next step is writing the message. A continuation
 keeps its source's title and shows a **Continued** badge in the session list;
 the mark is the persisted `session_continued_from:<id>` setting projected as
-`continued_from` on the session.
+`continued_from` on the session. Continuations created before that mark are
+recorded once at Controller startup from their source's accepted send receipt.
+When the original agent is idle on a Machine that supports hibernation, its
+"continued in a new agent" cue also offers **Hibernate** to free the worker; it
+resumes on the next message there. Nothing is hibernated automatically.
 
 While choices are pending, a one-line cue above the Composer says what the
 next message does ("starts a new agent · Claude · Mink", or how many sessions

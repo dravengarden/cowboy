@@ -359,6 +359,36 @@ mod tests {
     }
 
     #[test]
+    fn earlier_continuations_are_marked_from_their_source_receipt() {
+        let hub = Hub::new();
+        for id in ["source", "target", "linked"] {
+            session(&hub, id, "me");
+        }
+        let receipt = |session: &str| {
+            json!({"revision": 3, "applied_revision": 3, "delivery": {
+                "operation": "op", "fingerprint": "", "session_id": session,
+                "state": "accepted"}})
+        };
+        hub.load_settings(vec![
+            (crate::session_context::key("source"), receipt("target")),
+            // Linking context to the same agent is not a continuation.
+            (crate::session_context::key("linked"), receipt("linked")),
+        ]);
+        hub.restore_continuations();
+        let mark = |id: &str| hub.session_info(id).unwrap().meta.continued_from;
+        assert_eq!(mark("target").as_deref(), Some("source"));
+        assert_eq!(mark("linked"), None);
+        assert_eq!(mark("source"), None);
+        // The recorded mark survives a later send from the same source.
+        hub.load_settings(vec![(
+            crate::session_context::key("source"),
+            receipt("source"),
+        )]);
+        hub.restore_continuations();
+        assert_eq!(mark("target").as_deref(), Some("source"));
+    }
+
+    #[test]
     fn project_bound_folder_and_explicit_global_survive_new_agent_creation() {
         let hub = Hub::new();
         for id in ["source", "target", "second"] {
