@@ -185,16 +185,23 @@ with its original detail available; `starting` alone does not prove recovery.
 Failed turns and interrupted tools retain their failure state. Folding a
 recovered error does not retry a message or transfer it to another session.
 
-The links belong to the first human prompt that reaches the agent, not only to
-the queued bootstrap row. If that row leaves the queue undispatched (removed,
-cleared by an edit) or a front insert overtakes it, the first dispatched client
-prompt carries the preamble instead, and the overtaken row is later sent as an
-ordinary message. The move happens only when the Hub can prove delivery has not
-occurred: the bound prompt was never dispatched and the retained transcript
-covers every event since the send without a user echo. Receipts recorded
-before this rule keep exact binding. A runtime that returns an undelivered
-prompt requeues the user's content without the preamble, so its retry receives
-exactly one copy.
+The links belong to the first authored prompt dispatched to the agent, not only
+to the queued bootstrap row. Before handing a prompt to its runtime, the
+dispatcher records that prompt as the injection's carrier with a
+compare-and-set under a separate `session_context_carrier:<id>` setting; only
+the carrier receives the preamble, including on retries of the same prompt. If
+the bootstrap row leaves the queue undispatched (removed, cleared by an edit) or
+a front insert overtakes it, the next dispatched prompt becomes the carrier and
+the overtaken row is later sent as an ordinary message. Scheduled wakeups,
+retries and managed-call prompts never carry or consume the links; current-turn
+steering bypasses dispatch and leaves them for the next queued prompt. If the
+record cannot be written, the prompt stays queued instead of being sent without
+durable evidence, so a Controller restart cannot apply the links twice. A prompt
+that became the carrier but then failed dispatch keeps the links for its retry;
+deleting that requeued row drops them, and the context can be linked again.
+Receipts recorded before this rule keep exact binding. A runtime that returns an
+undelivered prompt requeues it without the exact server-generated preamble
+block, so its retry receives one copy and similar user text is preserved.
 
 This is account isolation, not a guarantee against Provider enforcement. There
 is no quota-triggered account rotation, credential rewriting, native-thread

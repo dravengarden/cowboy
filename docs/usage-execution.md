@@ -107,9 +107,10 @@ A confirmed or scheduled usage reset runs the same collector with its native
 usage read, the reset preflight and the reset request. It takes a start from the
 same Provider window, spacing and single-active-collector rule, and delays the
 account's next poll, but it does not wait for that account's polling interval.
-A paced reset is refused before any Provider call ("no reset was sent"). A
-scheduled reset reserves its start before any one-shot claim, so pacing only
-delays it. A refused or changed reset records no failure backoff; an
+A paced reset is refused before any Provider call ("no reset was sent"). Resets
+are serialized before their start is charged and hold that serialization until
+the invocation ends, so the charged time is the actual call time. A scheduled
+reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an
 authentication failure does.
 
 These controls bound Cowboy's collection starts; they do

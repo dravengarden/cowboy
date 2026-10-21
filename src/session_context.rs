@@ -32,39 +32,94 @@ pub struct Source {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Injection {
-    /// The prompt that carries the links. Until a human prompt reaches the
-    /// agent, this follows the first one dispatched; see `Hub` dispatch.
     pub cmid: String,
     pub sources: Vec<Source>,
-    /// First destination event sequence that can echo the bootstrap. Legacy
-    /// receipts (`None`) keep exact binding to `cmid`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<u64>,
+    /// The links go with the first authored prompt dispatched to the agent,
+    /// recorded in [`Carrier`] before handoff. Legacy receipts (`false`) keep
+    /// exact binding to `cmid`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follows_first_prompt: bool,
 }
 
-/// Start of the bounded preamble block; used to keep requeued rows clean.
+/// Durable record of the one prompt that carries an injection's links.
+/// Written by compare-and-set before that prompt reaches a runtime, under its
+/// own key so context edits never race it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Carrier {
+    /// The injection's original bootstrap cmid this record belongs to.
+    pub injection: String,
+    pub cmid: String,
+}
+
+pub fn carrier_key(id: &str) -> String {
+    format!(
+        "{}{id}",
+        crate::core::settings_keys::SESSION_CONTEXT_CARRIER_PREFIX
+    )
+}
+
+fn carrier(hub: &crate::core::Hub, id: &str, injection: &Injection) -> Option<Carrier> {
+    hub.setting(&carrier_key(id))
+        .and_then(|value| serde_json::from_value::<Carrier>(value).ok())
+        .filter(|carrier| carrier.injection == injection.cmid)
+}
+
+/// The compare-and-set that names `cmid` as the carrier, or `None` when this
+/// prompt needs no record: legacy binding, no links, a non-authored prompt or
+/// an injection that already has its carrier.
+pub fn carrier_claim(
+    hub: &crate::core::Hub,
+    id: &str,
+    cmid: Option<&str>,
+) -> Option<(String, Option<serde_json::Value>, serde_json::Value)> {
+    let cmid = cmid.filter(|cmid| crate::core::Hub::is_authored_cmid(cmid))?;
+    let context = read(hub, id).ok()?;
+    let injection = context
+        .injection
+        .filter(|injection| injection.follows_first_prompt && !injection.sources.is_empty())?;
+    // An unresolved send admits only its own bootstrap; preamble refuses others.
+    if context
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| matches!(delivery.state.as_str(), "preparing" | "unknown"))
+        && injection.cmid != cmid
+    {
+        return None;
+    }
+    if carrier(hub, id, &injection).is_some() {
+        return None;
+    }
+    let key = carrier_key(id);
+    let expected = hub.setting(&key);
+    let value = serde_json::to_value(Carrier {
+        injection: injection.cmid,
+        cmid: cmid.to_owned(),
+    })
+    .expect("carrier serializes");
+    Some((key, expected, value))
+}
+
+/// Start of the bounded preamble block.
 pub const PREAMBLE_PREFIX: &str = "<system-reminder>\nLinked Cowboy sessions: ";
 
 /// A prompt returned by a runtime includes the preamble that dispatch added.
-/// Requeue the user's own content so a retry receives exactly one preamble.
+/// Requeue the user's own content so a retry receives exactly one copy. Only a
+/// block identical to the server-generated preamble for this cmid is removed.
 pub fn without_preamble(
     hub: &crate::core::Hub,
     id: &str,
     cmid: Option<&str>,
     mut content: Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
-    let bound = read(hub, id).is_ok_and(|context| {
-        context
-            .injection
-            .is_some_and(|injection| Some(injection.cmid.as_str()) == cmid)
-    });
-    if bound
-        && content.len() > 1
+    if content.len() > 1
         && content[0].get("type").and_then(serde_json::Value::as_str) == Some("text")
-        && content[0]
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|text| text.starts_with(PREAMBLE_PREFIX))
+        && let Some(text) = content[0].get("text").and_then(serde_json::Value::as_str)
+        && text.starts_with(PREAMBLE_PREFIX)
+        && preamble(hub, id, cmid)
+            .ok()
+            .flatten()
+            .is_some_and(|preamble| preamble == text)
     {
         content.remove(0);
     }
@@ -238,12 +293,17 @@ pub fn preamble(
     if context.revision != context.applied_revision {
         return Err("Session context has pending changes. Send through sessions.context_send or cancel the pending changes.".into());
     }
-    let Some(injection) = context
-        .injection
-        .filter(|injection| Some(injection.cmid.as_str()) == cmid)
-    else {
+    let Some(injection) = context.injection else {
         return Ok(None);
     };
+    let bound = if injection.follows_first_prompt {
+        carrier(hub, id, &injection).map_or_else(|| injection.cmid.clone(), |carrier| carrier.cmid)
+    } else {
+        injection.cmid.clone()
+    };
+    if Some(bound.as_str()) != cmid {
+        return Ok(None);
+    }
     let owner = hub
         .session_info(id)
         .ok_or("Session unavailable")?
@@ -339,7 +399,7 @@ mod tests {
                 session_id: "source".into(),
                 before: 40,
             }],
-            after: None,
+            follows_first_prompt: false,
         });
         put(&hub, &context);
         let first = preamble(&hub, "destination", Some("first"))
@@ -389,7 +449,7 @@ mod tests {
             injection: Some(Injection {
                 cmid: "admitted".into(),
                 sources: vec![],
-                after: None,
+                follows_first_prompt: false,
             }),
             ..Context::default()
         };
@@ -402,7 +462,7 @@ mod tests {
         );
     }
 
-    fn accepted(hub: &crate::core::Hub, cmid: &str, after: Option<u64>) {
+    fn accepted(hub: &crate::core::Hub, cmid: &str, follows_first_prompt: bool) {
         put(
             hub,
             &Context {
@@ -422,19 +482,28 @@ mod tests {
                         session_id: "source".into(),
                         before: 9,
                     }],
-                    after,
+                    follows_first_prompt,
                 }),
                 ..Context::default()
             },
         );
     }
 
-    /// Hand the prompt to a fake runtime; dropping it releases dispatch ownership.
-    fn dispatched(rx: &mut tokio::sync::mpsc::Receiver<crate::core::DispatchReq>) -> String {
-        rx.try_recv()
+    /// Hand the prompt to a fake runtime as `dispatch_one` does: record the
+    /// carrier first. Dropping the request releases dispatch ownership.
+    fn dispatched(
+        hub: &crate::core::Hub,
+        rx: &mut tokio::sync::mpsc::Receiver<crate::core::DispatchReq>,
+    ) -> String {
+        let cmid = rx
+            .try_recv()
             .expect("a prompt was dispatched")
             .cmid
-            .expect("client prompt")
+            .expect("client prompt");
+        if let Some((key, _, value)) = carrier_claim(hub, "destination", Some(&cmid)) {
+            hub.load_settings(vec![(key, value)]);
+        }
+        cmid
     }
 
     fn finish_turn(hub: &crate::core::Hub) {
@@ -465,7 +534,7 @@ mod tests {
         // sess-1792554554396: the bootstrap left the queue undispatched while
         // the environment was preparing; the next message lost its links.
         let (hub, mut rx) = starting_destination();
-        accepted(&hub, "context-op", Some(0));
+        accepted(&hub, "context-op", true);
         hub.submit_context(
             "destination",
             "original".into(),
@@ -484,13 +553,26 @@ mod tests {
         );
         hub.set_status("destination", crate::core::Status::Exited, None);
         hub.retry_resource_wait("destination");
-        let first = dispatched(&mut rx);
+        let first = dispatched(&hub, &mut rx);
         assert_eq!(first, "c-next");
         assert!(carries_links(&hub, &first));
-        assert_eq!(
-            read(&hub, "destination").unwrap().injection.unwrap().cmid,
-            "c-next"
-        );
+        // The record survives a Controller restart with the settings snapshot.
+        let restored = crate::core::Hub::new();
+        session(&restored, "source", "owner");
+        session(&restored, "destination", "owner");
+        restored.load_settings(vec![
+            (
+                key("destination"),
+                hub.setting(&key("destination")).unwrap(),
+            ),
+            (
+                carrier_key("destination"),
+                hub.setting(&carrier_key("destination")).unwrap(),
+            ),
+        ]);
+        assert!(carries_links(&restored, "c-next"));
+        assert!(!carries_links(&restored, "context-op"));
+        assert!(carrier_claim(&restored, "destination", Some("c-other")).is_none());
         // Its retry keeps identical links; nothing else receives them.
         assert!(carries_links(&hub, &first));
         finish_turn(&hub);
@@ -500,13 +582,13 @@ mod tests {
             vec![],
             Some("c-later".into()),
         );
-        assert!(!carries_links(&hub, &dispatched(&mut rx)));
+        assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
     }
 
     #[test]
     fn a_front_insert_carries_links_and_the_overtaken_bootstrap_does_not_repeat_them() {
         let (hub, mut rx) = starting_destination();
-        accepted(&hub, "context-op", Some(0));
+        accepted(&hub, "context-op", true);
         hub.submit_context(
             "destination",
             "original".into(),
@@ -522,11 +604,11 @@ mod tests {
         ));
         hub.set_status("destination", crate::core::Status::Exited, None);
         hub.retry_resource_wait("destination");
-        let first = dispatched(&mut rx);
+        let first = dispatched(&hub, &mut rx);
         assert_eq!(first, "c-front");
         assert!(carries_links(&hub, &first));
         finish_turn(&hub);
-        let bootstrap = dispatched(&mut rx);
+        let bootstrap = dispatched(&hub, &mut rx);
         assert_eq!(bootstrap, "context-op");
         assert!(!carries_links(&hub, &bootstrap));
     }
@@ -534,7 +616,7 @@ mod tests {
     #[test]
     fn preparation_failure_and_recovery_keep_the_bootstrap_first() {
         let (hub, mut rx) = starting_destination();
-        accepted(&hub, "context-op", Some(0));
+        accepted(&hub, "context-op", true);
         hub.submit_context(
             "destination",
             "original".into(),
@@ -558,7 +640,7 @@ mod tests {
         );
         hub.set_status("destination", crate::core::Status::Exited, None);
         hub.retry_resource_wait("destination");
-        let first = dispatched(&mut rx);
+        let first = dispatched(&hub, &mut rx);
         assert_eq!(first, "context-op");
         assert!(carries_links(&hub, &first));
         // An undelivered prompt returns with the preamble that dispatch added.
@@ -588,13 +670,13 @@ mod tests {
     #[test]
     fn legacy_or_delivered_links_never_move() {
         let (hub, mut rx) = starting_destination();
-        accepted(&hub, "context-op", None);
+        accepted(&hub, "context-op", false);
         hub.set_status("destination", crate::core::Status::Running, None);
         hub.submit("destination", "next".into(), vec![], Some("c-next".into()));
-        assert!(!carries_links(&hub, &dispatched(&mut rx)));
+        assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
         // A delivered bootstrap whose echo is retained never moves either.
         let (hub, mut rx) = starting_destination();
-        accepted(&hub, "context-op", Some(0));
+        accepted(&hub, "context-op", true);
         hub.set_status("destination", crate::core::Status::Running, None);
         hub.submit_context(
             "destination",
@@ -602,9 +684,46 @@ mod tests {
             vec![],
             "context-op".into(),
         );
-        assert!(carries_links(&hub, &dispatched(&mut rx)));
+        assert!(carries_links(&hub, &dispatched(&hub, &mut rx)));
         finish_turn(&hub);
         hub.submit("destination", "next".into(), vec![], Some("c-next".into()));
-        assert!(!carries_links(&hub, &dispatched(&mut rx)));
+        assert!(!carries_links(&hub, &dispatched(&hub, &mut rx)));
+    }
+
+    #[test]
+    fn scheduled_and_managed_prompts_never_carry_or_consume_links() {
+        let (hub, mut rx) = starting_destination();
+        accepted(&hub, "context-op", true);
+        hub.set_status("destination", crate::core::Status::Running, None);
+        for cmid in ["__wakeup-1", "cowboy-retry", "managed-call:abc"] {
+            assert!(carrier_claim(&hub, "destination", Some(cmid)).is_none());
+            assert!(!carries_links(&hub, cmid));
+        }
+        hub.submit(
+            "destination",
+            "human".into(),
+            vec![],
+            Some("c-human".into()),
+        );
+        assert!(carries_links(&hub, &dispatched(&hub, &mut rx)));
+    }
+
+    #[test]
+    fn requeue_keeps_user_text_that_only_resembles_the_preamble() {
+        let (hub, _rx) = starting_destination();
+        accepted(&hub, "context-op", true);
+        let pasted = format!("{PREAMBLE_PREFIX}[] pasted by the user");
+        hub.requeue_prompt(
+            "destination",
+            "joined".into(),
+            vec![
+                serde_json::json!({"type":"text","text":pasted}),
+                serde_json::json!({"type":"text","text":"original"}),
+            ],
+            Some("context-op".into()),
+        );
+        let queue = hub.queue_and_drafts("destination", |_| true).unwrap().0;
+        assert_eq!(queue[0].content.len(), 2);
+        assert_eq!(queue[0].text, "joined");
     }
 }

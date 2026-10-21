@@ -124,11 +124,59 @@ pub(super) async fn initialize(
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
             sources: snapshots,
-            after: state.hub.next_event_seq(id),
+            follows_first_prompt: true,
         }),
         ..Context::default()
     };
     save(state, id, &context).await
+}
+
+/// Durably name the prompt that carries linked context before it reaches a
+/// runtime. Without that record the prompt stays queued: links are never sent
+/// on evidence that a restart could lose. Only one dispatch per session runs.
+pub(super) async fn claim_carrier(
+    state: &AppState,
+    id: &str,
+    cmid: Option<&str>,
+) -> Result<(), String> {
+    claim_carrier_in(&state.hub, state.store.as_ref(), id, cmid).await
+}
+
+async fn claim_carrier_in(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    id: &str,
+    cmid: Option<&str>,
+) -> Result<(), String> {
+    let Some((key, expected, value)) = crate::session_context::carrier_claim(hub, id, cmid) else {
+        return Ok(());
+    };
+    let unavailable = "Linked context could not be recorded; the message stays queued";
+    let store = store.ok_or(unavailable)?;
+    let committed = match store
+        .compare_and_put_setting(&key, expected.as_ref(), &value)
+        .await
+    {
+        Ok(true) => true,
+        // A lost reply may already have committed this exact record.
+        _ => matches!(
+            store
+                .compare_and_put_setting(&key, Some(&value), &value)
+                .await,
+            Ok(true)
+        ),
+    };
+    if committed {
+        hub.load_settings(vec![(key, value)]);
+        return Ok(());
+    }
+    // Refresh the stored record so the requeued prompt is decided on it.
+    if let Ok(settings) = store.load_settings().await
+        && let Some((key, stored)) = settings.into_iter().find(|(stored, _)| *stored == key)
+    {
+        hub.load_settings(vec![(key, stored)]);
+    }
+    Err(unavailable.into())
 }
 
 /// Publish the preference revision only after registration. An initial prompt
@@ -571,7 +619,7 @@ async fn deliver(
     target_context.injection = Some(Injection {
         cmid: cmid.clone(),
         sources,
-        after: state.hub.next_event_seq(&target_id),
+        follows_first_prompt: true,
     });
     if let Err(error) = save(&state, &target_id, &target_context).await {
         preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
@@ -583,11 +631,6 @@ async fn deliver(
         .hub
         .submit_context(&target_id, request.text, request.content, cmid);
     delivery.state = "accepted".into();
-    // Dispatch may already have moved the injection to the first human prompt.
-    // Record acceptance without restoring the pre-dispatch binding.
-    if let Some(current) = crate::session_context::read(&state.hub, &target_id)?.injection {
-        target_context.injection = Some(current);
-    }
     if target_id != id {
         target_context.delivery = Some(delivery.clone());
         save(&state, &target_id, &target_context).await?;
@@ -635,6 +678,69 @@ pub(super) async fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn carrier_is_recorded_once_and_survives_a_lost_reply() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let hub = crate::core::Hub::new();
+        let context = serde_json::json!({
+            "revision": 2, "applied_revision": 2, "sources": ["source"],
+            "injection": {"cmid": "context-op", "follows_first_prompt": true,
+                "sources": [{"session_id": "source", "before": 3}]},
+        });
+        hub.load_settings(vec![(crate::session_context::key("d"), context)]);
+        let carrier = |hub: &crate::core::Hub| {
+            hub.setting(&crate::session_context::carrier_key("d"))
+                .map(|value| value["cmid"].clone())
+        };
+        claim_carrier_in(&hub, Some(&store), "d", Some("c-1"))
+            .await
+            .unwrap();
+        assert_eq!(carrier(&hub), Some(serde_json::json!("c-1")));
+        // Only the first dispatched prompt becomes the carrier.
+        claim_carrier_in(&hub, Some(&store), "d", Some("c-2"))
+            .await
+            .unwrap();
+        assert_eq!(carrier(&hub), Some(serde_json::json!("c-1")));
+        // A lost reply: storage committed c-1 but memory did not observe it.
+        hub.load_settings(vec![(
+            crate::session_context::carrier_key("d"),
+            serde_json::Value::Null,
+        )]);
+        claim_carrier_in(&hub, Some(&store), "d", Some("c-1"))
+            .await
+            .unwrap();
+        assert_eq!(carrier(&hub), Some(serde_json::json!("c-1")));
+        // Another prompt is refused, refreshes memory, and then goes without links.
+        hub.load_settings(vec![(
+            crate::session_context::carrier_key("d"),
+            serde_json::Value::Null,
+        )]);
+        assert!(
+            claim_carrier_in(&hub, Some(&store), "d", Some("c-3"))
+                .await
+                .is_err()
+        );
+        assert_eq!(carrier(&hub), Some(serde_json::json!("c-1")));
+        claim_carrier_in(&hub, Some(&store), "d", Some("c-3"))
+            .await
+            .unwrap();
+        // Without durable storage nothing is sent with links.
+        let fresh = crate::core::Hub::new();
+        fresh.load_settings(vec![(
+            crate::session_context::key("d"),
+            hub.setting(&crate::session_context::key("d")).unwrap(),
+        )]);
+        assert!(
+            claim_carrier_in(&fresh, None, "d", Some("c-1"))
+                .await
+                .is_err()
+        );
+    }
     #[test]
     fn lost_reply_replays_receipt_but_changed_message_cannot_reuse_send_id() {
         let mut request = Send {

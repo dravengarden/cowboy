@@ -1538,7 +1538,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                         // reset on an automatic retry.
                         // Pacing may delay a due reset; reserve it before an
                         // irreversible claim so pacing never discards it.
-                        let reservation = match usage.reserve_reset(provider) {
+                        let reservation = match usage.reserve_reset(provider).await {
                             Ok(reservation) => reservation,
                             Err(error) => {
                                 tracing::debug!(%error, %provider, "scheduled provider reset waits for usage pacing");
@@ -3480,6 +3480,10 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
             return;
         }
     };
+    if let Err(error) = session_context::claim_carrier(&state, &session_id, cmid.as_deref()).await {
+        retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
+        return;
+    }
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     let dispatch_fence = plugin_lifecycle_fences.read();
     if plugin_key

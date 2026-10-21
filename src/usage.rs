@@ -111,11 +111,13 @@ pub struct ResetResult {
     pub credit_id: Option<String>,
 }
 
-/// A Provider-paced admission held for one reset attempt. Dropping an unused
-/// reservation keeps its charged start but records no Provider failure.
+/// A Provider-paced admission held for one reset attempt. It owns the reset
+/// serialization, so the charged start is the actual invocation time. Dropping
+/// an unused reservation keeps its charged start but records no failure.
 pub(crate) struct ResetReservation {
     account: String,
     permit: Option<limiter::Permit>,
+    _serial: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl ResetReservation {
@@ -862,10 +864,11 @@ impl UsageService {
 
     /// Reserve a paced reset before an irreversible one-shot claim, so pacing
     /// can only delay a scheduled reset and never discard it.
-    pub(crate) fn reserve_reset(
+    pub(crate) async fn reserve_reset(
         &self,
         provider: &str,
     ) -> std::result::Result<ResetReservation, ResetError> {
+        let serial = Arc::clone(&self.reset_lock).lock_owned().await;
         let bindings = self.bindings.current();
         let binding = bindings
             .iter()
@@ -881,6 +884,7 @@ impl UsageService {
             .map(|permit| ResetReservation {
                 account: binding.account.clone(),
                 permit: Some(permit),
+                _serial: serial,
             })
             .map_err(|budget| ResetError {
                 call_may_have_reached_provider: false,
@@ -909,11 +913,11 @@ impl UsageService {
         expected_credit_id: Option<&str>,
         reservation: Option<ResetReservation>,
     ) -> std::result::Result<ResetResult, ResetError> {
+        // The reservation holds the reset serialization through the invocation.
         let mut reservation = match reservation {
             Some(reservation) => reservation,
-            None => self.reserve_reset(provider)?,
+            None => self.reserve_reset(provider).await?,
         };
-        let _guard = self.reset_lock.lock().await;
         let bindings = self.bindings.current();
         let Some(binding) = bindings
             .iter()
