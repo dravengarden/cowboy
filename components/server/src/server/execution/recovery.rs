@@ -541,6 +541,16 @@ fn transient(reason: crate::machine_protocol::execution::Refusal) -> bool {
     matches!(reason, Refusal::Unavailable | Refusal::Capacity)
 }
 
+/// A preparation has no target yet; its keeper may still be starting on a
+/// loaded Machine. Hold the prompt in the retried target wait instead of
+/// reporting the missing target as a placement refusal.
+fn preparation_wait(record: &crate::execution_environment::ExecutionBinding) -> Result<(), String> {
+    if record.preparation().is_some() {
+        return Err(target_not_ready());
+    }
+    Ok(())
+}
+
 /// Describe is read-only. Only a target-proven dead lifetime authorizes a new
 /// incarnation; link failures and uncertain commands remain fenced, never replayed.
 pub(in crate::server) async fn before_dispatch(
@@ -561,6 +571,7 @@ pub(in crate::server) async fn before_dispatch(
     if !state.runtime_router.connected(&info.meta.machine_id) {
         return Err("runtime is not connected".into());
     }
+    preparation_wait(record)?;
     let target = record
         .decode()
         .ok()
@@ -732,6 +743,26 @@ mod dispatch_safety_tests {
         ] {
             assert!(!transient(permanent));
         }
+    }
+
+    #[test]
+    fn a_prompt_sent_while_preparing_waits_for_the_target() {
+        let binding = crate::execution_environment::fixture();
+        assert!(preparation_wait(&binding).is_ok());
+        let decoded = binding.decode().unwrap();
+        let preparing = crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::to_value(crate::execution_environment::PreparationV1 {
+                schema: 1,
+                phase: "preparing".into(),
+                runtime: decoded.runtime.clone(),
+                machine_id: decoded.environment.machine_id.clone(),
+                workspace_id: decoded.workspace.id.clone(),
+                source_path: decoded.workspace.source_path.clone(),
+                executor_digest: decoded.environment.executor_digest.clone(),
+            })
+            .unwrap(),
+        );
+        assert_eq!(preparation_wait(&preparing), Err(target_not_ready()));
     }
 
     #[test]
