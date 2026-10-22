@@ -187,6 +187,7 @@ impl Manager {
             "{:x}",
             Sha256::digest(service_id.as_deref().unwrap_or("unassigned").as_bytes())
         );
+        sweep_dangling_control_aliases();
         Ok(Self {
             service_id,
             machine_id,
@@ -991,6 +992,8 @@ impl Manager {
         self.gates.lock().remove(session_id);
         // Worktree and tombstone remain; stopped native bytes need no GC root.
         let _ = std::fs::remove_file(directory.join("executor-root"));
+        // A stopped lifetime is never contacted again; drop its socket alias.
+        remove_control_alias(binding);
         Ok(())
     }
 }
@@ -1089,12 +1092,44 @@ async fn exchange(
     .await?
 }
 
+fn control_root() -> PathBuf {
+    PathBuf::from(format!(
+        "/tmp/cowboy-execution-{}",
+        rustix::process::geteuid().as_raw()
+    ))
+}
+
+fn remove_control_alias(binding: &BindingV1) {
+    let alias = control_root().join(&binding.environment.incarnation);
+    if std::fs::symlink_metadata(&alias).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        let _ = std::fs::remove_file(alias);
+    }
+}
+
+/// Aliases outlive their lifetimes when a session's directory is deleted; a
+/// dangling one can never reach a keeper again. Best effort, at startup only.
+fn sweep_dangling_control_aliases() {
+    sweep_dangling_aliases_in(&control_root());
+}
+
+fn sweep_dangling_aliases_in(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_symlink()) && !path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Unix socket address limits apply to the path passed to bind/connect, not
 /// the resolved directory. A private short alias keeps durable state under its
 /// full Service namespace without depending on /run/user surviving a logout.
 fn control_socket(directory: &Path, binding: &BindingV1) -> Result<PathBuf> {
     let uid = rustix::process::geteuid().as_raw();
-    let root = PathBuf::from(format!("/tmp/cowboy-execution-{uid}"));
+    let root = control_root();
     match std::fs::DirBuilder::new().mode(0o700).create(&root) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}

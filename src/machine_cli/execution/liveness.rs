@@ -86,6 +86,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn startup_sweep_removes_only_dangling_control_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(live.path(), root.path().join("live")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("deleted"), root.path().join("dangling"))
+            .unwrap();
+        std::fs::write(root.path().join("regular"), b"kept").unwrap();
+        sweep_dangling_aliases_in(root.path());
+        assert!(root.path().join("live").exists());
+        assert!(std::fs::symlink_metadata(root.path().join("dangling")).is_err());
+        assert!(root.path().join("regular").exists());
+    }
+
+    #[test]
     fn unavailable_is_not_proof_of_loss() {
         for kind in [
             std::io::ErrorKind::TimedOut,
