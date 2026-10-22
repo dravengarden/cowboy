@@ -33,6 +33,10 @@ pub struct StartArgs {
     /// call; `cowboy call capabilities` lists them. Default: the session's.
     #[arg(long)]
     preset: Option<String>,
+    /// When the call ends, Cowboy queues one notice into this session. End
+    /// your turn instead of polling `cowboy call wait`.
+    #[arg(long)]
+    notify: bool,
 }
 
 /// The request contract, shown by `--help` so the always-on agent prompt need
@@ -42,7 +46,8 @@ pub const START_HELP: &str = r#"Request (JSON on stdin with --request-file -):
    "instruction":"<self-contained task>","context":{"scope":"current-worktree"},
    "access":"read-only","conversation":{"mode":"fresh"}}
 
-The command prints a JSON envelope with a call_id. Then:
+The command prints a JSON envelope with a call_id. With --notify, end your
+turn: Cowboy posts a notice into this session when the call ends. Otherwise:
   cowboy call wait <call_id>     until the state is terminal
   cowboy call result <call_id>   the reply text
 cowboy call capabilities lists whether calls are on, native capabilities and presets.
@@ -237,10 +242,18 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
         Ok(bytes) => bytes,
         Err(code) => return emit(&error(code, "not_submitted")),
     };
-    let request = match Request::parse(&bytes) {
+    let mut request = match Request::parse(&bytes) {
         Ok(request) => request,
         Err(reason) => return emit(&error(&reason.to_string(), "not_submitted")),
     };
+    if args.notify {
+        request
+            .labels
+            .insert(super::review::NOTIFY.to_owned(), "parent".to_owned());
+        if !super::valid_labels(&request.labels) {
+            return emit(&error("invalid_labels", "not_submitted"));
+        }
+    }
     if args.check {
         return emit(&json!({"schema":1,"state":"validated","authorized":false,
             "provider":provider,"request_id":request.request_id,"request_digest":request.digest()}));
@@ -356,6 +369,12 @@ pub struct ReviewArgs {
     /// One of the reviewer's presets (model and reasoning) for this review.
     #[arg(long)]
     preset: Option<String>,
+    /// Return once the review is admitted. Cowboy queues one notice into
+    /// this session when it ends; end your turn, then read
+    /// `cowboy call result <call_id>`. Use this when a shell command cannot
+    /// wait for a whole review.
+    #[arg(long)]
+    notify: bool,
     /// Give up waiting after this many minutes; the review keeps running and
     /// its call id is printed.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=60))]
@@ -416,6 +435,9 @@ fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {
         request["labels"][super::review::REUSE] = json!((!args.fresh).to_string());
         request["instruction"] = json!(super::review_instruction(args.design, focus, Some(base)));
         request["output"] = json!({"format":"json_schema","schema":super::review::output_schema()});
+    }
+    if args.notify {
+        request["labels"][super::review::NOTIFY] = json!("parent");
     }
     Request::parse(request.to_string().as_bytes()).map_err(|reason| reason.to_string())
 }
@@ -499,6 +521,12 @@ async fn run_review(context: &Wiring, args: &ReviewArgs, focus: &str) -> Result<
     };
     let call_id = call_id.to_owned();
     let state = started.get("state").and_then(Value::as_str);
+    if args.notify && state != Some("completed") {
+        return Ok(format!(
+            "review started: call {call_id}; Cowboy will post a notice in this session when it \
+             ends. End your turn, then read: cowboy call result {call_id}"
+        ));
+    }
     let settled = if state == Some("completed") {
         started.clone()
     } else {
@@ -735,6 +763,7 @@ mod tests {
             ask: false,
             agent: "auto".into(),
             preset: None,
+            notify: false,
             timeout_min: 20,
         }
     }
@@ -794,6 +823,23 @@ mod tests {
         );
         assert_eq!(seen[0]["provider"], "auto");
         assert_eq!(seen[0]["request"]["purpose"], "review");
+    }
+
+    #[tokio::test]
+    async fn a_notified_review_returns_after_admission_without_waiting() {
+        let (_dir, wiring, seen) =
+            gateway(|_| json!({"schema":1,"state":"running","call_id":"call-1","error":null}));
+        let mut args = review_args(false);
+        args.notify = true;
+        let text = run_review(&wiring, &args, "").await.unwrap();
+        assert!(
+            text.starts_with("review started: call call-1;")
+                && text.ends_with("cowboy call result call-1"),
+            "{text}"
+        );
+        let seen = seen.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["request"]["labels"]["notify"], "parent");
     }
 
     #[tokio::test]
