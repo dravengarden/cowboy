@@ -201,6 +201,16 @@ async fn replacement_login_preserves_pinned_session(
         .cancel_provider_login("login-owner", "replacement")
         .await
         .unwrap();
+    abandoned_replacement_falls_back(store, completion, hub, meta, &input).await;
+}
+
+async fn abandoned_replacement_falls_back(
+    store: &Store,
+    completion: &NativeCompletion,
+    hub: &crate::core::Hub,
+    meta: &crate::core::SessionMeta,
+    input: &crate::store::provider_accounts::logins::Request,
+) {
     // A cancelled replacement that never completed falls back to the previous
     // working login, for discovery and for locked new-session admission.
     assert_eq!(
@@ -213,7 +223,7 @@ async fn replacement_login_preserves_pinned_session(
     transport_contract(store, hub, meta, true).await;
     // A newer pending replacement on top of a cancelled one still blocks.
     store
-        .claim_provider_login("login-owner", "replacement-2", &input)
+        .claim_provider_login("login-owner", "replacement-2", input)
         .await
         .unwrap();
     assert!(
