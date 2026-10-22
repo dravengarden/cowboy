@@ -270,6 +270,11 @@ async fn checked(
     let intent = request.intent;
     intent.validate()?;
     let machine = &intent.previous.environment.machine_id;
+    // An offline target has no protocol to compare yet: automatic recovery
+    // waits for it instead of reporting it unsupported.
+    if grant.is_none() && state.machine_control.operation_connection(machine).is_err() {
+        return Err(target_not_ready());
+    }
     if !state.machine_control.machine_supports(
         machine,
         crate::machine_protocol::EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -343,7 +348,18 @@ async fn checked(
     if !authority_current(state, session, grant).await {
         return Err("Local Operator authority changed; recovery remains fenced".into());
     }
-    let target_connection = state.machine_control.operation_connection(machine)?;
+    // Only automatic recovery retries a target that is not ready; an explicit
+    // Operator request keeps its exact diagnostic and repeats on request.
+    let target_connection = state
+        .machine_control
+        .operation_connection(machine)
+        .map_err(|error| {
+            if grant.is_none() {
+                target_not_ready()
+            } else {
+                error
+            }
+        })?;
     let response = state
         .machine_control
         .execution_request(
@@ -357,9 +373,19 @@ async fn checked(
                 },
             },
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            if grant.is_none() {
+                unanswered(state, &target_connection, error)
+            } else {
+                error
+            }
+        })?;
     let binding = match response {
         Response::Prepared { binding } => binding,
+        Response::Refused { reason } if grant.is_none() && transient(reason) => {
+            return Err(target_not_ready());
+        }
         Response::Refused { reason } => {
             return Err(format!(
                 "Target recovery refused ({reason:?}); repeat only the saved request to observe it"
@@ -481,6 +507,40 @@ fn replaceable_worker(delivery: &serde_json::Value) -> bool {
                 )))
 }
 
+/// A target that is offline, booting or briefly saturated answers later.
+/// The prompt stays queued in a resource wait that maintenance retries, so
+/// it is delivered once the target reconnects instead of waiting for
+/// another unrelated event.
+fn target_not_ready() -> String {
+    format!(
+        "{}{}",
+        crate::server::session_maintenance::WAIT_PREFIX,
+        crate::server::session_maintenance::TARGET_WAIT_REASON
+    )
+}
+
+/// A request the target never answered: its connection went away or was
+/// replaced, or the reply did not arrive. Validation failures (an old
+/// protocol, an identity) keep their own diagnostic.
+fn unanswered(
+    state: &AppState,
+    connection: &crate::machine_control::ConnectionToken,
+    error: String,
+) -> String {
+    if !state.machine_control.is_current(connection)
+        || error.starts_with("Execution response unavailable")
+    {
+        target_not_ready()
+    } else {
+        error
+    }
+}
+
+fn transient(reason: crate::machine_protocol::execution::Refusal) -> bool {
+    use crate::machine_protocol::execution::Refusal;
+    matches!(reason, Refusal::Unavailable | Refusal::Capacity)
+}
+
 /// Describe is read-only. Only a target-proven dead lifetime authorizes a new
 /// incarnation; link failures and uncertain commands remain fenced, never replayed.
 pub(in crate::server) async fn before_dispatch(
@@ -542,7 +602,8 @@ pub(in crate::server) async fn before_dispatch(
         }
         let target_connection = state
             .machine_control
-            .operation_connection(&previous.environment.machine_id)?;
+            .operation_connection(&previous.environment.machine_id)
+            .map_err(|_| target_not_ready())?;
         let response = state
             .machine_control
             .execution_request(
@@ -557,13 +618,15 @@ pub(in crate::server) async fn before_dispatch(
                     },
                 },
             )
-            .await?;
+            .await
+            .map_err(|error| unanswered(state, &target_connection, error))?;
         match response {
             Response::Call { response: KeeperResponse::Ready { scope, .. } } if scope == Scope::from_binding(&previous) => {
                 state.execution_readiness.remember(&state.machine_control, session, &previous, target_connection);
                 return worker_recovery_for_ready_target(state, session, &previous).await;
             }
             Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {}
+            Response::Refused { reason } if transient(reason) => return Err(target_not_ready()),
             _ => return Err("Execution target unavailable or identity changed; retained prompt was not delivered".into()),
         }
         RecoveryV1 {
@@ -653,6 +716,23 @@ async fn prepare_auto_recovery(
 #[cfg(test)]
 mod dispatch_safety_tests {
     use super::*;
+
+    #[test]
+    fn a_target_that_is_not_ready_is_a_retried_wait_not_a_failed_send() {
+        use crate::machine_protocol::execution::Refusal;
+        assert!(target_not_ready().starts_with(crate::server::session_maintenance::WAIT_PREFIX));
+        assert!(transient(Refusal::Unavailable));
+        assert!(transient(Refusal::Capacity));
+        for permanent in [
+            Refusal::EnvironmentLost,
+            Refusal::IdentityMismatch,
+            Refusal::InvalidRequest,
+            Refusal::WorkspaceUnavailable,
+            Refusal::PreparationFailed,
+        ] {
+            assert!(!transient(permanent));
+        }
+    }
 
     #[test]
     fn a_lost_lifetime_ends_one_turn_per_incarnation() {

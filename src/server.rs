@@ -3568,6 +3568,9 @@ fn retain_failed_dispatch(
         );
         return;
     }
+    // A refusal that is not a wait ends an earlier retry: the prompt stays
+    // queued for explicit intervention instead of failing every two seconds.
+    session_maintenance::clear_wait(hub, &session_id);
     // Restore-timeout holds already explain the queue and the next step.
     // Prefixing "send failed:" makes a protective refusal look like a
     // transport crash.
@@ -3586,6 +3589,57 @@ fn is_transient_machine_disconnect(error: &str) -> bool {
 #[cfg(test)]
 mod dispatcher_failure_tests {
     use super::*;
+
+    #[test]
+    fn a_permanent_refusal_ends_an_earlier_retried_wait() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let key = format!(
+            "{}s",
+            crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        );
+        let not_ready = format!(
+            "{}{}",
+            session_maintenance::WAIT_PREFIX,
+            session_maintenance::TARGET_WAIT_REASON
+        );
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            &not_ready,
+        );
+        assert!(hub.setting(&key).is_some());
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            "Execution target unavailable or identity changed; retained prompt was not delivered",
+        );
+        assert!(hub.setting(&key).is_none());
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        // A transient disconnect alone keeps relying on the reconnect edge.
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            "Machine is not connected",
+        );
+        assert!(hub.setting(&key).is_none());
+    }
 
     #[tokio::test]
     async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
