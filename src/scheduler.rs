@@ -80,7 +80,7 @@ enum Action {
     },
 }
 
-struct Pending {
+pub struct Pending {
     fire_at_ms: i64,
     action: Action,
 }

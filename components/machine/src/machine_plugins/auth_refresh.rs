@@ -276,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn successful_exit_cannot_validate_a_different_credential_snapshot() {
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../../plugins/grok/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../plugins/grok/provider.json")).unwrap();
         let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
         let auth = package.manifest.authentication;
         let bundle = PortableCredentialBundle {

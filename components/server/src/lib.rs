@@ -8,6 +8,11 @@ pub use cowboy::*;
 mod server;
 
 #[cfg(test)]
+pub use cowboy_machine::{
+    execution_host, machine_broker, machine_cli, machine_code_plugins, machine_plugins,
+};
+
+#[cfg(test)]
 mod cli_tests;
 #[cfg(test)]
 mod controller_policy_tests;

@@ -89,6 +89,7 @@ regex = "1"
 tikv-jemallocator = "0.7"
 
 [dev-dependencies]
+cowboy-machine = { version = "0.1.0", path = "../machine", features = ["full", "machine-host", "test-support"] }
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
 tempfile = "3"
@@ -104,5 +105,5 @@ pedantic = { level = "allow", priority = -1 }
 
 
 [package.metadata.cargo-machete]
-# cowboy-wire is only listed to enable its test fixtures for server tests.
-ignored = ["cowboy-wire"]
+# cowboy-wire enables test fixtures; cowboy-machine supplies the Machine side to integration tests.
+ignored = ["cowboy-wire", "cowboy-machine"]

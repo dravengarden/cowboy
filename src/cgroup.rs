@@ -21,11 +21,11 @@ use std::path::{Path, PathBuf};
 
 // Named authentication and Direct workers use a separate fail-closed owner.
 #[cfg(feature = "machine-host")]
-mod containment;
+pub mod containment;
 #[cfg(feature = "machine-host")]
 pub use containment::{Containment, ContainmentIdentity, ProcessOwner};
 
-const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
 /// The deterministic leaf-cgroup path for a session, or None if cowboy's own
 /// cgroup can't be resolved (cgroup-v1 host / parse failure). Pure path math —
@@ -95,7 +95,7 @@ fn write_kill(dir: &Path) {
 /// cowboy's own cgroup-v2 directory, parsed from `/proc/self/cgroup`
 /// (`0::/<path>`). None if the host is cgroup-v1 / the parse fails / the dir is
 /// absent — all of which fall through to running uncontained.
-fn own_cgroup() -> Option<PathBuf> {
+pub fn own_cgroup() -> Option<PathBuf> {
     let raw = std::fs::read_to_string("/proc/self/cgroup").ok()?;
     // A cgroup-v2 host has exactly one line: `0::/system.slice/cowboy.service`.
     let rel = raw.lines().find_map(|l| l.strip_prefix("0::"))?;

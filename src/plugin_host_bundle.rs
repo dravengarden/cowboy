@@ -13,7 +13,7 @@
 )]
 
 use std::collections::BTreeMap;
-#[cfg(any(feature = "full", test))]
+#[cfg(any(feature = "full", test, feature = "test-support"))]
 use std::fs;
 use std::path::Path;
 
@@ -152,7 +152,7 @@ impl PluginHostBundle {
     ///
     /// # Errors
     /// Returns under the same conditions as [`Self::load_for_package`].
-    #[cfg(any(feature = "full", test))]
+    #[cfg(any(feature = "full", test, feature = "test-support"))]
     pub fn load_bytes_for_package(
         path: &Path,
         plugin_id: &str,

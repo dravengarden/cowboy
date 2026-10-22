@@ -109,7 +109,7 @@ pub struct CommandRequestError {
 }
 
 #[derive(Clone, Copy)]
-enum RequestBinding<'a> {
+pub enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
     Workspace(&'a WorkspaceCodeScope),
     Connection(&'a ConnectionToken),
@@ -151,7 +151,7 @@ pub struct PluginHostBinding {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ReplyKind {
+pub enum ReplyKind {
     NativeBinding,
     NativeLogout,
     LoginStop,
@@ -206,7 +206,7 @@ impl From<AdapterFailure> for String {
     }
 }
 
-enum Reply {
+pub enum Reply {
     NativeBinding(Option<Box<crate::provider_account::PreparedBinding>>),
     NativeLogout(Option<crate::provider_account::NativeLogoutObservation>),
     LoginStop(Option<crate::provider_account::LoginStopObservation>),
@@ -261,14 +261,14 @@ impl Reply {
     }
 }
 
-struct PendingResponse {
+pub struct PendingResponse {
     connection: ConnectionToken,
     kind: ReplyKind,
     ticket: Arc<()>,
     sender: oneshot::Sender<Reply>,
 }
 
-struct PendingRequestGuard<'a> {
+pub struct PendingRequestGuard<'a> {
     live: &'a RwLock<LiveState>,
     request_id: String,
     ticket: Arc<()>,
@@ -336,12 +336,12 @@ fn same_installation(left: &PluginInventory, right: &PluginInventory) -> bool {
 }
 
 #[derive(Default)]
-struct LiveState {
+pub struct LiveState {
     connections: HashMap<String, Connection>,
-    events: HashMap<String, Vec<MachineEvent>>,
+    pub events: HashMap<String, Vec<MachineEvent>>,
     plugin_inventory: HashMap<String, PluginInventorySnapshot>,
     workspace_inventory: HashMap<String, HashMap<String, WorkspaceCodeScope>>,
-    pending: HashMap<String, PendingResponse>,
+    pub pending: HashMap<String, PendingResponse>,
 }
 
 impl LiveState {
@@ -497,7 +497,7 @@ impl LiveState {
 pub struct MachineControl {
     service: crate::service_identity::ServiceIdentity,
     read_owner: Arc<()>,
-    live: RwLock<LiveState>,
+    pub live: RwLock<LiveState>,
     next_request: AtomicU64,
     /// Latest host observation per Machine. Retained across reconnects so an
     /// offline Machine still shows when it was last observed.
@@ -873,7 +873,7 @@ impl MachineControl {
         Ok(format!("{prefix}-{}-{sequence}", std::process::id()))
     }
 
-    fn begin_request<'a>(
+    pub fn begin_request<'a>(
         &'a self,
         machine_id: &str,
         request_id: &str,
@@ -1884,9 +1884,6 @@ impl MachineControl {
     }
 }
 
-#[cfg(test)]
-#[path = "machine_control/telemetry_binding_tests.rs"]
-mod telemetry_binding_tests;
 
 #[cfg(test)]
 #[path = "machine_control/site_tests.rs"]

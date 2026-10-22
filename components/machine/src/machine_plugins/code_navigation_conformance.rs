@@ -40,6 +40,7 @@ pub(super) fn configure(store: &MachinePluginStore, digest: &str, root: &Path) -
     fs::create_dir(&root).unwrap();
     fs::create_dir(root.join("lsp-worktree")).unwrap();
     let executable = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
         .join("plugins/zed/adapter/target/debug/examples/navigation_lsp")
         .canonicalize()
         .expect("build the explicit test-only LSP fixture");

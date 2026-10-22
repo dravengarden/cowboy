@@ -998,7 +998,7 @@ mod tests {
 
     pub(super) fn package() -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../plugins/claude-code/provider.json")).unwrap();
         cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
     }
 

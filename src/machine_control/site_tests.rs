@@ -2,10 +2,6 @@
 use super::*;
 use crate::machine_protocol::{plugin_install, telemetry_binding};
 
-#[cfg(feature = "machine-host")]
-#[path = "site_tests/matrix.rs"]
-mod matrix;
-
 #[test]
 fn service_reopen_preserves_logical_identity_but_never_adopts_connection_handles() {
     let root = tempfile::tempdir().unwrap();

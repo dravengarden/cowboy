@@ -116,8 +116,8 @@ settings-recovery-browser-conformance BROWSER:
 
 # Disposable authenticated HTTP + WebSocket handshakes against exact releases.
 product-sync-controller-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_PRODUCT_SYNC_MATRIX="$1" COWBOY_TEST_PRODUCT_SYNC_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::probe::product_sync::immutable_product_sync -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_PRODUCT_SYNC_MATRIX="$1" COWBOY_TEST_PRODUCT_SYNC_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::probe::product_sync::immutable_product_sync -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Same isolated browser runner, real React development StrictMode + MUI.
 provider-ui-browser-conformance BROWSER:
@@ -214,7 +214,7 @@ build: build-web
 
 # Build the user-scoped Machine bootstrap commands on macOS or Linux.
 build-machine-bootstrap:
-    cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
+    cargo build --release --locked --no-default-features --features machine-host -p cowboy --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo build --release --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
     cargo build --release --locked --bin cowboy-acp-worker
 
@@ -426,8 +426,8 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 
 zed-plugin-conformance ADAPTER SERVER:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_ZED_ADAPTER="$1" COWBOY_TEST_ZED_SERVER="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact --nocapture' conformance "{{ADAPTER}}" "{{SERVER}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_ZED_ADAPTER="$1" COWBOY_TEST_ZED_SERVER="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact --nocapture' conformance "{{ADAPTER}}" "{{SERVER}}"
 
 # Actual private native conditional effect, isolated from ordinary Zed and the
 # live Machine. No network, host PID visibility or writable cgroup hierarchy.
@@ -442,8 +442,8 @@ zed-native-navigation-conformance ADAPTER SERVER:
 # Real authenticated Controller/Machine/Code chain. No production state or egress.
 code-buffer-connected-conformance INPUT RECEIPT:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_CODE_CONNECTED_INPUT="$1" COWBOY_TEST_CODE_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib immutable_connected_code_buffers -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_CODE_CONNECTED_INPUT="$1" COWBOY_TEST_CODE_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib immutable_connected_code_buffers -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # Agent artifact probes run on the actual target OS; Code uses the gate above.
 # Worker acceptance additionally
@@ -486,25 +486,25 @@ execution-keeper-conformance KEEPER CLI VERSION SHA256 RECEIPT:
 # Actual native Provider launcher -> worker WS -> Machine manager -> keeper.
 # The PID namespace owns all detached fixture processes; no production auth.
 execution-worker-conformance INPUT RECEIPT:
-    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
+    cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
     # Namespace setup needs capabilities; native sandbox helpers expect an ordinary user afterward.
     # The target's home is a fresh directory: its user files are fixtures, never this account's.
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # A packaged managed Claude turn through a real read-only keeper (see
 # docs/managed-agent-calls.md). Same isolation as the worker gate.
 execution-managed-conformance INPUT RECEIPT:
-    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
+    cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
     # Namespace setup needs capabilities; native sandbox helpers expect an ordinary user afterward.
     # The target's home is a fresh directory: its user files are fixtures, never this account's.
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib native_managed_claude_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib native_managed_claude_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 execution-image-conformance INPUT RECEIPT:
-    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib native_managed_image_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib native_managed_image_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # Actual public login, signed fixture installation and two enrolled Machines.
 # All state is disposable; the fixture Agent makes no model requests.
@@ -524,50 +524,50 @@ catalog-reader-conformance BRIDGE BASELINE CANDIDATE SDK LEGACY_PACKAGE RECEIPT 
 # Machine attempt codecs against immutable active/recovery/cold readers.
 # Clean source, no external network, installation admission or live state.
 plugin-machine-install-reader-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_MACHINE_INSTALL_READER_MATRIX="$1" COWBOY_TEST_MACHINE_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::machine_installation::immutable_machine_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_MACHINE_INSTALL_READER_MATRIX="$1" COWBOY_TEST_MACHINE_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::machine_installation::immutable_machine_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Service-only installation journal floor; Machine attempts have their own gate.
 plugin-install-reader-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_READER_MATRIX="$1" COWBOY_TEST_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation::immutable_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_READER_MATRIX="$1" COWBOY_TEST_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation::immutable_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Real active writer pair; nine reader pairs independently reopen each stopped
 # result twice. Recovery readers are NOT asked to admit fresh installation.
 # No production credentials, Plugin installation, policy, export or sessions.
 plugin-install-connected-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_CONNECTED_MATRIX="$1" COWBOY_TEST_INSTALL_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation_connected::immutable_connected_installation -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_CONNECTED_MATRIX="$1" COWBOY_TEST_INSTALL_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation_connected::immutable_connected_installation -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Separate telemetry evidence and policy floors remain mandatory.
 telemetry-reader-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Separate from journal-reader acceptance: explicit managed startup policy,
 # stopped optional export, local recording and no legacy fallback on restart.
 telemetry-background-startup-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_STARTUP_MATRIX="$1" COWBOY_TEST_TELEMETRY_STARTUP_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::startup::immutable_background_startup -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_STARTUP_MATRIX="$1" COWBOY_TEST_TELEMETRY_STARTUP_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::startup::immutable_background_startup -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Actual private writer-policy startup, independent finite purposes and durable
 # reopen. Synthetic Operator/peer only; never admits production writers.
 telemetry-writer-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_WRITER_MATRIX="$1" COWBOY_TEST_TELEMETRY_WRITER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::admission::immutable_writer_admission -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_WRITER_MATRIX="$1" COWBOY_TEST_TELEMETRY_WRITER_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::admission::immutable_writer_admission -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Connected immutable release pairs, real fixture authentication and bounded
 # packet-loss/disconnect faults plus managed OTLP delivery to an isolated HTTP
 # receiver. No production credentials, policy, external destination or sessions.
 telemetry-connected-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_CONNECTED_MATRIX="$1" COWBOY_TEST_TELEMETRY_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::connected::immutable_connected_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_CONNECTED_MATRIX="$1" COWBOY_TEST_TELEMETRY_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::connected::immutable_connected_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 # Real disposable Victoria databases; no caller-supplied endpoint, credential or
 # state path. Separate from the mandatory 45-flow protocol/fault receiver gate.
 telemetry-victoria-conformance MATRIX DATABASES RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_VICTORIA_MATRIX="$1" COWBOY_TEST_TELEMETRY_VICTORIA_DATABASES="$2" COWBOY_TEST_TELEMETRY_VICTORIA_RECEIPT="$3"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::victoria::immutable_victoria_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{DATABASES}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_VICTORIA_MATRIX="$1" COWBOY_TEST_TELEMETRY_VICTORIA_DATABASES="$2" COWBOY_TEST_TELEMETRY_VICTORIA_RECEIPT="$3"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::victoria::immutable_victoria_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{DATABASES}}" "{{RECEIPT}}"
 
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
@@ -577,7 +577,7 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
-    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
+    cargo build --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
@@ -673,18 +673,18 @@ typecheck:
 # Keep independently packaged feature slices honest. An all-features build can
 # hide accidental dependencies on modules that are absent from these releases.
 feature-check:
-    cargo check --locked --no-default-features --features machine-host --bin cowboy-machine --bin cowboy-machine-install
+    cargo check --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
 test:
     # The invoking Codex Plugin exports its own signed package path. Cowboy's
     # unit tests exercise embedded fixtures and must not inherit that runtime.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test -p cowboy -p cowboy-server --all-targets --all-features --locked
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test -p cowboy -p cowboy-server -p cowboy-machine --all-targets --all-features --locked
     # The shared wire crate is a workspace member, so the root package does not run its tests.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
-    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host --lib
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host -p cowboy -p cowboy-machine --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && bun run test
@@ -727,8 +727,8 @@ check-compact:
 # Exercise the actual private Operator CLI/Controller and enrolled Machine.
 # Only active entries write; other matrix entries are resolved, not reader-tested.
 plugin-local-operator-conformance MATRIX RECEIPT:
-    cargo test --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_LOCAL_OPERATOR_MATRIX="$1" COWBOY_TEST_LOCAL_OPERATOR_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-wire --all-features --lib immutable_local_operator_installation -- --ignored --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+    cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_LOCAL_OPERATOR_MATRIX="$1" COWBOY_TEST_LOCAL_OPERATOR_RECEIPT="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib immutable_local_operator_installation -- --ignored --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
 test-fast:
     cargo nextest run --all-features --locked
@@ -749,7 +749,7 @@ do-memory-mock-extreme:
 # Opt into the shared compiler cache for clean or batch builds. Interactive
 # Cargo commands intentionally keep rustc incremental state for the edit loop.
 build-cached:
-    RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build -p cowboy -p cowboy-server --all-targets --all-features --locked
+    RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build -p cowboy -p cowboy-server -p cowboy-machine --all-targets --all-features --locked
     cd plugins/zed/adapter && RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --locked
 
 # Show sccache cache stats.

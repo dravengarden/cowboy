@@ -9,7 +9,7 @@ use std::path::PathBuf;
 )]
 struct Args {
     #[command(subcommand)]
-    file: Option<cowboy::execution_host::file_helper::Command>,
+    file: Option<cowboy_machine::execution_host::file_helper::Command>,
     #[arg(long, required = true)]
     contract: Option<PathBuf>,
     #[arg(long, required = true)]
@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     // File utilities are short synchronous processes, not keeper daemons.
     // Avoid creating a Tokio worker thread for every host CPU on each Read.
     if let Some(command) = args.file.take() {
-        match cowboy::execution_host::file_helper::run(command) {
+        match cowboy_machine::execution_host::file_helper::run(command) {
             Ok(code) => std::process::exit(code),
             Err(_) => {
                 eprintln!("Cowboy target file operation failed");
@@ -46,14 +46,14 @@ async fn serve(args: Args) -> anyhow::Result<()> {
     let state_dir = args
         .state_dir
         .ok_or_else(|| anyhow::anyhow!("state directory required"))?;
-    let context = cowboy::execution_host::log_context(&contract)?;
-    let logs = cowboy::logs::init(
+    let context = cowboy_machine::execution_host::log_context(&contract)?;
+    let logs = cowboy_machine::logs::init(
         args.logs_dir.unwrap_or_else(|| state_dir.join("logs")),
         context,
     )?
     .track_outcome();
     logs.finish(
-        cowboy::execution_host::run(cowboy::execution_host::Args {
+        cowboy_machine::execution_host::run(cowboy_machine::execution_host::Args {
             contract,
             state_dir,
             socket: args.socket,

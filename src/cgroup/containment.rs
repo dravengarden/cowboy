@@ -4,18 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf};
 
 #[cfg(target_os = "linux")]
-mod linux;
-#[cfg(all(test, target_os = "linux"))]
-mod tests;
+pub mod linux;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessOwner {
-    boot: uuid::Uuid,
+    pub boot: uuid::Uuid,
     pid: u32,
-    start: u64,
+    pub start: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pid_namespace: Option<u64>,
+    pub pid_namespace: Option<u64>,
 }
 
 impl ProcessOwner {
@@ -45,14 +43,14 @@ impl ProcessOwner {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainmentIdentity {
-    owner: ProcessOwner,
-    directory: PathBuf,
-    device: u64,
-    inode: u64,
+    pub owner: ProcessOwner,
+    pub directory: PathBuf,
+    pub device: u64,
+    pub inode: u64,
     /// Bind absence observations to the original cgroupfs view. Legacy
     /// identities without it cannot establish same-boot path disappearance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    root_inode: Option<u64>,
+    pub root_inode: Option<u64>,
 }
 
 impl ContainmentIdentity {
@@ -79,7 +77,7 @@ impl ContainmentIdentity {
 }
 
 pub struct Containment {
-    identity: ContainmentIdentity,
+    pub identity: ContainmentIdentity,
     #[cfg(target_os = "linux")]
     directory: std::fs::File,
 }

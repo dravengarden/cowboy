@@ -15,7 +15,7 @@ if [[ "${1:-}" == "--build-backend" ]]; then
     (
         cd "$repo_root"
         cargo build --release --locked --no-default-features --features machine-host \
-            --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
+            -p cowboy --bin cowboy -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
         cargo build --release --locked --no-default-features --features code-adapter \
             --bin cowboy-code-adapter
         cargo build --release --locked --bin cowboy-acp-worker

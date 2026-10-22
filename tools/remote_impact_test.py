@@ -57,19 +57,19 @@ class ImpactTest(unittest.TestCase):
     def test_the_managed_profile_runs_its_managed_turn(self):
         selected = suites([CLAUDE + "managed.mjs"])
         self.assertIn("claude-managed", selected)
-        self.assertIn("claude-managed", suites(["src/execution_host/read_only.rs"]))
+        self.assertIn("claude-managed", suites(["components/machine/src/execution_host/read_only.rs"]))
 
     def test_a_codex_launcher_change_stays_in_its_lane(self):
         self.assertEqual(set(suites(["plugins/codex/runtime/launch.mjs"])), {"codex-adapter-check", "codex-worker", "codex-image"})
 
     def test_the_execution_transport_runs_every_suite_built_on_it(self):
-        selected = suites(["src/execution_host/ledger.rs"])
+        selected = suites(["components/machine/src/execution_host/ledger.rs"])
         self.assertEqual(set(selected), {"execution-rust-tests", "claude-worker", "codex-worker", "session",
                                          "keeper", "claude-task-stop"})
         self.assertEqual(selected["claude-worker"]["phases"], "all")
 
     def test_machine_control_runs_its_session_gate(self):
-        self.assertEqual(set(suites(["src/machine_broker.rs"])), {"execution-rust-tests", "session"})
+        self.assertEqual(set(suites(["components/machine/src/machine_broker.rs"])), {"execution-rust-tests", "session"})
 
     def test_the_execution_session_api_runs_its_session_gate(self):
         self.assertEqual(set(suites(["components/server/src/server/execution/sessions.rs"])), {"execution-rust-tests", "session"})
@@ -79,7 +79,7 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(set(selected), {"claude-remote-check", "claude-worker", "codex-worker"})
 
     def test_the_keeper_binary_runs_every_keeper_suite(self):
-        self.assertEqual(set(suites(["src/bin/cowboy-execution-host.rs"])), {
+        self.assertEqual(set(suites(["components/machine/src/bin/cowboy-execution-host.rs"])), {
             "execution-rust-tests", "claude-worker", "codex-worker", "session", "keeper", "claude-task-stop"})
 
     def test_the_codex_acp_launcher_runs_its_handshake_probe(self):

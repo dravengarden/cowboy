@@ -27,7 +27,7 @@ use crate::runtime_wire::Frame;
 
 pub const DESCRIPTOR_ENV: &str = "COWBOY_EXECUTION_DESCRIPTOR";
 const MAX_PENDING: usize = 24;
-const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 // A validated binding is at most 16 KiB before JSON escaping. Bound the
 // complete control envelope too, and reserve its worst-case aggregate so
 // admitted bulk inputs cannot starve polling or result observation.
@@ -35,18 +35,18 @@ const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const CONTROL_RESERVE_BYTES: usize = MAX_PENDING * MAX_CONTROL_BYTES;
 const RETRY: Duration = Duration::from_secs(30);
 
-struct Pending {
+pub struct Pending {
     request: RuntimeRequest,
     sender: oneshot::Sender<MachineResponse>,
     sent: Option<Instant>,
-    bytes: usize,
+    pub bytes: usize,
 }
 
 pub struct Client {
     session: String,
     epoch: String,
     binding: BindingV1,
-    pending: Mutex<BTreeMap<String, Pending>>,
+    pub pending: Mutex<BTreeMap<String, Pending>>,
     notify: mpsc::UnboundedSender<()>,
     event_cursor: Mutex<Option<u64>>,
 }
@@ -119,7 +119,7 @@ impl Client {
         }
     }
 
-    async fn call(&self, command: Command) -> Result<Response> {
+    pub async fn call(&self, command: Command) -> Result<Response> {
         let started = Instant::now();
         let operation = match &command {
             Command::Invoke { invocation, .. } => Some(invocation.operation_id.clone()),
@@ -261,7 +261,7 @@ impl Client {
         Ok(round)
     }
 
-    async fn invoke(&self, method: String, params: Value) -> Result<Value> {
+    pub async fn invoke(&self, method: String, params: Value) -> Result<Value> {
         let started = std::time::Instant::now();
         let invocation = Invocation {
             // The suffix asks the keeper for the backend's own duration.
@@ -583,5 +583,3 @@ fn valid_id(value: &Value) -> bool {
             .is_some_and(|value| !value.is_empty() && value.len() <= 128)
 }
 
-#[cfg(test)]
-mod tests;

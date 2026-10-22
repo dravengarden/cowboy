@@ -70,8 +70,6 @@ pub mod diff_snapshot;
 pub mod durable_state;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::execution_environment;
-#[cfg(feature = "machine-host")]
-pub mod execution_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::execution_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -90,12 +88,6 @@ pub mod logs;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_auth;
 #[cfg(feature = "machine-host")]
-pub mod machine_broker;
-#[cfg(feature = "machine-host")]
-pub mod machine_cli;
-#[cfg(feature = "machine-host")]
-pub mod machine_code_plugins;
-#[cfg(feature = "machine-host")]
 pub mod machine_components;
 #[cfg(feature = "full")]
 pub mod machine_control;
@@ -105,8 +97,6 @@ pub mod machine_convergence;
 pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_lanes;
-#[cfg(feature = "machine-host")]
-pub mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]

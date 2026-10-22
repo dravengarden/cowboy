@@ -56,7 +56,7 @@ pub struct Reply<L> {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-enum ReplyKind {
+pub enum ReplyKind {
     #[serde(rename = "bufferLeaseRead")]
     BufferLeaseRead,
 }

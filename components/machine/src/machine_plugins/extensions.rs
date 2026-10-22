@@ -276,9 +276,9 @@ mod tests {
         dependencies: Vec<WorkspaceExtensionDependency>,
     ) -> DesiredPlugin {
         let mut manifest: cowboy_plugin_sdk::PluginManifest =
-            serde_json::from_str(include_str!("../../plugins/github/plugin.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../plugins/github/plugin.json")).unwrap();
         let mut contract: WorkspaceExtensionContract =
-            serde_json::from_str(include_str!("../../plugins/github/contract.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../plugins/github/contract.json")).unwrap();
         manifest.id = id.into();
         manifest.version = version.into();
         contract.id = id.into();

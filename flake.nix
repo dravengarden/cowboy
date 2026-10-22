@@ -48,6 +48,18 @@
         ./components/wire/Cargo.toml
         ./components/wire/src
       ];
+      machine-files = [
+        ./components/machine/Cargo.toml
+        ./components/machine/src
+        ./components/machine/tests
+      ];
+      machine-stub-files = [
+        ./components/machine/Cargo.toml
+        ./components/machine/src/lib.rs
+        ./components/machine/src/bin/cowboy-machine.rs
+        ./components/machine/src/bin/cowboy-machine-install.rs
+        ./components/machine/src/bin/cowboy-execution-host.rs
+      ];
       server-files = [
         ./components/server/Cargo.toml
         ./components/server/src
@@ -121,7 +133,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ wire-files ++ server-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ server-files ++ machine-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -145,11 +157,8 @@
           ./src/claude_shell.rs
           ./src/cgroup.rs
           ./src/cgroup
-          ./src/execution_host.rs
           ./src/execution_target_environment.rs
           ./src/durable_state.rs
-          ./src/execution_host
-          ./src/bin/cowboy-execution-host.rs
           ./src/code_buffer_read.rs
           ./src/code_buffer_read
           ./plugins/zed/adapter/fixtures/content.json
@@ -162,12 +171,6 @@
           ./src/plugin_process
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
-          ./src/machine_broker.rs
-          ./src/machine_broker
-          ./src/machine_code_plugins.rs
-          ./src/machine_code_plugins
-          ./src/machine_cli.rs
-          ./src/machine_cli
           ./src/agent_api.rs
           ./src/agent_api
           ./src/managed_calls.rs
@@ -183,8 +186,6 @@
           ./src/machine_transport.rs
           ./src/machine_transport
           ./src/generation_retention.rs
-          ./src/machine_plugins.rs
-          ./src/machine_plugins
           ./src/operation_budget.rs
           ./src/owned_json.rs
           ./src/telemetry_plugin.rs
@@ -202,9 +203,7 @@
           ./src/workspace_extensions.rs
           ./src/workspace_extensions
           ./src/workspace_roots.rs
-          ./src/bin/cowboy-machine-install.rs
-          ./src/bin/cowboy-machine.rs
-        ] ++ plugin-contract-files ++ wire-files ++ server-stub-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ machine-files ++ server-stub-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -227,7 +226,7 @@
           # compiles the wire modules.
           ./components/wire/Cargo.toml
           ./components/wire/src/lib.rs
-        ] ++ server-stub-files);
+        ] ++ server-stub-files ++ machine-stub-files);
       };
 
 
@@ -370,7 +369,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Qij/eQeV7GK/ltfXpIfrQxCAVhC2KiwZ8LRl3KRadvI=";
+        hash = "sha256-hU2MgE/8jSdZrAec5le0g9HIpq+6Nr+XmmoElMzgcpw=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -414,6 +413,14 @@
           "cowboy-codex-app-server"
         ];
         cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-server" "-p" "cowboy-wire" ];
+        # cowboy-server dev-depends on cowboy-machine, which enables the
+        # machine-host tests of the base crate in this build. This one runs a
+        # real nested cargo build, which the sandbox (no writable toolchain
+        # state) cannot do; it stays covered by just test.
+        checkFlags = [
+          "--skip"
+          "session_workspace::storage::tests::routed_git_worktree_can_be_reused_and_captured_for_cleanup"
+        ];
         nativeBuildInputs = [ pkgs.pkg-config ];
         # This derived digest must never become a stale worker-generation pin.
         # Enforce it inside the immutable worker build as well as the root gate.
@@ -447,8 +454,12 @@
           "--no-default-features"
           "--features"
           "machine-host"
+          "-p"
+          "cowboy"
           "--bin"
           "cowboy"
+          "-p"
+          "cowboy-machine"
           "--bin"
           "cowboy-machine"
           "--bin"
@@ -508,7 +519,7 @@
         buildPhase = ''
           runHook preBuild
           if ! cargo test --offline --locked --release --no-default-features \
-            --features machine-host --lib --no-run --message-format=json \
+            --features machine-host -p cowboy-machine --lib --no-run --message-format=json \
             > conformance-build.json; then
             python3 - <<'PY'
           import json, pathlib, sys
@@ -529,7 +540,7 @@
           artifacts = [json.loads(line) for line in pathlib.Path("conformance-build.json").read_text().splitlines()]
           executables = [artifact["executable"] for artifact in artifacts
               if artifact.get("reason") == "compiler-artifact"
-              and artifact["target"]["name"] == "cowboy"
+              and artifact["target"]["name"] == "cowboy_machine"
               and artifact["target"]["kind"] == ["lib"]
               and artifact["profile"]["test"] and artifact.get("executable")]
           if len(executables) != 1:
@@ -801,10 +812,10 @@
         test -e ${machine-src}/src/plugin_runtime_args.rs
         test -e ${machine-src}/plugins/grok/host.json
         test -e ${machine-src}/src/provider/deepseek_context.rs
-        test -e ${machine-src}/src/machine_plugins.rs
-        test -e ${machine-src}/src/machine_plugins/operations.rs
-        test -e ${machine-src}/src/machine_plugins/operations/installations.rs
-        test -e ${machine-src}/src/machine_plugins/operations/lease.rs
+        test -e ${machine-src}/components/machine/src/machine_plugins.rs
+        test -e ${machine-src}/components/machine/src/machine_plugins/operations.rs
+        test -e ${machine-src}/components/machine/src/machine_plugins/operations/installations.rs
+        test -e ${machine-src}/components/machine/src/machine_plugins/operations/lease.rs
         test -e ${machine-src}/src/operation_budget.rs
         test -e ${machine-src}/src/owned_json.rs
         test -e ${machine-src}/components/wire/src/machine_protocol/plugin_step.rs
@@ -816,7 +827,7 @@
         test -e ${machine-src}/src/session_workspace.rs
         test -e ${machine-src}/src/session_workspace/storage.rs
         test -e ${machine-src}/src/durable_state.rs
-        test -e ${machine-src}/src/machine_broker/deletions.rs
+        test -e ${machine-src}/components/machine/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
         test -e ${machine-src}/src/session_deletion_admission/reader_floor.rs
         test -e ${machine-src}/src/component_proof.rs

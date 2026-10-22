@@ -23,9 +23,9 @@
     "src/worker.rs",
     "src/acp_bridge.rs",
     "src/acp.rs",
-    "src/bin/cowboy-execution-host.rs",
-    "src/bin/cowboy-machine.rs",
-    "src/bin/cowboy-machine-install.rs",
+    "components/machine/src/bin/cowboy-execution-host.rs",
+    "components/machine/src/bin/cowboy-machine.rs",
+    "components/machine/src/bin/cowboy-machine-install.rs",
     "components/memory-client/"
   ],
   "native": {
@@ -206,7 +206,7 @@
       "command": "cargo test --locked --all-features --workspace --lib -- worker_execution execution_ remote_runtime runtime_wire machine_ server::execution worker acp_bridge",
       "paths": [
         "src/worker_execution",
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
         "components/wire/src/execution_environment.rs",
         "src/execution_target_environment.rs",
@@ -219,24 +219,24 @@
         "Cargo.lock",
         "flake.nix",
         "flake.lock",
-        "src/machine_broker",
+        "components/machine/src/machine_broker",
         "src/machine_control",
         "components/wire/src/machine_auth.rs",
-        "src/machine_cli",
+        "components/machine/src/machine_cli",
         "src/machine_install",
         "src/machine_components",
         "src/machine_convergence",
-        "src/machine_plugins",
-        "src/machine_code_plugins",
+        "components/machine/src/machine_plugins",
+        "components/machine/src/machine_code_plugins",
         "components/server/src/server/execution.rs",
         "components/server/src/server/execution/",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
         "src/acp.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "src/bin/cowboy-machine.rs",
-        "src/bin/cowboy-machine-install.rs"
+        "components/machine/src/bin/cowboy-execution-host.rs",
+        "components/machine/src/bin/cowboy-machine.rs",
+        "components/machine/src/bin/cowboy-machine-install.rs"
       ]
     },
     "claude-worker": {
@@ -257,7 +257,7 @@
         "plugins/claude-code/runtime/managed.mjs",
         "plugins/claude-code/runtime/agent-calls.mjs",
         "src/worker_execution",
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
         "components/wire/src/execution_environment.rs",
         "src/execution_target_environment.rs",
@@ -277,7 +277,7 @@
         "src/worker.rs",
         "src/acp_bridge.rs",
         "src/acp.rs",
-        "src/bin/cowboy-execution-host.rs",
+        "components/machine/src/bin/cowboy-execution-host.rs",
         "components/memory-client/"
       ],
       "native": [
@@ -438,7 +438,7 @@
       "entry": "tools/execution_worker_conformance.py",
       "paths": [
         "src/worker_execution",
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
         "components/wire/src/execution_environment.rs",
         "src/execution_target_environment.rs",
@@ -466,7 +466,7 @@
         "src/worker.rs",
         "src/acp_bridge.rs",
         "src/acp.rs",
-        "src/bin/cowboy-execution-host.rs",
+        "components/machine/src/bin/cowboy-execution-host.rs",
         "components/memory-client/"
       ],
       "native": [
@@ -486,7 +486,7 @@
       "entry": "tools/execution_session_conformance.py",
       "paths": [
         "src/worker_execution",
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
         "components/wire/src/execution_environment.rs",
         "src/execution_target_environment.rs",
@@ -499,24 +499,24 @@
         "Cargo.lock",
         "flake.nix",
         "flake.lock",
-        "src/machine_broker",
+        "components/machine/src/machine_broker",
         "src/machine_control",
         "components/wire/src/machine_auth.rs",
-        "src/machine_cli",
+        "components/machine/src/machine_cli",
         "src/machine_install",
         "src/machine_components",
         "src/machine_convergence",
-        "src/machine_plugins",
-        "src/machine_code_plugins",
+        "components/machine/src/machine_plugins",
+        "components/machine/src/machine_code_plugins",
         "components/server/src/server/execution.rs",
         "components/server/src/server/execution/",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
         "src/acp.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "src/bin/cowboy-machine.rs",
-        "src/bin/cowboy-machine-install.rs"
+        "components/machine/src/bin/cowboy-execution-host.rs",
+        "components/machine/src/bin/cowboy-machine.rs",
+        "components/machine/src/bin/cowboy-machine-install.rs"
       ],
       "native": [
         "exec-server"
@@ -531,13 +531,13 @@
       "command": "just execution-keeper-conformance KEEPER CLI VERSION SHA256 <new receipt>",
       "entry": "tools/execution_keeper_conformance.py",
       "paths": [
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
         "components/wire/src/execution_environment.rs",
         "src/execution_target_environment.rs",
         "Cargo.toml",
         "Cargo.lock",
-        "src/bin/cowboy-execution-host.rs"
+        "components/machine/src/bin/cowboy-execution-host.rs"
       ],
       "native": [
         "exec-server"
@@ -548,9 +548,9 @@
       "command": "just execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA <new receipt>",
       "entry": "tools/claude_native_task_stop_probe.py",
       "paths": [
-        "src/execution_host",
+        "components/machine/src/execution_host",
         "components/wire/src/execution_protocol.rs",
-        "src/bin/cowboy-execution-host.rs"
+        "components/machine/src/bin/cowboy-execution-host.rs"
       ],
       "native": [
         "claude",
@@ -614,10 +614,10 @@
         "plugins/claude-code/runtime/context-mod.js",
         "plugins/claude-code/runtime/tools.mjs",
         "tools/execution_claude_managed_conformance.py",
-        "src/worker_execution/tests/native_managed.rs",
-        "src/execution_host/read_only.rs",
+        "components/machine/src/worker_execution_tests/native_managed.rs",
+        "components/machine/src/execution_host/read_only.rs",
         "src/managed_calls/snapshot.rs",
-        "src/machine_cli/execution.rs"
+        "components/machine/src/machine_cli/execution.rs"
       ]
     },
     "codex-image": {
@@ -627,11 +627,11 @@
       "paths": [
         "plugins/codex/runtime/launch.mjs",
         "plugins/codex/runtime/adapter.patch",
-        "src/worker_execution/tests/native_managed.rs",
+        "components/machine/src/worker_execution_tests/native_managed.rs",
         "src/managed_calls/media.rs",
         "src/managed_calls/snapshot.rs",
         "src/managed_calls/snapshot/images.rs",
-        "src/machine_cli/execution.rs",
+        "components/machine/src/machine_cli/execution.rs",
         "components/server/src/server/managed_calls/runner.rs"
       ],
       "manifests": [

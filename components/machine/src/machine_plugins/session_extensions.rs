@@ -166,13 +166,13 @@ mod tests {
 
         let matrix = super::super::tests::session_extension_release(
             &publisher,
-            include_str!("../../plugins/matrix/plugin.json"),
-            include_str!("../../plugins/matrix/contract.json"),
+            include_str!("../../../../plugins/matrix/plugin.json"),
+            include_str!("../../../../plugins/matrix/contract.json"),
         );
         let review = super::super::tests::session_extension_release(
             &publisher,
-            include_str!("../../plugins/review/plugin.json"),
-            include_str!("../../plugins/review/contract.json"),
+            include_str!("../../../../plugins/review/plugin.json"),
+            include_str!("../../../../plugins/review/contract.json"),
         );
         let installed = store.install(&matrix).await.unwrap();
         store.install(&review).await.unwrap();

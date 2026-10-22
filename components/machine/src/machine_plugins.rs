@@ -5277,9 +5277,9 @@ pub fn telemetry_release(
     version: &str,
 ) -> DesiredPlugin {
     let mut manifest: cowboy_plugin_sdk::PluginManifest =
-        serde_json::from_str(include_str!("../examples/telemetry/victoria/plugin.json")).unwrap();
+        serde_json::from_str(include_str!("../../../examples/telemetry/victoria/plugin.json")).unwrap();
     let mut contract: cowboy_plugin_sdk::TelemetryBackendContract = serde_json::from_str(
-        include_str!("../examples/telemetry/victoria/telemetry.json"),
+        include_str!("../../../examples/telemetry/victoria/telemetry.json"),
     )
     .unwrap();
     if version.starts_with("1.0.") {
@@ -5551,8 +5551,8 @@ mod tests {
                 cowboy_plugin_sdk::PluginKind::MemoryBackend,
                 session_extension_release(
                     &publisher,
-                    include_str!("../plugins/matrix/plugin.json"),
-                    include_str!("../plugins/matrix/contract.json"),
+                    include_str!("../../../plugins/matrix/plugin.json"),
+                    include_str!("../../../plugins/matrix/contract.json"),
                 ),
             ),
             (
@@ -5560,8 +5560,8 @@ mod tests {
                 cowboy_plugin_sdk::PluginKind::CallProfile,
                 session_extension_release(
                     &publisher,
-                    include_str!("../plugins/review/plugin.json"),
-                    include_str!("../plugins/review/contract.json"),
+                    include_str!("../../../plugins/review/plugin.json"),
+                    include_str!("../../../plugins/review/contract.json"),
                 ),
             ),
         ] {
@@ -6122,7 +6122,7 @@ mod tests {
                 .unwrap();
         store.pin_service_key(signer.public_key()).unwrap();
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/claude-code/provider.json")).unwrap();
         let next = cowboy_provider_sdk::build_package(source.clone().compile().unwrap()).unwrap();
         let mut previous = source.clone();
         previous
@@ -6221,7 +6221,7 @@ mod tests {
         let first = store.for_account(&first_id).unwrap();
         let second = store.for_account(&second_id).unwrap();
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/claude-deepseek/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/claude-deepseek/provider.json")).unwrap();
         let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
         let signer =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))
@@ -6324,7 +6324,7 @@ mod tests {
         });
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let runtime_artifacts: Vec<PlatformRuntimeArtifacts> = package
             .manifest
@@ -6356,7 +6356,7 @@ mod tests {
             })
             .collect();
         let manifest: PluginManifest =
-            serde_json::from_str(include_str!("../plugins/gemini/plugin.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/gemini/plugin.json")).unwrap();
         let component_release = manifest.component_release.clone();
         let plugin_package = PluginPackage::new(
             manifest,
@@ -6879,11 +6879,11 @@ mod tests {
             stream.write_all(&script).await.unwrap();
         });
         let manifest: PluginManifest =
-            serde_json::from_str(include_str!("../plugins/zed/plugin.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/zed/plugin.json")).unwrap();
         let component_release = manifest.component_release.clone();
         let plugin_version = manifest.version.clone();
         let mut contract: CodeIntelligenceContract =
-            serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/zed/contract.json")).unwrap();
         // Retained schema-1 releases remain readable during runtime migration.
         contract.schema_version = 1;
         contract.runtime = None;
@@ -6973,9 +6973,9 @@ mod tests {
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let manifest: PluginManifest =
-            serde_json::from_str(include_str!("../plugins/zed/plugin.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/zed/plugin.json")).unwrap();
         let contract: cowboy_plugin_sdk::CodeIntelligenceContract =
-            serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/zed/contract.json")).unwrap();
         let runtime = contract.runtime.clone().expect("owned Zed runtime");
         let package = PluginPackage::new(
             manifest.clone(),
@@ -7485,7 +7485,7 @@ mod tests {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let root = std::env::temp_dir().join(format!(
             "cowboy-legacy-provider-home-test-{}-{}",
@@ -7590,7 +7590,7 @@ mod tests {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let root = std::env::temp_dir().join(format!(
             "cowboy-grok-auth-repair-test-{}-{}",
@@ -7695,7 +7695,7 @@ mod tests {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let root = std::env::temp_dir().join(format!(
             "cowboy-grok-auth-candidate-test-{}-{}",
@@ -7799,7 +7799,7 @@ mod tests {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         for next_generation in [18, 19] {
             let root = std::env::temp_dir().join(format!(
@@ -7857,7 +7857,7 @@ mod tests {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let root = std::env::temp_dir().join(format!(
             "cowboy-grok-auth-order-test-{}-{}",

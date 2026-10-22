@@ -9,7 +9,7 @@ rust-version = "1.98.1"
 
 [workspace]
 resolver = "3"
-members = ["components/plugin-sdk", "components/provider-sdk", "components/server", "components/wire"]
+members = ["components/machine", "components/plugin-sdk", "components/provider-sdk", "components/server", "components/wire"]
 exclude = ["plugins/zed/adapter"]
 
 [features]
@@ -20,21 +20,6 @@ machine-host = ["dep:cowboy-wire", "cowboy-wire/machine-host"]
 # Test helpers that downstream crates (cowboy-server) also need.
 test-support = ["dep:tempfile", "cowboy-wire/test-fixtures"]
 code-adapter = []
-
-[[bin]]
-name = "cowboy-machine"
-path = "src/bin/cowboy-machine.rs"
-required-features = ["machine-host"]
-
-[[bin]]
-name = "cowboy-machine-install"
-path = "src/bin/cowboy-machine-install.rs"
-required-features = ["machine-host"]
-
-[[bin]]
-name = "cowboy-execution-host"
-path = "src/bin/cowboy-execution-host.rs"
-required-features = ["machine-host"]
 
 [[bin]]
 name = "cowboy-code-adapter"

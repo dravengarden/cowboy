@@ -335,7 +335,7 @@ pub(super) async fn terminate(identity: &ContainmentIdentity) -> io::Result<()> 
 }
 
 #[allow(unsafe_code)]
-pub(super) fn attach_before_exec(command: &mut tokio::process::Command, membership: File) {
+pub fn attach_before_exec(command: &mut tokio::process::Command, membership: File) {
     // SAFETY: only a write syscall and stack-only error conversion after fork.
     // A removed cgroup rejects this write; provider code cannot escape recovery.
     unsafe {

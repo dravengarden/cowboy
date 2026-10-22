@@ -82,7 +82,7 @@ impl RemoteBootstrap {
     }
 }
 
-struct Shared {
+pub struct Shared {
     socket: PathBuf,
     hub: Hub,
     pending: Mutex<HashMap<String, CoreCommand>>,
@@ -3784,7 +3784,7 @@ mod tests {
         )));
     }
 
-    fn snapshot(session_id: &str) -> WorkerSnapshot {
+    pub fn snapshot(session_id: &str) -> WorkerSnapshot {
         WorkerSnapshot {
             session_id: session_id.to_owned(),
             worker_epoch: "epoch-1".to_owned(),
