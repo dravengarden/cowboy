@@ -60,7 +60,16 @@ struct Host {
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     stopped: watch::Receiver<bool>,
     close: tokio::sync::Notify,
+    /// Last request from an attached worker. Its executor client long-polls
+    /// Events for as long as it lives, so silence means no worker remains.
+    attended: Mutex<std::time::Instant>,
 }
+
+/// A worker that has not polled for this long is gone: its native client
+/// cannot reattach to the stdio of processes it started. A local session's
+/// worker unit takes its children with it; reap them here the same way.
+/// Long enough to ride out Controller restarts and Machine maintenance.
+const UNATTENDED_PROCESS_REAP: Duration = Duration::from_secs(30 * 60);
 
 async fn read_json<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Result<Value> {
     read_json_bounded(reader, wire::MAX_FRAME_BYTES).await
@@ -175,6 +184,12 @@ impl Host {
                 reason: Refusal::Unauthorized,
             };
         }
+        if matches!(
+            request.command,
+            Command::Invoke { .. } | Command::Observe { .. } | Command::Events { .. }
+        ) {
+            *self.attended.lock() = std::time::Instant::now();
+        }
         let result = match request.command {
             Command::Shutdown => {
                 self.ledger.lock().lose();
@@ -235,33 +250,7 @@ impl Host {
                     let read_only::Decision::Forward(native) = native else {
                         unreachable!("refusals return above")
                     };
-                    let admission = {
-                        // Reserve before admitting so a full local queue proves
-                        // non-admission. Once admitted, the writer owns the call.
-                        let mut ledger = self.ledger.lock();
-                        if ledger.observe(&invocation.operation_id).is_some() || ledger.lost {
-                            ledger.admit(&invocation)
-                        } else {
-                            match self.writer.try_reserve() {
-                                Ok(permit) => {
-                                    let result = ledger.admit(&invocation);
-                                    if let Ok(Admission::New { id, .. }) = &result {
-                                        // The ledger retains the admitted params;
-                                        // only the native frame carries context.
-                                        let params = wire::with_call_context(
-                                            &invocation.method,
-                                            &native,
-                                            self.call_context.as_deref(),
-                                        );
-                                        permit.send(json!({"id": id, "method": invocation.method, "params": params}));
-                                    }
-                                    result
-                                }
-                                Err(_) => Err(Refusal::Capacity),
-                            }
-                        }
-                    };
-                    match admission {
+                    match self.admit(&invocation, &native) {
                         Ok(Admission::Existing(receiver) | Admission::New { receiver, .. }) => {
                             Ok(Response::Operation {
                                 outcome: wait_outcome(receiver, wait_ms).await,
@@ -296,6 +285,47 @@ impl Host {
             }
         };
         result.unwrap_or_else(|reason| Response::Refused { reason })
+    }
+
+    /// Reserve before admitting so a full local queue proves non-admission.
+    /// Once admitted, the writer owns the call.
+    fn admit(&self, invocation: &wire::Invocation, native: &Value) -> Result<Admission, Refusal> {
+        let mut ledger = self.ledger.lock();
+        if ledger.observe(&invocation.operation_id).is_some() || ledger.lost {
+            return ledger.admit(invocation);
+        }
+        let permit = self.writer.try_reserve().map_err(|_| Refusal::Capacity)?;
+        let result = ledger.admit(invocation);
+        if let Ok(Admission::New { id, .. }) = &result {
+            // The ledger retains the admitted params; only the native frame
+            // carries context.
+            let params =
+                wire::with_call_context(&invocation.method, native, self.call_context.as_deref());
+            permit.send(json!({"id": id, "method": invocation.method, "params": params}));
+        }
+        result
+    }
+
+    /// Terminate the native processes of a worker that is gone. Each request
+    /// is an ordinary admitted operation, so its reply keeps the ledger whole.
+    fn reap_unattended(&self, sequence: &mut u64) -> usize {
+        if self.attended.lock().elapsed() < UNATTENDED_PROCESS_REAP || self.ledger.lock().lost {
+            return 0;
+        }
+        let processes = self.ledger.lock().take_processes();
+        let mut reaped = 0;
+        for process in processes {
+            *sequence += 1;
+            let invocation = wire::Invocation {
+                operation_id: format!("cowboy-unattended-reap-{sequence}"),
+                method: "process/terminate".into(),
+                params: json!({"processId": process}),
+            };
+            if self.admit(&invocation, &invocation.params).is_ok() {
+                reaped += 1;
+            }
+        }
+        reaped
     }
 
     async fn events(&self, after: u64, wait_ms: u64) -> Result<Response, Refusal> {
@@ -502,6 +532,24 @@ pub async fn run(args: Args) -> Result<()> {
         stop: Mutex::new(Some(stop)),
         stopped: finished_rx,
         close: tokio::sync::Notify::new(),
+        attended: Mutex::new(std::time::Instant::now()),
+    });
+    let reaper_host = Arc::clone(&host);
+    let reaper = tokio::spawn(async move {
+        let mut sequence = 0;
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let reaped = reaper_host.reap_unattended(&mut sequence);
+            if reaped > 0 {
+                tracing::info!(
+                    event_name = "cowboy.execution.unattended_reaped",
+                    processes = reaped,
+                    "terminated native processes of a worker that is gone"
+                );
+            }
+        }
     });
     let (messages, mut native_messages) = mpsc::channel(4);
     let reader = tokio::spawn(async move {
@@ -631,6 +679,7 @@ pub async fn run(args: Args) -> Result<()> {
             }
         }
     }
+    reaper.abort();
     host.ledger.lock().lose();
     if let Some(stop) = host.stop.lock().take() {
         let _ = stop.send(());
@@ -641,4 +690,86 @@ pub async fn run(args: Args) -> Result<()> {
         "execution environment stopped"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(attended: std::time::Instant) -> (Host, mpsc::Receiver<Value>) {
+        let (writer, frames) = mpsc::channel(8);
+        let (stop, _) = tokio::sync::oneshot::channel();
+        let scope = Scope {
+            binding_id: "binding".into(),
+            revision: 1,
+            incarnation: "incarnation".into(),
+        };
+        let host = Host {
+            scope,
+            call_context: None,
+            read_only: false,
+            capability_digest: [0; 32],
+            initialization: json!({}),
+            cwd: PathBuf::from("/"),
+            inode: (0, 0),
+            ledger: Mutex::new(Ledger::new()),
+            writer,
+            stop: Mutex::new(Some(stop)),
+            stopped: watch::channel(false).1,
+            close: tokio::sync::Notify::new(),
+            attended: Mutex::new(attended),
+        };
+        (host, frames)
+    }
+
+    fn start(host: &Host, process: &str) {
+        let invocation = wire::Invocation {
+            operation_id: format!("start-{process}"),
+            method: "process/start".into(),
+            params: json!({"processId": process, "argv": ["true"]}),
+        };
+        assert!(matches!(
+            host.admit(&invocation, &invocation.params),
+            Ok(Admission::New { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unattended_worker_has_its_processes_terminated_once() {
+        let gone = std::time::Instant::now()
+            .checked_sub(UNATTENDED_PROCESS_REAP + Duration::from_secs(1))
+            .unwrap();
+        let (host, mut frames) = host(gone);
+        start(&host, "mcp");
+        start(&host, "closed");
+        host.ledger
+            .lock()
+            .push_event(json!({"method": "process/closed", "params": {"processId": "closed"}}))
+            .unwrap();
+        let mut sequence = 0;
+        assert_eq!(host.reap_unattended(&mut sequence), 1);
+        let mut methods = Vec::new();
+        while let Ok(frame) = frames.try_recv() {
+            methods.push((
+                frame["method"].clone(),
+                frame["params"]["processId"].clone(),
+            ));
+        }
+        assert_eq!(
+            methods.last().unwrap(),
+            &(json!("process/terminate"), json!("mcp"))
+        );
+        assert_eq!(methods.len(), 3);
+        assert_eq!(host.reap_unattended(&mut sequence), 0);
+    }
+
+    #[test]
+    fn an_attended_worker_keeps_its_processes() {
+        let (host, mut frames) = host(std::time::Instant::now());
+        start(&host, "mcp");
+        let mut sequence = 0;
+        assert_eq!(host.reap_unattended(&mut sequence), 0);
+        assert_eq!(frames.try_recv().unwrap()["method"], "process/start");
+        assert!(frames.try_recv().is_err());
+    }
 }
