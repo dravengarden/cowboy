@@ -361,7 +361,10 @@ impl Supervisor {
         if runtime.has_worker(session_id) && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
             self.recycle_session_inner(session_id)
         } else {
-            self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), None)
+            // A managed-call continuation restarts its hibernated child here;
+            // it must resume the retained native thread, not open a blank one.
+            let resume = self.hub.agent_session_id_for_resume(session_id);
+            self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), resume)
         }
     }
 
@@ -1826,6 +1829,38 @@ mod tests {
             hub.agent_session_id_for_resume("s").as_deref(),
             Some("native-original")
         );
+    }
+
+    #[tokio::test]
+    async fn registered_start_resumes_a_hibernated_native_thread() {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        // A fresh child has no native rollout and must open a new thread.
+        hub.set_agent_session_id("s", "native-unprompted".into());
+        supervisor.start_registered_session("s").unwrap();
+        assert!(runtime.pending_for_test().iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session } if session.agent_session_id.is_none()
+        )));
+
+        // A managed-call continuation restarts the same child after its first
+        // turn hibernated it; the retained thread carries the earlier context.
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        hub.push("s", crate::core::Event::Update {
+            update: serde_json::json!({"sessionUpdate":"user_message_chunk", "content":{"type":"text", "text":"generate"}}),
+        });
+        hub.set_agent_session_id("s", "native-original".into());
+        supervisor.start_registered_session("s").unwrap();
+        assert!(runtime.pending_for_test().iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session }
+                if session.agent_session_id.as_deref() == Some("native-original")
+        )));
     }
 
     #[tokio::test]
