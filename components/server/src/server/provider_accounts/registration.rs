@@ -19,11 +19,21 @@ pub(in crate::server) async fn generation(
         );
     }
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
-    let (operation, completion) = store
+    let Some((operation, completion)) = store
         .native_login_for_session(owner, account, machine)
         .await
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| login_message("native_login_required"))?;
+    else {
+        let pending = store
+            .native_login_pending(owner, account, machine)
+            .await
+            .unwrap_or(false);
+        return Err(login_message(if pending {
+            "native_login_pending"
+        } else {
+            "native_login_required"
+        }));
+    };
     store
         .with_native_login_binding(owner, &operation, &completion, || {
             resolve_provider_generation_with_auth(
@@ -44,6 +54,9 @@ fn login_message(code: &str) -> String {
     match code {
         "native_login_required" => {
             "This subscription is not signed in on the selected Machine. Sign in from Settings → Subscriptions.".into()
+        }
+        "native_login_pending" => {
+            "A newer sign-in for this subscription has not finished on the selected Machine. Finish or cancel it in Settings → Subscriptions.".into()
         }
         "native_provider_generation_mismatch" => {
             "The Provider was updated on the selected Machine after this subscription signed in. Sign in again from Settings → Subscriptions.".into()
@@ -136,6 +149,7 @@ mod tests {
     fn login_refusals_tell_people_how_to_recover() {
         for code in [
             "native_login_required",
+            "native_login_pending",
             "native_provider_generation_mismatch",
         ] {
             let message = super::login_message(code);

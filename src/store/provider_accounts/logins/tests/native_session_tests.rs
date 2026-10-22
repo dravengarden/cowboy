@@ -215,7 +215,22 @@ async fn abandoned_replacement_falls_back(
     input: &crate::store::provider_accounts::logins::Request,
 ) {
     // A cancelled replacement that never completed falls back to the previous
-    // working login, for discovery and for locked new-session admission.
+    // working login, for discovery, the login list and locked admission.
+    assert!(
+        !store
+            .native_login_pending("login-owner", &input.account_id, &input.machine_id)
+            .await
+            .unwrap()
+    );
+    let listed = store
+        .native_login_receipts("login-owner", &input.account_id, "", 10)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].native_generation,
+        Some(completion.profile.generation)
+    );
     assert_eq!(
         store
             .native_login_for_session("login-owner", &input.account_id, &input.machine_id)
@@ -237,6 +252,18 @@ async fn abandoned_replacement_falls_back(
             .is_none(),
         "a pending replacement never falls back"
     );
+    assert!(
+        store
+            .native_login_pending("login-owner", &input.account_id, &input.machine_id)
+            .await
+            .unwrap(),
+        "an unfinished replacement is reported as pending, not as signed out"
+    );
+    let listed = store
+        .native_login_receipts("login-owner", &input.account_id, "", 10)
+        .await
+        .unwrap();
+    assert!(listed[0].native_generation > Some(completion.profile.generation));
     let mut blocked = meta.clone();
     blocked.id = "pending-replacement-new-session".into();
     assert!(

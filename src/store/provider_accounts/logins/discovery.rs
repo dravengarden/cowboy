@@ -1,4 +1,4 @@
-//! Bounded owner/account discovery of the latest native login on each Machine.
+//! Bounded owner/account discovery of the effective native login on each Machine.
 use super::{ProviderAccountId, Receipt, Result, StorageBackend, Store};
 use anyhow::ensure;
 
@@ -54,7 +54,8 @@ impl Store {
             ),
         };
         let mut seen = std::collections::BTreeSet::new();
-        rows.into_iter()
+        let latest = rows
+            .into_iter()
             .map(|(machine, generation, value)| {
                 let receipt: Receipt = serde_json::from_str(&value)?;
                 ensure!(
@@ -66,6 +67,37 @@ impl Store {
                 );
                 Ok(receipt)
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        if !latest.iter().any(super::native_selection::abandoned) {
+            return Ok(latest);
+        }
+        // Show the login that actually admits sessions: an abandoned newer
+        // attempt never replaces the previous working one in this list.
+        let receipts = self.owner_login_receipts(owner).await?;
+        Ok(latest
+            .into_iter()
+            .map(|receipt| {
+                let Some(generation) = receipt
+                    .native_generation
+                    .filter(|_| super::native_selection::abandoned(&receipt))
+                else {
+                    return receipt;
+                };
+                let machine = &receipt.input.machine_id;
+                let effective = super::native_selection::effective_generation(
+                    &receipts, account, machine, generation,
+                );
+                receipts
+                    .iter()
+                    .find(|candidate| {
+                        &candidate.input.account_id == account
+                            && &candidate.input.machine_id == machine
+                            && candidate.native_generation == Some(effective)
+                            && !super::native_selection::abandoned(candidate)
+                    })
+                    .cloned()
+                    .unwrap_or(receipt)
+            })
+            .collect())
     }
 }

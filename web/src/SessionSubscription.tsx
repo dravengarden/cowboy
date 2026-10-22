@@ -17,6 +17,7 @@ export function providerSubscriptionEnabled(data: { session_admission: string; s
 const LOGIN_REASONS: Record<string, string> = {
   native_login_outdated: "Sign in again: the Provider was updated",
   native_login_required: "Not signed in on a Machine",
+  native_login_pending: "Sign-in not finished: finish or cancel it",
 };
 export function subscriptionLoginReason(
   observations: readonly { account_id: string; provider_id: string; reason?: string }[],

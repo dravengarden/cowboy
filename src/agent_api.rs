@@ -115,7 +115,7 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
 // Readiness is a snapshot, not permission or proof of login; start rechecks admission.
-// Read: accounts.logins(account_id,{after_machine?,limit?}) -> latest login per Machine,
+// Read: accounts.logins(account_id,{after_machine?,limit?}) -> effective login per Machine,
 // ordered by machine_id; default20/max50, next_after_machine continues. Local metadata only.
 // Read: accounts.login_status(account_id,request_id) observes an existing owner-scoped login,
 // including UI/CLI/other-session logins; may reconcile its pending native completion.

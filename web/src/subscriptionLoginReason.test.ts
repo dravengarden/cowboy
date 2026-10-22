@@ -15,6 +15,11 @@ test("only definite sign-in states disable a subscription choice", () => {
       reason: "native_login_required",
     },
     {
+      account_id: "pika",
+      provider_id: "claude-code",
+      reason: "native_login_pending",
+    },
+    {
       account_id: "fox",
       provider_id: "claude-code",
       reason: "machine_unavailable",
@@ -28,6 +33,10 @@ test("only definite sign-in states disable a subscription choice", () => {
   assertEquals(
     subscriptionLoginReason(observations, "claude-code", "otter"),
     "Not signed in on a Machine",
+  );
+  assertEquals(
+    subscriptionLoginReason(observations, "claude-code", "pika"),
+    "Sign-in not finished: finish or cancel it",
   );
   // Transient Machine state and healthy logins stay selectable.
   assertEquals(
