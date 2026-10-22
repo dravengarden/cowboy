@@ -62,6 +62,12 @@ routinely breaks another.
   a disposable context over the loopback DevTools bridge, and
   `just desktop-keyboard-acceptance <endpoint> <dir>` drives Desktop keys as
   trusted input with screenshots. CDP IME composition is not OS IME acceptance.
+- Never test, profile or reproduce against production in a signed-in browser
+  profile: its login needs a human Cardea/Passkey approval. Use `just dev`
+  (product login off) with `just dev-web`, or a fixture suite, in an
+  anonymous or disposable Chrome context. Real-user behaviour comes from the
+  `cowboy-web` client events in VictoriaLogs (for example per-surface
+  `transcript_sync_completed` rates).
 - Desktop keyboard, leader, label, modal or Draft-page changes must pass
   `just desktop-browser-gate` (pinned Firefox and Chromium in both themes, then
   trusted-input acceptance with screenshots on hawk Chrome). Exit code 3 means

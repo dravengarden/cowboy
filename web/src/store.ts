@@ -2928,6 +2928,7 @@ function schedulePrefetch(): void {
     // Leave one MRU slot for the opened session; it is also pinned against
     // eviction, because prefetch rounds keep touching new ids over time.
     limit: TRANSCRIPT_SESSION_CACHE_LIMIT - 1,
+    capacity: TRANSCRIPT_SESSION_CACHE_LIMIT,
   }));
 }
 

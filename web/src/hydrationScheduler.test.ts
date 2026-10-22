@@ -49,6 +49,47 @@ test("candidates are capped and never name a session the Hub no longer lists", (
   );
 });
 
+test("prefetch only fills free cache slots and never evicts a cached transcript", () => {
+  // Eight busy sessions, six slots, one opened: the cache is already full of
+  // hydrated transcripts, so no busy session may push another one out.
+  const busy = ["a", "b", "c", "d", "e", "f", "g", "h"].map((id) => session(id, "busy"));
+  assertEquals(
+    prefetchCandidates({
+      sessions: busy,
+      activeId: "a",
+      recent: ["b", "c", "d", "e", "f", "a"],
+      hydrated: new Set(["a", "b", "c", "d", "e", "f"]),
+      limit: 5,
+      capacity: 6,
+    }),
+    [],
+  );
+  // Two free slots, one of them held for the not-yet-touched opened session.
+  assertEquals(
+    prefetchCandidates({
+      sessions: busy,
+      activeId: "a",
+      recent: ["b", "c", "d", "e"],
+      hydrated: new Set(["b", "c", "d", "e"]),
+      limit: 5,
+      capacity: 6,
+    }),
+    ["f"],
+  );
+  // A cached entry whose fetch failed retries in its own slot.
+  assertEquals(
+    prefetchCandidates({
+      sessions: busy,
+      activeId: "a",
+      recent: ["b", "c", "d", "e", "f", "a"],
+      hydrated: new Set(["a", "b", "c", "d", "e"]),
+      limit: 5,
+      capacity: 6,
+    }),
+    ["f"],
+  );
+});
+
 test("the runner bounds concurrency, dedupes in-flight work and preempts on cancel", async () => {
   const started: string[] = [];
   const aborted: string[] = [];
