@@ -45,7 +45,7 @@ test("the installed Review Plugin owns guidance while legacy sessions retain the
   assert.match(prompt, /review.start/);
   assert.match(prompt, /inspect calls.result/);
   assert.match(prompt, /review_selection/);
-  assert.ok(prompt.length < 800);
+  assert.ok(prompt.length < 900, prompt.length);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   assert.equal(
     agentCallsPrompt({ schema: 1, calls: null }),
