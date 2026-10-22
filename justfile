@@ -86,6 +86,15 @@ desktop-keyboard-acceptance ENDPOINT OUT:
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" tabs
     bun tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
+# Desktop performance profile under a production-sized synthetic workload
+# (250 sessions, 8 busy, live stream, status churn, switches, typing) in a
+# running Chrome's disposable context. Prints frame/long-task measurements and
+# the hottest functions per scenario and writes .cpuprofile files to OUT.
+# Never profile production in a signed-in profile. PERF_SCENARIOS and
+# PERF_THEME=dark narrow a run; DATA optionally replaces the transcripts.
+desktop-perf-profile ENDPOINT="http://127.0.0.1:9222" OUT="/tmp/cowboy-desktop-perf" *DATA:
+    bun tools/desktop-perf-profile.ts "{{ENDPOINT}}" "{{OUT}}" {{DATA}}
+
 idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
 

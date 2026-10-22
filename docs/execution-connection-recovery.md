@@ -461,6 +461,29 @@ The reboot fixture covers both a cold agent and an idle agent that remains on
 the runtime host while only the target keeper is lost. Automatic replacement
 also preserves the user's queue pause setting.
 
+### A turn in progress when the target reboots
+
+Recovery waits for an idle session, so an agent that was mid-turn kept calling
+the dead keeper: every later tool call of that turn failed and the agent
+retried until it gave up. When a forwarded call returns `EnvironmentLost` for a
+busy session, the Controller asks the target to prove the loss again through
+the read-only `Describe` (a contract-read failure alone is not proof), checks
+that the session is still busy on exactly that binding after the await, and
+then cancels the turn once per lost incarnation. The turn ends as an ordinary
+cancelled turn; the next prompt's preflight recreates the lifetime. The cancel
+deliberately sets no Interrupted status: that would clear live background-task
+evidence, could release a newer prompt's in-flight guard and blocks managed
+child hibernation.
+
+A 2026-10-22 production drill on a temporary OVH-runtime/Hawk-execution Claude
+session stopped the target keeper during `sleep 40` with the agent told to
+retry up to ten times. Before the change, every retry failed (a blocked
+`PreToolUse` hook after the first unknown result). After Controller `ad39be94`
+the interrupted call failed once, the turn ended `Cancelled` about a second
+later, and the next prompt ran on a fresh keeper in 21 seconds. The same drill
+confirmed idle keeper loss and SIGKILL of the whole OVH worker unit (idle or
+mid-turn) recover on the next prompt with native history intact.
+
 A live agent may reuse a readiness result tied to the exact binding and the
 current authenticated target connection. Reconnecting the Machine invalidates
 it even if an epoch string is reused. A terminal `EnvironmentLost` reply also

@@ -377,6 +377,7 @@ struct AppState {
     project_placement: crate::project_placement::Store,
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
     execution_readiness: execution::recovery::Readiness,
+    lost_turns: execution::recovery::LostTurns,
     execution_closures:
         Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
     managed_calls: Arc<managed_calls::Coordinator>,
@@ -1922,6 +1923,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         )?,
         execution_preparations: parking_lot::Mutex::default(),
         execution_readiness: Default::default(),
+        lost_turns: Default::default(),
         execution_closures: Arc::default(),
         managed_calls: Arc::default(),
         colocated_machines: args.colocated_machines.iter().cloned().collect(),

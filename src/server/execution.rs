@@ -19,7 +19,7 @@ pub(super) enum Maintenance {
 }
 
 pub(super) async fn forward(
-    state: &AppState,
+    state: &std::sync::Arc<AppState>,
     connection: &ConnectionToken,
     runtime_machine: &str,
     request: RuntimeRequest,
@@ -35,6 +35,12 @@ pub(super) async fn forward(
         state
             .execution_readiness
             .forget(&request.session_id, &request.binding);
+        recovery::end_turn_for_lost_environment(
+            state,
+            runtime_machine,
+            &request.session_id,
+            &request.binding,
+        );
     }
     observe_slow_forward(&request, started.elapsed());
     RuntimeReply {

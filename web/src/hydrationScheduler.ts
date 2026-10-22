@@ -18,15 +18,30 @@ export interface PrefetchCandidateInput {
   readonly hydrated: ReadonlySet<string>;
   /** Upper bound so prefetches never evict the active session from the MRU. */
   readonly limit: number;
+  /** Total transcript cache slots. A prefetch is speculative: it may only
+   * fill free slots, never evict a cached transcript. Otherwise more busy
+   * sessions than slots evict each other on every `sessions` broadcast and
+   * refetch full bootstraps forever. Omitted means unbounded. */
+  readonly capacity?: number;
 }
 
 /** Sessions worth fetching now, in priority order, capped at `limit`. */
 export function prefetchCandidates(input: PrefetchCandidateInput): string[] {
   const listed = new Set(input.sessions.map((session) => session.id));
+  const cached = new Set(input.recent);
+  // The opened session keeps a slot even before its own bootstrap touches it.
+  let free = input.capacity === undefined ? Infinity : input.capacity - cached.size -
+    (input.activeId !== undefined && !cached.has(input.activeId) ? 1 : 0);
   const out: string[] = [];
   const push = (id: string): void => {
     if (id === input.activeId || input.hydrated.has(id) || !listed.has(id)) return;
-    if (!out.includes(id)) out.push(id);
+    if (out.includes(id)) return;
+    // An already cached (but unhydrated) entry reuses its own slot.
+    if (!cached.has(id)) {
+      if (free <= 0) return;
+      free -= 1;
+    }
+    out.push(id);
   };
   for (const session of input.sessions) {
     if (session.status === "busy") push(session.id);

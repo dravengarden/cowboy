@@ -62,6 +62,18 @@ routinely breaks another.
   a disposable context over the loopback DevTools bridge, and
   `just desktop-keyboard-acceptance <endpoint> <dir>` drives Desktop keys as
   trusted input with screenshots. CDP IME composition is not OS IME acceptance.
+- Never test, profile or reproduce against production in a signed-in browser
+  profile: its login needs a human Cardea/Passkey approval. Use `just dev`
+  (product login off) with `just dev-web`, or a fixture suite, in an
+  anonymous or disposable Chrome context. Real-user behaviour comes from the
+  `cowboy-web` client events in VictoriaLogs (for example per-surface
+  `transcript_sync_completed` rates). For Desktop performance, run
+  `just desktop-perf-profile` before and after a change that touches the
+  Sessions list, store fan-out, Transcript or Markdown rendering, and compare
+  the long-task totals per scenario. A `sessions` frame must not re-render
+  unchanged rows (`sessionIdentity.ts`, `SessionRowMemo`; time-relative row
+  content keeps its own clock), and highlighted code keeps the cached
+  renderer (`syntaxRenderer.ts`), never the library's per-token default.
 - Desktop keyboard, leader, label, modal or Draft-page changes must pass
   `just desktop-browser-gate` (pinned Firefox and Chromium in both themes, then
   trusted-input acceptance with screenshots on hawk Chrome). Exit code 3 means

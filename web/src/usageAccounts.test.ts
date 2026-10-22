@@ -153,3 +153,11 @@ test("default changes never rebind Service data; legacy orders group accounts an
   assertEquals(orderUsageAccounts(cards, ["anthropic", "openai"]).map((c) => c.id), ["anthropic", "otter", "openai"]);
   assertEquals(orderUsageAccounts(cards, ["openai", "otter", "anthropic"]).map((c) => c.id), ["openai", "otter", "anthropic"]);
 });
+test("a login made before a Provider update asks to sign in again", () => {
+  setup();
+  const stale = { account_id: "otter", provider_id: "claude-code", refreshing: false, usage: null,
+    reason: "native_login_outdated", message: "The Provider was updated after this account signed in." };
+  const cards = registeredUsageAccounts(snapshot, registry, [], [stale]);
+  assertEquals(cards[1].statusLabel, "SIGN IN AGAIN");
+  assertEquals(cards[1].emptyMessage, stale.message);
+});

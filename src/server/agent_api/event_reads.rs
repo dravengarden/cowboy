@@ -232,11 +232,14 @@ mod tests {
         let attachment = select(&value, &json!({"path":"/update/content/1/uri"})).unwrap();
         assert_eq!(attachment["data"], "cowboy-attachment://sha256");
         assert_eq!(attachment["range"]["next"], Value::Null);
-        for args in [
-            json!({"path":"bad"}),
-            json!({"path":"/bad~2"}),
-            json!({"path":0}),
-        ] {
+        let relative = select(&value, &json!({"path":"update/content/1/uri"})).unwrap();
+        assert_eq!(relative["path"], "/update/content/1/uri");
+        assert_eq!(relative["data"], "cowboy-attachment://sha256");
+        assert_eq!(
+            select(&value, &json!({"path":"bad"})),
+            Err("not_found".into())
+        );
+        for args in [json!({"path":"/bad~2"}), json!({"path":0})] {
             assert_eq!(select(&value, &args), Err("invalid_argument".into()));
         }
     }

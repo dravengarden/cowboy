@@ -682,6 +682,8 @@ fn operation_errors_keep_codes_and_split_details() {
             .unwrap()
             .contains("topics: session, sessions")
     );
+    let value = call_error("control.read", "{}", "selection_too_large".into());
+    assert!(value["message"].as_str().unwrap().contains("describe:true"));
     let long = format!("{{\"x\":\"{}\"}}", "é".repeat(1000));
     let value = call_error("sessions.info", &long, "invalid_argument".into());
     assert!(value["message"].as_str().unwrap().chars().count() < 420);

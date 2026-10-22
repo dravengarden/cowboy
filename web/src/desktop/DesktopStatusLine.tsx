@@ -251,10 +251,11 @@ export function DesktopStatusLine({
       `[data-desktop-region="${CSS.escape(focusedRegion)}"]`,
     )
     : null;
-  const itemCount = regionElement && regionElement.dataset.desktopNavigation !== "scroll"
-    ? [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
-      .filter((element) => element.offsetParent !== null).length
-    : 0;
+  // Only "is any item visible" matters; stop at the first instead of reading
+  // layout (`offsetParent`) for every row of a long list on each render.
+  const hasItems = regionElement !== null && regionElement.dataset.desktopNavigation !== "scroll" &&
+    [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
+      .some((element) => element.offsetParent !== null);
   const promptRegions = focusedPane === "prompt" &&
       focusedRegion?.startsWith("prompt.") === true &&
       focusedRegion !== "prompt.composer"
@@ -279,7 +280,7 @@ export function DesktopStatusLine({
     ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
-    ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && itemCount > 0
+    ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && hasItems
       ? [{ keys: DESKTOP_SHORTCUTS.switchSession, label: "Switch" }]
       : []),
     ...(regionElement?.dataset.desktopReorderable === "true" &&

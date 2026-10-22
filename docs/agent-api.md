@@ -191,7 +191,13 @@ The agent should end its turn instead of polling `calls.wait`, then read
 `calls.result`. The notice is sent by the Controller runner that observes the
 terminal transition; a Controller crash in that instant can lose it, so
 `calls.inspect` remains the authority. The option is opt-in: an agent that
-already polls would otherwise spend an extra turn. Each broker operation
+already polls would otherwise spend an extra turn. The CLI takes the same choice as
+`--notify` on `cowboy review` (which then returns right after admission) and
+on `cowboy codex`/`cowboy claude`; Review 1.0.6 guidance starts reviews this
+way because a shell command cannot outlive its tool timeout.
+
+Selection `path` values are JSON pointers; a missing leading slash
+(`"plugins"`, `"0"`) is read as the same pointer. Each broker operation
 rechecks the live parent and, for owned sessions, the active product account. A
 long-running read cannot continue using an owner snapshot after the parent
 closes or its account is disabled.
@@ -683,7 +689,11 @@ authentication contract and native identity recipe. Its auth generation comes
 from that Machine's native login, independently of the default account's Service
 authentication or replicated credentials. A Provider upgrade that no longer
 matches the login makes this readiness projection null; it never substitutes
-the default account.
+the default account. Account usage then reports `native_login_outdated`
+("sign in again") instead of `native_login_required`, and the login list marks
+that completed login `outdated` with its signed-in and installed Provider
+versions. Existing sessions keep their exact retained generation; a new login
+on the updated release is required for new sessions and usage.
 
 The internal native-session writer checks this binding and inserts the session
 in one transaction under the account admission lock. Concurrent revocation

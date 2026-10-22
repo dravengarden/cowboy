@@ -173,6 +173,7 @@ import {
   TRANSCRIPT_SESSION_CACHE_LIMIT,
 } from "./transcriptSessionCache";
 import { createPrefetchRunner, prefetchCandidates } from "./hydrationScheduler";
+import { reuseUnchangedSessions } from "./sessionIdentity";
 import {
   announceProductAuthSession,
   PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
@@ -2938,6 +2939,7 @@ function schedulePrefetch(): void {
     // Leave one MRU slot for the opened session; it is also pinned against
     // eviction, because prefetch rounds keep touching new ids over time.
     limit: TRANSCRIPT_SESSION_CACHE_LIMIT - 1,
+    capacity: TRANSCRIPT_SESSION_CACHE_LIMIT,
   }));
 }
 
@@ -3582,10 +3584,10 @@ function commitSessions(): void {
   );
   setState({
     ...state,
-    sessions: live,
+    sessions: reuseUnchangedSessions(state.sessions, live),
     trashedSessions: trashed.length === 0 && state.trashedSessions.length === 0
       ? state.trashedSessions
-      : trashed,
+      : reuseUnchangedSessions(state.trashedSessions, trashed),
     titleOverrides: titles,
     sessionFolders: liveFolders(folders),
     trashFolders: folders,
