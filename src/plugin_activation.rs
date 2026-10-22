@@ -16,7 +16,7 @@ const MAX_CONFIG_BYTES: u64 = 128 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HostSourcePolicy {
+pub enum HostSourcePolicy {
     #[default]
     Bootstrap,
     CatalogOnly,
@@ -24,7 +24,7 @@ pub(crate) enum HostSourcePolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct HostReleasePin {
+pub struct HostReleasePin {
     pub plugin_id: String,
     pub plugin_version: String,
     pub artifact_digest: String,
@@ -66,7 +66,7 @@ struct HostActivationDocument {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct HostActivationPolicy {
+pub struct HostActivationPolicy {
     pub source: HostSourcePolicy,
     pins: BTreeMap<String, HostReleasePin>,
     required_bundles: BTreeSet<String>,
@@ -77,7 +77,7 @@ pub(crate) struct HostActivationPolicy {
 
 /// A read-only check receipt, never an activation or database readiness claim.
 #[derive(Debug, Serialize)]
-pub(crate) struct HostPreflightReport {
+pub struct HostPreflightReport {
     schema: &'static str,
     status: &'static str,
     source_policy: HostSourcePolicy,
@@ -89,7 +89,7 @@ pub(crate) struct HostPreflightReport {
     core_security: Option<crate::core_security::PasskeyConfig>,
     catalog_defaults: Vec<HostPreflightDefault>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) telemetry: Option<crate::telemetry_plugin::controller_policy::PreflightReport>,
+    pub telemetry: Option<crate::telemetry_plugin::controller_policy::PreflightReport>,
     not_checked: [&'static str; 5],
 }
 
@@ -101,7 +101,7 @@ struct HostPreflightDefault {
 
 /// Shared by the read-only CLI check and actual startup, before any Service
 /// identity, cache, database, host generation or authority marker is created.
-pub(crate) fn prepare_controller_hosts(
+pub fn prepare_controller_hosts(
     args: &crate::cli::ServeArgs,
 ) -> Result<(
     PluginCatalog,
@@ -164,7 +164,7 @@ pub(crate) fn prepare_controller_hosts(
     Ok((catalog, authentication, core_security))
 }
 
-pub(crate) fn load_legacy_oidc_provider(
+pub fn load_legacy_oidc_provider(
     enabled: bool,
     path: Option<&Path>,
 ) -> Result<Option<std::sync::Arc<crate::oidc::OidcProvider>>> {
@@ -178,7 +178,7 @@ pub(crate) fn load_legacy_oidc_provider(
 }
 
 impl HostActivationPolicy {
-    pub(crate) fn load(path: Option<&Path>) -> Result<Self> {
+    pub fn load(path: Option<&Path>) -> Result<Self> {
         let Some(path) = path else {
             return Ok(Self::default());
         };
@@ -237,7 +237,7 @@ impl HostActivationPolicy {
     }
 
     /// Merge the exact OIDC driver selection, rejecting a conflicting host pin.
-    pub(crate) fn pin(&mut self, pin: HostReleasePin, require_bundle: bool) -> Result<()> {
+    pub fn pin(&mut self, pin: HostReleasePin, require_bundle: bool) -> Result<()> {
         pin.validate()?;
         if let Some(existing) = self.pins.get(&pin.plugin_id) {
             ensure!(
@@ -253,11 +253,11 @@ impl HostActivationPolicy {
         Ok(())
     }
 
-    pub(crate) fn strict_activation(&self) -> bool {
+    pub fn strict_activation(&self) -> bool {
         self.source == HostSourcePolicy::CatalogOnly || !self.pins.is_empty()
     }
 
-    pub(crate) fn report(
+    pub fn report(
         &self,
         releases: &[CatalogHostRelease],
         catalog_only_recorded: bool,
@@ -304,11 +304,11 @@ impl HostActivationPolicy {
     /// Pure preflight: selects defaults and rejects incomplete candidates before
     /// staging, authority-marker writes, or any storage migration can run.
     /// Exact release digests this policy selects; Catalog retention keeps them.
-    pub(crate) fn pinned_artifact_digests(&self) -> impl Iterator<Item = &str> {
+    pub fn pinned_artifact_digests(&self) -> impl Iterator<Item = &str> {
         self.pins.values().map(|pin| pin.artifact_digest.as_str())
     }
 
-    pub(crate) fn select(&self, releases: &mut [CatalogHostRelease]) -> Result<()> {
+    pub fn select(&self, releases: &mut [CatalogHostRelease]) -> Result<()> {
         for pin in self.pins.values() {
             ensure!(
                 self.core_security

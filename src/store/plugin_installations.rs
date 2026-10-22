@@ -129,7 +129,7 @@ macro_rules! dispatch {
 }
 
 impl Store {
-    pub(crate) async fn plugin_install_staging_resolution(
+    pub async fn plugin_install_staging_resolution(
         &self,
         operation: &str,
     ) -> Result<Option<InstallStagingResolutionReceipt>> {
@@ -139,7 +139,7 @@ impl Store {
     /// Commit a separately authorized conclusion that one exact Machine
     /// attempt failed while still in content-addressed staging. The original
     /// operation and receipt remain unchanged for audit and deduplication.
-    pub(crate) async fn resolve_plugin_install_staging(
+    pub async fn resolve_plugin_install_staging(
         &self,
         permit: &InstallStagingResolutionPermit,
         before: &InstallOperation,
@@ -163,7 +163,7 @@ impl Store {
 
     /// Original forward observation only. Historical recovery needs a fresh,
     /// independent operation; this cannot overwrite terminal/uncertain state.
-    pub(crate) async fn record_plugin_install_receipt(
+    pub async fn record_plugin_install_receipt(
         &self,
         intent: &InstallIntent,
         receipt: &InstallReceipt,
@@ -188,7 +188,7 @@ impl Store {
     /// that snapshot under the journal lock before accepting a terminal receipt.
     /// This never recreates the original installation authority or dispatches a
     /// Machine effect.
-    pub(crate) async fn reconcile_plugin_install_receipt(
+    pub async fn reconcile_plugin_install_receipt(
         &self,
         before: &InstallOperation,
         receipt: &InstallReceipt,
@@ -252,7 +252,7 @@ impl Store {
         )
     }
 
-    pub(crate) async fn begin_plugin_install(&self, intent: &InstallIntent) -> Result<()> {
+    pub async fn begin_plugin_install(&self, intent: &InstallIntent) -> Result<()> {
         intent.validate()?;
         let document = serde_json::to_string(intent)?;
         ensure!(
@@ -262,14 +262,11 @@ impl Store {
         dispatch!(self, begin_plugin_install(intent, &document))
     }
 
-    pub(crate) async fn plugin_install_operation(
-        &self,
-        id: &str,
-    ) -> Result<Option<InstallOperation>> {
+    pub async fn plugin_install_operation(&self, id: &str) -> Result<Option<InstallOperation>> {
         dispatch!(self, plugin_install_operation(id))
     }
 
-    pub(crate) async fn plugin_install_history(
+    pub async fn plugin_install_history(
         &self,
         service: &str,
         machine: &str,
@@ -278,7 +275,7 @@ impl Store {
         dispatch!(self, plugin_install_history(service, machine, plugin))
     }
 
-    pub(crate) async fn advance_plugin_install(
+    pub async fn advance_plugin_install(
         &self,
         intent: &InstallIntent,
         from: InstallPhase,
@@ -300,10 +297,7 @@ impl Store {
 
     /// Startup only: no Machine commands or authentication writes. Each
     /// interrupted phase becomes fenced evidence, never a renewed grant.
-    pub(crate) async fn recover_plugin_installs(
-        &self,
-        service: &str,
-    ) -> Result<Vec<InstallOperation>> {
+    pub async fn recover_plugin_installs(&self, service: &str) -> Result<Vec<InstallOperation>> {
         dispatch!(self, recover_plugin_installs(service))
     }
 }

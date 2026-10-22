@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Revocation {
+pub enum Revocation {
     Applied {
         generation: u64,
     },
@@ -17,7 +17,7 @@ pub(crate) enum Revocation {
 impl ProviderAuthService {
     /// Revocation recovery may observe an already authenticated empty vault
     /// after a lost database commit. This does not claim a new write occurred.
-    pub(crate) fn discard_revoking_grant(&self, receipt: &Receipt) -> Result<bool> {
+    pub fn discard_revoking_grant(&self, receipt: &Receipt) -> Result<bool> {
         if self.discard_cancelled_grant(receipt)? {
             return Ok(true);
         }
@@ -43,7 +43,7 @@ impl ProviderAuthService {
 
     /// Seal only an authenticated tombstone for this historical recipient.
     /// Caller must separately admit the current account and Machine enrollment.
-    pub(crate) fn seal_revoked_grant(
+    pub fn seal_revoked_grant(
         &self,
         receipt: &Receipt,
         recipient: &str,
@@ -88,7 +88,7 @@ impl ProviderAuthService {
 
     /// Lookup a historical local recipient even if its Machine was re-enrolled
     /// or revoked. This never creates a vault or authorizes remote delivery.
-    pub(crate) fn existing_revocation_grant(&self, receipt: &Receipt) -> Result<Arc<Self>> {
+    pub fn existing_revocation_grant(&self, receipt: &Receipt) -> Result<Arc<Self>> {
         ensure!(
             self.account_id.is_default() && !receipt.account_id.is_default(),
             "named account lookup requires the root vault"
@@ -111,7 +111,7 @@ impl ProviderAuthService {
         Ok(grant)
     }
 
-    pub(crate) fn revoke_committed_grant(&self, receipt: &Receipt) -> Result<Revocation> {
+    pub fn revoke_committed_grant(&self, receipt: &Receipt) -> Result<Revocation> {
         let Phase::Committed { generation } = receipt.phase else {
             anyhow::bail!("Provider grant is not committed");
         };

@@ -11,10 +11,10 @@ use std::sync::{
 };
 
 #[cfg(feature = "machine-host")]
-pub(crate) const MACHINE_POLICY_FILE: &str = "telemetry-writer-policy.json";
+pub const MACHINE_POLICY_FILE: &str = "telemetry-writer-policy.json";
 
 #[cfg(feature = "machine-host")]
-pub(crate) mod preflight;
+pub mod preflight;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,13 +52,13 @@ impl<'de> Deserialize<'de> for FenceAcknowledgment {
 mod sealed {
     pub trait Sealed {}
 }
-pub(crate) trait Purpose: sealed::Sealed + Send + Sync {
+pub trait Purpose: sealed::Sealed + Send + Sync {
     const INDEX: usize;
 }
-pub(crate) struct BindingWrites;
-pub(crate) struct MachineRecovery;
+pub struct BindingWrites;
+pub struct MachineRecovery;
 #[cfg_attr(not(feature = "full"), allow(dead_code))]
-pub(crate) struct ServiceResolution;
+pub struct ServiceResolution;
 impl sealed::Sealed for BindingWrites {}
 impl sealed::Sealed for MachineRecovery {}
 impl sealed::Sealed for ServiceResolution {}
@@ -72,7 +72,7 @@ impl Purpose for ServiceResolution {
     const INDEX: usize = 2;
 }
 
-pub(crate) struct WriterAdmission {
+pub struct WriterAdmission {
     path: PathBuf,
     config: Configuration,
     snapshot: PrivateSnapshot,
@@ -80,7 +80,7 @@ pub(crate) struct WriterAdmission {
 }
 
 impl WriterAdmission {
-    pub(crate) fn load(path: &Path) -> Result<Arc<Self>> {
+    pub fn load(path: &Path) -> Result<Arc<Self>> {
         ensure!(
             path.is_absolute(),
             "telemetry writer policy must be absolute"
@@ -106,7 +106,7 @@ impl WriterAdmission {
     }
 
     #[cfg(feature = "machine-host")]
-    pub(crate) fn load_optional(path: &Path) -> Result<Option<Arc<Self>>> {
+    pub fn load_optional(path: &Path) -> Result<Option<Arc<Self>>> {
         // Only actual absence is optional. A symlink, corrupt policy or access
         // failure is not silently treated as a missing host instruction.
         match std::fs::symlink_metadata(path) {
@@ -116,15 +116,15 @@ impl WriterAdmission {
         }
     }
 
-    pub(crate) fn owns_service(&self, service: &str) -> bool {
+    pub fn owns_service(&self, service: &str) -> bool {
         self.config.service_id == service
     }
 
-    pub(crate) fn target_matches(&self, machine: &str) -> bool {
+    pub fn target_matches(&self, machine: &str) -> bool {
         self.config.machine_id == machine
     }
 
-    pub(crate) fn allows<P: Purpose>(&self, service: &str, machine: Option<&str>) -> bool {
+    pub fn allows<P: Purpose>(&self, service: &str, machine: Option<&str>) -> bool {
         self.owns_service(service)
             && machine.is_none_or(|m| self.target_matches(m))
             && [
@@ -145,7 +145,7 @@ impl WriterAdmission {
         valid
     }
 
-    pub(crate) fn scope<P: Purpose>(
+    pub fn scope<P: Purpose>(
         self: &Arc<Self>,
         service: &str,
         machine: &str,
@@ -160,37 +160,37 @@ impl WriterAdmission {
 
 enum ScopeOwner {
     Policy(Arc<WriterAdmission>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Fixture,
 }
 
 // Intentionally not Clone, Debug, Serialize or Deserialize. It never renews the
 // separately required original Operator/connection/monotonic execution budget.
-pub(crate) struct WriteScope<P: Purpose> {
+pub struct WriteScope<P: Purpose> {
     owner: ScopeOwner,
     purpose: PhantomData<P>,
 }
 impl<P: Purpose> WriteScope<P> {
     #[cfg(feature = "full")]
-    pub(crate) fn check_for(&self, service: &str, machine: &str) -> bool {
+    pub fn check_for(&self, service: &str, machine: &str) -> bool {
         match &self.owner {
             ScopeOwner::Policy(policy) => policy.allows::<P>(service, Some(machine)),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ScopeOwner::Fixture => true,
         }
     }
 
-    #[cfg(any(test, feature = "machine-host"))]
-    pub(crate) fn check(&self) -> bool {
+    #[cfg(any(test, feature = "machine-host", feature = "test-support"))]
+    pub fn check(&self) -> bool {
         match &self.owner {
             ScopeOwner::Policy(policy) => policy.current(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ScopeOwner::Fixture => true,
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn fixture() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture() -> Self {
         Self {
             owner: ScopeOwner::Fixture,
             purpose: PhantomData,
@@ -198,5 +198,5 @@ impl<P: Purpose> WriteScope<P> {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;

@@ -5,9 +5,9 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 
-pub(crate) const NAME: &str = "portable-session-deletion-reader-floor.json";
+pub const NAME: &str = "portable-session-deletion-reader-floor.json";
 
-pub(crate) fn require_absent_for_install(state: &Path) -> Result<()> {
+pub fn require_absent_for_install(state: &Path) -> Result<()> {
     match std::fs::symlink_metadata(state.join(NAME)) {
         Ok(_) => bail!(
             "portable reader floor requires signed refresh with an authenticated selected host; bootstrap recovery remains closed"
@@ -18,7 +18,7 @@ pub(crate) fn require_absent_for_install(state: &Path) -> Result<()> {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) use record::{Floor, read, retain};
+pub use record::{Floor, read, retain};
 
 #[cfg(feature = "machine-host")]
 mod record {
@@ -38,20 +38,20 @@ mod record {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(crate) struct Floor {
+    pub struct Floor {
         schema: u32,
         state_dir: PathBuf,
         dataset: String,
         reader_schema: u32,
         publisher_key_sha256: String,
-        pub(crate) anchor_version: String,
-        pub(crate) anchor_digest: String,
-        pub(crate) anchor_generation: String,
-        pub(crate) anchor_proof_sha256: String,
+        pub anchor_version: String,
+        pub anchor_digest: String,
+        pub anchor_generation: String,
+        pub anchor_proof_sha256: String,
     }
 
     impl Floor {
-        pub(crate) fn new(
+        pub fn new(
             state: &Path,
             desired: &DesiredComponent,
             publisher: &str,
@@ -113,7 +113,7 @@ mod record {
             Ok(())
         }
 
-        pub(crate) fn check_publisher(&self, publisher: &str) -> Result<()> {
+        pub fn check_publisher(&self, publisher: &str) -> Result<()> {
             ensure!(
                 self.publisher_key_sha256 == publisher_digest(publisher)?,
                 "portable reader floor publisher differs from configured key"
@@ -121,7 +121,7 @@ mod record {
             Ok(())
         }
 
-        pub(crate) fn anchor_path(&self, root: &Path) -> PathBuf {
+        pub fn anchor_path(&self, root: &Path) -> PathBuf {
             root.join("payloads/machine_host")
                 .join(&self.anchor_version)
                 .join(&self.anchor_digest)
@@ -135,7 +135,7 @@ mod record {
         ))
     }
 
-    pub(crate) fn read(state: &Path) -> Result<Option<Floor>> {
+    pub fn read(state: &Path) -> Result<Option<Floor>> {
         read_inner(state).context("reading portable reader floor")
     }
 
@@ -188,7 +188,7 @@ mod record {
 
     // The first validated anchor wins. Never overwrite, repair, remove or
     // advance a committed floor; failures may leave a floor fencing selection.
-    pub(crate) fn retain(state: &Path, proposed: &Floor) -> Result<Floor> {
+    pub fn retain(state: &Path, proposed: &Floor) -> Result<Floor> {
         proposed.validate(state)?;
         if let Some(floor) = read(state)? {
             sync_floor(state)?;

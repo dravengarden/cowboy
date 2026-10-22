@@ -42,7 +42,7 @@ impl Bindings {
 }
 
 impl MachinePluginStore {
-    pub(crate) async fn telemetry_recovery_audit(
+    pub async fn telemetry_recovery_audit(
         &self,
         query: &RecoveryAuditQuery,
         service: Option<&str>,

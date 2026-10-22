@@ -4,7 +4,7 @@ use super::{ConnectionToken, LiveState, MachineControl};
 use crate::machine_protocol::telemetry_binding::BindingInstallation;
 use std::sync::Arc;
 
-pub(crate) struct TelemetryInstallationLease {
+pub struct TelemetryInstallationLease {
     connection: ConnectionToken,
     revision: Arc<()>,
     installation: BindingInstallation,
@@ -30,7 +30,7 @@ impl TelemetryInstallationLease {
 }
 
 impl MachineControl {
-    pub(crate) fn lease_telemetry_installation(
+    pub fn lease_telemetry_installation(
         &self,
         connection: &ConnectionToken,
         installation: &BindingInstallation,

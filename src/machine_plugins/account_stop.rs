@@ -4,9 +4,9 @@ use crate::provider_account::{ProviderAccountId, prepare_private_directory};
 use anyhow::{Result, ensure};
 use sha2::{Digest as _, Sha256};
 use std::{fs, path::PathBuf};
-pub(crate) mod transition;
+pub mod transition;
 mod worker_exit;
-pub(crate) use worker_exit::SystemdWorker;
+pub use worker_exit::SystemdWorker;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,7 +97,7 @@ fn decode_marker(bytes: &[u8]) -> Result<(String, ProviderAccountId, Option<Stri
 
 impl MachinePluginStore {
     /// Validate the complete recovery set before any process-stop effect.
-    pub(crate) fn account_stops(&self) -> Result<Vec<(String, ProviderAccountId)>> {
+    pub fn account_stops(&self) -> Result<Vec<(String, ProviderAccountId)>> {
         let root = self.account_stop_root();
         match fs::symlink_metadata(&root) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -133,11 +133,7 @@ impl MachinePluginStore {
         Ok(stops)
     }
 
-    pub(crate) fn account_stop_matches(
-        &self,
-        session: &str,
-        account: &ProviderAccountId,
-    ) -> Result<bool> {
+    pub fn account_stop_matches(&self, session: &str, account: &ProviderAccountId) -> Result<bool> {
         if !self.account_session_stopped(session)? {
             return Ok(false);
         }
@@ -150,7 +146,7 @@ impl MachinePluginStore {
         Ok(record_session == session && record_account == *account)
     }
 
-    pub(crate) fn account_stop_command(
+    pub fn account_stop_command(
         &self,
         session: &str,
         account: &ProviderAccountId,
@@ -171,7 +167,7 @@ impl MachinePluginStore {
 
     /// Any present marker (including damaged state) refuses admission. No
     /// account-bearing launch declaration is needed to fence a reconnecting peer.
-    pub(crate) fn account_session_stopped(&self, session: &str) -> Result<bool> {
+    pub fn account_session_stopped(&self, session: &str) -> Result<bool> {
         let root = self.account_stop_root();
         match fs::symlink_metadata(&root) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -209,16 +205,12 @@ impl MachinePluginStore {
 
     /// Persist intent before the broker reports or attempts a stop. Replays are
     /// idempotent; no operation here removes the fence or touches credentials.
-    #[cfg(test)]
-    pub(crate) fn stop_account_session(
-        &self,
-        session: &str,
-        account: &ProviderAccountId,
-    ) -> Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stop_account_session(&self, session: &str, account: &ProviderAccountId) -> Result<()> {
         self.persist_account_stop(session, account, None)
     }
 
-    pub(crate) fn stop_account_session_scoped(
+    pub fn stop_account_session_scoped(
         &self,
         session: &str,
         account: &ProviderAccountId,

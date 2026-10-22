@@ -6,32 +6,32 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 mod completion;
-pub(crate) mod discovery;
+pub mod discovery;
 mod grant_admission;
 #[cfg(test)]
-pub(crate) mod grant_tests;
-pub(crate) mod login_stops;
+pub mod grant_tests;
+pub mod login_stops;
 mod readiness;
-pub(crate) mod remote_wipes;
+pub mod remote_wipes;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum LocalWipe {
+pub enum LocalWipe {
     Wiped { generation: u64 },
     CancelledDiscarded,
 }
-pub(crate) mod stops;
+pub mod stops;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OperationTarget {
+pub struct OperationTarget {
     pub operation_id: String,
     pub machine_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SessionTarget {
+pub struct SessionTarget {
     pub session_id: String,
     /// Missing placement must be reconciled; it does not mean no worker exists.
     pub machine_id: Option<String>,
@@ -39,7 +39,7 @@ pub(crate) struct SessionTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Plan {
+pub struct Plan {
     pub logins: Vec<OperationTarget>,
     pub grants: Vec<OperationTarget>,
     pub sessions: Vec<SessionTarget>,

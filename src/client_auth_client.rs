@@ -27,10 +27,10 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const MAX_CREDENTIAL_BYTES: u64 = 64 * 1_024;
 
 #[derive(Clone)]
-pub(crate) struct ClientAuthentication(Arc<DeviceCredentialManager>);
+pub struct ClientAuthentication(Arc<DeviceCredentialManager>);
 
 #[derive(Debug, Clone)]
-pub(crate) struct ClientRequestAuthorization {
+pub struct ClientRequestAuthorization {
     pub bearer: Option<String>,
     pub proof_headers: Vec<(String, String)>,
 }
@@ -51,8 +51,8 @@ impl ClientRequestAuthorization {
 }
 
 impl ClientAuthentication {
-    #[cfg(test)]
-    pub(crate) fn fixture(base_url: Url) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture(base_url: Url) -> Self {
         let key = crate::client_auth::new_signing_key().unwrap();
         let mut manager = DeviceCredentialManager::new(
             base_url.clone(),
@@ -74,7 +74,7 @@ impl ClientAuthentication {
         }));
         Self(Arc::new(manager))
     }
-    pub(crate) fn new(
+    pub fn new(
         base_url: Url,
         legacy_token: Option<&str>,
         state_dir: Option<PathBuf>,
@@ -92,7 +92,7 @@ impl ClientAuthentication {
         )?)))
     }
 
-    pub(crate) async fn authorize(
+    pub async fn authorize(
         &self,
         method: &Method,
         path_and_query: &str,
@@ -105,19 +105,19 @@ impl ClientAuthentication {
 
     /// The browser approval this computer is waiting for, if any. A caller
     /// without a terminal (an editor that hides stderr) shows it to the user.
-    pub(crate) fn pending_approval(&self) -> Option<PendingApproval> {
+    pub fn pending_approval(&self) -> Option<PendingApproval> {
         self.0.pending_approval.lock().clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_pending_approval(&self, pending: Option<PendingApproval>) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_pending_approval(&self, pending: Option<PendingApproval>) {
         *self.0.pending_approval.lock() = pending;
     }
 
-    pub(crate) async fn ensure_login(&self) -> Result<()> {
+    pub async fn ensure_login(&self) -> Result<()> {
         self.0.ensure_login().await
     }
-    pub(crate) async fn ensure_cardea_login(&self, profile: &str) -> Result<()> {
+    pub async fn ensure_cardea_login(&self, profile: &str) -> Result<()> {
         ensure!(
             !profile.is_empty()
                 && profile.len() <= 64
@@ -183,13 +183,13 @@ struct StoredDeviceCredential {
 
 /// A device authorization waiting for the signed-in user's approval.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingApproval {
-    pub(crate) url: String,
-    pub(crate) fingerprint: String,
+pub struct PendingApproval {
+    pub url: String,
+    pub fingerprint: String,
 }
 
 #[derive(Debug)]
-pub(crate) struct DeviceCredentialManager {
+pub struct DeviceCredentialManager {
     base_url: Url,
     device_name: String,
     credential_path: PathBuf,
@@ -698,7 +698,7 @@ fn credential_access_is_usable(
         && rejected_access_token != Some(credential.access_token.as_str())
 }
 
-pub(crate) fn normalized_base_url(input: &str) -> Result<Url> {
+pub fn normalized_base_url(input: &str) -> Result<Url> {
     let mut url = Url::parse(input).with_context(|| format!("invalid Cowboy URL {input:?}"))?;
     validate_base_url(&url)?;
     url.set_query(None);
@@ -759,7 +759,7 @@ fn resolve_verification_url(base_url: &Url, advertised: &str) -> Result<Url> {
 
 /// Origins this computer holds a login for, so a client command needs no
 /// `--origin` when there is exactly one.
-pub(crate) fn logged_in_origins(state_dir: Option<PathBuf>) -> Result<Vec<String>> {
+pub fn logged_in_origins(state_dir: Option<PathBuf>) -> Result<Vec<String>> {
     let state_dir = state_dir.map_or_else(default_auth_state_dir, Ok)?;
     let entries = match std::fs::read_dir(&state_dir) {
         Ok(entries) => entries,

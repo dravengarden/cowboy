@@ -13,7 +13,7 @@ use anyhow::{Context as _, ensure};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::Command;
 
-pub(crate) const MAX_PLUGIN_COMMAND_INPUT_BYTES: usize = 1024 * 1024;
+pub const MAX_PLUGIN_COMMAND_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_PLUGIN_COMMAND_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_PLUGIN_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 const PLUGIN_COMMAND_TIMEOUT: Duration = Duration::from_secs(12);
@@ -21,13 +21,13 @@ static PLUGIN_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Own a freshly spawned process group across success, failure and future
 /// cancellation. The leader must be spawned with `process_group(0)`.
-pub(crate) struct PluginProcessGroup {
+pub struct PluginProcessGroup {
     process_id: u32,
     cgroup: Option<PathBuf>,
 }
 
 impl PluginProcessGroup {
-    pub(crate) fn new(process_id: u32) -> Self {
+    pub fn new(process_id: u32) -> Self {
         let owner = format!(
             "plugin-{}-{}",
             std::process::id(),
@@ -62,7 +62,7 @@ impl Drop for PluginProcessGroup {
 }
 
 #[cfg(unix)]
-pub(crate) fn owned_group_id(raw: u32) -> Option<rustix::process::Pid> {
+pub fn owned_group_id(raw: u32) -> Option<rustix::process::Pid> {
     // kill(-1, ...) means ALL permitted processes, not process group 1.
     // Zero would select our own group. Neither is ever an owned child group.
     (raw > 1)
@@ -75,22 +75,22 @@ pub(crate) fn owned_group_id(raw: u32) -> Option<rustix::process::Pid> {
 mod process_group_tests;
 
 #[derive(Debug)]
-pub(crate) struct PluginCommandOutput {
-    pub(crate) status: ExitStatus,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
+pub struct PluginCommandOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 #[derive(Debug)]
-pub(crate) struct PluginCommandFailure {
-    pub(crate) started: bool,
+pub struct PluginCommandFailure {
+    pub started: bool,
     #[allow(dead_code)]
-    pub(crate) timed_out: bool,
-    pub(crate) error: anyhow::Error,
+    pub timed_out: bool,
+    pub error: anyhow::Error,
 }
 
 #[cfg(feature = "full")]
-pub(crate) async fn run_plugin_command(
+pub async fn run_plugin_command(
     program: &str,
     args: &[String],
     input: &[u8],
@@ -101,7 +101,7 @@ pub(crate) async fn run_plugin_command(
 /// Run a signed Plugin command with a closed, caller-supplied environment.
 /// No ambient Machine or Controller variable is inherited.
 #[cfg(feature = "machine-host")]
-pub(crate) async fn run_plugin_command_with_environment(
+pub async fn run_plugin_command_with_environment(
     program: &str,
     args: &[String],
     input: &[u8],
@@ -120,7 +120,7 @@ pub(crate) async fn run_plugin_command_with_environment(
 /// Release admission authority only after spawn succeeded. Nothing awaits
 /// between command setup, spawn and this callback; failed spawns never admit.
 #[cfg(feature = "machine-host")]
-pub(crate) async fn run_plugin_command_with_environment_on_started(
+pub async fn run_plugin_command_with_environment_on_started(
     program: &str,
     args: &[String],
     input: &[u8],

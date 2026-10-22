@@ -4,19 +4,19 @@
 use super::*;
 
 #[derive(Clone, Default)]
-pub(crate) struct AuthWatchPlan {
+pub struct AuthWatchPlan {
     pub directories: BTreeSet<PathBuf>,
     files: BTreeSet<PathBuf>,
     discovery: BTreeSet<PathBuf>,
 }
 
 impl AuthWatchPlan {
-    pub(crate) fn discover(&mut self, directory: PathBuf) {
+    pub fn discover(&mut self, directory: PathBuf) {
         self.directories.insert(directory.clone());
         self.discovery.insert(directory);
     }
 
-    pub(crate) fn file(&mut self, root: &Path, file: PathBuf) {
+    pub fn file(&mut self, root: &Path, file: PathBuf) {
         let mut parent = file.parent();
         while let Some(path) = parent.filter(|path| path.starts_with(root)) {
             self.directories.insert(path.to_path_buf());

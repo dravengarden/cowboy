@@ -78,14 +78,14 @@ fn ended() -> CommandRequestError {
     }
 }
 
-pub(crate) struct ResolvedBinding {
+pub struct ResolvedBinding {
     step: BindingStep,
     connection: ConnectionToken,
     port: Option<ResolvedPort>,
 }
 
 impl ResolvedBinding {
-    pub(crate) fn resolve(
+    pub fn resolve(
         catalog: &PluginCatalog,
         control: &MachineControl,
         step: BindingStep,
@@ -113,19 +113,19 @@ impl ResolvedBinding {
         Ok(resolved)
     }
 
-    pub(crate) fn step(&self) -> &BindingStep {
+    pub fn step(&self) -> &BindingStep {
         &self.step
     }
 
-    pub(crate) fn connection(&self) -> &ConnectionToken {
+    pub fn connection(&self) -> &ConnectionToken {
         &self.connection
     }
 
-    pub(crate) fn installation(&self) -> Option<&BindingInstallation> {
+    pub fn installation(&self) -> Option<&BindingInstallation> {
         self.port.as_ref().map(|port| &port.installation)
     }
 
-    pub(crate) fn current(&self, catalog: &PluginCatalog, control: &MachineControl) -> bool {
+    pub fn current(&self, catalog: &PluginCatalog, control: &MachineControl) -> bool {
         let live = control.telemetry_binding_target_current(
             &self.connection,
             &self.step,
@@ -136,7 +136,7 @@ impl ResolvedBinding {
             .map_or(live, |port| port.current(catalog, live))
     }
 
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         &self,
         catalog: &PluginCatalog,
         control: &MachineControl,
@@ -156,14 +156,14 @@ impl ResolvedBinding {
     }
 }
 
-pub(crate) struct ResolvedExport {
+pub struct ResolvedExport {
     attempt: ExportAttempt,
     connection: ConnectionToken,
     port: ResolvedPort,
 }
 
 impl ResolvedExport {
-    pub(crate) fn resolve(
+    pub fn resolve(
         catalog: &PluginCatalog,
         control: &MachineControl,
         attempt: ExportAttempt,
@@ -196,15 +196,15 @@ impl ResolvedExport {
         Ok(resolved)
     }
 
-    pub(crate) fn attempt(&self) -> &ExportAttempt {
+    pub fn attempt(&self) -> &ExportAttempt {
         &self.attempt
     }
 
-    pub(crate) fn installation(&self) -> &BindingInstallation {
+    pub fn installation(&self) -> &BindingInstallation {
         &self.port.installation
     }
 
-    pub(crate) fn current(&self, catalog: &PluginCatalog, control: &MachineControl) -> bool {
+    pub fn current(&self, catalog: &PluginCatalog, control: &MachineControl) -> bool {
         self.port.current(
             catalog,
             control.telemetry_export_target_current(
@@ -215,7 +215,7 @@ impl ResolvedExport {
         )
     }
 
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         &self,
         catalog: &PluginCatalog,
         control: &MachineControl,

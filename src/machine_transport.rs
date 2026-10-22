@@ -17,14 +17,14 @@ use anyhow::{Result, ensure};
 use futures::{Sink, SinkExt};
 use tokio::sync::{Notify, mpsc};
 
-pub(crate) const HEADER: &str = "x-cowboy-machine-transport";
-pub(crate) const CHUNKED: &str = "chunks-v1";
-pub(crate) const COMPRESSION_HEADER: &str = "x-cowboy-machine-compression";
-pub(crate) const DEFLATE: &str = "zlib-v1";
-pub(crate) const PACING_HEADER: &str = "x-cowboy-machine-pacing";
-pub(crate) const CREDIT: &str = "credit-v1";
-pub(crate) const STREAM_HEADER: &str = "x-cowboy-machine-stream";
-pub(crate) const STREAM: &str = "deflate-stream-v1";
+pub const HEADER: &str = "x-cowboy-machine-transport";
+pub const CHUNKED: &str = "chunks-v1";
+pub const COMPRESSION_HEADER: &str = "x-cowboy-machine-compression";
+pub const DEFLATE: &str = "zlib-v1";
+pub const PACING_HEADER: &str = "x-cowboy-machine-pacing";
+pub const CREDIT: &str = "credit-v1";
+pub const STREAM_HEADER: &str = "x-cowboy-machine-stream";
+pub const STREAM: &str = "deflate-stream-v1";
 const CHUNK_BYTES: usize = 16 * 1024;
 // Chunk bytes sent beyond the receiver's credit: at the measured ~100 KiB/s
 // overlay a small frame waits about a second behind bulk, while a 0.2-1 s
@@ -40,7 +40,7 @@ const COMPRESSED: u32 = 1 << 31;
 const STREAMED: u32 = 1 << 30;
 
 #[derive(Clone, Copy)]
-pub(crate) struct Features {
+pub struct Features {
     pub chunked: bool,
     pub compressed: bool,
     pub paced: bool,
@@ -170,14 +170,14 @@ impl StreamDecoder {
 /// Chunk bytes the peer has decoded, from its credit messages. The reader of
 /// a paced connection records them; its writer waits on them.
 #[derive(Default)]
-pub(crate) struct Credit {
+pub struct Credit {
     acknowledged: AtomicU64,
     changed: Notify,
 }
 
 impl Credit {
     /// Record a credit message; false when `payload` is not one.
-    pub(crate) fn observe(&self, payload: &[u8]) -> bool {
+    pub fn observe(&self, payload: &[u8]) -> bool {
         let Some(total) = payload
             .strip_prefix(CREDIT_PREFIX)
             .and_then(|digits| std::str::from_utf8(digits).ok())
@@ -237,12 +237,12 @@ fn decompress(bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-pub(crate) fn heartbeat(text: &str) -> bool {
+pub fn heartbeat(text: &str) -> bool {
     text.starts_with("{\"type\":\"heartbeat\",")
         || text == "{\"type\":\"runtime\",\"frame\":{\"type\":\"heartbeat\"}}"
 }
 
-pub(crate) trait Message: Send {
+pub trait Message: Send {
     fn text(&self) -> Option<&str>;
     fn binary(bytes: Vec<u8>) -> Self;
     fn pong(bytes: Vec<u8>) -> Self;
@@ -287,7 +287,7 @@ where
 
 /// Write `incoming` to `sink`, pacing chunked frames by `credit` when the
 /// connection negotiated it (both `features.paced` and a credit are required).
-pub(crate) async fn write<S, M>(
+pub async fn write<S, M>(
     mut sink: S,
     mut incoming: mpsc::UnboundedReceiver<M>,
     features: impl Into<Features>,
@@ -420,7 +420,7 @@ where
 }
 
 #[derive(Default)]
-pub(crate) struct Decoder {
+pub struct Decoder {
     bytes: Vec<u8>,
     total: usize,
     compressed: bool,
@@ -433,7 +433,7 @@ pub(crate) struct Decoder {
 
 impl Decoder {
     /// A decoder for a connection's negotiated pacing and stream compression.
-    pub(crate) fn new(features: impl Into<Features>) -> Self {
+    pub fn new(features: impl Into<Features>) -> Self {
         let features = features.into();
         Self {
             paced: features.paced,
@@ -444,7 +444,7 @@ impl Decoder {
         }
     }
 
-    pub(crate) fn text(&self, text: &str) -> Result<()> {
+    pub fn text(&self, text: &str) -> Result<()> {
         ensure!(
             self.bytes.is_empty() || heartbeat(text) || (self.paced && overtakes(text)),
             "interleaved Machine data frame"
@@ -454,7 +454,7 @@ impl Decoder {
 
     /// The credit to return for the chunks decoded so far, when paced. Send it
     /// as an urgent message after each chunk.
-    pub(crate) fn credit<M: Message>(&mut self) -> Option<M> {
+    pub fn credit<M: Message>(&mut self) -> Option<M> {
         // Streamed small frames are not chunk bytes and earn no credit.
         if !std::mem::take(&mut self.credit_due) {
             return None;
@@ -463,7 +463,7 @@ impl Decoder {
             .then(|| M::pong([CREDIT_PREFIX, self.received.to_string().as_bytes()].concat()))
     }
 
-    pub(crate) async fn chunk(
+    pub async fn chunk(
         &mut self,
         features: impl Into<Features>,
         bytes: &[u8],

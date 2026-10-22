@@ -1,6 +1,6 @@
 //! A browsing preference refers to an existing code context; it grants no file
 //! access and never moves the Agent's execution workspace.
-pub(crate) fn valid(value: &str) -> bool {
+pub fn valid(value: &str) -> bool {
     if value.is_empty() || value.len() > 1024 || value.chars().any(char::is_control) {
         return false;
     }
@@ -14,7 +14,7 @@ pub(crate) fn valid(value: &str) -> bool {
 
 /// Preserve the distinction between an absent override (inherit) and null
 /// (stop inheritance and use automatic session/worktree resolution).
-pub(crate) fn deserialize_override<'de, D: serde::Deserializer<'de>>(
+pub fn deserialize_override<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<String>>, D::Error> {
     use serde::Deserialize as _;
@@ -23,7 +23,7 @@ pub(crate) fn deserialize_override<'de, D: serde::Deserializer<'de>>(
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Change {
+pub struct Change {
     pub scope: String,
     /// Omit to change the calling session; otherwise its owner's directory.
     pub folder_id: Option<String>,
@@ -31,16 +31,14 @@ pub(crate) struct Change {
     pub change: serde_json::Value,
 }
 
-pub(crate) fn override_value(value: Option<&Option<String>>) -> serde_json::Value {
+pub fn override_value(value: Option<&Option<String>>) -> serde_json::Value {
     value.map_or_else(
         || serde_json::json!({}),
         |value| serde_json::json!({"directory":value}),
     )
 }
 
-pub(crate) fn parse_change(
-    value: &serde_json::Value,
-) -> Result<Option<Option<String>>, &'static str> {
+pub fn parse_change(value: &serde_json::Value) -> Result<Option<Option<String>>, &'static str> {
     let map = value.as_object().ok_or("invalid_argument")?;
     if map.len() != 1 {
         return Err("invalid_argument");

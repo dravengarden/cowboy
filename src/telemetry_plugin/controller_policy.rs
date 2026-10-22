@@ -6,13 +6,13 @@ use anyhow::{Result, ensure};
 use serde::Serialize;
 use std::sync::Arc;
 
-pub(crate) struct ControllerPolicy {
+pub struct ControllerPolicy {
     pub writer: Option<Arc<WriterAdmission>>,
     pub background: Option<Arc<BackgroundPolicy>>,
 }
 
 impl ControllerPolicy {
-    pub(crate) fn load(args: &ServeArgs, service: &str) -> Result<Self> {
+    pub fn load(args: &ServeArgs, service: &str) -> Result<Self> {
         let writer = args
             .telemetry_writer_policy
             .as_deref()
@@ -62,7 +62,7 @@ enum LegacyCheck {
 /// Closed, credential-free observations, never serialized permits or claims of
 /// writer/export readiness. No path, owner, binding, epoch or policy digest.
 #[derive(Debug, Serialize)]
-pub(crate) struct PreflightReport {
+pub struct PreflightReport {
     schema: &'static str,
     writer_policy: PolicyCheck,
     managed_background_policy: PolicyCheck,
@@ -70,7 +70,7 @@ pub(crate) struct PreflightReport {
     not_checked: [&'static str; 6],
 }
 
-pub(crate) fn inspect(args: &ServeArgs) -> Result<PreflightReport> {
+pub fn inspect(args: &ServeArgs) -> Result<PreflightReport> {
     let policy = if args.telemetry_writer_policy.is_some()
         || args.telemetry_managed_export_policy.is_some()
     {
@@ -113,6 +113,3 @@ pub(crate) fn inspect(args: &ServeArgs) -> Result<PreflightReport> {
         ],
     })
 }
-
-#[cfg(test)]
-mod tests;

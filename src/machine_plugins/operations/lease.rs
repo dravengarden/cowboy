@@ -14,30 +14,30 @@ use std::time::Duration;
 const MAX_EXECUTION_TIME: Duration = Duration::from_mins(1);
 
 mod telemetry_recovery;
-pub(crate) use telemetry_recovery::BindingRecoveryLease;
+pub use telemetry_recovery::BindingRecoveryLease;
 mod installation;
-pub(crate) use installation::InstallationLease;
+pub use installation::InstallationLease;
 mod code_buffer_sync;
-pub(crate) use code_buffer_sync::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
+pub use code_buffer_sync::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
 mod code_buffer_navigation;
-pub(crate) use code_buffer_navigation::{CodeNavigationInvocation, CodeNavigationOwner};
+pub use code_buffer_navigation::{CodeNavigationInvocation, CodeNavigationOwner};
 
 /// The connection task is the unique owner. Detached command tasks receive only
 /// leases; retaining one must not keep a disconnected connection authorized.
-pub(crate) struct PluginExecutionScope {
+pub struct PluginExecutionScope {
     connected: Arc<AtomicBool>,
     service: Option<String>,
     machine: String,
 }
 
 impl PluginExecutionScope {
-    pub(crate) fn native_usage(
+    pub fn native_usage(
         &self,
         profile: crate::provider_account::NativeProfileReceipt,
     ) -> crate::machine_plugins::native_usage::Invocation {
         crate::machine_plugins::native_usage::Invocation::new(profile, Arc::clone(&self.connected))
     }
-    pub(crate) fn telemetry_export(
+    pub fn telemetry_export(
         &self,
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,
     ) -> anyhow::Result<crate::machine_plugins::ManagedExportInvocation> {
@@ -55,7 +55,7 @@ impl PluginExecutionScope {
         )
     }
 
-    pub(crate) fn new(service: Option<&str>, machine: &str) -> Self {
+    pub fn new(service: Option<&str>, machine: &str) -> Self {
         Self {
             connected: Arc::new(AtomicBool::new(true)),
             service: service.map(str::to_owned),
@@ -65,7 +65,7 @@ impl PluginExecutionScope {
 
     /// Capture before spawn: the request and its original connection/time
     /// budget travel together and cannot be retargeted by an async caller.
-    pub(crate) fn host(
+    pub fn host(
         &self,
         request: crate::machine_plugins::PluginHostRequest,
     ) -> crate::machine_plugins::PluginHostInvocation {
@@ -74,7 +74,7 @@ impl PluginExecutionScope {
 
     /// Called synchronously on command receipt, BEFORE spawning or waiting for
     /// a lifecycle lock. The wire supplies no duration or reusable capability.
-    pub(crate) fn uninstall(
+    pub fn uninstall(
         &self,
         step: &UninstallStep,
     ) -> Result<UninstallExecutionLease, StepUnavailable> {
@@ -83,7 +83,7 @@ impl PluginExecutionScope {
 
     /// Capture on protocol receipt, before detached scheduling. A negotiated
     /// command still cannot enable the independent local writer admission.
-    pub(crate) fn telemetry_binding(
+    pub fn telemetry_binding(
         &self,
         step: &BindingStep,
     ) -> Result<BindingExecutionLease, BindingUnavailable> {
@@ -127,7 +127,7 @@ impl PluginExecutionScope {
 }
 
 /// No deserialization, cloning, retargeting or renewal from a stored receipt.
-pub(crate) struct BindingExecutionLease {
+pub struct BindingExecutionLease {
     connected: Arc<AtomicBool>,
     request_digest: BindingDigest,
     budget: OperationBudget,
@@ -174,7 +174,7 @@ impl Drop for PluginExecutionScope {
 /// No Clone, Serialize or Deserialize: one admitted command, exact request,
 /// original connection and process-local deadline. A saved result is evidence,
 /// not an instance of this type.
-pub(crate) struct UninstallExecutionLease {
+pub struct UninstallExecutionLease {
     connected: Arc<AtomicBool>,
     request_digest: String,
     budget: OperationBudget,

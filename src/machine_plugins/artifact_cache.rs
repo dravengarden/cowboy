@@ -184,11 +184,7 @@ pub(super) fn read_retained(content: &Path, digest: &str) -> Option<Vec<u8>> {
 impl MachinePluginStore {
     /// Import opaque public bytes only; never opens identity, credentials,
     /// operation journals, generation pointers, or a Controller connection.
-    pub(crate) fn cache_runtime_artifact(
-        state: &Path,
-        source: &Path,
-        digest: &str,
-    ) -> Result<usize> {
+    pub fn cache_runtime_artifact(state: &Path, source: &Path, digest: &str) -> Result<usize> {
         ensure!(
             state.is_absolute() && state.is_dir(),
             "existing absolute Service state directory required"

@@ -156,7 +156,7 @@ pub fn key(id: &str) -> String {
     format!("{}{id}", crate::core::settings_keys::SESSION_CONTEXT_PREFIX)
 }
 
-pub(crate) fn announce(hub: &crate::core::Hub, id: &str, context: &Context) {
+pub fn announce(hub: &crate::core::Hub, id: &str, context: &Context) {
     if let Some(owner) = hub
         .session_info(id)
         .and_then(|info| info.meta.owner_user_id)
@@ -178,7 +178,7 @@ pub(crate) fn announce(hub: &crate::core::Hub, id: &str, context: &Context) {
     }
 }
 
-pub(crate) fn restore_announcements(hub: &crate::core::Hub) {
+pub fn restore_announcements(hub: &crate::core::Hub) {
     for session in hub.session_list() {
         if let Ok(context) = read(hub, &session.id)
             && context.revision > 0
@@ -225,7 +225,7 @@ pub fn pending(hub: &crate::core::Hub, id: &str) -> bool {
 /// Queue admission uses the same fence as dispatch, without reading sessions
 /// (the caller already owns the Hub session lock). Only the admitted bootstrap
 /// may pass a preparing receipt; scheduled and manually queued work waits.
-pub(crate) fn allows_dispatch(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> bool {
+pub fn allows_dispatch(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> bool {
     read(hub, id).is_ok_and(|context| {
         context.revision == context.applied_revision
             && (context

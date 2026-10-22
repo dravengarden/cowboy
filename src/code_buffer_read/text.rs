@@ -2,11 +2,11 @@
 //! snapshot detects native revision/owner ABA; it is not a resource or a grant.
 use super::*;
 
-pub(crate) const MAX_PAGE_BYTES: u32 = 64 * 1024;
+pub const MAX_PAGE_BYTES: u32 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum TextPage {
+pub enum TextPage {
     Start {},
     Continue { offset: u32, snapshot: String },
 }
@@ -39,7 +39,7 @@ impl TextPage {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-pub(crate) enum TextOutput {
+pub enum TextOutput {
     Mismatch {},
     Stale {},
     Page {

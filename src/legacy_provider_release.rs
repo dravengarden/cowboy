@@ -17,7 +17,7 @@ use crate::machine_auth::LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct LegacyProviderRelease {
+pub struct LegacyProviderRelease {
     pub release_schema: u16,
     pub provider_id: String,
     pub provider_version: String,
@@ -32,7 +32,7 @@ pub(crate) struct LegacyProviderRelease {
 }
 
 impl LegacyProviderRelease {
-    pub(crate) fn proof(&self) -> Result<Vec<u8>> {
+    pub fn proof(&self) -> Result<Vec<u8>> {
         let runtime_artifacts = format!(
             "sha256:{:x}",
             Sha256::digest(serde_json::to_vec(&(
@@ -59,7 +59,7 @@ impl LegacyProviderRelease {
         Ok(proof)
     }
 
-    pub(crate) fn validate_and_project(
+    pub fn validate_and_project(
         &self,
         bytes: &[u8],
     ) -> Result<(ProviderPackage, AgentRuntimeBinding)> {

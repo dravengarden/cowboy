@@ -10,10 +10,10 @@ use std::fmt::Write as _;
 
 use anyhow::{Result, ensure};
 
-pub(crate) const POSTGRES_BASELINE_VERSION: i64 = 34;
-pub(crate) const SQLITE_BASELINE_VERSION: i64 = 8;
+pub const POSTGRES_BASELINE_VERSION: i64 = 34;
+pub const SQLITE_BASELINE_VERSION: i64 = 8;
 
-pub(crate) const LEGACY_POSTGRES_MIGRATIONS: &[(i64, &str)] = &[
+pub const LEGACY_POSTGRES_MIGRATIONS: &[(i64, &str)] = &[
     (
         1,
         "6b8c96bfaa20be52c2cc27d985c0c5409533b375a4a9443d8fb9aef0f86fb7b5cacb97b2f504006cd23c76cdf820193f",
@@ -148,7 +148,7 @@ pub(crate) const LEGACY_POSTGRES_MIGRATIONS: &[(i64, &str)] = &[
     ),
 ];
 
-pub(crate) const LEGACY_SQLITE_MIGRATIONS: &[(i64, &str)] = &[
+pub const LEGACY_SQLITE_MIGRATIONS: &[(i64, &str)] = &[
     (
         1,
         "37d5d2723cf03d0a97d735b7077481b798c15c331f6d9619f8a2c5516067de6c2d5210d756395bb8a9b4b6c06585daa3",
@@ -187,7 +187,7 @@ fn checksum_hex(checksum: &[u8]) -> String {
     encoded
 }
 
-pub(crate) fn needs_baseline_marker(
+pub fn needs_baseline_marker(
     applied: &[(i64, bool, Vec<u8>)],
     baseline_version: i64,
     legacy: &[(i64, &str)],

@@ -14,7 +14,7 @@ use super::{component_executable, component_proof, host_payload::HostPayload};
 use crate::machine_protocol::{ComponentKind, DesiredComponent};
 use crate::session_deletion_admission::reader_floor::{self, Floor};
 
-pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> anyhow::Result<()> {
+pub fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> anyhow::Result<()> {
     let floor = reader_floor::read(state)?;
     let root = state.join("components");
     // Do not construct a ComponentStore: this check creates no cache or stores.
@@ -295,7 +295,7 @@ fn recovery_target(state: &Path, key: &Path) -> anyhow::Result<(PathBuf, PathBuf
 
 /// Administrator-invoked, idempotent repair. Never overwrite a pointer or floor;
 /// an interruption between links remains fail-closed and can be resumed.
-pub(crate) fn restore_portable_host_selection(state: &Path, key: &Path) -> anyhow::Result<()> {
+pub fn restore_portable_host_selection(state: &Path, key: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     let accepted = recovery_target(state, key)?;
     let root = state.join("components");

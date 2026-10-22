@@ -9,7 +9,7 @@ use tokio::sync::{Notify, mpsc::error::TryRecvError};
 
 use super::{Event, StoreWrite, estimated_store_write_bytes};
 
-pub(crate) const NORMAL_BYTES: usize = 8 * 1024 * 1024;
+pub const NORMAL_BYTES: usize = 8 * 1024 * 1024;
 const RESERVED_BYTES: usize = 256 * 1024;
 const RESERVED_SLOTS: usize = 64;
 // The local runtime's 32 MiB frame needs room for decoded-envelope overhead.
@@ -57,7 +57,7 @@ impl PersistenceHealth {
         self.last_error.lock().clone()
     }
 
-    pub(crate) fn mark_failed_batch(&self) {
+    pub fn mark_failed_batch(&self) {
         self.failed_batches.fetch_add(1, Ordering::Relaxed);
         self.degraded.store(true, Ordering::Relaxed);
         *self.last_error.lock() = Some("database write retries exhausted".to_owned());

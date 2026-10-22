@@ -9,25 +9,25 @@ mod capture;
 pub mod cli;
 mod data;
 mod source;
-pub(crate) mod storage;
+pub mod storage;
 #[cfg(test)]
 mod tests;
 
 #[cfg(feature = "machine-host")]
-pub(crate) use capture::provider_usage;
+pub use capture::provider_usage;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) use capture::runtime_spans;
+pub use capture::runtime_spans;
 pub use capture::{Context, Guard, directory, init};
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) use capture::{forward_runtime, init_stderr};
-pub(crate) use data::now_ms;
+pub use capture::{forward_runtime, init_stderr};
+pub use data::now_ms;
 #[cfg(feature = "full")]
-pub(crate) use storage::SqliteStore;
+pub use storage::SqliteStore;
 
 /// The existing JSONL writer and the indexed OTel store accept the same already
 /// sanitized telemetry records. Remote delivery retains its independent queue.
 #[cfg(feature = "full")]
-pub(crate) trait EvidenceSink: Send {
+pub trait EvidenceSink: Send {
     fn write(&mut self, records: &str, now_ms: i64) -> anyhow::Result<()>;
     fn maintain(&mut self, now_ms: i64) -> anyhow::Result<()>;
 }
@@ -50,7 +50,7 @@ pub enum LocalBackend {
 }
 
 #[cfg(feature = "full")]
-pub(crate) struct Fanout(pub Vec<Box<dyn EvidenceSink>>);
+pub struct Fanout(pub Vec<Box<dyn EvidenceSink>>);
 #[cfg(feature = "full")]
 impl EvidenceSink for Fanout {
     fn write(&mut self, records: &str, now: i64) -> anyhow::Result<()> {

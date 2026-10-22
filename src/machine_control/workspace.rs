@@ -19,7 +19,7 @@ const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 /// Only the authenticated registry can construct or renew this observation.
 /// Cloning borrows the SAME incarnation; JSON and equal strings cannot mint it.
 #[derive(Clone, Debug)]
-pub(crate) struct WorkspaceCodeScope(Arc<WorkspaceIdentity>);
+pub struct WorkspaceCodeScope(Arc<WorkspaceIdentity>);
 
 #[derive(Debug)]
 struct WorkspaceIdentity {
@@ -49,15 +49,15 @@ impl Hash for WorkspaceCodeScope {
 }
 
 impl WorkspaceCodeScope {
-    pub(crate) fn machine_id(&self) -> &str {
+    pub fn machine_id(&self) -> &str {
         &self.0.connection.0.machine_id
     }
 
-    pub(crate) fn cwd(&self) -> &str {
+    pub fn cwd(&self) -> &str {
         &self.0.cwd
     }
 
-    pub(crate) fn string_bytes(&self) -> usize {
+    pub fn string_bytes(&self) -> usize {
         self.machine_id().len()
             + self.0.connection.0.epoch.len()
             + self.0.workspace_id.len()
@@ -216,7 +216,7 @@ impl LiveState {
 }
 
 impl MachineControl {
-    pub(crate) fn workspace_code_scope(
+    pub fn workspace_code_scope(
         &self,
         service: &str,
         machine: &str,
@@ -230,15 +230,12 @@ impl MachineControl {
         scope.matches(&live).then(|| scope.clone())
     }
 
-    pub(crate) fn workspace_scope_is_current(&self, scope: &WorkspaceCodeScope) -> bool {
+    pub fn workspace_scope_is_current(&self, scope: &WorkspaceCodeScope) -> bool {
         scope.matches(&self.live.read())
     }
 
     /// No persisted/local-route fallback after the original observation ends.
-    pub(crate) fn workspace_scope_is_colocated(
-        &self,
-        scope: &WorkspaceCodeScope,
-    ) -> Result<bool, String> {
+    pub fn workspace_scope_is_colocated(&self, scope: &WorkspaceCodeScope) -> Result<bool, String> {
         let colocated = {
             let live = self.live.read();
             if !scope.matches(&live) {
@@ -261,7 +258,7 @@ impl MachineControl {
 
     /// Only a typed Code operation is accepted. The original scope supplies the
     /// root, Machine, adapter and connection; the caller cannot substitute them.
-    pub(crate) async fn code_request_in_workspace(
+    pub async fn code_request_in_workspace(
         &self,
         scope: &WorkspaceCodeScope,
         operation: CodeOperation,
@@ -274,7 +271,7 @@ impl MachineControl {
         self.workspace_adapter_request(scope, "code", request).await
     }
 
-    pub(crate) async fn workspace_extension_request(
+    pub async fn workspace_extension_request(
         &self,
         scope: &WorkspaceCodeScope,
         operation: crate::workspace_extensions::Operation,

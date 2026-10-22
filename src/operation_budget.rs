@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
-pub(crate) struct TimeSample {
+pub struct TimeSample {
     monotonic: Instant,
     wall_ms: i64,
 }
 
 impl TimeSample {
-    pub(crate) fn now() -> Self {
+    pub fn now() -> Self {
         Self {
             monotonic: Instant::now(),
             wall_ms: chrono::Utc::now().timestamp_millis(),
@@ -22,20 +22,20 @@ impl TimeSample {
     /// new wall deadline after validation/queueing would give the remote site
     /// more time than the originating confirmation retained.
     #[cfg(feature = "full")]
-    pub(crate) fn deadline_ms(self, cap: Duration) -> i64 {
+    pub fn deadline_ms(self, cap: Duration) -> i64 {
         self.wall_ms
             .saturating_add(i64::try_from(cap.as_millis()).unwrap_or(i64::MAX))
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(monotonic: Instant, wall_ms: i64) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(monotonic: Instant, wall_ms: i64) -> Self {
         Self { monotonic, wall_ms }
     }
 }
 
 /// One original deadline. Neither checking nor repairing a clock renews it.
 /// Capture the sample before scheduling, validation, or lock acquisition.
-pub(crate) struct OperationBudget {
+pub struct OperationBudget {
     received: Instant,
     deadline: Instant,
     expires_at_ms: i64,
@@ -47,7 +47,7 @@ impl OperationBudget {
     /// Consume both original budgets without renewing either clock or clearing
     /// an observed failure. Used when a fresh confirmation consumes a preview.
     #[cfg_attr(not(feature = "full"), allow(dead_code))]
-    pub(crate) fn intersect(self, other: Self) -> Self {
+    pub fn intersect(self, other: Self) -> Self {
         let expired = self.expired() | other.expired();
         Self {
             received: self.received.max(other.received),
@@ -62,7 +62,7 @@ impl OperationBudget {
         }
     }
 
-    pub(crate) fn new(expires_at_ms: i64, cap: Duration, received: TimeSample) -> Self {
+    pub fn new(expires_at_ms: i64, cap: Duration, received: TimeSample) -> Self {
         let remaining = expires_at_ms.saturating_sub(received.wall_ms).max(0);
         let budget = Duration::from_millis(remaining.unsigned_abs()).min(cap);
         Self {
@@ -74,12 +74,12 @@ impl OperationBudget {
         }
     }
 
-    pub(crate) fn expired(&self) -> bool {
+    pub fn expired(&self) -> bool {
         self.check_at(TimeSample::now())
     }
 
     #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
-    pub(crate) fn remaining(&self) -> Duration {
+    pub fn remaining(&self) -> Duration {
         if self.expired() {
             Duration::ZERO
         } else {
@@ -102,13 +102,13 @@ impl OperationBudget {
         self.expired.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    pub(crate) fn expired_at(&self, now: TimeSample) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expired_at(&self, now: TimeSample) -> bool {
         self.check_at(now)
     }
 
-    #[cfg(test)]
-    pub(crate) fn expire_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expire_for_test(&self) {
         self.expired.store(true, Ordering::Release);
     }
 }

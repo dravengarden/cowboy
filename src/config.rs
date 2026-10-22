@@ -373,7 +373,7 @@ impl Config {
         merged
     }
 
-    pub(crate) fn to_json(&self) -> serde_json::Value {
+    pub fn to_json(&self) -> serde_json::Value {
         let fields = self
             .entries()
             .map(|(field, value, source)| {
@@ -1204,7 +1204,7 @@ pub fn patch(
     patch_checked(scope, path, expected, changes, || Ok(()))
 }
 
-pub(crate) fn patch_checked(
+pub fn patch_checked(
     scope: Scope,
     path: &Path,
     expected: &str,

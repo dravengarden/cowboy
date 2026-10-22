@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Config, Handle, Scope, schema};
 
 #[derive(Clone)]
-pub(crate) struct Limiter {
+pub struct Limiter {
     inner: Arc<parking_lot::Mutex<State>>,
     config: Handle,
     path: Option<PathBuf>,
@@ -45,7 +45,7 @@ struct Account {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Budget {
+pub struct Budget {
     pub last_attempt_ms: i64,
     pub next_allowed_ms: i64,
 }
@@ -63,7 +63,7 @@ impl Budget {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Success,
     /// A reserved start that sent nothing; keep its charge, change no backoff.
     Unused,
@@ -72,7 +72,7 @@ pub(crate) enum Outcome {
     LocalFailure,
 }
 
-pub(crate) struct Permit {
+pub struct Permit {
     limiter: Limiter,
     provider: String,
     account: String,

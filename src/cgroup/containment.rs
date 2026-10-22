@@ -10,7 +10,7 @@ mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProcessOwner {
+pub struct ProcessOwner {
     boot: uuid::Uuid,
     pid: u32,
     start: u64,
@@ -19,7 +19,7 @@ pub(crate) struct ProcessOwner {
 }
 
 impl ProcessOwner {
-    pub(crate) fn current() -> io::Result<Self> {
+    pub fn current() -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         {
             linux::owner()
@@ -30,7 +30,7 @@ impl ProcessOwner {
         }
     }
 
-    pub(crate) fn exited(&self) -> io::Result<bool> {
+    pub fn exited(&self) -> io::Result<bool> {
         #[cfg(target_os = "linux")]
         {
             linux::owner_exited(self)
@@ -44,7 +44,7 @@ impl ProcessOwner {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ContainmentIdentity {
+pub struct ContainmentIdentity {
     owner: ProcessOwner,
     directory: PathBuf,
     device: u64,
@@ -56,17 +56,17 @@ pub(crate) struct ContainmentIdentity {
 }
 
 impl ContainmentIdentity {
-    pub(crate) fn owner(&self) -> &ProcessOwner {
+    pub fn owner(&self) -> &ProcessOwner {
         &self.owner
     }
-    pub(crate) fn boot(&self) -> uuid::Uuid {
+    pub fn boot(&self) -> uuid::Uuid {
         self.owner.boot
     }
 
     /// Caller must own explicit stop authority for this exact launch. A missing
     /// group on the original boot is safe only because rmdir closes membership:
     /// no child can subsequently join through a previously opened descriptor.
-    pub(crate) async fn terminate(&self) -> io::Result<()> {
+    pub async fn terminate(&self) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
             linux::terminate(self).await
@@ -78,14 +78,14 @@ impl ContainmentIdentity {
     }
 }
 
-pub(crate) struct Containment {
+pub struct Containment {
     identity: ContainmentIdentity,
     #[cfg(target_os = "linux")]
     directory: std::fs::File,
 }
 
 impl Containment {
-    pub(crate) fn prepare(command: &mut tokio::process::Command) -> io::Result<Self> {
+    pub fn prepare(command: &mut tokio::process::Command) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         {
             linux::prepare(command)
@@ -97,11 +97,11 @@ impl Containment {
         }
     }
 
-    pub(crate) fn identity(&self) -> &ContainmentIdentity {
+    pub fn identity(&self) -> &ContainmentIdentity {
         &self.identity
     }
 
-    pub(crate) async fn finish(self) -> io::Result<()> {
+    pub async fn finish(self) -> io::Result<()> {
         self.identity.terminate().await
     }
 }

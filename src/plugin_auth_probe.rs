@@ -6,14 +6,14 @@
 use std::path::PathBuf;
 
 #[cfg(all(test, feature = "machine-host"))]
-pub(crate) use cowboy_plugin_sdk::CliAuthRule;
+pub use cowboy_plugin_sdk::CliAuthRule;
 #[cfg(feature = "machine-host")]
-pub(crate) use cowboy_plugin_sdk::{
+pub use cowboy_plugin_sdk::{
     CliAuthCondition, CliAuthOutcome, CliAuthProbeState, CliAuthRuleSet, CliAuthSource,
 };
 
 #[cfg(feature = "machine-host")]
-pub(crate) fn evaluate(rules: &CliAuthRuleSet) -> CliAuthOutcome {
+pub fn evaluate(rules: &CliAuthRuleSet) -> CliAuthOutcome {
     rules
         .rules
         .iter()
@@ -142,7 +142,7 @@ fn expand_path(template: &str) -> Option<PathBuf> {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) fn dotenv_value(contents: &str, key: &str) -> Option<String> {
+pub fn dotenv_value(contents: &str, key: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let line = line.trim();
         let line = line.strip_prefix("export ").unwrap_or(line);

@@ -72,7 +72,7 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(set(suites(["src/machine_broker.rs"])), {"execution-rust-tests", "session"})
 
     def test_the_execution_session_api_runs_its_session_gate(self):
-        self.assertEqual(set(suites(["src/server/execution/sessions.rs"])), {"execution-rust-tests", "session"})
+        self.assertEqual(set(suites(["components/server/src/server/execution/sessions.rs"])), {"execution-rust-tests", "session"})
 
     def test_the_shared_memory_client_runs_both_worker_suites(self):
         selected = suites(["components/memory-client/index.mjs"])

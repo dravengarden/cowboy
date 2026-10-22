@@ -225,8 +225,8 @@ fn completions(
 impl MachinePluginStore {
     /// Execute real target/policy checks but interrupt the second replacement.
     /// The resulting live owner is poisoned; a new owner must validate reopen.
-    #[cfg(test)]
-    pub(crate) async fn interrupt_binding_for_test(&self, step: &BindingStep) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn interrupt_binding_for_test(&self, step: &BindingStep) {
         let _lifecycle = self.lifecycle.lock().await;
         let scope = crate::machine_plugins::PluginExecutionScope::new(
             Some(&step.service_id),
@@ -260,7 +260,7 @@ impl MachinePluginStore {
         assert!(bindings.state.lock().poisoned);
     }
 
-    pub(crate) async fn commit_telemetry_binding_command(
+    pub async fn commit_telemetry_binding_command(
         &self,
         step: &BindingStep,
         lease: BindingExecutionLease,

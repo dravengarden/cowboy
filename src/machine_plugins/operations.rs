@@ -10,13 +10,13 @@ use crate::machine_protocol::plugin_step::{
 
 pub(super) mod install_attempts;
 pub(super) mod installations;
-pub(crate) mod lease;
+pub mod lease;
 pub(super) mod maintenance;
 mod telemetry_bindings;
 
 use lease::UninstallExecutionLease;
 
-pub(crate) enum UninstallAccess<'a> {
+pub enum UninstallAccess<'a> {
     Observe,
     Execute(&'a UninstallExecutionLease),
 }
@@ -330,7 +330,7 @@ fn leased_effect_outcome(
 }
 
 impl MachinePluginStore {
-    pub(crate) async fn uninstall_recovery_observation(
+    pub async fn uninstall_recovery_observation(
         &self,
         step: &UninstallStep,
         service: Option<&str>,
@@ -404,7 +404,7 @@ impl MachinePluginStore {
         Ok(Some(digest))
     }
 
-    pub(crate) async fn uninstall_step(
+    pub async fn uninstall_step(
         &self,
         step: &UninstallStep,
         service: Option<&str>,

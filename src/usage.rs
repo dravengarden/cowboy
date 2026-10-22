@@ -23,8 +23,8 @@ use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 
 mod execution;
-pub(crate) mod limiter;
-pub(crate) mod native;
+pub mod limiter;
+pub mod native;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 // All collection entry points share the same budget, including failed attempts.
@@ -114,7 +114,7 @@ pub struct ResetResult {
 /// A Provider-paced admission held for one reset attempt. It owns the reset
 /// serialization, so the charged start is the actual invocation time. Dropping
 /// an unused reservation keeps its charged start but records no failure.
-pub(crate) struct ResetReservation {
+pub struct ResetReservation {
     account: String,
     permit: Option<limiter::Permit>,
     _serial: tokio::sync::OwnedMutexGuard<()>,
@@ -162,8 +162,8 @@ impl std::error::Error for ResetError {}
 
 #[derive(Clone)]
 pub struct UsageService {
-    pub(crate) native: native::Cache,
-    pub(crate) limiter: limiter::Limiter,
+    pub native: native::Cache,
+    pub limiter: limiter::Limiter,
     bindings: UsageBindingSource,
     machine_control: Arc<crate::machine_control::MachineControl>,
     store: Option<crate::store::Store>,
@@ -192,7 +192,7 @@ enum PluginCommandRoute {
 
 #[derive(Clone)]
 enum UsageBindingSource {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Static(Arc<Vec<PluginUsageSpec>>),
     Catalog(Arc<crate::plugin_catalog::PluginCatalog>),
 }
@@ -200,7 +200,7 @@ enum UsageBindingSource {
 impl UsageBindingSource {
     fn current(&self) -> Vec<PluginUsageSpec> {
         match self {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::Static(bindings) => bindings.as_ref().clone(),
             Self::Catalog(catalog) => catalog
                 .runtime()
@@ -210,13 +210,13 @@ impl UsageBindingSource {
 }
 
 impl UsageService {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Option<crate::store::Store>, cache_path: Option<PathBuf>) -> Self {
         Self::with_bindings(store, cache_path, Vec::new())
     }
 
     #[must_use]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_bindings(
         store: Option<crate::store::Store>,
         cache_path: Option<PathBuf>,
@@ -231,7 +231,7 @@ impl UsageService {
     }
 
     #[must_use]
-    pub(crate) fn with_plugin_catalog(
+    pub fn with_plugin_catalog(
         store: Option<crate::store::Store>,
         cache_path: Option<PathBuf>,
         catalog: Arc<crate::plugin_catalog::PluginCatalog>,
@@ -287,12 +287,12 @@ impl UsageService {
         }
     }
 
-    pub(crate) fn with_config(mut self, config: crate::config::Handle) -> Self {
+    pub fn with_config(mut self, config: crate::config::Handle) -> Self {
         self.limiter = self.limiter.with_config(config);
         self
     }
 
-    pub(crate) fn with_runtime_restrictions(
+    pub fn with_runtime_restrictions(
         mut self,
         restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
     ) -> Self {
@@ -306,9 +306,9 @@ impl UsageService {
     }
 
     fn command_route(&self, account: &str, operation: PluginHostOperation) -> PluginCommandRoute {
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let UsageBindingSource::Catalog(catalog) = &self.bindings;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let catalog = match &self.bindings {
             UsageBindingSource::Static(_) => return PluginCommandRoute::Bootstrap,
             UsageBindingSource::Catalog(catalog) => catalog,
@@ -461,7 +461,7 @@ impl UsageService {
     }
 
     #[must_use]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn exposes_activity(&self, account: &str) -> bool {
         self.bindings
             .current()
@@ -518,7 +518,7 @@ impl UsageService {
 
     /// Project cached observations without starting a collector or cloning
     /// unrelated account activity. The callback must stay bounded and synchronous.
-    pub(crate) async fn cached_view<T>(
+    pub async fn cached_view<T>(
         &self,
         read: impl FnOnce(&UsageSnapshot, &[PluginUsageSpec], &BTreeSet<String>) -> T,
     ) -> T {
@@ -723,7 +723,7 @@ impl UsageService {
     /// processes; running them one after another prevents their RSS peaks
     /// from stacking inside the controller service cgroup. Explicit user
     /// refreshes keep the concurrent path above.
-    pub(crate) async fn refresh_background(&self) -> UsageSnapshot {
+    pub async fn refresh_background(&self) -> UsageSnapshot {
         self.refresh_with_policy(true).await
     }
 
@@ -864,7 +864,7 @@ impl UsageService {
 
     /// Reserve a paced reset before an irreversible one-shot claim, so pacing
     /// can only delay a scheduled reset and never discard it.
-    pub(crate) async fn reserve_reset(
+    pub async fn reserve_reset(
         &self,
         provider: &str,
     ) -> std::result::Result<ResetReservation, ResetError> {
@@ -896,7 +896,7 @@ impl UsageService {
             })
     }
 
-    pub(crate) async fn consume_reserved_reset(
+    pub async fn consume_reserved_reset(
         &self,
         reservation: ResetReservation,
         provider: &str,
@@ -1284,13 +1284,13 @@ pub fn with_session_usage(
     crate::provider_info::overlay_session_usage(snapshot, sessions, catalog, bindings)
 }
 
-pub(crate) fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-pub(crate) fn intern_usage_str(value: String) -> &'static str {
+pub fn intern_usage_str(value: String) -> &'static str {
     match value.as_str() {
         "available" => "available",
         "unavailable" => "unavailable",
@@ -1398,8 +1398,8 @@ fn bind_collected_usage(mut usage: ProviderUsage, binding: &PluginUsageSpec) -> 
     usage.source = intern_usage_str(binding.product_label().to_owned());
     usage
 }
-
 #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn unavailable_providers() -> Vec<ProviderUsage> {
     crate::plugin_runtime_args::usage_accounts()
         .into_iter()

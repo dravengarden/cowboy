@@ -4,7 +4,7 @@ use super::{NativeCompletion, Receipt, Registry, Result, StorageBackend, Store};
 use crate::store::provider_accounts::Change;
 
 impl Store {
-    pub(crate) async fn bind_native_login_identity(
+    pub async fn bind_native_login_identity(
         &self,
         owner: &str,
         operation: &str,

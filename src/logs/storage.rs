@@ -16,7 +16,7 @@ const PAGE_BYTES: u64 = 4096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Policy {
+pub struct Policy {
     pub schema: u16,
     pub retain_seconds: u64,
     pub rotate_seconds: u64,
@@ -39,7 +39,7 @@ impl Default for Policy {
     }
 }
 impl Policy {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1
                 && (60..=90 * 86400).contains(&self.retain_seconds)
@@ -68,7 +68,7 @@ struct State {
     maintained_ms: i64,
 }
 
-pub(crate) fn private(path: &Path, directory: bool) -> Result<fs::Metadata> {
+pub fn private(path: &Path, directory: bool) -> Result<fs::Metadata> {
     let m = fs::symlink_metadata(path).context("log path unavailable")?;
     validate_private(&m, directory)?;
     Ok(m)
@@ -86,7 +86,7 @@ fn validate_private(m: &fs::Metadata, directory: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn private_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub fn private_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -108,7 +108,7 @@ pub(crate) fn private_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
+pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     if path.try_exists()? {
         private(path, false)?;
     }
@@ -134,7 +134,7 @@ pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 
 struct Lock(File);
 #[derive(Debug)]
-pub(crate) struct Busy;
+pub struct Busy;
 impl std::fmt::Display for Busy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("log store busy")
@@ -148,8 +148,8 @@ impl Drop for Lock {
 }
 
 #[derive(Clone)]
-pub(crate) struct SqliteStore {
-    pub(crate) directory: PathBuf,
+pub struct SqliteStore {
+    pub directory: PathBuf,
 }
 #[derive(Clone)]
 struct Segment {
@@ -182,7 +182,7 @@ fn query_step<T>(result: rusqlite::Result<T>, coverage: &mut Coverage) -> Result
 }
 
 impl SqliteStore {
-    pub(crate) fn open(directory: PathBuf, create: bool) -> Result<Self> {
+    pub fn open(directory: PathBuf, create: bool) -> Result<Self> {
         ensure!(
             directory.is_absolute() && directory.file_name().is_some(),
             "log directory must be an absolute child directory"
@@ -268,10 +268,10 @@ impl SqliteStore {
     fn save(&self, state: &State) -> Result<()> {
         atomic_json(&self.directory.join("store.json"), state)
     }
-    pub(crate) fn policy(&self) -> Result<Policy> {
+    pub fn policy(&self) -> Result<Policy> {
         Ok(self.state()?.policy)
     }
-    pub(crate) fn configure(&self, policy: Policy) -> Result<()> {
+    pub fn configure(&self, policy: Policy) -> Result<()> {
         policy.validate()?;
         let _lock = self.lock(false)?;
         let mut state = self.state()?;
@@ -378,7 +378,7 @@ impl SqliteStore {
             created_ms: now,
         })
     }
-    pub(crate) fn append(&self, entries: &[Entry], now: i64) -> Result<()> {
+    pub fn append(&self, entries: &[Entry], now: i64) -> Result<()> {
         ensure!(entries.len() <= 256 && now >= 0, "log batch exceeds bounds");
         for e in entries {
             e.validate()?;
@@ -492,10 +492,10 @@ impl SqliteStore {
         }
         Ok(())
     }
-    pub(crate) fn maintain(&self, now: i64) -> Result<()> {
+    pub fn maintain(&self, now: i64) -> Result<()> {
         self.maintenance(now, false)
     }
-    pub(crate) fn maintain_if_due(&self, now: i64) -> Result<()> {
+    pub fn maintain_if_due(&self, now: i64) -> Result<()> {
         self.maintenance(now, true)
     }
     fn maintenance(&self, now: i64, if_due: bool) -> Result<()> {
@@ -547,7 +547,7 @@ impl SqliteStore {
         state.maintained_ms = now;
         self.save(&state)
     }
-    pub(crate) fn status(&self) -> Result<serde_json::Value> {
+    pub fn status(&self) -> Result<serde_json::Value> {
         let _lock = self.lock(false)?;
         let state = self.state()?;
         let segments = self.segments()?;
@@ -556,7 +556,7 @@ impl SqliteStore {
             serde_json::json!({"schema":"cowboy.logs.status/v1","store_id":state.id,"directory":self.directory,"policy":state.policy,"retained_bytes":segments.iter().map(|s|s.bytes).sum::<u64>(),"segments":segments.len(),"expired_records":state.expired_records,"capacity_evicted_segments":state.capacity_evicted_segments,"maintained_ms":state.maintained_ms,"maintenance_interval_seconds":30,"writers":health.writers,"writer_history":health.summary,"writer_inventory_truncated":health.inventory_truncated}),
         )
     }
-    pub(crate) fn query(&self, query: &Query) -> Result<Page> {
+    pub fn query(&self, query: &Query) -> Result<Page> {
         query.validate()?;
         let _lock = self.lock(false)?;
         let state = self.state()?;
@@ -591,7 +591,7 @@ impl SqliteStore {
             coverage,
         })
     }
-    pub(crate) fn metrics(&self, query: &Query) -> Result<Metrics> {
+    pub fn metrics(&self, query: &Query) -> Result<Metrics> {
         query.validate()?;
         ensure!(query.after.is_none(), "metrics do not accept a page cursor");
         let _lock = self.lock(false)?;

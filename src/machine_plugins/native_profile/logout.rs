@@ -13,7 +13,7 @@ pub(super) struct Record {
     pub process: Option<processes::Reservation>,
 }
 
-pub(crate) enum LogoutPreparation {
+pub enum LogoutPreparation {
     Execute(Box<PreparedNativeLogin>),
     /// None is unknown, never permission to launch the same operation again.
     Observed(Option<bool>),
@@ -22,7 +22,7 @@ pub(crate) enum LogoutPreparation {
 impl MachinePluginStore {
     /// Caller must separately establish session-stop and login-cancel authority.
     /// This never reads, copies or exports native credentials.
-    pub(crate) fn prepare_native_logout(
+    pub fn prepare_native_logout(
         &self,
         provider: &str,
         generation: u64,
@@ -108,7 +108,7 @@ impl MachinePluginStore {
         })))
     }
 
-    pub(crate) fn record_native_logout_exit(
+    pub fn record_native_logout_exit(
         &self,
         provider: &str,
         generation: u64,
@@ -118,7 +118,7 @@ impl MachinePluginStore {
         self.record_native_logout_outcome(provider, generation, operation, succeeded, false)
     }
 
-    pub(crate) fn record_native_logout_tree_exit(
+    pub fn record_native_logout_tree_exit(
         &self,
         provider: &str,
         generation: u64,
@@ -165,7 +165,7 @@ impl MachinePluginStore {
     }
 
     /// Read both durable outcomes, including after private-home deletion.
-    pub(crate) fn native_auth_trees_exited(
+    pub fn native_auth_trees_exited(
         &self,
         provider: &str,
         generation: u64,
@@ -186,7 +186,7 @@ impl MachinePluginStore {
 
     /// Delete only the exact logged-out generation. The retained tombstone
     /// prevents reusing the original login, including after a partial deletion.
-    pub(crate) fn cleanup_logged_out_native_profile(
+    pub fn cleanup_logged_out_native_profile(
         &self,
         provider: &str,
         generation: u64,

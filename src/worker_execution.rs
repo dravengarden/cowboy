@@ -25,7 +25,7 @@ use crate::execution_protocol::{
 use crate::machine_protocol::execution::{Refusal, Response as MachineResponse};
 use crate::runtime_wire::Frame;
 
-pub(crate) const DESCRIPTOR_ENV: &str = "COWBOY_EXECUTION_DESCRIPTOR";
+pub const DESCRIPTOR_ENV: &str = "COWBOY_EXECUTION_DESCRIPTOR";
 const MAX_PENDING: usize = 24;
 const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 // A validated binding is at most 16 KiB before JSON escaping. Bound the
@@ -42,7 +42,7 @@ struct Pending {
     bytes: usize,
 }
 
-pub(crate) struct Client {
+pub struct Client {
     session: String,
     epoch: String,
     binding: BindingV1,
@@ -55,7 +55,7 @@ pub(crate) struct Client {
 const SLOW_CALL: Duration = Duration::from_secs(5);
 
 impl Client {
-    pub(crate) fn new(
+    pub fn new(
         session: String,
         epoch: String,
         binding: BindingV1,
@@ -71,7 +71,7 @@ impl Client {
         })
     }
 
-    pub(crate) fn frames(&self, reconnect: bool) -> Vec<Frame> {
+    pub fn frames(&self, reconnect: bool) -> Vec<Frame> {
         let mut pending = self.pending.lock();
         pending.retain(|_, pending| !pending.sender.is_closed());
         pending
@@ -89,7 +89,7 @@ impl Client {
             .collect()
     }
 
-    pub(crate) fn complete(&self, reply: RuntimeReply) {
+    pub fn complete(&self, reply: RuntimeReply) {
         if reply.session_id != self.session
             || reply.worker_epoch != self.epoch
             || reply.scope != Scope::from_binding(&self.binding)
@@ -216,7 +216,7 @@ impl Client {
     /// Read a remote managed child's current round from its execution target.
     /// The target keeper announces the constraint it enforces and where the
     /// Machine wrote the round; neither is taken from this worker's launch.
-    pub(crate) async fn managed_round(
+    pub async fn managed_round(
         &self,
         profile: cowboy_provider_sdk::ManagedRuntimeProfile,
     ) -> Result<crate::managed_calls::round::RoundMarker> {
@@ -351,8 +351,8 @@ impl Client {
     }
 }
 
-pub(crate) struct Endpoint {
-    pub(crate) client: Arc<Client>,
+pub struct Endpoint {
+    pub client: Arc<Client>,
     descriptor: PathBuf,
     listener: tokio::task::JoinHandle<()>,
 }
@@ -365,7 +365,7 @@ impl Drop for Endpoint {
 }
 
 impl Endpoint {
-    pub(crate) async fn start(client: Arc<Client>, directory: &Path) -> Result<Self> {
+    pub async fn start(client: Arc<Client>, directory: &Path) -> Result<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let token = format!(
@@ -422,7 +422,7 @@ impl Endpoint {
         })
     }
 
-    pub(crate) fn descriptor(&self) -> &Path {
+    pub fn descriptor(&self) -> &Path {
         &self.descriptor
     }
 }

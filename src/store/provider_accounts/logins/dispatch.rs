@@ -1,7 +1,7 @@
 //! Serialize fresh login enqueue with account revocation and cancellation.
 use super::{Claim, Receipt, Registry, Result, StorageBackend, Store};
 
-pub(crate) struct DispatchScope {
+pub struct DispatchScope {
     pub registry_revision: i64,
     pub recipient_fingerprint: String,
 }
@@ -10,7 +10,7 @@ impl Store {
     /// Only the fresh claimant may call this once. The synchronous callback
     /// must check the live connection and must not await or reenter Store.
     /// A commit error after the callback is an unknown outcome, never retry-send.
-    pub(crate) async fn with_provider_login_dispatch<T>(
+    pub async fn with_provider_login_dispatch<T>(
         &self,
         owner: &str,
         operation: &str,

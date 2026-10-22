@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     pub grant_operation: String,
     pub machine_id: String,
     pub recipient_fingerprint: String,
@@ -20,7 +20,7 @@ impl Store {
     /// The caller verifies the exact sealed wipe ACK. First recording rechecks
     /// enrollment and its live connection under owner/Machine locks. Identical
     /// historical replay grants no authority and does not call the callback.
-    pub(crate) async fn record_provider_remote_wipe(
+    pub async fn record_provider_remote_wipe(
         &self,
         owner: &str,
         operation: &str,

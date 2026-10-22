@@ -38,11 +38,11 @@ const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 const VAULT_DOMAIN: &[u8] = b"cowboy-provider-auth-vault-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) mod grants;
+pub mod grants;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ServiceAuthenticationState {
+pub enum ServiceAuthenticationState {
     SignedOut,
     Authenticating,
     Ready,
@@ -52,7 +52,7 @@ pub(crate) enum ServiceAuthenticationState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ServiceDistributionState {
+pub enum ServiceDistributionState {
     None,
     Pending,
     Current,
@@ -62,7 +62,7 @@ pub(crate) enum ServiceDistributionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ProviderAuthenticationStatus {
+pub struct ProviderAuthenticationStatus {
     pub provider_id: String,
     pub account_id: ProviderAccountId,
     /// Public enrollment key, not a credential. None denotes portable state.
@@ -83,7 +83,7 @@ pub(crate) struct ProviderAuthenticationStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProviderAuthRefreshResult {
+pub enum ProviderAuthRefreshResult {
     Stale { current_generation: u64 },
     Unchanged(Vec<ProviderAuthenticationStatus>),
     Updated(Vec<ProviderAuthenticationStatus>),
@@ -158,7 +158,7 @@ impl Drop for VaultOwner {
     }
 }
 
-pub(crate) struct ProviderAuthService {
+pub struct ProviderAuthService {
     root: PathBuf,
     account_id: ProviderAccountId,
     accounts: parking_lot::Mutex<BTreeMap<ProviderAccountId, Arc<Self>>>,
@@ -173,7 +173,7 @@ pub(crate) struct ProviderAuthService {
 }
 
 impl ProviderAuthService {
-    pub(crate) fn open(data_dir: &Path) -> Result<Self> {
+    pub fn open(data_dir: &Path) -> Result<Self> {
         fs::create_dir_all(data_dir)?;
         // The configured data location may itself be a host-managed symlink.
         // Resolve that trusted anchor once; owned credential scopes below it
@@ -303,7 +303,7 @@ impl ProviderAuthService {
 
     /// Resolve one independently locked credential lineage. Admission and DB
     /// ownership must be checked by the caller before opening a named account.
-    pub(crate) fn account(&self, account: &ProviderAccountId) -> Result<Arc<Self>> {
+    pub fn account(&self, account: &ProviderAccountId) -> Result<Arc<Self>> {
         ensure!(
             !account.is_default(),
             "default authentication uses the root vault"
@@ -334,7 +334,7 @@ impl ProviderAuthService {
     /// does not constrain the account's execution placement on other Machines.
     /// The caller verifies account ownership and enrollment before opening this
     /// empty scope, then verifies native identity before committing credentials.
-    pub(crate) fn machine_grant(&self, recipient_key: &str) -> Result<Arc<Self>> {
+    pub fn machine_grant(&self, recipient_key: &str) -> Result<Arc<Self>> {
         ensure!(
             !self.account_id.is_default() && self.recipient_key.is_none(),
             "Machine grants require a named account scope"
@@ -379,7 +379,7 @@ impl ProviderAuthService {
 
     /// Refresh/reconciliation is lookup-only. An untrusted observation must
     /// never create a new account or mint a Machine authorization grant.
-    pub(crate) fn existing_machine_grant(
+    pub fn existing_machine_grant(
         &self,
         account: &ProviderAccountId,
         recipient_key: &str,
@@ -406,7 +406,7 @@ impl ProviderAuthService {
     }
 
     #[must_use]
-    pub(crate) fn statuses(&self) -> Vec<ProviderAuthenticationStatus> {
+    pub fn statuses(&self) -> Vec<ProviderAuthenticationStatus> {
         let mut statuses: BTreeMap<_, _> = self
             .providers
             .read()
@@ -425,7 +425,7 @@ impl ProviderAuthService {
     /// Durable generations that can actually be sealed to a Machine. A
     /// transient Service login flow is deliberately excluded.
     #[must_use]
-    pub(crate) fn replica_statuses(&self) -> Vec<ProviderAuthenticationStatus> {
+    pub fn replica_statuses(&self) -> Vec<ProviderAuthenticationStatus> {
         self.providers
             .read()
             .values()
@@ -433,7 +433,7 @@ impl ProviderAuthService {
             .collect()
     }
 
-    pub(crate) fn machine_account_replica_statuses(
+    pub fn machine_account_replica_statuses(
         &self,
         recipient_key: &str,
     ) -> Result<Vec<ProviderAuthenticationStatus>> {
@@ -455,7 +455,7 @@ impl ProviderAuthService {
     }
 
     #[must_use]
-    pub(crate) fn status(&self, provider_id: &str) -> Option<ProviderAuthenticationStatus> {
+    pub fn status(&self, provider_id: &str) -> Option<ProviderAuthenticationStatus> {
         self.providers
             .read()
             .get(provider_id)
@@ -463,7 +463,7 @@ impl ProviderAuthService {
     }
 
     #[must_use]
-    pub(crate) fn active_authentication_request(&self, provider_id: &str) -> Option<String> {
+    pub fn active_authentication_request(&self, provider_id: &str) -> Option<String> {
         self.transient
             .read()
             .get(provider_id)
@@ -473,7 +473,7 @@ impl ProviderAuthService {
             .map(|active| active.request_id.clone())
     }
 
-    pub(crate) fn begin_authentication(
+    pub fn begin_authentication(
         &self,
         package: &ProviderPackage,
         request_id: &str,
@@ -519,7 +519,7 @@ impl ProviderAuthService {
         Ok(status)
     }
 
-    pub(crate) fn cancel_authentication(&self, provider_id: &str, request_id: &str) {
+    pub fn cancel_authentication(&self, provider_id: &str, request_id: &str) {
         let mut transient = self.transient.write();
         if transient
             .get(provider_id)
@@ -529,7 +529,7 @@ impl ProviderAuthService {
         }
     }
 
-    pub(crate) fn fail_authentication(&self, provider_id: &str, request_id: &str) {
+    pub fn fail_authentication(&self, provider_id: &str, request_id: &str) {
         let mut transient = self.transient.write();
         if let Some(active) = transient
             .get_mut(provider_id)
@@ -544,7 +544,7 @@ impl ProviderAuthService {
     /// Service authentication generation remains immutable. Credential commit
     /// and logout take the matching write lock, so neither can slip between a
     /// readiness check and durable session registration.
-    pub(crate) fn with_scheduling_generation<T>(
+    pub fn with_scheduling_generation<T>(
         &self,
         provider_id: &str,
         authentication_required: bool,
@@ -573,7 +573,7 @@ impl ProviderAuthService {
     /// Commit a successfully authenticated portable bundle as the next Service
     /// generation. A stale executor cannot overwrite a newer generation when
     /// `expected_generation` is supplied.
-    pub(crate) fn commit(
+    pub fn commit(
         &self,
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,
@@ -596,7 +596,7 @@ impl ProviderAuthService {
     /// in a public authentication scope. Each Provider keeps its own signed
     /// contract and encrypted vault entry, while the user's secret is entered
     /// only once at Service scope.
-    pub(crate) fn commit_shared(
+    pub fn commit_shared(
         &self,
         packages: &[ProviderPackage],
         bundle: &PortableCredentialBundle,
@@ -692,7 +692,7 @@ impl ProviderAuthService {
     /// one concurrent writer can advance that generation; a loser receives the
     /// current generation and rehydrates from the Service instead of forking a
     /// second durable credential lineage.
-    pub(crate) fn compare_and_swap_refresh(
+    pub fn compare_and_swap_refresh(
         &self,
         packages: &[ProviderPackage],
         bundle: &PortableCredentialBundle,
@@ -796,7 +796,7 @@ impl ProviderAuthService {
 
     /// Publish a newer wipe generation. Old encrypted vault generations are
     /// no longer addressable and every connected Machine receives this tombstone.
-    pub(crate) fn logout(&self, provider_id: &str) -> Result<ProviderAuthenticationStatus> {
+    pub fn logout(&self, provider_id: &str) -> Result<ProviderAuthenticationStatus> {
         self.logout_shared(&[provider_id.to_owned()])?
             .into_iter()
             .next()
@@ -805,7 +805,7 @@ impl ProviderAuthService {
 
     /// Publish one wipe generation for every Provider in a shared
     /// authentication scope.
-    pub(crate) fn logout_shared(
+    pub fn logout_shared(
         &self,
         provider_ids: &[String],
     ) -> Result<Vec<ProviderAuthenticationStatus>> {
@@ -869,7 +869,7 @@ impl ProviderAuthService {
 
     /// Encrypt the current Service generation to one enrolled Machine and sign
     /// every field that can affect routing or credential materialization.
-    pub(crate) fn seal_for_machine(
+    pub fn seal_for_machine(
         &self,
         provider_id: &str,
         machine_public_key: &str,
@@ -959,7 +959,7 @@ impl ProviderAuthService {
         Ok(envelope)
     }
 
-    pub(crate) fn mark_distribution(
+    pub fn mark_distribution(
         &self,
         provider_id: &str,
         generation: u64,
@@ -982,7 +982,7 @@ impl ProviderAuthService {
     /// Mark the exact Service credential generation rejected by a live Agent.
     /// A stale worker cannot expire a newer login, and repeated reports for the
     /// same generation are idempotent.
-    pub(crate) fn mark_expired(
+    pub fn mark_expired(
         &self,
         provider_id: &str,
         generation: u64,

@@ -1,5 +1,5 @@
 // Wire protocol — mirrors src/core.rs (Outbound/Envelope/Event) and the
-// inbound commands parsed in src/server.rs. The ACP pass-through `update`
+// inbound commands parsed in components/server/src/server.rs. The ACP pass-through `update`
 // payloads are typed loosely; their discriminant is `sessionUpdate`.
 
 import type {

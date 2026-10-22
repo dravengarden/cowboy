@@ -8,7 +8,7 @@ use crate::machine_protocol::telemetry_export::{ATTEMPT_BUDGET, ExportAttempt, E
 
 impl MachineControl {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn telemetry_export_target_current(
+    pub fn telemetry_export_target_current(
         &self,
         token: &ConnectionToken,
         attempt: &ExportAttempt,
@@ -30,7 +30,7 @@ impl MachineControl {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn export_bound_telemetry(
+    pub async fn export_bound_telemetry(
         &self,
         token: &ConnectionToken,
         attempt: &ExportAttempt,

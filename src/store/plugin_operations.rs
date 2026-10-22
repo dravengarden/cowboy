@@ -120,7 +120,7 @@ macro_rules! dispatch {
 }
 
 impl Store {
-    pub(crate) async fn begin_plugin_uninstall(&self, intent: &UninstallIntent) -> Result<()> {
+    pub async fn begin_plugin_uninstall(&self, intent: &UninstallIntent) -> Result<()> {
         intent.validate()?;
         ensure!(
             intent.expires_at_ms >= chrono::Utc::now().timestamp_millis(),
@@ -134,11 +134,11 @@ impl Store {
         dispatch!(self, begin_plugin_uninstall(intent, &document))
     }
 
-    pub(crate) async fn plugin_uninstall_operation(&self, id: &str) -> Result<Option<Operation>> {
+    pub async fn plugin_uninstall_operation(&self, id: &str) -> Result<Option<Operation>> {
         dispatch!(self, plugin_uninstall_operation(id))
     }
 
-    pub(crate) async fn plugin_uninstall_history(
+    pub async fn plugin_uninstall_history(
         &self,
         service: &str,
         machine: &str,
@@ -149,11 +149,11 @@ impl Store {
 
     /// Before dispatch/HTTP starts. Evidence survives restart, authorization does
     /// not: do not send compensating or forward Machine commands from this scan.
-    pub(crate) async fn recover_plugin_uninstalls(&self, service: &str) -> Result<Vec<Operation>> {
+    pub async fn recover_plugin_uninstalls(&self, service: &str) -> Result<Vec<Operation>> {
         dispatch!(self, recover_plugin_uninstalls(service))
     }
 
-    pub(crate) async fn advance_plugin_uninstall(
+    pub async fn advance_plugin_uninstall(
         &self,
         id: &str,
         from: Phase,
@@ -169,11 +169,11 @@ impl Store {
 
     /// Completion and the exact Service-side deletion are one local commit.
     /// The CAS also serializes with a possibly ambiguous earlier COMMIT.
-    pub(crate) async fn commit_plugin_uninstall(&self, intent: &UninstallIntent) -> Result<()> {
+    pub async fn commit_plugin_uninstall(&self, intent: &UninstallIntent) -> Result<()> {
         dispatch!(self, commit_plugin_uninstall(intent))
     }
 
-    pub(crate) async fn plugin_uninstall_resolution(
+    pub async fn plugin_uninstall_resolution(
         &self,
         operation: &str,
     ) -> Result<Option<ResolutionReceipt>> {
@@ -182,7 +182,7 @@ impl Store {
 
     /// Only the separately authenticated, finite local resolution can take this
     /// transition. Ordinary phase advancement still cannot leave `NeedsAttention`.
-    pub(crate) async fn resolve_plugin_uninstall(
+    pub async fn resolve_plugin_uninstall(
         &self,
         permit: &ResolutionPermit,
     ) -> Result<ResolutionReceipt> {

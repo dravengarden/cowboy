@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result, ensure};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
-pub(crate) struct Readiness {
+pub struct Readiness {
     pub account_completed: bool,
     pub missing: Vec<Missing>,
     /// Public lifecycle entry remains gated; completion uses a locked writer.
@@ -13,7 +13,7 @@ pub(crate) struct Readiness {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct Missing {
+pub struct Missing {
     pub kind: &'static str,
     pub target: String,
 }
@@ -21,7 +21,7 @@ pub(crate) struct Missing {
 impl Store {
     /// Read immutable plan locators and durable historical evidence. Concurrent
     /// progress may make this inventory conservative; it never authorizes work.
-    pub(crate) async fn provider_revocation_readiness(
+    pub async fn provider_revocation_readiness(
         &self,
         owner: &str,
         operation: &str,

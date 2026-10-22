@@ -19,17 +19,17 @@ struct State {
 /// Clone shares one observation, not a fresh permission lifetime. No serde or
 /// Debug; an account/role tuple cannot reconstruct this private core identity.
 #[derive(Clone)]
-pub(crate) struct ProductPermissionObservation {
+pub struct ProductPermissionObservation {
     owner: Weak<HubInner>,
     state: Arc<State>,
 }
 
 impl ProductPermissionObservation {
-    pub(crate) fn role(&self) -> AdminRole {
+    pub fn role(&self) -> AdminRole {
         self.state.role
     }
 
-    pub(crate) fn current(&self, hub: &Hub, account: &str) -> bool {
+    pub fn current(&self, hub: &Hub, account: &str) -> bool {
         Weak::ptr_eq(&self.owner, &Arc::downgrade(&hub.inner))
             && account.len() <= MAX_ACCOUNT_BYTES
             && account.trim().eq_ignore_ascii_case(&self.state.account)
@@ -65,7 +65,7 @@ impl Observations {
 }
 
 impl Hub {
-    pub(crate) fn observe_product_permissions(
+    pub fn observe_product_permissions(
         &self,
         account: &str,
     ) -> Option<ProductPermissionObservation> {

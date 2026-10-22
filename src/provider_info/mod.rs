@@ -10,7 +10,7 @@ use crate::core::SessionMeta;
 use crate::plugin_host::{PluginUsageSpec, UsageSessionRateLimits};
 use crate::usage::ProviderUsage;
 
-pub(crate) fn overlay_session_usage(
+pub fn overlay_session_usage(
     snapshot: crate::usage::UsageSnapshot,
     sessions: &[SessionMeta],
     catalog: &crate::provider_catalog::ProviderCatalog,
@@ -113,11 +113,7 @@ fn project_session_rate_limits(raw: &Value, projection: &UsageSessionRateLimits)
     Some(Value::Object(projected))
 }
 
-pub(crate) fn unavailable(
-    provider: &'static str,
-    source: &'static str,
-    message: &str,
-) -> ProviderUsage {
+pub fn unavailable(provider: &'static str, source: &'static str, message: &str) -> ProviderUsage {
     ProviderUsage {
         provider,
         status: "unavailable",
@@ -131,11 +127,7 @@ pub(crate) fn unavailable(
     }
 }
 
-pub(crate) fn error(
-    provider: &'static str,
-    source: &'static str,
-    message: String,
-) -> ProviderUsage {
+pub fn error(provider: &'static str, source: &'static str, message: String) -> ProviderUsage {
     ProviderUsage {
         error: Some(message),
         ..unavailable(provider, source, "")

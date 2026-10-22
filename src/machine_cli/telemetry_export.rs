@@ -4,7 +4,7 @@ use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::telemetry_export::{ExportAttempt, ExportOutcome, ExportReceipt};
 use std::sync::Arc;
 
-pub(crate) fn export(
+pub fn export(
     request_id: String,
     attempt: ExportAttempt,
     store: Arc<MachinePluginStore>,

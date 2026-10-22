@@ -10,16 +10,16 @@ use crate::machine_protocol::telemetry_binding::{
 };
 use crate::plugin_operation::Actor;
 
-pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
-pub(crate) const MAX_OPERATIONS: usize = 1024;
+pub const MAX_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_OPERATIONS: usize = 1024;
 const MAX_INTENT_BYTES: usize = 16 * 1024;
 const MAX_OBSERVATION_BYTES: usize = 16 * 1024;
 
-pub(crate) mod resolution;
+pub mod resolution;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Intent {
+pub struct Intent {
     pub schema: u16,
     pub operation_id: String,
     pub service_id: String,
@@ -32,7 +32,7 @@ pub(crate) struct Intent {
 }
 
 impl Intent {
-    pub(crate) fn machine_step(&self) -> Result<BindingStep> {
+    pub fn machine_step(&self) -> Result<BindingStep> {
         let actor = match &self.actor {
             Actor::Product { user_id } => user_id,
             Actor::Admin { account } => account,
@@ -78,7 +78,7 @@ impl Intent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Attention {
+pub enum Attention {
     AuthorizationEnded,
     Uncertain,
     InvalidEvidence,
@@ -87,7 +87,7 @@ pub(crate) enum Attention {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Progress {
+pub enum Progress {
     Prepared,
     Dispatching,
     /// Only a Prepared operation can be aborted without dispatch evidence.
@@ -128,7 +128,7 @@ impl Progress {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Operation {
+pub struct Operation {
     pub intent: Intent,
     pub progress: Progress,
 }
@@ -189,7 +189,7 @@ impl Operation {
 /// not an implicit fallback or a one-sided rewrite of this ledger's owner.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Ledger {
+pub struct Ledger {
     schema: u16,
     service_id: String,
     machine_id: String,
@@ -204,19 +204,14 @@ impl Ledger {
     /// Evidence required by a fresh, independently authorized export attempt.
     /// This predicate itself never creates a sending capability.
     #[cfg_attr(not(all(test, feature = "machine-host")), allow(dead_code))]
-    pub(crate) fn permits_export(
+    pub fn permits_export(
         &self,
         attempt: &crate::machine_protocol::telemetry_export::ExportAttempt,
     ) -> bool {
         self.permits_binding(&attempt.service_id, &attempt.machine_id, &attempt.binding)
     }
 
-    pub(crate) fn permits_binding(
-        &self,
-        service: &str,
-        machine: &str,
-        binding: &BindingSnapshot,
-    ) -> bool {
+    pub fn permits_binding(&self, service: &str, machine: &str, binding: &BindingSnapshot) -> bool {
         self.service_id == service
             && self.machine_id == machine
             && self.current.as_ref() == Some(binding)
@@ -224,7 +219,7 @@ impl Ledger {
             && !self.operations.iter().any(|op| op.progress.unresolved())
     }
 
-    pub(crate) fn decode(document: &str, service: &str) -> Result<Self> {
+    pub fn decode(document: &str, service: &str) -> Result<Self> {
         ensure!(
             document.len() <= MAX_BYTES,
             "Service binding journal exceeds budget"
@@ -324,7 +319,7 @@ impl Ledger {
         Ok(())
     }
 
-    pub(crate) fn encode(&self, service: &str) -> Result<String> {
+    pub fn encode(&self, service: &str) -> Result<String> {
         self.validate(service)?;
         let document = serde_json::to_string(self)?;
         ensure!(
@@ -338,10 +333,10 @@ impl Ledger {
 // Staged finite writer. Protocol 15 exists, but no HTTP mutation or production
 // admission switch is exported. Tests exercise these exact paths.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) mod writer {
+pub mod writer {
     use super::*;
 
-    pub(crate) enum Change<'a> {
+    pub enum Change<'a> {
         Begin(&'a Intent),
         Advance {
             expected: &'a Operation,
@@ -351,7 +346,7 @@ pub(crate) mod writer {
     }
 
     impl Change<'_> {
-        pub(crate) fn service(&self) -> &str {
+        pub fn service(&self) -> &str {
             match self {
                 Self::Begin(intent) => &intent.service_id,
                 Self::Advance { expected, .. } => &expected.intent.service_id,
@@ -359,7 +354,7 @@ pub(crate) mod writer {
             }
         }
 
-        pub(crate) fn within_budget(&self) -> bool {
+        pub fn within_budget(&self) -> bool {
             match self {
                 Self::Resolve(permit) => permit.within_budget(),
                 _ => true,
@@ -367,13 +362,13 @@ pub(crate) mod writer {
         }
     }
 
-    pub(crate) struct Updated {
+    pub struct Updated {
         pub operation: Operation,
         /// An identical retry returns evidence, never permission to dispatch.
         pub admitted: bool,
     }
 
-    pub(crate) fn apply(ledger: &mut Option<Ledger>, change: &Change<'_>) -> Result<Updated> {
+    pub fn apply(ledger: &mut Option<Ledger>, change: &Change<'_>) -> Result<Updated> {
         if let Some(ledger) = ledger.as_ref() {
             ledger.validate(change.service())?;
         }
@@ -474,13 +469,10 @@ pub(crate) mod writer {
 /// Opaque, sticky admission fence. Recovery may observe evidence but cannot
 /// activate a managed exporter or silently fall back to private legacy config.
 #[derive(Clone)]
-pub(crate) struct LegacyFence(std::sync::Arc<std::sync::atomic::AtomicBool>);
+pub struct LegacyFence(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl LegacyFence {
-    pub(crate) async fn recover(
-        store: Option<&crate::store::Store>,
-        service: &str,
-    ) -> Result<Self> {
+    pub async fn recover(store: Option<&crate::store::Store>, service: &str) -> Result<Self> {
         let managed = match store {
             Some(store) => store.telemetry_binding_ledger(service).await?.is_some(),
             None => false,
@@ -495,25 +487,25 @@ impl LegacyFence {
         )))
     }
 
-    pub(crate) fn allows_legacy(&self) -> bool {
+    pub fn allows_legacy(&self) -> bool {
         !self.0.load(std::sync::atomic::Ordering::Acquire)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Release);
     }
 
-    #[cfg(test)]
-    pub(crate) fn unmanaged_fixture() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn unmanaged_fixture() -> Self {
         Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             false,
         )))
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture(suffix: &str) -> Intent {
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture(suffix: &str) -> Intent {
     let step = crate::machine_protocol::telemetry_binding::fixture();
     Intent {
         schema: 1,
@@ -529,5 +521,5 @@ pub(crate) fn fixture(suffix: &str) -> Intent {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;

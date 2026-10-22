@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     pub login_operation: String,
     pub machine_id: String,
     pub recipient_fingerprint: String,
@@ -19,7 +19,7 @@ mod tests;
 impl Store {
     /// First recording revalidates original admission and live enrollment under
     /// the owner/Machine locks. Identical historical replay grants no authority.
-    pub(crate) async fn record_provider_login_stop(
+    pub async fn record_provider_login_stop(
         &self,
         owner: &str,
         operation: &str,

@@ -5,14 +5,14 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub(crate) mod grants;
-pub(crate) mod logins;
-pub(crate) mod revocation;
-pub(crate) mod transitions;
+pub mod grants;
+pub mod logins;
+pub mod revocation;
+pub mod transitions;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Account {
+pub struct Account {
     pub id: ProviderAccountId,
     pub provider_id: String,
     pub label: String,
@@ -33,14 +33,14 @@ pub(crate) struct Account {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Registry {
+pub struct Registry {
     pub revision: i64,
     pub accounts: Vec<Account>,
     pub defaults: BTreeMap<String, ProviderAccountId>,
 }
 
 impl Account {
-    pub(crate) fn admits_binding(&self, bound: i64, registry: i64) -> bool {
+    pub fn admits_binding(&self, bound: i64, registry: i64) -> bool {
         bound >= 0
             && bound <= registry
             && self
@@ -50,21 +50,21 @@ impl Account {
                 })
     }
 
-    pub(crate) fn available(&self) -> bool {
+    pub fn available(&self) -> bool {
         self.enabled && !self.revoking
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Mutation {
+pub struct Mutation {
     pub expected_revision: i64,
     pub change: Change,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Change {
+pub enum Change {
     /// Internal lifecycle entry. Public metadata edits cannot start or clear it.
     #[serde(skip_deserializing)]
     BeginRevocation {
@@ -98,7 +98,7 @@ pub(crate) enum Change {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct Receipt {
+pub struct Receipt {
     /// Local lifecycle completion only; the account admission fence stays set.
     #[serde(default)]
     pub revocation_completed: bool,
@@ -115,7 +115,7 @@ pub(crate) struct Receipt {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum MutationResult {
+pub enum MutationResult {
     Applied(Receipt),
     Conflict(Registry),
     Invalid(&'static str),
@@ -281,7 +281,7 @@ impl Registry {
     }
 
     /// Resolve only at creation. Recovery uses the persisted session identity.
-    pub(crate) fn resolve(
+    pub fn resolve(
         &self,
         provider: &str,
         explicit: Option<&ProviderAccountId>,
@@ -303,7 +303,7 @@ impl Registry {
 }
 
 impl Store {
-    pub(crate) async fn provider_accounts(&self, owner: &str) -> Result<Registry> {
+    pub async fn provider_accounts(&self, owner: &str) -> Result<Registry> {
         macro_rules! read {
             ($db:expr) => {
                 sqlx::query_scalar::<_, String>(
@@ -324,7 +324,7 @@ impl Store {
             .unwrap_or_default())
     }
 
-    pub(crate) async fn provider_account_receipt(
+    pub async fn provider_account_receipt(
         &self,
         owner: &str,
         operation: &str,
@@ -342,7 +342,7 @@ impl Store {
             .transpose()?)
     }
 
-    pub(crate) async fn mutate_provider_accounts(
+    pub async fn mutate_provider_accounts(
         &self,
         owner: &str,
         operation: &str,

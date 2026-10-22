@@ -25,10 +25,10 @@ struct LedgerFile {
     evidence_digest: BindingDigest,
 }
 
-#[cfg(all(test, feature = "full"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
 impl MachinePluginStore {
     /// Re-checksummed negative fixtures must use the real wire field order.
-    pub(crate) fn rewrite_binding_fixture(
+    pub fn rewrite_binding_fixture(
         bytes: &[u8],
         change: impl FnOnce(&mut serde_json::Value),
     ) -> Vec<u8> {
@@ -163,9 +163,9 @@ struct BindingState {
     ledger: Option<Ledger>,
     poisoned: bool,
     // Isolated finite-transaction fixtures only. Production uses host policy.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     writer: bool,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     recovery_writer: bool,
     /// Process-local proof of validated reopen, never reconstructed from a
     /// live failed write or a serialized request. Unknown/schema-one stay fenced.
@@ -187,7 +187,7 @@ impl Bindings {
         state: &BindingState,
         step: &BindingStep,
     ) -> Option<WriteScope<P>> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if [state.writer, state.recovery_writer, false][P::INDEX] {
             return Some(WriteScope::fixture());
         }
@@ -244,9 +244,9 @@ impl Bindings {
             state: parking_lot::Mutex::new(BindingState {
                 ledger,
                 poisoned: false,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 writer: false,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 recovery_writer: false,
                 reopened_prepared,
             }),
@@ -378,13 +378,13 @@ fn unavailable(reason: BindingUnavailable) -> BindingObservation {
 }
 
 impl MachinePluginStore {
-    #[cfg(test)]
-    pub(crate) fn enable_binding_writer_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn enable_binding_writer_for_test(&self) {
         self.operations.telemetry_bindings.state.lock().writer = true;
     }
 
-    #[cfg(test)]
-    pub(crate) fn enable_binding_recovery_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn enable_binding_recovery_for_test(&self) {
         self.operations
             .telemetry_bindings
             .state
@@ -392,7 +392,7 @@ impl MachinePluginStore {
             .recovery_writer = true;
     }
 
-    pub(crate) async fn telemetry_binding_observation(
+    pub async fn telemetry_binding_observation(
         &self,
         step: &BindingStep,
         service: Option<&str>,

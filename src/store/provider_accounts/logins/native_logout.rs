@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Completion {
+pub struct Completion {
     pub revocation_operation: String,
     pub machine_id: String,
     pub recipient_fingerprint: String,
@@ -17,7 +17,7 @@ impl Store {
     /// proposal has no outcome yet; the callback must return the response
     /// future without polling it. Recorded failure or confirmed cleanup
     /// suppresses redispatch; success alone still permits scoped cleanup.
-    pub(crate) async fn with_native_logout_dispatch<T>(
+    pub async fn with_native_logout_dispatch<T>(
         &self,
         owner: &str,
         login_operation: &str,
@@ -39,7 +39,7 @@ impl Store {
 
     /// Admit a fresh observation under owner/enrollment locks. Exact historical
     /// replay is read-only, including after later enrollment changes.
-    pub(crate) async fn record_native_logout_completion(
+    pub async fn record_native_logout_completion(
         &self,
         owner: &str,
         login_operation: &str,

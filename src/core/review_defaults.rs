@@ -28,7 +28,7 @@ impl Receipts {
 }
 
 impl Hub {
-    pub(crate) fn review_default_receipt(&self, operation: &str) -> bool {
+    pub fn review_default_receipt(&self, operation: &str) -> bool {
         self.inner
             .review_default_receipts
             .lock()
@@ -36,7 +36,7 @@ impl Hub {
             .is_some()
     }
 
-    pub(crate) fn review_directory_update(
+    pub fn review_directory_update(
         &self,
         actor: &FolderActor,
         session_id: &str,

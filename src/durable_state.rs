@@ -15,21 +15,21 @@ const MAX_COUNT: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Journal {
+pub struct Journal {
     pub writer_enabled: bool,
     pub deleted_sessions: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Incarnations {
+pub struct Incarnations {
     pub writer_enabled: bool,
     pub lineages: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Continuations {
+pub struct Continuations {
     pub pending: u64,
 }
 
@@ -37,7 +37,7 @@ pub(crate) struct Continuations {
 /// cleanup continuation namespace on a build without an admitted writer).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct DurableState {
+pub struct DurableState {
     pub schema: u8,
     pub deletion_journal: Option<Journal>,
     pub session_incarnations: Option<Incarnations>,
@@ -45,12 +45,12 @@ pub(crate) struct DurableState {
 }
 
 impl DurableState {
-    pub(crate) const SCHEMA: u8 = 1;
+    pub const SCHEMA: u8 = 1;
 
     /// Decode a Machine reply, refusing unknown fields, another schema and any
     /// count beyond [`MAX_COUNT`].
     #[cfg(feature = "full")]
-    pub(crate) fn from_reply(value: serde_json::Value) -> Result<Self, String> {
+    pub fn from_reply(value: serde_json::Value) -> Result<Self, String> {
         let state: Self = serde_json::from_value(value).map_err(|error| error.to_string())?;
         let counts = [
             state

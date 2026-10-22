@@ -14,14 +14,14 @@ use crate::plugin_storage::{NamespaceBackend, PluginNamespace, set_postgres_sear
 use crate::store::Store;
 
 const CORE_IMPORT: &str = "core_passkeys";
-pub(crate) const STORAGE_CAPABILITY: &str = "webauthn";
+pub const STORAGE_CAPABILITY: &str = "webauthn";
 
 mod ownership;
 
 /// Only checked core initialization or the legacy bridge constructs this port.
 /// No generic SQL execution or Plugin capability dispatch is exposed.
 #[derive(Clone)]
-pub(crate) struct PasskeyStorage {
+pub struct PasskeyStorage {
     backend: NamespaceBackend,
 }
 
@@ -29,17 +29,17 @@ pub(crate) struct PasskeyStorage {
 /// Serialize initialization *before* any import, not only at the final pointer
 /// swap, so competing initializers cannot copy credentials into two locations.
 #[derive(Default)]
-pub(crate) struct PasskeyBinding {
+pub struct PasskeyBinding {
     storage: std::sync::OnceLock<PasskeyStorage>,
     initialization: tokio::sync::Mutex<()>,
 }
 
 impl PasskeyBinding {
-    pub(crate) fn get(&self) -> Option<&PasskeyStorage> {
+    pub fn get(&self) -> Option<&PasskeyStorage> {
         self.storage.get()
     }
 
-    pub(crate) async fn attach(&self, namespace: &PluginNamespace, store: &Store) -> Result<()> {
+    pub async fn attach(&self, namespace: &PluginNamespace, store: &Store) -> Result<()> {
         let _initialization = self.initialization.lock().await;
         ensure!(
             self.storage.get().is_none(),
@@ -52,7 +52,7 @@ impl PasskeyBinding {
             .map_err(|_| anyhow::anyhow!("Passkey storage is already bound"))
     }
 
-    pub(crate) async fn attach_core(
+    pub async fn attach_core(
         &self,
         store: &Store,
         config: &crate::core_security::Config,
@@ -78,7 +78,7 @@ const LEGACY_POSTGRES_CHECKSUM: &str =
 const LEGACY_SQLITE_CHECKSUM: &str =
     "sha256:d8b43ab7949eb0919d8429acca66c60bcd0be4cdb5b4ac198c41677fd1deb385";
 
-pub(crate) fn validate_legacy_host(host: &crate::plugin_host::PluginHostSpec) -> Result<()> {
+pub fn validate_legacy_host(host: &crate::plugin_host::PluginHostSpec) -> Result<()> {
     if !host
         .native_capabilities
         .iter()

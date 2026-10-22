@@ -350,7 +350,7 @@ pub(super) async fn fixture(store: &Store) -> Vec<(&'static str, grants::Receipt
     fixtures
 }
 
-pub(crate) async fn contract(store: &Store) {
+pub async fn contract(store: &Store) {
     let fixtures = fixture(store).await;
     let base = fixtures[0].1.clone();
     let mut input = Mutation {
@@ -499,7 +499,7 @@ async fn discovery_contract(store: &Store) {
     assert!(found.contains("revoke") && found.contains("resume-34"));
 }
 
-pub(crate) async fn persisted(store: &Store) {
+pub async fn persisted(store: &Store) {
     assert!(
         store
             .provider_account_revocations(None)

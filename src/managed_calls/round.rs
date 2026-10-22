@@ -24,7 +24,7 @@ pub struct RoundMarker {
     pub output_schema: Option<serde_json::Value>,
 }
 
-pub(crate) fn read_private(path: &Path, limit: u64) -> Option<Vec<u8>> {
+pub fn read_private(path: &Path, limit: u64) -> Option<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()

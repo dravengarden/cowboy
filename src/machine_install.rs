@@ -707,7 +707,7 @@ fn launcher_script_with_bootstrap(
 }
 
 #[cfg(all(test, feature = "machine-host"))]
-pub(crate) fn portable_cache_launcher_fixture(state: &Path, key: &Path) -> String {
+pub fn portable_cache_launcher_fixture(state: &Path, key: &Path) -> String {
     let args = InstallArgs::try_parse_from([
         "installer",
         "--controller-url",

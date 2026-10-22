@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 mod failed;
 mod logout;
 mod processes;
-pub(crate) use logout::LogoutPreparation;
+pub use logout::LogoutPreparation;
 
-pub(crate) struct PreparedNativeLogin {
+pub struct PreparedNativeLogin {
     pub home: PathBuf,
     pub command: PathBuf,
     pub method: cowboy_provider_sdk::AuthMethod,
@@ -109,7 +109,7 @@ impl MachinePluginStore {
     }
 
     /// Metadata lookup must not create an account or run authentication.
-    pub(crate) fn observe_native_profile(
+    pub fn observe_native_profile(
         &self,
         account: &crate::provider_account::ProviderAccountId,
         provider: &str,
@@ -401,7 +401,7 @@ impl MachinePluginStore {
 
     /// Recover completion without rerunning login or opening native credential
     /// files. Retained metadata is not sufficient after revocation or home loss.
-    pub(crate) fn native_profile_receipt(
+    pub fn native_profile_receipt(
         &self,
         provider: &str,
         generation: u64,
@@ -443,8 +443,8 @@ impl MachinePluginStore {
 
     /// Record only after `wait()` has confirmed this reserved login's leader.
     /// A dropped task or missing process table entry is not eligible evidence.
-    #[cfg(test)]
-    pub(crate) fn record_native_login_exit(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_native_login_exit(
         &self,
         provider: &str,
         generation: u64,
@@ -454,7 +454,7 @@ impl MachinePluginStore {
         self.record_native_login_outcome(provider, generation, request, login_succeeded, false)
     }
 
-    pub(crate) fn record_native_login_tree_exit(
+    pub fn record_native_login_tree_exit(
         &self,
         provider: &str,
         generation: u64,

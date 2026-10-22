@@ -10,10 +10,10 @@ use std::{
 /// CLI arguments keep this out of durable reader formats: an older Controller
 /// rejects the unknown flag instead of silently ignoring a new restriction.
 #[derive(Debug, Default)]
-pub(crate) struct RuntimeRestrictions(BTreeMap<String, BTreeSet<String>>);
+pub struct RuntimeRestrictions(BTreeMap<String, BTreeSet<String>>);
 
 impl RuntimeRestrictions {
-    pub(crate) fn parse(bindings: &[String]) -> anyhow::Result<Self> {
+    pub fn parse(bindings: &[String]) -> anyhow::Result<Self> {
         let mut providers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for binding in bindings {
             let (provider, machine) = binding.split_once('=').ok_or_else(|| {
@@ -38,13 +38,13 @@ impl RuntimeRestrictions {
         Ok(Self(providers))
     }
 
-    pub(crate) fn allows(&self, provider: &str, machine: &str) -> bool {
+    pub fn allows(&self, provider: &str, machine: &str) -> bool {
         self.0
             .get(provider)
             .is_none_or(|machines| machines.contains(machine))
     }
 
-    pub(crate) fn check(&self, provider: &str, machine: &str) -> Result<(), String> {
+    pub fn check(&self, provider: &str, machine: &str) -> Result<(), String> {
         if self.allows(provider, machine) {
             Ok(())
         } else {
@@ -57,7 +57,7 @@ impl RuntimeRestrictions {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Mode {
+pub enum Mode {
     Disabled,
     Local,
     Remote,
@@ -67,7 +67,7 @@ pub(crate) enum Mode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Policy {
+pub struct Policy {
     pub agent_mode: Mode,
     pub hosts_projects: bool,
     /// None permits any enrolled target; an empty set permits none.
@@ -86,7 +86,7 @@ impl Default for Policy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Configuration {
+pub struct Configuration {
     pub schema: u16,
     pub revision: String,
     pub default_runtime_machine_id: Option<String>,
@@ -94,11 +94,11 @@ pub(crate) struct Configuration {
 }
 
 impl Configuration {
-    pub(crate) fn policy(&self, machine: &str) -> Policy {
+    pub fn policy(&self, machine: &str) -> Policy {
         self.machines.get(machine).cloned().unwrap_or_default()
     }
 
-    pub(crate) fn allows(&self, runtime: &str, target: &str) -> bool {
+    pub fn allows(&self, runtime: &str, target: &str) -> bool {
         let policy = self.policy(runtime);
         if !self.policy(target).hosts_projects {
             return false;
@@ -114,13 +114,13 @@ impl Configuration {
     }
 }
 
-pub(crate) struct Store {
+pub struct Store {
     path: PathBuf,
     value: parking_lot::Mutex<Configuration>,
 }
 
 impl Store {
-    pub(crate) fn new(
+    pub fn new(
         directory: &Path,
         default_runtime_machine_id: Option<String>,
     ) -> anyhow::Result<Self> {
@@ -145,11 +145,11 @@ impl Store {
         })
     }
 
-    pub(crate) fn snapshot(&self) -> Configuration {
+    pub fn snapshot(&self) -> Configuration {
         self.value.lock().clone()
     }
 
-    pub(crate) fn update(
+    pub fn update(
         &self,
         expected_revision: &str,
         machine: String,

@@ -54,7 +54,7 @@ assumptions. The Claude-specific contract review is in
 | Worker binary, `worker.rs` or `acp_bridge.rs` | `execution-rust-tests`, both worker suites, `session` |
 | Keeper binary (`cowboy-execution-host`) | as the keeper modules |
 | Machine control modules (`src/machine_*`) or Machine binaries | `execution-rust-tests`, `session` |
-| Server execution-session API (`src/server/execution*`) | `execution-rust-tests`, `session` |
+| Server execution-session API (`components/server/src/server/execution*`) | `execution-rust-tests`, `session` |
 | Shared `components/memory-client` | `claude-remote-check`, both worker suites |
 | A harness file under `tools/` | every suite whose entry imports it, transitively |
 

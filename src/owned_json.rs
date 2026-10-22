@@ -1,7 +1,7 @@
 //! Atomic durable replacement for small, single-owner configuration files.
 use std::{fs, io::Write as _, os::unix::fs::OpenOptionsExt as _, path::Path};
 
-pub(crate) fn write(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
+pub fn write(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("missing config directory"))?;

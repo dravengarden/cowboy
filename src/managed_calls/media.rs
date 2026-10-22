@@ -192,7 +192,7 @@ pub use cowboy_wire::managed_calls::media::{
 };
 
 #[cfg(all(test, feature = "full"))]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     pub fn png() -> Vec<u8> {
         let mut bytes = Vec::new();

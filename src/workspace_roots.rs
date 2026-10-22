@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) fn resolve_configured_root(path: &Path) -> std::io::Result<(PathBuf, bool)> {
+pub fn resolve_configured_root(path: &Path) -> std::io::Result<(PathBuf, bool)> {
     if !path.is_absolute()
         || path
             .components()
@@ -44,7 +44,7 @@ pub(crate) fn resolve_configured_root(path: &Path) -> std::io::Result<(PathBuf, 
     }
 }
 
-pub(crate) fn canonical_target_within_root(target: &Path, configured_root: &Path) -> bool {
+pub fn canonical_target_within_root(target: &Path, configured_root: &Path) -> bool {
     configured_root.canonicalize().is_ok_and(|active_root| {
         active_root == configured_root
             && active_root.is_dir()

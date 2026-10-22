@@ -17,8 +17,8 @@ const MAX_CHANGES: usize = 1_000;
 const MAX_HISTORY_COMMITS: usize = 128;
 const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
-pub(crate) const FILE_PAGE_BYTES: usize = 256 * 1024;
-pub(crate) const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+pub const FILE_PAGE_BYTES: usize = 256 * 1024;
+pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
 #[cfg(test)]
@@ -1165,7 +1165,7 @@ fn file_revision(relative: &Path, metadata: &std::fs::Metadata) -> String {
 }
 
 #[cfg(feature = "full")]
-pub(crate) fn cached_file_page(
+pub fn cached_file_page(
     relative: &str,
     bytes: Vec<u8>,
     revision: String,
@@ -1231,7 +1231,7 @@ fn file_page_text(bytes: &[u8], more_in_file: bool) -> Result<(String, bool), St
     Ok((valid[..end].to_owned(), end < valid.len()))
 }
 
-pub(crate) fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
+pub fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
     let (revision, offset) = cursor
         .rsplit_once(':')
         .ok_or_else(|| "invalid file cursor".to_owned())?;

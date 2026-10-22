@@ -7,7 +7,7 @@ use crate::machine_protocol::telemetry_export::{
 };
 use crate::operation_budget::{OperationBudget, TimeSample};
 
-pub(crate) struct ManagedExportInvocation {
+pub struct ManagedExportInvocation {
     request: ExportAttempt,
     connected: Arc<AtomicBool>,
     budget: OperationBudget,
@@ -49,7 +49,7 @@ impl ManagedExportInvocation {
 }
 
 impl MachinePluginStore {
-    pub(crate) async fn export_bound_telemetry(
+    pub async fn export_bound_telemetry(
         &self,
         invocation: ManagedExportInvocation,
     ) -> ExportReceipt {

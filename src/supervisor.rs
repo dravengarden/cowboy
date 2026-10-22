@@ -67,9 +67,9 @@ pub struct Supervisor {
 }
 
 /// Receives the id of a dormant session that a prompt is waking.
-pub(crate) type WakeListener = Arc<dyn Fn(&str) + Send + Sync>;
+pub type WakeListener = Arc<dyn Fn(&str) + Send + Sync>;
 /// A cold prompt holds its admission lease until Starting has been published.
-pub(crate) type WakeAdmission = Arc<dyn Fn(&str) -> Result<Box<dyn Send>, String> + Send + Sync>;
+pub type WakeAdmission = Arc<dyn Fn(&str) -> Result<Box<dyn Send>, String> + Send + Sync>;
 
 fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
     let live_floor = hub
@@ -96,7 +96,7 @@ fn session_configuration(
 
 impl Supervisor {
     #[must_use]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_remote(
         hub: Hub,
         workspace_root: PathBuf,
@@ -134,20 +134,20 @@ impl Supervisor {
         }
     }
 
-    pub(crate) fn set_wake_listener(&self, listener: WakeListener) {
+    pub fn set_wake_listener(&self, listener: WakeListener) {
         *self.wake_listener.lock() = Some(listener);
     }
 
-    pub(crate) fn set_wake_admission(&self, admission: WakeAdmission) {
+    pub fn set_wake_admission(&self, admission: WakeAdmission) {
         *self.wake_admission.lock() = Some(admission);
     }
 
-    pub(crate) fn set_recovery_admission(&self, admission: WakeAdmission) {
+    pub fn set_recovery_admission(&self, admission: WakeAdmission) {
         *self.recovery_admission.lock() = Some(admission);
     }
 
     /// The isolated workspace is ready, but no AI process is needed until use.
-    pub(crate) fn finish_session_preparation(
+    pub fn finish_session_preparation(
         &self,
         session_id: &str,
         complete: impl FnOnce(&Hub) -> Result<(), String>,
@@ -189,7 +189,7 @@ impl Supervisor {
                 .is_ok_and(|runtime| !runtime.has_worker(session_id)))
     }
 
-    pub(crate) fn with_runtime_restrictions(
+    pub fn with_runtime_restrictions(
         mut self,
         restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
     ) -> Self {
@@ -197,7 +197,7 @@ impl Supervisor {
         self
     }
 
-    pub(crate) fn runtime_allowed(&self, provider: &str, machine: &str) -> bool {
+    pub fn runtime_allowed(&self, provider: &str, machine: &str) -> bool {
         self.runtime_restrictions.allows(provider, machine)
     }
 
@@ -255,7 +255,7 @@ impl Supervisor {
 
     /// Validate and construct registration without publishing or starting it.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prepare_session_on_with_id(
+    pub fn prepare_session_on_with_id(
         &self,
         id: &str,
         provider: &str,
@@ -461,7 +461,7 @@ impl Supervisor {
         self.send_traced(session_id, command, None)
     }
 
-    pub(crate) fn start_steer(
+    pub fn start_steer(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
@@ -482,7 +482,7 @@ impl Supervisor {
         )
     }
 
-    pub(crate) fn start_cancel_turn(
+    pub fn start_cancel_turn(
         &self,
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
@@ -495,7 +495,7 @@ impl Supervisor {
             .start_cancel_turn(session_id, target, cmid)
     }
 
-    pub(crate) fn delivery_turn_finished(
+    pub fn delivery_turn_finished(
         &self,
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
@@ -504,16 +504,13 @@ impl Supervisor {
             .delivery_turn_finished(session_id, target)
     }
 
-    pub(crate) fn delivery_controls(
-        &self,
-        session_id: &str,
-    ) -> crate::runtime_wire::DeliveryControls {
+    pub fn delivery_controls(&self, session_id: &str) -> crate::runtime_wire::DeliveryControls {
         self.runtime_for_session(session_id)
             .map(|runtime| runtime.delivery_controls(session_id))
             .unwrap_or_default()
     }
 
-    pub(crate) fn delivery_target(
+    pub fn delivery_target(
         &self,
         session_id: &str,
     ) -> Option<crate::send_delivery::DeliveryTarget> {
@@ -525,7 +522,7 @@ impl Supervisor {
             .delivery_target(session_id)
     }
 
-    pub(crate) fn send_traced(
+    pub fn send_traced(
         &self,
         session_id: &str,
         command: AgentCommand,
@@ -552,7 +549,7 @@ impl Supervisor {
         admission.map(|admit| admit(session_id)).transpose()
     }
 
-    pub(crate) fn send_traced_after_execution_recovery(
+    pub fn send_traced_after_execution_recovery(
         &self,
         session_id: &str,
         command: AgentCommand,
@@ -785,7 +782,7 @@ impl Supervisor {
 
     /// Internal migration declaration only; never activates a worker. Fresh
     /// account admission remains the Controller/transport caller's obligation.
-    pub(crate) fn readmission_session(
+    pub fn readmission_session(
         &self,
         session_id: &str,
         target: &crate::provider_account::NativeProfileReceipt,
@@ -817,7 +814,7 @@ impl Supervisor {
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
-        let extensions = Some(crate::server::launch_extensions(&self.hub, &meta));
+        let extensions = Some(crate::controller_hooks::launch_extensions(&self.hub, &meta));
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
@@ -873,12 +870,12 @@ impl Supervisor {
 
     /// Snapshot only. A destructive coordinator must record its intent before
     /// asking the runtime to stop; this does not grant permission to restart it.
-    pub(crate) fn has_live_worker(&self, session_id: &str) -> bool {
+    pub fn has_live_worker(&self, session_id: &str) -> bool {
         self.runtime_for_session(session_id)
             .is_ok_and(|runtime| runtime.has_worker(session_id))
     }
 
-    pub(crate) fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
+    pub fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
         self.runtime_for_session(session_id)
             .ok()?
             .observed_configuration(session_id)
@@ -985,7 +982,7 @@ impl Supervisor {
         self.recycle_session_inner(session_id)
     }
 
-    pub(crate) fn recover_execution_session(
+    pub fn recover_execution_session(
         &self,
         session_id: &str,
         intent: crate::execution_environment::RecoveryV1,

@@ -5,14 +5,14 @@ use super::{
 };
 use crate::machine_protocol::telemetry_recovery::RecoveryRequest;
 
-pub(crate) struct BindingRecoveryLease {
+pub struct BindingRecoveryLease {
     connected: Arc<AtomicBool>,
     digest: BindingDigest,
     budget: OperationBudget,
 }
 
 impl PluginExecutionScope {
-    pub(crate) fn telemetry_recovery(
+    pub fn telemetry_recovery(
         &self,
         request: &RecoveryRequest,
     ) -> Result<BindingRecoveryLease, BindingUnavailable> {

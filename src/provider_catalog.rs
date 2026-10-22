@@ -20,7 +20,7 @@ mod service_catalog {
     const EMBEDDED_SOURCES: &[(&str, &str)] = crate::first_party_sources::PROVIDER_SOURCES;
 
     #[derive(Debug, Clone, Serialize)]
-    pub(crate) struct CatalogEntry {
+    pub struct CatalogEntry {
         pub provider_id: String,
         pub provider_version: String,
         pub package_digest: String,
@@ -45,7 +45,7 @@ mod service_catalog {
 
     #[derive(Debug, Clone, Copy, Serialize)]
     #[serde(rename_all = "snake_case")]
-    pub(crate) enum AgentPluginReleaseState {
+    pub enum AgentPluginReleaseState {
         Unbound,
         Ready,
     }
@@ -56,7 +56,7 @@ mod service_catalog {
         package: ProviderPackage,
     }
 
-    pub(crate) struct ProviderCatalog {
+    pub struct ProviderCatalog {
         embedded: BTreeMap<(String, String), CatalogEntry>,
         external: RwLock<BTreeMap<(String, String, String), CatalogArtifact>>,
         plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
@@ -64,7 +64,7 @@ mod service_catalog {
     }
 
     impl ProviderCatalog {
-        pub(crate) fn open(
+        pub fn open(
             data_dir: &Path,
             plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
         ) -> Result<Self> {
@@ -136,15 +136,15 @@ mod service_catalog {
             Ok(catalog)
         }
 
-        pub(crate) fn catalog_root(&self) -> Option<PathBuf> {
+        pub fn catalog_root(&self) -> Option<PathBuf> {
             Some(self.plugin_catalog.catalog_root())
         }
 
-        pub(crate) fn legacy_catalog_root(&self) -> Option<&Path> {
+        pub fn legacy_catalog_root(&self) -> Option<&Path> {
             self.legacy_root.as_deref()
         }
 
-        pub(crate) fn refresh_external(&self) -> Result<usize> {
+        pub fn refresh_external(&self) -> Result<usize> {
             let mut next = BTreeMap::new();
             for desired in self.plugin_catalog.released_plugins() {
                 if desired.release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
@@ -162,7 +162,7 @@ mod service_catalog {
             Ok(count)
         }
 
-        pub(crate) fn entries(&self) -> Vec<CatalogEntry> {
+        pub fn entries(&self) -> Vec<CatalogEntry> {
             let external = self.external.read();
             let mut combined: Vec<_> = external
                 .values()
@@ -185,7 +185,7 @@ mod service_catalog {
             combined
         }
 
-        pub(crate) fn package(
+        pub fn package(
             &self,
             provider_id: &str,
             version: &str,
@@ -202,7 +202,7 @@ mod service_catalog {
                 .map(|artifact| artifact.package.clone())
         }
 
-        pub(crate) fn latest_package(
+        pub fn latest_package(
             &self,
             provider_id: &str,
         ) -> Option<(String, String, ProviderPackage)> {
@@ -226,10 +226,7 @@ mod service_catalog {
         /// Return the newest signed package for each Provider in one public
         /// credential scope. Provider packages keep their own projection
         /// contract; only the portable bundle is shared.
-        pub(crate) fn packages_for_authentication_scope(
-            &self,
-            scope: &str,
-        ) -> Vec<ProviderPackage> {
+        pub fn packages_for_authentication_scope(&self, scope: &str) -> Vec<ProviderPackage> {
             let external = self.external.read();
             let mut latest: BTreeMap<String, &CatalogArtifact> = BTreeMap::new();
             for artifact in external
@@ -256,14 +253,14 @@ mod service_catalog {
                 .collect()
         }
 
-        pub(crate) fn provider_ids_for_authentication_scope(&self, scope: &str) -> Vec<String> {
+        pub fn provider_ids_for_authentication_scope(&self, scope: &str) -> Vec<String> {
             self.packages_for_authentication_scope(scope)
                 .into_iter()
                 .map(|package| package.manifest.id)
                 .collect()
         }
 
-        pub(crate) fn account_usage_provider(
+        pub fn account_usage_provider(
             &self,
             provider_id: &str,
             version: &str,
@@ -706,7 +703,7 @@ mod service_catalog {
 }
 
 #[cfg(feature = "full")]
-pub(crate) use service_catalog::ProviderCatalog;
+pub use service_catalog::ProviderCatalog;
 
 #[cfg(test)]
 mod tests {

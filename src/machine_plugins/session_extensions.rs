@@ -19,11 +19,11 @@ const DESCRIPTOR_LIMIT: usize = 65_536;
 const MAX_CALL_PROFILES: usize = 8;
 
 /// Name of the variable that locates a session's extension descriptor.
-pub(crate) const SESSION_EXTENSIONS_ENV: &str = "COWBOY_SESSION_EXTENSIONS";
+pub const SESSION_EXTENSIONS_ENV: &str = "COWBOY_SESSION_EXTENSIONS";
 /// Value of that variable when the descriptor could not be resolved: the
 /// Provider then runs without memory instead of falling back to a host
 /// enrollment that could override the session's switches.
-pub(crate) const SESSION_EXTENSIONS_DISABLED: &str = "disabled";
+pub const SESSION_EXTENSIONS_DISABLED: &str = "disabled";
 
 fn valid_session_id(value: &str) -> bool {
     !value.is_empty()
@@ -34,7 +34,7 @@ fn valid_session_id(value: &str) -> bool {
 }
 
 /// The private descriptor path of one session below the Machine state root.
-pub(crate) fn descriptor_path(state_dir: &Path, session_id: &str) -> Option<PathBuf> {
+pub fn descriptor_path(state_dir: &Path, session_id: &str) -> Option<PathBuf> {
     valid_session_id(session_id).then(|| {
         state_dir
             .join("extensions")
@@ -47,7 +47,7 @@ impl MachinePluginStore {
     /// Resolve the descriptor for one session from this Machine's active
     /// session-extension Plugins. More than one active memory backend is
     /// ambiguous, so memory is then disabled rather than guessed.
-    pub(crate) fn session_extensions(&self, switches: SessionExtensions) -> Result<Value> {
+    pub fn session_extensions(&self, switches: SessionExtensions) -> Result<Value> {
         ensure!(
             switches.schema == SESSION_EXTENSIONS_SCHEMA,
             "unsupported session extension schema"
@@ -115,7 +115,7 @@ impl MachinePluginStore {
 
     /// Atomically publish the session's descriptor (mode 0600) and return its
     /// path for the worker environment.
-    pub(crate) fn write_session_extensions(
+    pub fn write_session_extensions(
         &self,
         state_dir: &Path,
         session_id: &str,

@@ -2,7 +2,7 @@
 
 use crate::machine_protocol::{ArtifactFormat, DesiredComponent};
 
-pub(crate) fn component_slot(desired: &DesiredComponent) -> String {
+pub fn component_slot(desired: &DesiredComponent) -> String {
     let kind = serde_json::to_value(&desired.id.kind)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -14,7 +14,7 @@ pub(crate) fn component_slot(desired: &DesiredComponent) -> String {
     }
 }
 
-pub(crate) fn component_proof(desired: &DesiredComponent) -> Vec<u8> {
+pub fn component_proof(desired: &DesiredComponent) -> Vec<u8> {
     let format = match desired.artifact_format {
         ArtifactFormat::Raw => "raw",
         ArtifactFormat::TarGz => "tar_gz",

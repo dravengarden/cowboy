@@ -23,7 +23,7 @@ struct Entry {
 }
 
 #[derive(Default)]
-pub(crate) struct RuntimeTelemetry {
+pub struct RuntimeTelemetry {
     entries: BTreeMap<String, Entry>,
 }
 
@@ -33,7 +33,7 @@ impl RuntimeTelemetry {
             .retain(|_, entry| entry.born.elapsed() <= MAX_AGE);
     }
 
-    pub(crate) fn bind(
+    pub fn bind(
         &mut self,
         principal: &str,
         machine: &str,
@@ -88,7 +88,7 @@ impl RuntimeTelemetry {
         );
     }
 
-    pub(crate) fn dispatch(
+    pub fn dispatch(
         &mut self,
         session: &str,
         cmid: &str,
@@ -112,7 +112,7 @@ impl RuntimeTelemetry {
         Some((entry.owner.clone(), queued, TraceCarrier::new(context)))
     }
 
-    pub(crate) fn delivery(
+    pub fn delivery(
         &mut self,
         context: &TraceContext,
         outcome: Outcome,
@@ -128,12 +128,7 @@ impl RuntimeTelemetry {
         Some((entry.owner.clone(), entry.delivery.take()?.finish(outcome)?))
     }
 
-    pub(crate) fn accept(
-        &mut self,
-        machine: &str,
-        session: &str,
-        record: &SpanRecord,
-    ) -> Option<String> {
+    pub fn accept(&mut self, machine: &str, session: &str, record: &SpanRecord) -> Option<String> {
         self.prune();
         if !record.valid()
             || !matches!(
@@ -167,7 +162,7 @@ impl RuntimeTelemetry {
     }
 }
 
-pub(crate) fn owner_hash(principal: &str) -> String {
+pub fn owner_hash(principal: &str) -> String {
     format!("{:x}", Sha256::digest(principal.as_bytes()))
 }
 

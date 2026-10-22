@@ -9,23 +9,23 @@ use anyhow::Result;
 use tokio::sync::oneshot;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Stopped,
     Refused(String),
     Unconfirmed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ReadmissionOutcome {
+pub enum ReadmissionOutcome {
     Admitted,
     Refused(String),
     Unconfirmed,
 }
 
-pub(crate) struct PendingReadmission(PendingStop);
+pub struct PendingReadmission(PendingStop);
 
 impl PendingReadmission {
-    pub(crate) async fn wait(self, timeout: Duration) -> ReadmissionOutcome {
+    pub async fn wait(self, timeout: Duration) -> ReadmissionOutcome {
         match self.0.wait(timeout).await {
             Outcome::Stopped => ReadmissionOutcome::Admitted,
             Outcome::Refused(reason) => ReadmissionOutcome::Refused(reason),
@@ -39,7 +39,7 @@ pub(super) struct Waiter {
     sender: oneshot::Sender<Outcome>,
 }
 
-pub(crate) struct PendingStop {
+pub struct PendingStop {
     shared: Arc<Shared>,
     command_id: String,
     token: uuid::Uuid,
@@ -47,7 +47,7 @@ pub(crate) struct PendingStop {
 }
 
 impl PendingStop {
-    pub(crate) async fn wait(mut self, timeout: Duration) -> Outcome {
+    pub async fn wait(mut self, timeout: Duration) -> Outcome {
         match tokio::time::timeout(timeout, &mut self.receiver).await {
             Ok(Ok(outcome)) => outcome,
             _ => Outcome::Unconfirmed,
@@ -71,7 +71,7 @@ impl Drop for PendingStop {
 impl RemoteRuntime {
     /// Caller must verify the committed migration and current session authority.
     /// An admitted result means no process was started by this operation.
-    pub(crate) fn readmit_account_session(
+    pub fn readmit_account_session(
         &self,
         mut session: crate::runtime_wire::StartSession,
         binding: crate::provider_account::PreparedBinding,
@@ -114,15 +114,15 @@ impl RemoteRuntime {
             receiver,
         }))
     }
-    pub(crate) fn account_stop_connection(&self) -> Option<u64> {
+    pub fn account_stop_connection(&self) -> Option<u64> {
         self.connected().then(|| {
             self.shared
                 .account_stop_epoch
                 .load(std::sync::atomic::Ordering::Acquire)
         })
     }
-    #[cfg(test)]
-    pub(crate) fn for_account_stop_test(key: String) -> Arc<Self> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_account_stop_test(key: String) -> Arc<Self> {
         let mut runtime = Self::for_test(super::Hub::new(), Vec::new());
         let runtime_mut = Arc::get_mut(&mut runtime).unwrap();
         Arc::get_mut(&mut runtime_mut.shared)
@@ -132,7 +132,7 @@ impl RemoteRuntime {
         runtime
     }
 
-    pub(crate) fn account_stop_recipient(&self) -> Option<String> {
+    pub fn account_stop_recipient(&self) -> Option<String> {
         self.shared
             .auth_recipient_key
             .as_ref()
@@ -142,7 +142,7 @@ impl RemoteRuntime {
     /// The caller must authorize the durable revocation operation and exact
     /// enrolled Machine before invoking this transport primitive. Its result
     /// is process-stop evidence only, never native logout or credential cleanup.
-    pub(crate) fn quiesce_account_session(
+    pub fn quiesce_account_session(
         &self,
         operation: &str,
         session_id: &str,

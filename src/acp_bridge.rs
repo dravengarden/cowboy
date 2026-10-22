@@ -2500,11 +2500,20 @@ mod tests {
                                 display_name: "Matrix".to_owned(),
                                 canonical_path: "/home/ubuntu/matrix".to_owned(),
                             }];
-                            if let Err(error) = crate::server::resolve_machine_workspace(
-                                &workspaces,
-                                body["cwd"].as_str(),
-                            ) {
-                                return (StatusCode::BAD_REQUEST, error);
+                            let Some(requested) = body["cwd"]
+                                .as_str()
+                                .filter(|value| !value.trim().is_empty())
+                            else {
+                                return (
+                                    StatusCode::BAD_REQUEST,
+                                    "remote session requires a trusted workspace id".to_owned(),
+                                );
+                            };
+                            if !workspaces.iter().any(|workspace| workspace.id == requested) {
+                                return (
+                                    StatusCode::BAD_REQUEST,
+                                    format!("unknown trusted workspace {requested:?}"),
+                                );
                             }
                             if body["provider"] == "async-fixture" {
                                 return (

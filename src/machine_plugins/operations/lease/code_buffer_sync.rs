@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 const COMMAND_BUDGET: Duration = Duration::from_secs(15);
 
-pub(crate) struct CodeBufferSyncInvocation {
+pub struct CodeBufferSyncInvocation {
     request: Request,
     connection: Arc<AtomicBool>,
     deadline: Instant,
@@ -16,12 +16,12 @@ pub(crate) struct CodeBufferSyncInvocation {
 
 /// Kept with an operation, not with its transport observer. Reconnection cannot
 /// renew an old synchronization's authority even for the same Service name.
-pub(crate) struct CodeBufferSyncOwner {
+pub struct CodeBufferSyncOwner {
     connection: Arc<AtomicBool>,
 }
 
 impl PluginExecutionScope {
-    pub(crate) fn code_buffer_sync(&self, request: Request) -> Result<CodeBufferSyncInvocation> {
+    pub fn code_buffer_sync(&self, request: Request) -> Result<CodeBufferSyncInvocation> {
         request.validate()?;
         ensure!(
             self.connected.load(Ordering::Acquire)
@@ -38,11 +38,11 @@ impl PluginExecutionScope {
 }
 
 impl CodeBufferSyncInvocation {
-    pub(crate) fn request(&self) -> &Request {
+    pub fn request(&self) -> &Request {
         &self.request
     }
 
-    pub(crate) fn remaining(&self) -> Result<Duration> {
+    pub fn remaining(&self) -> Result<Duration> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         ensure!(
             self.connection.load(Ordering::Acquire) && !remaining.is_zero(),
@@ -51,14 +51,14 @@ impl CodeBufferSyncInvocation {
         Ok(remaining)
     }
 
-    pub(crate) fn owner(&self) -> Result<CodeBufferSyncOwner> {
+    pub fn owner(&self) -> Result<CodeBufferSyncOwner> {
         self.remaining()?;
         Ok(CodeBufferSyncOwner {
             connection: Arc::clone(&self.connection),
         })
     }
 
-    pub(crate) fn check_owner(&self, owner: &CodeBufferSyncOwner) -> Result<()> {
+    pub fn check_owner(&self, owner: &CodeBufferSyncOwner) -> Result<()> {
         self.remaining()?;
         ensure!(
             Arc::ptr_eq(&self.connection, &owner.connection),

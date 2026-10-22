@@ -64,7 +64,7 @@ impl Signals {
 
 // No Debug/Clone/serde on activation or per-attempt authority. The Arc shares
 // revocation; it does not copy a reusable batch grant.
-pub(crate) struct BackgroundPolicy {
+pub struct BackgroundPolicy {
     path: PathBuf,
     config: Configuration,
     snapshot: PrivateSnapshot,
@@ -74,13 +74,13 @@ pub(crate) struct BackgroundPolicy {
 /// A configured but stopped exporter is distinct from an unconfigured one.
 /// Retain that distinction through startup so stopping optional egress cannot
 /// select a legacy fallback. Stopped activations have no queue or retry task.
-pub(crate) enum Activation {
+pub enum Activation {
     Active(Arc<BackgroundPolicy>),
     Stopped,
 }
 
 impl BackgroundPolicy {
-    pub(crate) fn load(path: &Path, service: &str) -> Result<Arc<Self>> {
+    pub fn load(path: &Path, service: &str) -> Result<Arc<Self>> {
         ensure!(
             path.is_absolute(),
             "managed telemetry policy must be absolute"
@@ -115,7 +115,7 @@ impl BackgroundPolicy {
         }))
     }
 
-    pub(crate) fn stop(&self) {
+    pub fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
     }
 
@@ -132,7 +132,7 @@ impl BackgroundPolicy {
     /// Missing, unresolved or superseded evidence stops optional export, not
     /// the Controller. Mandatory journal integrity recovery runs BEFORE this
     /// check and still rejects corruption. There is no later auto-activation.
-    pub(crate) async fn activate(self: Arc<Self>, store: &crate::store::Store) -> Activation {
+    pub async fn activate(self: Arc<Self>, store: &crate::store::Store) -> Activation {
         let export_active = self.check_binding(store).await;
         tracing::info!(
             export_active,
@@ -147,7 +147,7 @@ impl BackgroundPolicy {
 
     /// Export prerequisite, not core availability. The typed export scope
     /// repeats this binding predicate per batch; neither check grants authority.
-    pub(crate) async fn check_binding(&self, store: &crate::store::Store) -> bool {
+    pub async fn check_binding(&self, store: &crate::store::Store) -> bool {
         let valid = self.current()
             && store
                 .telemetry_binding_ledger(&self.config.service_id)
@@ -168,14 +168,11 @@ impl BackgroundPolicy {
         valid
     }
 
-    pub(crate) fn allows(&self, signal: Signal) -> bool {
+    pub fn allows(&self, signal: Signal) -> bool {
         self.config.signals.allows(signal)
     }
 
-    pub(crate) fn admit(
-        self: &Arc<Self>,
-        payload: Export,
-    ) -> Result<(ExportAttempt, BackgroundPermit)> {
+    pub fn admit(self: &Arc<Self>, payload: Export) -> Result<(ExportAttempt, BackgroundPermit)> {
         // Capture before validation or scheduling. Queueing after this point
         // consumes the same budget and cannot choose a replacement connection.
         let received = TimeSample::now();
@@ -203,7 +200,7 @@ impl BackgroundPolicy {
     }
 }
 
-pub(crate) struct BackgroundPermit {
+pub struct BackgroundPermit {
     policy: Arc<BackgroundPolicy>,
     digest: BindingDigest,
     budget: OperationBudget,
@@ -211,16 +208,16 @@ pub(crate) struct BackgroundPermit {
 }
 
 impl BackgroundPermit {
-    pub(crate) fn revoke(&self) {
+    pub fn revoke(&self) {
         self.revoked.store(true, Ordering::Release);
     }
 
-    pub(crate) fn reject_binding(&self) {
+    pub fn reject_binding(&self) {
         self.policy.stop();
         self.revoke();
     }
 
-    pub(crate) fn remaining(&self) -> Duration {
+    pub fn remaining(&self) -> Duration {
         if self.revoked.load(Ordering::Acquire) || self.policy.stopped.load(Ordering::Acquire) {
             Duration::ZERO
         } else {
@@ -228,7 +225,7 @@ impl BackgroundPermit {
         }
     }
 
-    pub(crate) fn check(&self, attempt: &ExportAttempt) -> bool {
+    pub fn check(&self, attempt: &ExportAttempt) -> bool {
         let valid = !self.remaining().is_zero()
             && self.policy.current()
             && attempt

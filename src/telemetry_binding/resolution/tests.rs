@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), allow(unused_imports, dead_code))]
 use super::*;
 use crate::machine_protocol::telemetry_binding::{BindingRejection, BindingUnavailable};
 use crate::operation_budget::TimeSample;
@@ -7,10 +8,7 @@ use crate::telemetry_binding::{
 };
 use std::time::Duration;
 
-pub(crate) fn intent(
-    before: &Operation,
-    observation: Option<&BindingObservation>,
-) -> ResolutionIntent {
+pub fn intent(before: &Operation, observation: Option<&BindingObservation>) -> ResolutionIntent {
     let action = match observation {
         Some(observation) => ResolutionAction::AcceptApplied {
             observation_digest: binding_digest(&serde_json::to_vec(observation).unwrap()),
@@ -29,7 +27,7 @@ pub(crate) fn intent(
     .unwrap()
 }
 
-pub(crate) fn permit(
+pub fn permit(
     intent: &ResolutionIntent,
     before: &Operation,
     observation: Option<BindingObservation>,

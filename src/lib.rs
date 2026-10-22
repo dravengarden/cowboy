@@ -6,63 +6,65 @@
 //! wire protocol — not Rust's module layout — is the compatibility boundary.
 
 #[cfg(feature = "full")]
-mod acp;
+pub mod acp;
 #[cfg(feature = "full")]
-mod acp_bridge;
+pub mod acp_bridge;
 #[cfg(feature = "full")]
-mod admin;
+pub mod admin;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod agent_api;
 #[cfg(feature = "full")]
-mod agent_model;
+pub mod agent_model;
 #[cfg(feature = "full")]
-mod agent_sink;
+pub mod agent_sink;
 #[cfg(feature = "full")]
-mod artifacts;
+pub mod artifacts;
 #[cfg(feature = "full")]
-mod auth_plugins;
+pub mod auth_plugins;
 #[cfg(feature = "full")]
-mod browser_device;
+pub mod browser_device;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod cgroup;
+pub mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod claude_shell;
+pub mod claude_shell;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod cli;
 #[cfg(feature = "full")]
-mod client_auth;
+pub mod client_auth;
 #[cfg(feature = "full")]
-mod client_auth_client;
+pub mod client_auth_client;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod code_buffer_read;
+pub mod code_buffer_read;
 #[cfg(feature = "full")]
-mod code_cache;
+pub mod code_cache;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_review;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod component_proof;
+pub mod component_proof;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod composition;
+pub mod composition;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod config;
 #[cfg(feature = "full")]
-mod core;
+pub mod controller_hooks;
 #[cfg(feature = "full")]
-mod core_passkeys;
+pub mod core;
 #[cfg(feature = "full")]
-mod core_security;
+pub mod core_passkeys;
+#[cfg(feature = "full")]
+pub mod core_security;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
-mod deepseek_cache;
+pub mod deepseek_cache;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_context.rs"]
-mod deepseek_context;
+pub mod deepseek_context;
 #[cfg(feature = "full")]
-mod diff_snapshot;
+pub mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod durable_state;
+pub mod durable_state;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::execution_environment;
 #[cfg(feature = "machine-host")]
@@ -72,176 +74,177 @@ pub use cowboy_wire::execution_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_target_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
-mod files;
+pub mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod first_party_sources;
+pub mod first_party_sources;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod generation_retention;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod legacy_provider_release;
+pub mod legacy_provider_release;
 #[cfg(all(feature = "full", unix))]
-mod local_operator;
+pub mod local_operator;
 pub mod logs;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_auth;
 #[cfg(feature = "machine-host")]
-mod machine_broker;
+pub mod machine_broker;
 #[cfg(feature = "machine-host")]
 pub mod machine_cli;
 #[cfg(feature = "machine-host")]
-mod machine_code_plugins;
+pub mod machine_code_plugins;
 #[cfg(feature = "machine-host")]
-mod machine_components;
+pub mod machine_components;
 #[cfg(feature = "full")]
-mod machine_control;
+pub mod machine_control;
 #[cfg(feature = "full")]
-mod machine_convergence;
+pub mod machine_convergence;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod machine_lanes;
+pub mod machine_lanes;
 #[cfg(feature = "machine-host")]
-mod machine_plugins;
+pub mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod machine_transport;
+pub mod machine_transport;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod managed_calls;
 #[cfg(feature = "full")]
 #[path = "provider/managed_config.rs"]
-mod managed_config;
+pub mod managed_config;
 #[cfg(feature = "full")]
-mod memory_observability;
+pub mod memory_observability;
 #[cfg(feature = "full")]
-mod observability;
+pub mod observability;
 #[cfg(feature = "full")]
-mod oidc;
+pub mod oidc;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod operation_budget;
+pub mod operation_budget;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod otlp;
+pub mod otlp;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod owned_json;
+pub mod owned_json;
 #[cfg(feature = "full")]
-mod passkey;
+pub mod passkey;
 #[cfg(feature = "full")]
-mod persistence;
+pub mod persistence;
 #[cfg(feature = "full")]
-mod plugin;
+pub mod plugin;
 #[cfg(feature = "full")]
-mod plugin_activation;
+pub mod plugin_activation;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod plugin_auth_probe;
+pub mod plugin_auth_probe;
 #[cfg(feature = "full")]
-mod plugin_catalog;
+pub mod plugin_catalog;
 #[cfg(feature = "full")]
-mod plugin_dir;
+pub mod plugin_dir;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod plugin_host;
+pub mod plugin_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod plugin_host_bundle;
+pub mod plugin_host_bundle;
 #[cfg(feature = "full")]
-mod plugin_operation;
+pub mod plugin_operation;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod plugin_process;
+pub mod plugin_process;
 #[cfg(feature = "full")]
-mod plugin_runtime;
+pub mod plugin_runtime;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod plugin_runtime_args;
+pub mod plugin_runtime_args;
 #[cfg(feature = "full")]
-mod plugin_storage;
+pub mod plugin_storage;
 #[cfg(feature = "full")]
-mod product_auth;
+pub mod product_auth;
 #[cfg(feature = "full")]
-mod product_cli;
+pub mod product_cli;
 #[cfg(feature = "full")]
-mod project_placement;
+pub mod project_placement;
 #[cfg(feature = "full")]
-mod prompt_origin;
+pub mod prompt_origin;
 #[cfg(feature = "full")]
-mod provider;
+pub mod provider;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod provider_behavior;
+pub mod provider_behavior;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod provider_catalog;
+pub mod provider_catalog;
 #[cfg(feature = "full")]
-mod provider_info;
+pub mod provider_info;
 #[cfg(feature = "full")]
-mod provider_service;
+pub mod provider_service;
 #[cfg(feature = "machine-host")]
-mod provider_usage_spool;
+pub mod provider_usage_spool;
 #[cfg(feature = "full")]
-mod remote_runtime;
+pub mod remote_runtime;
 #[cfg(feature = "full")]
-mod review_directory;
+pub mod review_directory;
 #[cfg(feature = "full")]
-mod runtime;
+pub mod runtime;
 #[cfg(feature = "full")]
-mod runtime_router;
+pub mod runtime_router;
 #[cfg(feature = "full")]
-mod runtime_telemetry;
+pub mod runtime_telemetry;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod runtime_trace;
+pub mod runtime_trace;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::runtime_wire;
 #[cfg(feature = "full")]
-mod scheduler;
+pub mod scheduler;
 #[cfg(feature = "full")]
 pub mod send_delivery;
-#[cfg(feature = "full")]
-mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) use cowboy_wire::service_identity;
+pub use cowboy_wire::service_identity;
 #[cfg(feature = "full")]
 pub mod session_context;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod session_deletion_admission;
+pub mod session_deletion_admission;
 #[cfg(feature = "full")]
-mod session_folders;
+pub mod session_folders;
 #[cfg(feature = "machine-host")]
-mod session_workspace;
+pub mod session_workspace;
 #[cfg(feature = "full")]
-mod store;
+pub mod store;
 #[cfg(feature = "full")]
-mod supervisor;
+pub mod supervisor;
 #[cfg(feature = "full")]
-mod telemetry_binding;
+pub mod telemetry_binding;
 #[cfg(feature = "full")]
-mod telemetry_file;
+pub mod telemetry_file;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod telemetry_plugin;
+pub mod telemetry_plugin;
 #[cfg(feature = "full")]
-mod usage;
+pub mod usage;
 #[cfg(feature = "full")]
 pub mod worker;
 #[cfg(feature = "full")]
-mod worker_execution;
+pub mod worker_execution;
 #[cfg(feature = "full")]
-mod worker_telemetry;
+pub mod worker_telemetry;
 #[cfg(feature = "full")]
-mod workspace;
+pub mod workspace;
 #[cfg(any(feature = "full", feature = "machine-host", feature = "code-adapter"))]
-mod workspace_roots;
+pub mod workspace_roots;
 
 #[cfg(feature = "full")]
-mod migration_compat;
+pub mod migration_compat;
 #[cfg(all(test, feature = "full"))]
-mod migration_policy;
+pub mod migration_policy;
 #[cfg(all(test, feature = "full"))]
-mod protocol_contract;
+pub mod protocol_contract;
 #[cfg(feature = "full")]
-mod web_push;
+pub mod web_push;
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod workspace_extensions;
+pub mod workspace_extensions;
 
 /// FIFO fixtures use the POSIX utility: rustix's *at constructors are absent
 /// on macOS. Keep special-file rejection tests active on both host platforms.
-#[cfg(all(test, any(feature = "full", feature = "machine-host")))]
-pub(crate) fn test_fifo(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+#[cfg(all(
+    any(test, feature = "test-support"),
+    any(feature = "full", feature = "machine-host")
+))]
+pub fn test_fifo(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let status = std::process::Command::new("mkfifo")
         .args(["-m", "600"])
         .arg(path.as_ref())

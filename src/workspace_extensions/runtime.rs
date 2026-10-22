@@ -10,8 +10,8 @@ use super::{Failure, Metadata, Remote, Resource, Response};
 
 mod discovery;
 mod review;
-pub(crate) use discovery::{discover, review_target};
-pub(crate) use review::read_review;
+pub use discovery::{discover, review_target};
+pub use review::read_review;
 
 const MAX_BODY: usize = 64 * 1024;
 
@@ -122,7 +122,7 @@ async fn command(program: &str, args: &[String]) -> Result<Vec<u8>, Failure> {
     Ok(output.stdout)
 }
 
-pub(crate) async fn remotes(root: &Path) -> Result<Vec<Remote>, Failure> {
+pub async fn remotes(root: &Path) -> Result<Vec<Remote>, Failure> {
     let args = [
         "-C",
         root.to_str().ok_or(Failure::RepositoryUnavailable)?,
@@ -235,7 +235,7 @@ fn project(
     })
 }
 
-pub(crate) async fn read(
+pub async fn read(
     remote: &Remote,
     view: &WorkspaceResourceView,
     item: Option<&str>,

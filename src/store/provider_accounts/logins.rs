@@ -9,13 +9,13 @@ mod discovery;
 mod dispatch;
 mod native_admission;
 mod native_selection;
-pub(crate) use dispatch::DispatchScope;
+pub use dispatch::DispatchScope;
 mod native_binding;
-pub(crate) mod native_logout;
+pub mod native_logout;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     pub account_id: ProviderAccountId,
     pub machine_id: String,
     pub provider_version: String,
@@ -25,7 +25,7 @@ pub(crate) struct Request {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Receipt {
+pub struct Receipt {
     pub request_id: String,
     pub provider_id: String,
     pub input: Request,
@@ -56,14 +56,14 @@ pub(crate) struct Receipt {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NativeCompletion {
+pub struct NativeCompletion {
     pub machine_id: String,
     pub recipient_fingerprint: String,
     pub profile: crate::provider_account::NativeProfileReceipt,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum DispatchRejection {
+pub enum DispatchRejection {
     #[serde(rename = "authentication_cleanup_required")]
     CleanupRequired,
     #[serde(rename = "authentication_start_rejected")]
@@ -73,7 +73,7 @@ pub(crate) enum DispatchRejection {
 impl Receipt {
     /// A pre-dispatch refusal, not merely absence of a dispatch receipt.
     /// `StartRejected` may follow an attempted enqueue and is deliberately excluded.
-    pub(crate) fn never_dispatched(&self) -> bool {
+    pub fn never_dispatched(&self) -> bool {
         self.dispatch_rejection == Some(DispatchRejection::CleanupRequired)
             && self.dispatch_recipient_fingerprint.is_none()
             && self.dispatch_registry_revision.is_none()
@@ -82,19 +82,19 @@ impl Receipt {
             && self.native_binding_revision.is_none()
     }
 
-    pub(crate) fn matches(&self, input: &Request) -> bool {
+    pub fn matches(&self, input: &Request) -> bool {
         &self.input == input
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct Claim {
+pub struct Claim {
     pub receipt: Receipt,
     pub fresh: bool,
 }
 
 impl Store {
-    pub(crate) async fn provider_login_operation_for_request(
+    pub async fn provider_login_operation_for_request(
         &self,
         owner: &str,
         request: &str,
@@ -120,7 +120,7 @@ impl Store {
     /// The caller must authenticate the sending Machine and verify its signed
     /// release/identity recipe first. This journal is deliberately separate
     /// from grant admission: recording evidence never enables a session.
-    pub(crate) async fn record_native_login_completion(
+    pub async fn record_native_login_completion(
         &self,
         owner: &str,
         operation: &str,
@@ -181,7 +181,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn reject_provider_login(
+    pub async fn reject_provider_login(
         &self,
         owner: &str,
         operation: &str,
@@ -212,7 +212,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn cancel_provider_login(
+    pub async fn cancel_provider_login(
         &self,
         owner: &str,
         operation: &str,
@@ -242,7 +242,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn provider_login_receipt(
+    pub async fn provider_login_receipt(
         &self,
         owner: &str,
         operation: &str,
@@ -269,7 +269,7 @@ impl Store {
             .transpose()
     }
 
-    pub(crate) async fn claim_provider_login(
+    pub async fn claim_provider_login(
         &self,
         owner: &str,
         operation: &str,

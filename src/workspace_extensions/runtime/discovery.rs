@@ -10,7 +10,7 @@ const PAGE_SIZE: u64 = 20;
 const BRANCH_PAGE_SIZE: usize = 10;
 const BRANCH_PAGES: u32 = 10;
 
-pub(crate) fn review_target(remote: &Remote, repository: Option<&str>) -> Result<Remote, Failure> {
+pub fn review_target(remote: &Remote, repository: Option<&str>) -> Result<Remote, Failure> {
     let Some(repository) = repository else {
         return Ok(remote.clone());
     };
@@ -152,7 +152,7 @@ fn summary(source: &Value, remote: &Remote) -> Result<PullSummary, Failure> {
     })
 }
 
-pub(crate) async fn discover(
+pub async fn discover(
     remote: &Remote,
     filters: &PullDiscovery,
     page: u32,

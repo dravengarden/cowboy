@@ -18,11 +18,11 @@ mod host_payload;
 #[cfg(all(test, target_os = "linux"))]
 mod streaming_tests;
 
-pub(crate) use anchor_recovery::{
+pub use anchor_recovery::{
     restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine,
 };
-pub(crate) use cached_host::check_portable_host_cache;
-pub(crate) use cached_host::restore_portable_host_selection;
+pub use cached_host::check_portable_host_cache;
+pub use cached_host::restore_portable_host_selection;
 
 pub struct ComponentStore {
     root: PathBuf,

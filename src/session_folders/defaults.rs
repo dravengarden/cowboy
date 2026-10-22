@@ -19,7 +19,7 @@ pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
 
 /// Stored preferences may come from a newer Controller. Validate known fields
 /// strictly, but leave future keys opaque to this reader. Input APIs stay closed.
-pub(crate) fn parse_stored(value: &serde_json::Value) -> Result<FolderDefaults, String> {
+pub fn parse_stored(value: &serde_json::Value) -> Result<FolderDefaults, String> {
     let mut fields = value
         .as_object()
         .cloned()
@@ -30,7 +30,7 @@ pub(crate) fn parse_stored(value: &serde_json::Value) -> Result<FolderDefaults, 
 
 /// Updating known fields (including restoring inheritance) must not erase
 /// settings introduced by a newer writer during a rollback.
-pub(crate) fn stored_json(
+pub fn stored_json(
     defaults: &FolderDefaults,
     previous: Option<&str>,
 ) -> Result<String, serde_json::Error> {

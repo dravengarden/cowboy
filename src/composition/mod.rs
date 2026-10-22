@@ -11,7 +11,7 @@ mod json;
 mod wire;
 
 #[cfg(feature = "full")]
-pub(crate) mod telemetry;
+pub mod telemetry;
 
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -24,7 +24,7 @@ use wire::{
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CheckError {
+pub enum CheckError {
     InvalidJson,
     InvalidContract,
     DuplicateScope,
@@ -57,7 +57,7 @@ impl std::error::Error for CheckError {}
 
 // Serialize only; private construction. This report cannot resurrect authority.
 #[derive(Debug, Serialize)]
-pub(crate) struct CheckedStructure {
+pub struct CheckedStructure {
     status: &'static str,
     authorized: bool,
     contract_fingerprint: &'static str,
@@ -73,7 +73,7 @@ struct SiteProjection {
     nodes: Vec<NodeId>,
 }
 
-pub(crate) fn check_file(path: &std::path::Path) -> anyhow::Result<()> {
+pub fn check_file(path: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     // Reject known pipes/devices before open (a FIFO could otherwise block).
     anyhow::ensure!(

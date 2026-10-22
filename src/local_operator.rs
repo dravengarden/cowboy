@@ -13,14 +13,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-pub(crate) const SOCKET_NAME: &str = "control.sock";
+pub const SOCKET_NAME: &str = "control.sock";
 const GRANT_NAME: &str = "grant.json";
 
-pub(crate) fn uid() -> u32 {
+pub fn uid() -> u32 {
     rustix::process::geteuid().as_raw()
 }
 
-pub(crate) fn directory(data_dir: &Path) -> Result<PathBuf> {
+pub fn directory(data_dir: &Path) -> Result<PathBuf> {
     let directory = data_dir.canonicalize()?.join("local-operator");
     match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
         Ok(()) => {}
@@ -43,7 +43,7 @@ fn private_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn private_file(path: &Path, create: bool) -> Result<File> {
+pub fn private_file(path: &Path, create: bool) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(create)
@@ -100,7 +100,7 @@ fn policy(directory: &Path) -> Result<Identity> {
 }
 
 // Never serialized or reconstructed from an Actor, request body or journal.
-pub(crate) struct Grant {
+pub struct Grant {
     directory: PathBuf,
     identity: Identity,
     peer_uid: u32,
@@ -108,7 +108,7 @@ pub(crate) struct Grant {
 }
 
 impl Grant {
-    pub(crate) fn capture(directory: &Path, peer_uid: u32, live: Arc<AtomicBool>) -> Result<Self> {
+    pub fn capture(directory: &Path, peer_uid: u32, live: Arc<AtomicBool>) -> Result<Self> {
         ensure!(
             peer_uid == uid() || peer_uid == 0,
             "local Operator peer is not the Service account"
@@ -125,12 +125,12 @@ impl Grant {
         })
     }
 
-    pub(crate) fn current(&self) -> bool {
+    pub fn current(&self) -> bool {
         self.live.load(Ordering::Acquire)
             && policy(&self.directory).is_ok_and(|identity| identity == self.identity)
     }
 
-    pub(crate) fn actor(&self) -> crate::plugin_operation::Actor {
+    pub fn actor(&self) -> crate::plugin_operation::Actor {
         // Reserved host namespace inside the existing bounded Admin actor codec.
         // This does not create or impersonate a browser admin account.
         crate::plugin_operation::Actor::Admin {
@@ -165,7 +165,7 @@ fn enable(directory: &Path) -> Result<()> {
 }
 
 #[derive(Args)]
-pub(crate) struct OperatorArgs {
+pub struct OperatorArgs {
     /// Controller data directory, on the Controller host under its Service account.
     #[arg(
         long,
@@ -381,7 +381,7 @@ enum OperatorCommand {
     },
 }
 
-pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
+pub async fn run(args: OperatorArgs) -> Result<()> {
     let directory = directory(&args.data_dir)?;
     match args.command {
         OperatorCommand::Enable => {

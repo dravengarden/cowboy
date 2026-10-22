@@ -307,7 +307,7 @@ pub fn disable_registration_token(policy: &mut RegistrationPolicy, token_id: &st
     Ok(())
 }
 
-pub(crate) fn hex_sha256(value: &[u8]) -> String {
+pub fn hex_sha256(value: &[u8]) -> String {
     use sha2::Digest as _;
     sha2::Sha256::digest(value)
         .iter()
@@ -540,11 +540,7 @@ impl AdminIdentities {
 
     /// Recheck an already authenticated core operation without retaining its
     /// bearer secret. The hash is a lookup key, never a public login input.
-    pub(crate) fn principal_by_token_hash(
-        &self,
-        token_hash: &str,
-        now_ms: i64,
-    ) -> Option<AdminPrincipal> {
+    pub fn principal_by_token_hash(&self, token_hash: &str, now_ms: i64) -> Option<AdminPrincipal> {
         let session = self
             .sessions
             .iter()
@@ -637,7 +633,7 @@ impl AdminIdentities {
 
     /// Issue an admin session only after an external identity has already been
     /// verified and mapped to this exact, pre-existing Cowboy admin account.
-    pub(crate) fn login_federated(&mut self, account: &str, now_ms: i64) -> Result<String> {
+    pub fn login_federated(&mut self, account: &str, now_ms: i64) -> Result<String> {
         let account = normalize_admin_account(account)?;
         anyhow::ensure!(
             self.accounts
@@ -726,7 +722,7 @@ fn normalize_admin_account(account: &str) -> Result<String> {
     Ok(account)
 }
 
-pub(crate) fn ensure_admin_password(password: &str, account: &str) -> Result<()> {
+pub fn ensure_admin_password(password: &str, account: &str) -> Result<()> {
     let chars = password.chars().count();
     anyhow::ensure!(
         (ADMIN_PASSWORD_MIN_LEN..=ADMIN_PASSWORD_MAX_LEN).contains(&chars),

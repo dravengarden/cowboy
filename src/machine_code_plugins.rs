@@ -32,7 +32,7 @@ const MAX_CODE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKTREE_ROUTES: usize = 4096;
 
 #[derive(Clone)]
-pub(crate) struct CodeLaunchPlan {
+pub struct CodeLaunchPlan {
     pub plugin_id: String,
     pub generation_digest: String,
     pub runtime: CodeIntelligenceRuntime,
@@ -40,7 +40,7 @@ pub(crate) struct CodeLaunchPlan {
     pub home: PathBuf,
 }
 
-pub(crate) enum CodeRuntimeSelection {
+pub enum CodeRuntimeSelection {
     Installed(CodeLaunchPlan),
     Legacy(PathBuf),
 }
@@ -111,7 +111,7 @@ impl WorktreeRoute {
 }
 
 #[derive(Default)]
-pub(crate) struct CodeRuntimeHost {
+pub struct CodeRuntimeHost {
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
@@ -122,7 +122,7 @@ pub(crate) struct CodeRuntimeHost {
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
 
 impl CodeRuntimeHost {
-    pub(crate) async fn navigate(
+    pub async fn navigate(
         &self,
         invocation: crate::machine_plugins::CodeNavigationInvocation,
     ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
@@ -133,7 +133,7 @@ impl CodeRuntimeHost {
             .execute(invocation, &self.buffer_leases)
             .await
     }
-    pub(crate) async fn synchronize(
+    pub async fn synchronize(
         &self,
         invocation: crate::machine_plugins::CodeBufferSyncInvocation,
     ) -> Result<crate::machine_protocol::code_buffer_sync::Snapshot> {
@@ -141,7 +141,7 @@ impl CodeRuntimeHost {
             .execute(invocation, &self.buffer_leases)
             .await
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn live_generation_count(&self) -> usize {
         self.engines
             .lock()
@@ -287,7 +287,7 @@ fn request_worktree(payload: &Value) -> Result<Option<PathBuf>> {
 
 /// The package readiness command checks the real adapter/server pair before
 /// the active generation link moves. A successful probe does not install it.
-pub(crate) async fn probe_code_runtime(plan: &CodeLaunchPlan) -> Result<()> {
+pub async fn probe_code_runtime(plan: &CodeLaunchPlan) -> Result<()> {
     let runtime = RunningCodeRuntime::start(plan).await?;
     runtime.stop().await;
     Ok(())
@@ -449,7 +449,7 @@ fn runtime_command(
     Ok(command)
 }
 
-pub(crate) async fn exchange(socket: &Path, payload: &Value) -> Result<Value> {
+pub async fn exchange(socket: &Path, payload: &Value) -> Result<Value> {
     let request = serde_json::to_vec(payload)?;
     ensure!(
         request.len() <= MAX_CODE_MESSAGE_BYTES,

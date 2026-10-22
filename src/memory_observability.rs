@@ -9,7 +9,7 @@ const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 /// immutable release was built with without adding a `mallctl` wrapper (and its
 /// additional supply-chain surface) to the long-lived daemon.
 #[must_use]
-pub(crate) const fn compiled_malloc_conf() -> Option<&'static str> {
+pub const fn compiled_malloc_conf() -> Option<&'static str> {
     option_env!("JEMALLOC_SYS_WITH_MALLOC_CONF")
 }
 
@@ -18,7 +18,7 @@ pub(crate) const fn compiled_malloc_conf() -> Option<&'static str> {
 /// beside the compiled configuration so operators never diagnose the wrong
 /// effective policy.
 #[must_use]
-pub(crate) fn runtime_malloc_conf_override() -> Option<String> {
+pub fn runtime_malloc_conf_override() -> Option<String> {
     std::env::var("MALLOC_CONF")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -28,7 +28,7 @@ pub(crate) fn runtime_malloc_conf_override() -> Option<String> {
 /// usage collectors and any delegated child cgroups. This complements the
 /// daemon-only RSS metric when diagnosing service-level startup peaks.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct CgroupMemory {
+pub struct CgroupMemory {
     pub current_bytes: u64,
     pub peak_bytes: u64,
 }
@@ -36,7 +36,7 @@ pub(crate) struct CgroupMemory {
 /// Current and lifetime-high cgroup-v2 memory, when Cowboy's own cgroup can be
 /// resolved. Older kernels without `memory.peak` fall back to the current value.
 #[must_use]
-pub(crate) fn own_cgroup_memory() -> Option<CgroupMemory> {
+pub fn own_cgroup_memory() -> Option<CgroupMemory> {
     let raw = std::fs::read_to_string("/proc/self/cgroup").ok()?;
     let relative = raw.lines().find_map(|line| line.strip_prefix("0::"))?;
     let directory = PathBuf::from(CGROUP_ROOT).join(relative.trim_start_matches('/'));

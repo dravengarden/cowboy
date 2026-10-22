@@ -31,11 +31,7 @@ fn canonical_boot_id(value: &str) -> Option<uuid::Uuid> {
 
 impl MachinePluginStore {
     /// Called only after pre-exec containment has observed an empty subtree.
-    pub(crate) fn mark_auth_candidate_tree_exited(
-        &self,
-        provider: &str,
-        request: &str,
-    ) -> Result<()> {
+    pub fn mark_auth_candidate_tree_exited(&self, provider: &str, request: &str) -> Result<()> {
         let _guard = self.auth_candidates.lock();
         super::validate_plugin_id(provider)?;
         super::validate_auth_candidate_id(request)?;
@@ -69,7 +65,7 @@ impl MachinePluginStore {
 
     /// Own named secret-input lifetime without storing the supplied secret.
     /// This path never spawns a command, including if its future is aborted.
-    pub(crate) async fn with_secret_input<T, F>(
+    pub async fn with_secret_input<T, F>(
         self: &Arc<Self>,
         provider: &str,
         request: &str,
@@ -178,11 +174,7 @@ impl MachinePluginStore {
 
     /// Only call after the native process has exited and its process-group
     /// cleanup guard has run. This contains no credential or account identity.
-    pub(crate) fn mark_auth_candidate_completed(
-        &self,
-        provider: &str,
-        request: &str,
-    ) -> Result<()> {
+    pub fn mark_auth_candidate_completed(&self, provider: &str, request: &str) -> Result<()> {
         super::validate_plugin_id(provider)?;
         super::validate_auth_candidate_id(request)?;
         let root = self.auth_candidate_root(provider);
@@ -302,7 +294,7 @@ fn read_marker(path: &Path, maximum: usize) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-pub(crate) struct AuthCandidateCleanup {
+pub struct AuthCandidateCleanup {
     store: Arc<MachinePluginStore>,
     provider: String,
     request: String,
@@ -312,7 +304,7 @@ pub(crate) struct AuthCandidateCleanup {
 }
 
 impl AuthCandidateCleanup {
-    pub(crate) fn new(store: Arc<MachinePluginStore>, provider: &str, request: &str) -> Self {
+    pub fn new(store: Arc<MachinePluginStore>, provider: &str, request: &str) -> Self {
         Self {
             store,
             provider: provider.into(),
@@ -323,7 +315,7 @@ impl AuthCandidateCleanup {
         }
     }
 
-    pub(crate) fn discard(&mut self) -> anyhow::Result<()> {
+    pub fn discard(&mut self) -> anyhow::Result<()> {
         ensure!(
             !self.process_unconfirmed,
             "native login process exit is unconfirmed; retaining its reservation"
@@ -341,18 +333,18 @@ impl AuthCandidateCleanup {
 
     /// Set immediately after spawn, before the next await. If the task is
     /// aborted, Drop must retain the home and its exclusive login reservation.
-    pub(crate) fn process_started(&mut self) {
+    pub fn process_started(&mut self) {
         self.process_unconfirmed = true;
         self.process_started = true;
     }
 
     /// Only the process runner's confirmed exit may release the reservation.
-    pub(crate) fn process_exited(&mut self) {
+    pub fn process_exited(&mut self) {
         self.process_unconfirmed = false;
     }
 
     /// Move cleanup responsibility without a moment in which it is unowned.
-    pub(crate) fn transfer(&mut self) -> Self {
+    pub fn transfer(&mut self) -> Self {
         let guard = Self {
             store: self.store.clone(),
             provider: self.provider.clone(),
@@ -365,7 +357,7 @@ impl AuthCandidateCleanup {
         guard
     }
 
-    pub(crate) fn matches(
+    pub fn matches(
         &self,
         provider: &str,
         account: &crate::provider_account::ProviderAccountId,

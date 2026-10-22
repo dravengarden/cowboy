@@ -4,7 +4,7 @@ use anyhow::{Result, ensure};
 use cardea_core::authorization::{Plan, Receipt};
 
 #[derive(sqlx::FromRow)]
-pub(crate) struct CardeaOperation {
+pub struct CardeaOperation {
     pub operation_id: String,
     pub request_digest: String,
     pub plan: String,
@@ -13,7 +13,7 @@ pub(crate) struct CardeaOperation {
     pub receipt: Option<String>,
 }
 impl CardeaOperation {
-    pub(crate) fn plan(&self) -> Result<Plan> {
+    pub fn plan(&self) -> Result<Plan> {
         let plan: Plan = cardea_core::authorization::decode(self.plan.as_bytes())
             .map_err(|_| anyhow::anyhow!("invalid saved plan"))?;
         ensure!(
@@ -32,16 +32,16 @@ macro_rules! dispatch {
     };
 }
 impl Store {
-    pub(crate) async fn cardea_device_allowed(&self, user: &str, device: &str) -> Result<bool> {
+    pub async fn cardea_device_allowed(&self, user: &str, device: &str) -> Result<bool> {
         dispatch!(self, cardea_device_allowed(user, device))
     }
-    pub(crate) async fn cardea_operation(&self, id: &str) -> Result<Option<CardeaOperation>> {
+    pub async fn cardea_operation(&self, id: &str) -> Result<Option<CardeaOperation>> {
         dispatch!(self, cardea_operation(id))
     }
-    pub(crate) async fn cardea_request(&self, key: &str) -> Result<Option<CardeaOperation>> {
+    pub async fn cardea_request(&self, key: &str) -> Result<Option<CardeaOperation>> {
         dispatch!(self, cardea_request(key))
     }
-    pub(crate) async fn prepare_cardea_operation(
+    pub async fn prepare_cardea_operation(
         &self,
         key: &str,
         binding: &str,
@@ -57,17 +57,13 @@ impl Store {
             prepare_cardea_operation(key, binding, &plan.operation_id, &document)
         )
     }
-    pub(crate) async fn claim_cardea_operation(
-        &self,
-        id: &str,
-        claim: &str,
-    ) -> Result<CardeaOperation> {
+    pub async fn claim_cardea_operation(&self, id: &str, claim: &str) -> Result<CardeaOperation> {
         dispatch!(self, claim_cardea_operation(id, claim))
     }
-    pub(crate) async fn start_cardea_operation(&self, id: &str, claim: &str) -> Result<bool> {
+    pub async fn start_cardea_operation(&self, id: &str, claim: &str) -> Result<bool> {
         dispatch!(self, start_cardea_operation(id, claim))
     }
-    pub(crate) async fn record_cardea_operation(&self, receipt: &Receipt) -> Result<()> {
+    pub async fn record_cardea_operation(&self, receipt: &Receipt) -> Result<()> {
         let document = serde_json::to_string(receipt)?;
         ensure!(document.len() <= 4096, "receipt too large");
         dispatch!(

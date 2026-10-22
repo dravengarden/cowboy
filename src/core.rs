@@ -30,12 +30,12 @@ mod code_scope;
 mod review_defaults;
 mod session_continuation;
 mod session_trash;
-pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
+pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
 mod product_permissions;
-pub(crate) use product_permissions::ProductPermissionObservation;
+pub use product_permissions::ProductPermissionObservation;
 mod persistence_queue;
-pub(crate) use persistence_queue::NORMAL_BYTES as STORE_BATCH_MAX_BYTES;
+pub use persistence_queue::NORMAL_BYTES as STORE_BATCH_MAX_BYTES;
 pub use persistence_queue::{PersistenceHealth, StoreReceiver, StoreSink};
 pub mod settings_keys;
 
@@ -59,11 +59,11 @@ const HOT_TAIL_TRIM_BATCH: usize = 200;
 /// Soft heap budget for one persisted session's canonical hot tail. A count
 /// limit alone is ineffective for screenshots and multi-megabyte tool results.
 /// Keep at least the newest event so the cursor always advances.
-pub(crate) const HOT_TAIL_MAX_BYTES: usize = 1024 * 1024;
+pub const HOT_TAIL_MAX_BYTES: usize = 1024 * 1024;
 /// Idle sessions keep a smaller replay tail. Opening one pages older rows
 /// through `/api/history`; a busy turn keeps the full 1 MiB so the focused
 /// transcript does not stall mid-stream.
-pub(crate) const HOT_TAIL_IDLE_MAX_BYTES: usize = 512 * 1024;
+pub const HOT_TAIL_IDLE_MAX_BYTES: usize = 512 * 1024;
 const BROADCAST_CAPACITY: usize = 1_024;
 /// Event-count ceiling for the cursor-based HTTP history route. The byte budget
 /// above is the primary bound; this limits render work for many tiny events.
@@ -93,7 +93,7 @@ fn estimated_json_bytes(value: &serde_json::Value) -> usize {
 
 /// A cheap soft estimate used only for retention. Walking a JSON string is O(1)
 /// (`String::len`), unlike serializing the ever-growing text on every token.
-pub(crate) fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
+pub fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
     let base = envelope
         .session_id
         .len()
@@ -106,7 +106,7 @@ pub(crate) fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
     }
 }
 
-pub(crate) fn hot_tail_budget_bytes(status: Status) -> usize {
+pub fn hot_tail_budget_bytes(status: Status) -> usize {
     match status {
         Status::Busy => HOT_TAIL_MAX_BYTES,
         _ => HOT_TAIL_IDLE_MAX_BYTES,
@@ -144,7 +144,7 @@ fn trim_hot_log(
 /// events. Storage applies an approximate serialized-byte bound before rows
 /// cross the process boundary; this exact model-side pass accounts for decoded
 /// strings and keeps the newest event when it alone exceeds the budget.
-pub(crate) fn bound_restored_hot_log(log: &mut Vec<Envelope>) -> bool {
+pub fn bound_restored_hot_log(log: &mut Vec<Envelope>) -> bool {
     // Older rows may predate canonical raw-output compaction. Normalize them
     // before computing the in-process budget so a duplicated image/command
     // result does not become the one oversized event retained after restart.
@@ -209,7 +209,7 @@ fn is_turn_end(envelope: &Envelope) -> bool {
 /// A typed refusal ends a turn, but leaves the native worker available. This
 /// controller-owned detail holds queued work through idle snapshots without
 /// inferring a refusal from ordinary assistant prose.
-pub(crate) const MODEL_REFUSAL_DETAIL: &str = "The model declined this request. Review its message before editing the request, changing models, or starting a new session. Queued messages require an explicit send.";
+pub const MODEL_REFUSAL_DETAIL: &str = "The model declined this request. Review its message before editing the request, changing models, or starting a new session. Queued messages require an explicit send.";
 
 /// Whether the current native-agent context has received a user turn.
 ///
@@ -262,7 +262,7 @@ fn question_chunk_text(envelope: &Envelope) -> &str {
     }
 }
 
-pub(crate) fn question_summary_title(text: &str, ordinal: u64) -> String {
+pub fn question_summary_title(text: &str, ordinal: u64) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = compact.trim_matches(|character: char| {
         matches!(
@@ -293,7 +293,7 @@ mod question_summary_title_tests {
     }
 }
 
-pub(crate) fn bound_history_page(mut events: Vec<Envelope>) -> Vec<Envelope> {
+pub fn bound_history_page(mut events: Vec<Envelope>) -> Vec<Envelope> {
     let mut start = events.len();
     let mut serialized_bytes = 0usize;
     for index in (0..events.len()).rev() {
@@ -593,7 +593,7 @@ impl SessionMeta {
     /// signed Provider must also accept this executor contract. This is a
     /// structural check only: named dispatch and projection require the fresh
     /// Store admission enforced by RemoteRuntime, never this cached metadata.
-    pub(crate) fn require_runtime_launch(&self) -> Result<(), String> {
+    pub fn require_runtime_launch(&self) -> Result<(), String> {
         if !self.provider_account_id.is_default()
             && (self.closing
                 || self.provider != "claude-code"
@@ -614,7 +614,7 @@ impl SessionMeta {
 
     /// Structural check only. The caller must separately hold current native
     /// account/session admission before dispatching this dormant declaration.
-    pub(crate) fn require_native_readmission(
+    pub fn require_native_readmission(
         &self,
         target: &crate::provider_account::NativeProfileReceipt,
     ) -> Result<(), String> {
@@ -818,7 +818,7 @@ pub enum Delivery {
 #[derive(Debug, Clone)]
 pub struct DispatchReq {
     /// Held across the channel and async preflight until runtime handoff.
-    pub(crate) ownership: std::sync::Arc<DispatchOwnership>,
+    pub ownership: std::sync::Arc<DispatchOwnership>,
     pub session_id: String,
     pub text: String,
     pub content: Vec<serde_json::Value>,
@@ -828,7 +828,7 @@ pub struct DispatchReq {
     pub cmid: Option<String>,
 }
 
-pub(crate) struct DispatchOwnership {
+pub struct DispatchOwnership {
     hub: std::sync::Weak<HubInner>,
     session: String,
     epoch: u64,
@@ -900,13 +900,13 @@ const NON_ACTIVITY_SESSION_UPDATES: [&str; 5] = [
 ];
 
 /// [`NON_ACTIVITY_SESSION_UPDATES`] as a SQL list for the restore queries.
-pub(crate) const NON_ACTIVITY_SESSION_UPDATES_SQL: &str = "'available_commands_update', \
+pub const NON_ACTIVITY_SESSION_UPDATES_SQL: &str = "'available_commands_update', \
 'current_mode_update', 'config_option_update', 'usage_update', 'session_info_update'";
 
 /// Whether an event shows the session being used: prompts, agent output,
 /// tool calls and permissions. Lifecycle edges and worker metadata replayed
 /// by a restart or reconnect are not.
-pub(crate) fn counts_as_activity(event: &Event) -> bool {
+pub fn counts_as_activity(event: &Event) -> bool {
     match event {
         Event::Lifecycle { .. } => false,
         Event::Update { update } => !update
@@ -1805,7 +1805,7 @@ pub enum StoreWrite {
     },
 }
 
-pub(crate) fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
+pub fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
     match write {
         StoreWrite::AppendEvent(envelope) => estimated_envelope_bytes(envelope),
         StoreWrite::UpdateConfigOptions { options, .. }
@@ -1904,7 +1904,7 @@ pub struct Hub {
     inner: std::sync::Arc<HubInner>,
 }
 
-pub(crate) struct ContextEditGuard {
+pub struct ContextEditGuard {
     hub: Hub,
     id: String,
 }
@@ -2034,7 +2034,7 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
         .or_else(|| option.get("current_value"))
 }
 
-pub(crate) fn config_option_accepts(option: &serde_json::Value, value: &serde_json::Value) -> bool {
+pub fn config_option_accepts(option: &serde_json::Value, value: &serde_json::Value) -> bool {
     option
         .get("options")
         .is_none_or(|choices| config_value_list_contains(choices, value))
@@ -2402,14 +2402,14 @@ impl Hub {
 
     /// Restore the persisted sidebar folder tree. Session placements ride on
     /// each [`RestoredSession::folder_id`] instead.
-    pub(crate) fn restore_workspace_orders(&self, orders: Vec<(String, Vec<String>)>) {
+    pub fn restore_workspace_orders(&self, orders: Vec<(String, Vec<String>)>) {
         *self.inner.workspace_orders.lock() = orders.into_iter().collect();
     }
 
     /// Announce one owner's changed draft `metadata` (no body) to that owner's
     /// devices. The live patch carries only this document; a reconnect resync
     /// carries every document announced this lifetime.
-    pub(crate) fn announce_preferences(&self, owner: &str, scope: &str, revision: i64) {
+    pub fn announce_preferences(&self, owner: &str, scope: &str, revision: i64) {
         {
             let mut all = self.inner.preference_announcements.lock();
             let scopes = all.entry(owner.to_owned()).or_default();
@@ -2429,7 +2429,7 @@ impl Hub {
         );
     }
 
-    pub(crate) fn announce_draft(&self, owner: &str, metadata: serde_json::Value) {
+    pub fn announce_draft(&self, owner: &str, metadata: serde_json::Value) {
         let Some(id) = metadata.get("id").and_then(serde_json::Value::as_str) else {
             return;
         };
@@ -2717,7 +2717,7 @@ impl Hub {
     /// Reader-first fence shared by snapshots and streamed events. A native
     /// id, config update or permission request cannot adopt an unsupported
     /// environment through the event path while snapshots reject it.
-    pub(crate) fn accepts_runtime_projection(&self, session_id: &str) -> bool {
+    pub fn accepts_runtime_projection(&self, session_id: &str) -> bool {
         !self
             .inner
             .sessions
@@ -2957,7 +2957,7 @@ impl Hub {
         );
     }
 
-    pub(crate) fn is_managed_child(&self, session_id: &str) -> bool {
+    pub fn is_managed_child(&self, session_id: &str) -> bool {
         self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.meta
                 .execution_binding
@@ -3378,7 +3378,7 @@ impl Hub {
     }
 
     /// Register a new session in `Starting` state and broadcast the new list.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn create_local_session(
         &self,
         id: String,
@@ -3416,7 +3416,7 @@ impl Hub {
     }
 
     /// Construct metadata without publishing it or enqueuing a database write.
-    pub(crate) fn prepare_session(registration: SessionRegistration) -> SessionMeta {
+    pub fn prepare_session(registration: SessionRegistration) -> SessionMeta {
         let SessionRegistration {
             id,
             provider,
@@ -3476,7 +3476,7 @@ impl Hub {
 
     /// Only for a committed row, with current account admission held by caller.
     /// Refuse a collision rather than replacing live transcript/runtime state.
-    pub(crate) fn project_persisted_session(&self, meta: SessionMeta) -> bool {
+    pub fn project_persisted_session(&self, meta: SessionMeta) -> bool {
         self.project_new_session(meta, false)
     }
 
@@ -3610,7 +3610,7 @@ impl Hub {
     /// re-broadcasts the session list so every connected surface sees the
     /// new label. Unknown ids are silently ignored (matches `set_status`).
     /// Mark `session_id` as continuing `source` (or restore that mark).
-    pub(crate) fn set_continued_from(&self, session_id: &str, source: Option<String>) {
+    pub fn set_continued_from(&self, session_id: &str, source: Option<String>) {
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -3625,7 +3625,7 @@ impl Hub {
     }
 
     /// Project persisted continuation marks after settings and sessions load.
-    pub(crate) fn restore_continuations(&self) {
+    pub fn restore_continuations(&self) {
         let sessions = self.session_list();
         let key = |id: &str| format!("{}{id}", settings_keys::SESSION_CONTINUED_FROM_PREFIX);
         // Continuations created before the mark existed are named by their
@@ -3751,7 +3751,7 @@ impl Hub {
 
     /// Close the queue admission race before awaiting a durable context edit.
     /// Messages arriving during the write remain queued, including schedules.
-    pub(crate) fn begin_context_edit(
+    pub fn begin_context_edit(
         &self,
         id: &str,
         allow_queued: bool,
@@ -3778,11 +3778,11 @@ impl Hub {
             && crate::session_context::allows_dispatch(self, id, cmid)
     }
 
-    pub(crate) fn context_state_changed(&self, id: &str) {
+    pub fn context_state_changed(&self, id: &str) {
         self.try_drain(id);
     }
 
-    pub(crate) fn set_resource_wait(&self, session_id: &str, reason: Option<String>) {
+    pub fn set_resource_wait(&self, session_id: &str, reason: Option<String>) {
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             if let Some(s) = sessions.get_mut(session_id)
@@ -4530,7 +4530,7 @@ impl Hub {
     /// Authorize and copy under the same lock so an ownership change cannot
     /// expose a different user's messages between admission and observation.
     #[must_use]
-    pub(crate) fn queue_and_drafts(
+    pub fn queue_and_drafts(
         &self,
         session_id: &str,
         visible: impl FnOnce(&SessionMeta) -> bool,
@@ -4545,7 +4545,7 @@ impl Hub {
     /// The flag reports whether the retained window's start was included.
     /// Visibility is checked atomically with the read.
     #[must_use]
-    pub(crate) fn log_window(
+    pub fn log_window(
         &self,
         session_id: &str,
         after_seq: Option<u64>,
@@ -4791,7 +4791,7 @@ impl Hub {
 
     /// Project a binding already committed by the guarded Store writer. This
     /// deliberately enqueues no persistence write and never starts a worker.
-    pub(crate) fn project_native_binding(
+    pub fn project_native_binding(
         &self,
         expected: &SessionMeta,
         target: &crate::provider_account::NativeProfileReceipt,
@@ -5115,7 +5115,7 @@ impl Hub {
 
     /// Publish a prepared binding only after its compare-and-set has committed
     /// to storage. No intermediate runtime-local metadata is ever observable.
-    pub(crate) fn accept_execution_binding(
+    pub fn accept_execution_binding(
         &self,
         session_id: &str,
         expected: &crate::execution_environment::ExecutionBinding,
@@ -5157,7 +5157,7 @@ impl Hub {
 
     /// Publish a storage-CASed maintenance transition without changing the
     /// native conversation, prompts, Provider, authentication or workspace.
-    pub(crate) fn accept_execution_recovery(
+    pub fn accept_execution_recovery(
         &self,
         session_id: &str,
         expected: &crate::execution_environment::ExecutionBinding,
@@ -5533,11 +5533,7 @@ impl Hub {
     }
 
     /// Supply a preview without allocating a worker or claiming an ACP reply.
-    pub(crate) fn set_initial_config_options(
-        &self,
-        expected: &SessionMeta,
-        options: serde_json::Value,
-    ) {
+    pub fn set_initial_config_options(&self, expected: &SessionMeta, options: serde_json::Value) {
         let mut sessions = self.inner.sessions.lock();
         if let Some(session) = sessions.get_mut(&expected.id)
             && session.meta.provider == expected.provider
@@ -5556,7 +5552,7 @@ impl Hub {
     /// Return only the last agent-backed options snapshot. Unlike
     /// [`Self::config_options`], this does not synthesize host-owned controls
     /// when the agent has not advertised any options yet.
-    pub(crate) fn persisted_config_options(&self, session_id: &str) -> Option<serde_json::Value> {
+    pub fn persisted_config_options(&self, session_id: &str) -> Option<serde_json::Value> {
         self.inner
             .sessions
             .lock()
@@ -5764,7 +5760,7 @@ impl Hub {
     /// emitting another client notification. Some ACP agents report failures
     /// as ordinary message chunks, so their original transcript event remains
     /// visible while this durable incident feeds the diagnostic log.
-    pub(crate) fn record_session_error(&self, session_id: &str, message: &str) {
+    pub fn record_session_error(&self, session_id: &str, message: &str) {
         let occurred_at_ms = now_ms();
         let suffix = self.inner.next_error_id.fetch_add(1, Ordering::Relaxed);
         let incident_id = format!("session-error:{session_id}:{occurred_at_ms}:{suffix}");
@@ -5907,7 +5903,7 @@ impl Hub {
     ///   deliberately reviving an exited/crashed session via `session/load`.
     ///
     /// Both require that nothing of ours is already in flight.
-    pub(crate) fn delivery_hold(&self, session_id: &str) -> Option<String> {
+    pub fn delivery_hold(&self, session_id: &str) -> Option<String> {
         self.inner
             .sessions
             .lock()
@@ -5917,7 +5913,7 @@ impl Hub {
 
     /// Caller must commit the corresponding setting first. This method only
     /// publishes already-durable state, never sends a second write-behind.
-    pub(crate) fn publish_delivery_hold(&self, session_id: &str, operation: Option<String>) {
+    pub fn publish_delivery_hold(&self, session_id: &str, operation: Option<String>) {
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5940,7 +5936,7 @@ impl Hub {
 
     /// Run exactly the replacement message after its original turn has ended.
     /// Other queued items and the user's Pause remain unchanged.
-    pub(crate) fn dispatch_interrupt_once(
+    pub fn dispatch_interrupt_once(
         &self,
         session_id: &str,
         operation: &str,
@@ -6065,7 +6061,7 @@ impl Hub {
     }
 
     /// Retry a never-dispatched resource wait, respecting pause and editing.
-    pub(crate) fn retry_resource_wait(&self, session_id: &str) {
+    pub fn retry_resource_wait(&self, session_id: &str) {
         self.drain_head(session_id, true, false);
     }
 
@@ -6225,7 +6221,7 @@ impl Hub {
 
     /// The admitted bootstrap precedes messages queued while its intent was
     /// being persisted. It still respects Pause and never interrupts a turn.
-    pub(crate) fn submit_context(
+    pub fn submit_context(
         &self,
         session_id: &str,
         text: String,
@@ -6424,7 +6420,7 @@ impl Hub {
     /// ids (scheduler wakeups, scheduled drafts, retry, legacy continuation)
     /// are deliberately reusable and never participate in delivery dedupe.
     /// A human/API prompt, not a scheduler, retry or managed-call prompt.
-    pub(crate) fn is_authored_cmid(cmid: &str) -> bool {
+    pub fn is_authored_cmid(cmid: &str) -> bool {
         Self::is_client_cmid(cmid)
             && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
             && !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)

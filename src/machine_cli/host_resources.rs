@@ -105,7 +105,7 @@ fn cgroup_memory_headroom_bytes() -> Option<u64> {
 
 /// Both the host and its tightest ancestor constrain a cold launch. Hosts
 /// without a finite cgroup still have a physical memory admission boundary.
-pub(crate) fn memory_headroom_bytes() -> Option<u64> {
+pub fn memory_headroom_bytes() -> Option<u64> {
     let available = parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)?.1;
     // This is an admission estimate, not MemAvailable: while tasks are already
     // stalling there is no budget for another worker. Reporting it also lets
@@ -128,7 +128,7 @@ fn full_pressure(text: &str) -> Option<f64> {
 
 /// Pause cold allocations while memory stalls consume at least 1% of the
 /// last ten seconds. Existing work continues; the launch queue stays bounded.
-pub(crate) fn memory_stalled() -> bool {
+pub fn memory_stalled() -> bool {
     let stalled = |path: &Path| {
         full_pressure(&std::fs::read_to_string(path).unwrap_or_default())
             .is_some_and(|full| full >= 1.0)
@@ -156,7 +156,7 @@ pub(crate) fn memory_stalled() -> bool {
 }
 
 /// Observe this host. `None` on platforms or hosts without the Linux sources.
-pub(crate) fn sample(state_dir: &Path) -> Option<HostResources> {
+pub fn sample(state_dir: &Path) -> Option<HostResources> {
     if !cfg!(target_os = "linux") {
         return None;
     }

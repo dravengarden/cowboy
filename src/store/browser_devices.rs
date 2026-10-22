@@ -5,7 +5,7 @@ use anyhow::Result;
 use super::{StorageBackend, Store};
 
 impl Store {
-    pub(crate) async fn browser_device_key(
+    pub async fn browser_device_key(
         &self,
         cookie: &str,
         token_hash: &str,
@@ -30,7 +30,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn bind_browser_device(
+    pub async fn bind_browser_device(
         &self,
         cookie: &str,
         token_hash: &str,

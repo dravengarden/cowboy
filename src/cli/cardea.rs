@@ -5,7 +5,7 @@ use clap::Subcommand;
 use serde_json::json;
 
 #[derive(Subcommand)]
-pub(super) enum Command {
+pub enum Command {
     /// Print a catalog proposal; use cardea change propose for human review.
     Catalog {
         #[arg(long)]
@@ -18,7 +18,7 @@ pub(super) enum Command {
         expected_revision: u64,
     },
 }
-pub(crate) fn proposal(
+pub fn proposal(
     application: &str,
     origin: &str,
     id: &str,

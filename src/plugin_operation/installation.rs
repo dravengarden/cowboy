@@ -10,12 +10,12 @@ use crate::operation_budget::OperationBudget;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const MAX_INSTALL_INTENT_BYTES: usize = 4096;
-pub(crate) const MAX_INSTALL_STAGING_RESOLUTION_BYTES: usize = 4096;
+pub const MAX_INSTALL_INTENT_BYTES: usize = 4096;
+pub const MAX_INSTALL_STAGING_RESOLUTION_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct InstallIntent {
+pub struct InstallIntent {
     pub schema: u16,
     pub operation_id: String,
     pub service_id: String,
@@ -38,7 +38,7 @@ pub(crate) struct InstallIntent {
     pub expires_at_ms: i64,
 }
 
-pub(crate) fn valid_operation_id(value: &str) -> bool {
+pub fn valid_operation_id(value: &str) -> bool {
     (16..=128).contains(&value.len())
         && value
             .bytes()
@@ -46,7 +46,7 @@ pub(crate) fn valid_operation_id(value: &str) -> bool {
 }
 
 impl InstallIntent {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let actor = match &self.actor {
             Actor::Product { user_id } => user_id,
             Actor::Admin { account } => account,
@@ -96,7 +96,7 @@ impl InstallIntent {
         Ok(())
     }
 
-    pub(crate) fn machine_step(&self) -> Result<InstallStep> {
+    pub fn machine_step(&self) -> Result<InstallStep> {
         self.validate()?;
         let expected = self
             .machine_target
@@ -124,7 +124,7 @@ impl InstallIntent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum InstallPhase {
+pub enum InstallPhase {
     Prepared,
     SyncingAuthentication,
     Installing,
@@ -136,7 +136,7 @@ pub(crate) enum InstallPhase {
 }
 
 impl InstallPhase {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Prepared => "prepared",
             Self::SyncingAuthentication => "syncing_authentication",
@@ -149,14 +149,14 @@ impl InstallPhase {
         }
     }
 
-    pub(crate) const fn terminal(self) -> bool {
+    pub const fn terminal(self) -> bool {
         matches!(
             self,
             Self::Completed | Self::AuthenticationPending | Self::Aborted
         )
     }
 
-    pub(crate) const fn permits(self, next: Self) -> bool {
+    pub const fn permits(self, next: Self) -> bool {
         if !self.terminal()
             && !matches!(self, Self::NeedsAttention)
             && matches!(next, Self::NeedsAttention)
@@ -182,7 +182,7 @@ impl InstallPhase {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum InstallProblem {
+pub enum InstallProblem {
     Interrupted,
     PreconditionsChanged,
     AuthenticationSyncFailed,
@@ -193,7 +193,7 @@ pub(crate) enum InstallProblem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct InstallOperation {
+pub struct InstallOperation {
     pub intent: InstallIntent,
     pub phase: InstallPhase,
     pub problem: Option<InstallProblem>,
@@ -204,7 +204,7 @@ pub(crate) struct InstallOperation {
 }
 
 impl InstallOperation {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.intent.validate()?;
         if let Some(receipt) = &self.machine_receipt {
             ensure!(
@@ -301,7 +301,7 @@ impl InstallOperation {
 /// authority and carries no release envelope or credential.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct InstallStagingResolutionIntent {
+pub struct InstallStagingResolutionIntent {
     pub schema: u16,
     pub resolution_id: String,
     pub operation_id: String,
@@ -314,7 +314,7 @@ pub(crate) struct InstallStagingResolutionIntent {
 }
 
 impl InstallStagingResolutionIntent {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let actor = match &self.actor {
             Actor::Product { user_id } => user_id,
             Actor::Admin { account } => account,
@@ -344,7 +344,7 @@ impl InstallStagingResolutionIntent {
         self.observed_target.validate()
     }
 
-    pub(crate) fn matches(
+    pub fn matches(
         &self,
         operation: &InstallOperation,
         observed_target: &InstallTarget,
@@ -372,33 +372,33 @@ impl InstallStagingResolutionIntent {
 
 /// Ephemeral authority for the local durability commit. It cannot be decoded
 /// from the serialized intent and retains the original monotonic time budget.
-pub(crate) struct InstallStagingResolutionPermit {
+pub struct InstallStagingResolutionPermit {
     intent: InstallStagingResolutionIntent,
     budget: OperationBudget,
 }
 
 impl InstallStagingResolutionPermit {
-    pub(crate) fn new(intent: InstallStagingResolutionIntent, budget: OperationBudget) -> Self {
+    pub fn new(intent: InstallStagingResolutionIntent, budget: OperationBudget) -> Self {
         Self { intent, budget }
     }
 
-    pub(crate) fn intent(&self) -> &InstallStagingResolutionIntent {
+    pub fn intent(&self) -> &InstallStagingResolutionIntent {
         &self.intent
     }
 
-    pub(crate) fn within_budget(&self) -> bool {
+    pub fn within_budget(&self) -> bool {
         !self.budget.expired()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct InstallStagingResolutionReceipt {
+pub struct InstallStagingResolutionReceipt {
     pub intent: InstallStagingResolutionIntent,
     pub resolved_at_ms: i64,
 }
 
-#[cfg(test)]
-pub(crate) fn machine_fixture(id: &str) -> InstallIntent {
+#[cfg(any(test, feature = "test-support"))]
+pub fn machine_fixture(id: &str) -> InstallIntent {
     InstallIntent {
         schema: 2,
         machine_target: Some(InstallTarget::Vacant {}),
@@ -406,8 +406,8 @@ pub(crate) fn machine_fixture(id: &str) -> InstallIntent {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture(id: &str) -> InstallIntent {
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture(id: &str) -> InstallIntent {
     let operation_id = format!("installation-{id:0>16}");
     InstallIntent {
         schema: 1,

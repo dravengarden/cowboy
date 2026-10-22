@@ -20,25 +20,25 @@ use super::PluginCatalog;
 /// A release or artifact directory younger than this is never retired, so a
 /// publication in progress and the readers that just learned about it settle
 /// before retention judges it.
-pub(crate) const MIN_RELEASE_AGE: Duration = Duration::from_hours(24);
+pub const MIN_RELEASE_AGE: Duration = Duration::from_hours(24);
 
 /// Catalog identities that must stay, as lowercase hex artifact digests.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct CatalogKeepSet {
+pub struct CatalogKeepSet {
     digests: BTreeSet<String>,
 }
 
 impl CatalogKeepSet {
     /// Accepts `sha256:<hex>` or bare hex; anything else is not an identity
     /// and is ignored.
-    pub(crate) fn insert(&mut self, digest: &str) {
+    pub fn insert(&mut self, digest: &str) {
         if let Some(digest) = normalize_digest(digest) {
             self.digests.insert(digest);
         }
     }
 
     #[must_use]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.digests.len()
     }
 
@@ -54,7 +54,7 @@ fn normalize_digest(digest: &str) -> Option<String> {
 }
 
 #[derive(Debug, Default, serde::Serialize)]
-pub(crate) struct CatalogRetentionOutcome {
+pub struct CatalogRetentionOutcome {
     pub retained: usize,
     pub retired: Vec<String>,
     pub artifact_directories_removed: usize,
@@ -391,7 +391,7 @@ impl PluginCatalog {
     /// newest `keep_releases` versions of each Plugin, along with the artifact
     /// directories only they named. `keep_releases == 0` retires nothing. The
     /// caller refreshes the Catalog afterwards so readers drop the entries.
-    pub(crate) async fn retire_unreferenced(
+    pub async fn retire_unreferenced(
         &self,
         keep: CatalogKeepSet,
         keep_releases: i64,

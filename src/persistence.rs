@@ -14,9 +14,7 @@ const PERSISTED_CMID_MAX_BYTES: usize = 128;
 /// client-submitted prompt. A reconnecting client resends every unconfirmed
 /// submit with the same id; only a persisted echo lets the restored Hub (and a
 /// reloaded client reading its snapshot) recognise that the prompt already ran.
-pub(crate) fn persisted_event_payload(
-    envelope: &Envelope,
-) -> serde_json::Result<serde_json::Value> {
+pub fn persisted_event_payload(envelope: &Envelope) -> serde_json::Result<serde_json::Value> {
     let mut payload = serde_json::to_value(&envelope.event)?;
     if let (Some(cmid), Some(object)) = (envelope.cmid.as_deref(), payload.as_object_mut())
         && !cmid.is_empty()
@@ -31,7 +29,7 @@ pub(crate) fn persisted_event_payload(
 }
 
 /// Remove and return the persisted `cmid`, leaving the plain event payload.
-pub(crate) fn take_persisted_cmid(payload: &mut serde_json::Value) -> Option<String> {
+pub fn take_persisted_cmid(payload: &mut serde_json::Value) -> Option<String> {
     match payload.as_object_mut()?.remove(PERSISTED_CMID_KEY)? {
         serde_json::Value::String(cmid)
             if !cmid.is_empty() && cmid.len() <= PERSISTED_CMID_MAX_BYTES =>
@@ -50,13 +48,13 @@ struct TextSlot {
 }
 
 #[derive(Default)]
-pub(crate) struct EventReducer {
+pub struct EventReducer {
     text: HashMap<String, TextSlot>,
     tools: HashMap<(String, String), Envelope>,
 }
 
 impl EventReducer {
-    pub(crate) fn clear_session(&mut self, session_id: &str) {
+    pub fn clear_session(&mut self, session_id: &str) {
         self.text.remove(session_id);
         self.tools.retain(|(session, _), _| session != session_id);
         self.shrink_tools_if_sparse();
@@ -67,7 +65,7 @@ impl EventReducer {
     /// stripped at ingest). Durable history and the Hub hot tail use this
     /// canonical form. A returned envelope may reuse an earlier seq, causing an
     /// UPSERT or in-memory replacement.
-    pub(crate) fn reduce(&mut self, mut env: Envelope) -> Option<Envelope> {
+    pub fn reduce(&mut self, mut env: Envelope) -> Option<Envelope> {
         // Also normalize replayed/raw completions before merging them. Otherwise
         // the merge would discard a raw-only result before it can be projected.
         compact_inbound_event(&mut env.event);
@@ -223,7 +221,7 @@ fn envelope_tool_is_terminal(envelope: &Envelope) -> bool {
 /// Compact a raw ACP event before the Hub clones it into history, the
 /// persistence queue, and live fan-out. Token chunks stay deltas; only the
 /// duplicated multi-megabyte `rawOutput` object is removed.
-pub(crate) fn compact_inbound_event(event: &mut Event) {
+pub fn compact_inbound_event(event: &mut Event) {
     match event {
         Event::Update { update } => compact_tool_update(update),
         Event::PermissionRequest { tool_call, .. } => compact_tool_update(tool_call),
@@ -237,11 +235,11 @@ pub(crate) fn compact_inbound_event(event: &mut Event) {
 /// A raw-only result is not a duplicate. Preserve it once in `content` for both
 /// live subscribers and history. In particular Codex MCP reports the complete
 /// `{result, error}` envelope only in `rawOutput`, without any ACP content.
-pub(crate) fn compact_canonical_tool_output(envelope: &mut Envelope) {
+pub fn compact_canonical_tool_output(envelope: &mut Envelope) {
     compact_inbound_event(&mut envelope.event);
 }
 
-pub(crate) fn compact_tool_update(update: &mut serde_json::Value) {
+pub fn compact_tool_update(update: &mut serde_json::Value) {
     crate::managed_calls::media::compact_metadata(update);
     let Some(update) = update.as_object_mut() else {
         return;

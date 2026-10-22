@@ -11,7 +11,7 @@ struct Active {
 }
 
 #[derive(Default)]
-pub(crate) struct WorkerTelemetry {
+pub struct WorkerTelemetry {
     local_active: Option<(Option<String>, std::time::Instant)>,
     queued: BTreeMap<String, SpanTimer>,
     active: Option<Active>,
@@ -27,7 +27,7 @@ impl WorkerTelemetry {
         }
     }
 
-    pub(crate) fn admit(&mut self, cmid: Option<&str>, trace: Option<TraceCarrier>) {
+    pub fn admit(&mut self, cmid: Option<&str>, trace: Option<TraceCarrier>) {
         self.queued.retain(|_, span| !span.expired());
         let (Some(cmid), Some(trace)) = (cmid, trace) else {
             return;
@@ -46,7 +46,7 @@ impl WorkerTelemetry {
         self.queued.insert(cmid.to_owned(), queue);
     }
 
-    pub(crate) fn started(&mut self, cmid: Option<&str>) {
+    pub fn started(&mut self, cmid: Option<&str>) {
         if self
             .local_active
             .replace((cmid.map(str::to_owned), std::time::Instant::now()))
@@ -85,7 +85,7 @@ impl WorkerTelemetry {
         }
     }
 
-    pub(crate) fn completed(&mut self, cmid: Option<&str>, reason: &str) {
+    pub fn completed(&mut self, cmid: Option<&str>, reason: &str) {
         if self
             .local_active
             .as_ref()
@@ -136,7 +136,7 @@ impl WorkerTelemetry {
         }
     }
 
-    pub(crate) fn event(&mut self, event: &RuntimeEvent) -> Vec<SpanRecord> {
+    pub fn event(&mut self, event: &RuntimeEvent) -> Vec<SpanRecord> {
         if matches!(event, RuntimeEvent::Update { update, cmid } if update["sessionUpdate"] == "agent_message_chunk"
             && cmid.as_deref().is_none_or(|id| self.active.as_ref().is_some_and(|active| active.cmid.as_deref() == Some(id))))
         {

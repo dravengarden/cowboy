@@ -24,14 +24,14 @@ impl Observations {
     }
 }
 
-pub(crate) struct Invocation {
+pub struct Invocation {
     profile: NativeProfileReceipt,
     connected: Arc<AtomicBool>,
     deadline: Instant,
 }
 
 impl Invocation {
-    pub(crate) fn new(profile: NativeProfileReceipt, connected: Arc<AtomicBool>) -> Self {
+    pub fn new(profile: NativeProfileReceipt, connected: Arc<AtomicBool>) -> Self {
         Self {
             profile,
             connected,
@@ -50,10 +50,7 @@ impl Invocation {
 }
 
 impl MachinePluginStore {
-    pub(crate) async fn collect_native_usage(
-        &self,
-        invocation: Invocation,
-    ) -> Result<serde_json::Value> {
+    pub async fn collect_native_usage(&self, invocation: Invocation) -> Result<serde_json::Value> {
         let profile = &invocation.profile;
         let _observation = tokio::time::timeout(
             invocation.remaining()?,
@@ -160,7 +157,7 @@ impl MachinePluginStore {
     }
 
     /// Serialize native logout against bounded usage processes sharing its home.
-    pub(crate) async fn native_observation_guard(&self) -> tokio::sync::OwnedMutexGuard<()> {
+    pub async fn native_observation_guard(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.native_observations
             .account(&self.account_id)
             .lock_owned()

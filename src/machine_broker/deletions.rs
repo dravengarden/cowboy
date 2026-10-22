@@ -17,7 +17,7 @@ const FILE: &str = "deletions.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Owner {
+pub struct Owner {
     pub machine_id: String,
     pub service_id: Option<String>,
 }

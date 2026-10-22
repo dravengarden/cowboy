@@ -5,17 +5,17 @@ use super::*;
 use crate::machine_protocol::plugin_step::digest as canonical_digest;
 use crate::operation_budget::OperationBudget;
 
-pub(crate) const MAX_RESOLUTION_BYTES: usize = 4096;
+pub const MAX_RESOLUTION_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ResolutionAction {
+pub enum ResolutionAction {
     AbortBeforeEffects,
     CompleteVerifiedRemoval,
 }
 
 impl ResolutionAction {
-    pub(crate) fn terminal_phase(self) -> Phase {
+    pub fn terminal_phase(self) -> Phase {
         match self {
             Self::AbortBeforeEffects => Phase::Aborted,
             Self::CompleteVerifiedRemoval => Phase::Completed,
@@ -23,7 +23,7 @@ impl ResolutionAction {
     }
 }
 
-pub(crate) fn can_complete_removal(operation: &Operation) -> bool {
+pub fn can_complete_removal(operation: &Operation) -> bool {
     operation.phase == Phase::NeedsAttention
         && operation.attention_from == Some(Phase::Uninstalling)
         && matches!(
@@ -37,7 +37,7 @@ pub(crate) fn can_complete_removal(operation: &Operation) -> bool {
         && operation.intent.installation_revision.is_some()
 }
 
-pub(crate) fn can_abort_before_effects(operation: &Operation) -> bool {
+pub fn can_abort_before_effects(operation: &Operation) -> bool {
     operation.phase == Phase::NeedsAttention
         && operation.attention_from == Some(Phase::Prepared)
         && matches!(
@@ -49,7 +49,7 @@ pub(crate) fn can_abort_before_effects(operation: &Operation) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ResolutionIntent {
+pub struct ResolutionIntent {
     pub schema: u16,
     pub resolution_id: String,
     pub operation_id: String,
@@ -66,7 +66,7 @@ pub(crate) struct ResolutionIntent {
 }
 
 impl ResolutionIntent {
-    pub(crate) fn new(
+    pub fn new(
         resolution_id: String,
         actor: Actor,
         operation: &Operation,
@@ -95,7 +95,7 @@ impl ResolutionIntent {
         Ok(intent)
     }
 
-    pub(crate) fn complete_removal(
+    pub fn complete_removal(
         resolution_id: String,
         actor: Actor,
         operation: &Operation,
@@ -128,7 +128,7 @@ impl ResolutionIntent {
         Ok(intent)
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             matches!(
                 (self.action, self.machine_evidence.is_some()),
@@ -170,7 +170,7 @@ impl ResolutionIntent {
         Ok(())
     }
 
-    pub(crate) fn matches(&self, operation: &Operation) -> Result<bool> {
+    pub fn matches(&self, operation: &Operation) -> Result<bool> {
         self.validate()?;
         let candidate = match self.action {
             ResolutionAction::AbortBeforeEffects => can_abort_before_effects(operation),
@@ -191,26 +191,26 @@ impl ResolutionIntent {
 /// Core-only, process-local admission. Not Clone/Debug/serde; the Service mints
 /// it only after checking the NEW confirmation's credential and Operator role.
 /// The Store repeats the budget and complete evidence CAS under its write lock.
-pub(crate) struct ResolutionPermit {
+pub struct ResolutionPermit {
     intent: ResolutionIntent,
     budget: OperationBudget,
 }
 
 impl ResolutionPermit {
-    pub(crate) fn new(intent: ResolutionIntent, budget: OperationBudget) -> Self {
+    pub fn new(intent: ResolutionIntent, budget: OperationBudget) -> Self {
         Self { intent, budget }
     }
 
-    pub(crate) fn intent(&self) -> &ResolutionIntent {
+    pub fn intent(&self) -> &ResolutionIntent {
         &self.intent
     }
 
-    pub(crate) fn within_budget(&self) -> bool {
+    pub fn within_budget(&self) -> bool {
         !self.budget.expired()
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(intent: ResolutionIntent) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(intent: ResolutionIntent) -> Self {
         let budget = OperationBudget::new(
             intent.expires_at_ms,
             std::time::Duration::from_mins(1),
@@ -219,20 +219,20 @@ impl ResolutionPermit {
         Self::new(intent, budget)
     }
 
-    #[cfg(test)]
-    pub(crate) fn expire_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expire_for_test(&self) {
         self.budget.expire_for_test();
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct ResolutionReceipt {
+pub struct ResolutionReceipt {
     pub intent: ResolutionIntent,
     pub resolved_at_ms: i64,
 }
 
 impl ResolutionReceipt {
-    pub(crate) fn matches_completed(&self, operation: &Operation) -> Result<bool> {
+    pub fn matches_completed(&self, operation: &Operation) -> Result<bool> {
         let terminal = self.intent.action.terminal_phase();
         if operation.phase != terminal || operation.updated_at_ms != self.resolved_at_ms {
             return Ok(false);
@@ -244,8 +244,8 @@ impl ResolutionReceipt {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> Operation {
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture() -> Operation {
     Operation {
         intent: super::fixture("no-effect-resolution"),
         phase: Phase::NeedsAttention,

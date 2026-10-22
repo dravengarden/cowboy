@@ -17,7 +17,7 @@ const INCARNATION_FLOOR: &str =
 
 /// The durable Machine datasets whose writer the component owner can admit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Dataset {
+pub enum Dataset {
     Deletion,
     Incarnation,
 }
@@ -233,11 +233,11 @@ fn selected_release(profile: &Path) -> Result<PathBuf> {
 
 /// Default builds never consult these authorities or admit a writer. Only the
 /// dedicated clean Nix writer build can pass the fixed root selection and floor.
-pub(crate) fn admitted(namespace: &Path, machine: &str) -> Result<bool> {
+pub fn admitted(namespace: &Path, machine: &str) -> Result<bool> {
     admitted_dataset(Dataset::Deletion, namespace, machine)
 }
 
-pub(crate) fn admitted_dataset(dataset: Dataset, namespace: &Path, machine: &str) -> Result<bool> {
+pub fn admitted_dataset(dataset: Dataset, namespace: &Path, machine: &str) -> Result<bool> {
     match dataset.build() {
         None => return Ok(false),
         Some("schema1") => {}

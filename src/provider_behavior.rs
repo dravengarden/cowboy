@@ -6,17 +6,17 @@
 //! Machine-only build can drain legacy sessions without compiling Provider
 //! process recipes.
 
-pub(crate) const COMPONENT_COMMANDS_ENV: &str = "COWBOY_PROVIDER_COMPONENT_COMMANDS";
+pub const COMPONENT_COMMANDS_ENV: &str = "COWBOY_PROVIDER_COMPONENT_COMMANDS";
 /// Directories holding the shared projected credential files, by bundle key.
 /// Auth-generation runtime homes are private, but their credentials are one
 /// source; a Provider CLI that locks its own refresh beside those credentials
 /// must see the shared directory or sibling generations race the single-use
 /// refresh token.
-pub(crate) const CREDENTIAL_DIRECTORIES_ENV: &str = "COWBOY_PROVIDER_CREDENTIAL_DIRECTORIES";
-pub(crate) const PROVIDER_AUTH_REQUIRED_PREFIX: &str = "Provider authentication required - ";
+pub const CREDENTIAL_DIRECTORIES_ENV: &str = "COWBOY_PROVIDER_CREDENTIAL_DIRECTORIES";
+pub const PROVIDER_AUTH_REQUIRED_PREFIX: &str = "Provider authentication required - ";
 
 #[must_use]
-pub(crate) fn is_provider_auth_required_error(detail: &str) -> bool {
+pub fn is_provider_auth_required_error(detail: &str) -> bool {
     detail.contains(PROVIDER_AUTH_REQUIRED_PREFIX)
 }
 
@@ -26,7 +26,7 @@ pub(crate) fn is_provider_auth_required_error(detail: &str) -> bool {
 /// restore. Open, send, and Retry must not auto-revive these crashes. Reload
 /// remains the explicit "try again" control.
 #[must_use]
-pub(crate) fn is_native_session_restore_timeout(detail: &str) -> bool {
+pub fn is_native_session_restore_timeout(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("did not complete acp session/resume")
         || detail.contains("did not complete acp session/load")
@@ -37,19 +37,19 @@ pub(crate) fn is_native_session_restore_timeout(detail: &str) -> bool {
 /// composer dispatch. Keep this sentence free of ACP jargon; incident
 /// classification matches it as `session_restore_timeout`.
 #[cfg(feature = "full")]
-pub(crate) const NATIVE_RESTORE_TIMEOUT_HOLD: &str =
+pub const NATIVE_RESTORE_TIMEOUT_HOLD: &str =
     "Kept in the queue. Reload to retry restore — large conversations may still fail.";
 
 /// Crash, hold, and wrapped worker copy for the same session-local restore
 /// timeout. Used before generic "timed out" / worker-startup classifiers.
 #[cfg(any(feature = "full", test))]
 #[must_use]
-pub(crate) fn is_session_restore_timeout_error(detail: &str) -> bool {
+pub fn is_session_restore_timeout_error(detail: &str) -> bool {
     is_native_session_restore_timeout(detail) || detail.contains("Reload to retry restore")
 }
 
 #[must_use]
-pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {
+pub fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {
     use cowboy_provider_sdk::{
         ConfigurationBehavior, PermissionBehavior, ProviderBehaviorContract, SessionBehavior,
         TurnEndBehavior,

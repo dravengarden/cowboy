@@ -5,7 +5,7 @@ use crate::provider_account::NativeIdentity;
 use crate::store::provider_accounts::grants::Admission;
 
 impl ProviderAuthService {
-    pub(crate) async fn refresh_current_grant(
+    pub async fn refresh_current_grant(
         &self,
         store: &crate::store::Store,
         machine: &str,

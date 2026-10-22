@@ -45,7 +45,7 @@ impl Store {
     /// newer replacement was abandoned. Never fall back while a replacement is
     /// pending. The caller must use `with_native_login_binding` immediately
     /// around its scheduling effect; discovery can race a new reservation.
-    pub(crate) async fn native_login_for_session(
+    pub async fn native_login_for_session(
         &self,
         owner: &str,
         account: &ProviderAccountId,
@@ -94,7 +94,7 @@ impl Store {
 
     /// Discovery for an existing durable session, never a fallback for creation.
     /// Callers must recheck the row under `with_native_session_binding`.
-    pub(crate) async fn native_login_for_registered_session(
+    pub async fn native_login_for_registered_session(
         &self,
         owner: &str,
         session: &str,

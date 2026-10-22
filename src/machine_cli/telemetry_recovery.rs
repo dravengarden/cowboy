@@ -5,7 +5,7 @@ use crate::machine_protocol::telemetry_recovery_audit::RecoveryAuditQuery;
 use crate::machine_protocol::{MachineEvent, telemetry_binding::BindingCommitFailure};
 use std::sync::Arc;
 
-pub(crate) fn recover(
+pub fn recover(
     request_id: String,
     request: RecoveryRequest,
     store: Arc<MachinePluginStore>,
@@ -33,7 +33,7 @@ pub(crate) fn recover(
     });
 }
 
-pub(crate) fn query(
+pub fn query(
     request_id: String,
     request: RecoveryRequest,
     store: Arc<MachinePluginStore>,

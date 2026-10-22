@@ -29,7 +29,7 @@ const RETRY_BACKOFF: [Duration; 3] = [
 
 /// Drop requests stop; shutdown also joins the task before storage teardown.
 /// Neither operation cancels an already-started Catalog/runtime refresh.
-pub(crate) struct CatalogWatcher {
+pub struct CatalogWatcher {
     watchers: Vec<notify::RecommendedWatcher>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
@@ -43,7 +43,7 @@ impl Drop for CatalogWatcher {
 }
 
 impl CatalogWatcher {
-    pub(crate) async fn shutdown(mut self) -> Result<()> {
+    pub async fn shutdown(mut self) -> Result<()> {
         self.stop.send_replace(true);
         self.watchers.clear();
         if let Some(task) = self.task.take() {
@@ -76,7 +76,7 @@ impl Stop {
     }
 }
 
-pub(crate) fn spawn(
+pub fn spawn(
     catalog: Arc<PluginCatalog>,
     storage: crate::plugin_storage::PluginStorage,
     providers: Arc<crate::provider_catalog::ProviderCatalog>,
@@ -281,7 +281,7 @@ async fn adopt(
 }
 
 impl PluginCatalog {
-    pub(crate) fn roots(&self) -> Vec<PathBuf> {
+    pub fn roots(&self) -> Vec<PathBuf> {
         self.roots.clone()
     }
 }

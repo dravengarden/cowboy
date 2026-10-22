@@ -58,8 +58,8 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
 }
 
 /// One concrete key per registered setting.
-#[cfg(test)]
-pub(crate) fn examples() -> Vec<String> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn examples() -> Vec<String> {
     vec![
         admin::REGISTRATION_SETTING.to_owned(),
         admin::PERMISSIONS_SETTING.to_owned(),

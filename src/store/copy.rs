@@ -75,7 +75,7 @@ const TABLES: &[&str] = &[
 ];
 
 #[derive(Debug, Serialize)]
-pub(crate) struct StoreCopyReport {
+pub struct StoreCopyReport {
     source_backend: &'static str,
     destination_backend: &'static str,
     tables: BTreeMap<String, u64>,
@@ -249,7 +249,7 @@ async fn sqlite_columns(destination: &mut SqliteConnection, table: &str) -> Resu
 /// destination is written in one transaction and is removed on every failure,
 /// so a caller can never mistake a partial copy for a cutover candidate.
 #[allow(clippy::too_many_lines)] // one fail-closed snapshot/copy/validation transaction
-pub(crate) async fn postgres_to_sqlite(
+pub async fn postgres_to_sqlite(
     source_url: &str,
     destination_url: &str,
     artifact_dir: PathBuf,

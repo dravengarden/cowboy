@@ -9,7 +9,7 @@ use anyhow::{Result, ensure};
 use std::fs;
 
 impl MachinePluginStore {
-    pub(crate) fn readmit_native_session(
+    pub fn readmit_native_session(
         &self,
         binding: &PreparedBinding,
         session: &crate::runtime_wire::StartSession,
@@ -34,7 +34,7 @@ impl MachinePluginStore {
         );
         self.readmit_account_binding(binding, &package)
     }
-    pub(crate) fn prepare_native_binding(&self, binding: &PreparedBinding) -> Result<()> {
+    pub fn prepare_native_binding(&self, binding: &PreparedBinding) -> Result<()> {
         let (package, _) = self.package_for_generation(
             &binding.target.provider_id,
             &binding.target.generation_digest,
@@ -43,7 +43,7 @@ impl MachinePluginStore {
     }
     /// Revalidate even identical retries: a historical preparation is not
     /// current admission. Serialize with stop, worker and login mutations.
-    pub(crate) fn prepare_account_binding(
+    pub fn prepare_account_binding(
         &self,
         binding: &PreparedBinding,
         package: &super::super::ProviderPackage,
@@ -126,7 +126,7 @@ impl MachinePluginStore {
 
     /// Caller must hold the broker lifecycle gate and verify current Controller
     /// authorization. This local step changes no processes or broker maps.
-    pub(crate) fn readmit_account_binding(
+    pub fn readmit_account_binding(
         &self,
         binding: &PreparedBinding,
         package: &super::super::ProviderPackage,

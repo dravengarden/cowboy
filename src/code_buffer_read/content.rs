@@ -1,11 +1,11 @@
 //! Text equality evidence, not a lease, version, filesystem identity or grant.
 use super::*;
 
-pub(crate) use crate::machine_protocol::code_buffer_sync::Content;
+pub use crate::machine_protocol::code_buffer_sync::Content;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Query {
+pub enum Query {
     Language {},
     Symbols {},
     Hover { position: Point },
@@ -13,7 +13,7 @@ pub(crate) enum Query {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum ContentOutput {
+pub enum ContentOutput {
     /// No LSP query was dispatched. No current native digest/text is disclosed.
     Mismatch {},
     /// The existing closed observation is nested, never another content query.
@@ -56,14 +56,14 @@ impl ContentOutput {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Observation {
+pub enum Observation {
     Language(LanguageOutput),
     Symbols(SymbolOutput),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct HoverBlock {
+pub struct HoverBlock {
     text: String,
     language: Option<String>,
     markdown: bool,

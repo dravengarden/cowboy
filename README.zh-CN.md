@@ -102,7 +102,7 @@ just build
 使用 SQLite 持久化启动本地 Hub：
 
 ```sh
-COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy serve \
+COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy-controller serve \
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 

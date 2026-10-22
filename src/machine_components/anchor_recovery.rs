@@ -2,12 +2,10 @@
 //! Existing damaged generations and unrelated selections are never replaced.
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{
-    restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine,
-};
+pub use linux::{restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine};
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn restore_portable_host_anchor(
+pub fn restore_portable_host_anchor(
     _state: &std::path::Path,
     _key: &std::path::Path,
     _manifest: &std::path::Path,
@@ -17,7 +15,7 @@ pub(crate) fn restore_portable_host_anchor(
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn restore_portable_host_anchor_with_quarantine(
+pub fn restore_portable_host_anchor_with_quarantine(
     _state: &std::path::Path,
     _key: &std::path::Path,
     _manifest: &std::path::Path,
@@ -270,7 +268,7 @@ mod linux {
         Ok(())
     }
 
-    pub(crate) fn restore_portable_host_anchor(
+    pub fn restore_portable_host_anchor(
         state: &Path,
         key: &Path,
         manifest: &Path,
@@ -279,7 +277,7 @@ mod linux {
         restore_anchor(state, key, manifest, artifact, false).map(|_| ())
     }
 
-    pub(crate) fn restore_portable_host_anchor_with_quarantine(
+    pub fn restore_portable_host_anchor_with_quarantine(
         state: &Path,
         key: &Path,
         manifest: &Path,

@@ -61,7 +61,7 @@ macro_rules! finish_namespace {
 }
 
 impl PasskeyStorage {
-    pub(crate) async fn validate_adoption(backend: &NamespaceBackend) -> Result<()> {
+    pub async fn validate_adoption(backend: &NamespaceBackend) -> Result<()> {
         Self::validate_ledger(backend).await?;
         let sql = "SELECT COUNT(*) FROM _cowboy_import WHERE name = $1";
         let (count, owned): (i64, bool) = match backend {
@@ -102,7 +102,7 @@ impl PasskeyStorage {
         Ok(())
     }
 
-    pub(crate) async fn open_core(
+    pub async fn open_core(
         backend: NamespaceBackend,
         authority: &Authority,
         phase: Phase,

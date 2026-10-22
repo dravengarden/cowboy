@@ -44,7 +44,7 @@ const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OidcProviderRuntimeDocument {
+pub struct OidcProviderRuntimeDocument {
     pub client_id: String,
     pub redirect_uri: String,
     pub subject: String,
@@ -58,7 +58,7 @@ pub(crate) struct OidcProviderRuntimeDocument {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum OidcRuntimeClientAuthentication {
+pub enum OidcRuntimeClientAuthentication {
     ClientSecretPost {
         client_secret_file: PathBuf,
     },
@@ -294,7 +294,7 @@ struct TokenResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CardeaDeviceIdentity {
+pub struct CardeaDeviceIdentity {
     schema: String,
     subject_id: String,
     client_id: String,
@@ -511,10 +511,10 @@ impl JsonWebKeySet {
 }
 
 impl OidcProvider {
-    #[cfg(test)]
-    pub(crate) fn cardea_device_fixture(origin: &str) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cardea_device_fixture(origin: &str) -> Self {
         let signing = SigningKey::from_bytes(&[7; 32]);
-        let mut provider = tests::provider_with_pinned_key(&signing);
+        let mut provider = provider_with_pinned_key(&signing);
         provider.issuer = origin.into();
         provider.token_endpoint = format!("{origin}/oauth2/token");
         provider.client_authentication = RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
@@ -525,7 +525,7 @@ impl OidcProvider {
     }
     /// The reserved Cardea provider owns this versioned identity extension.
     /// Product account mapping and permissions remain Cowboy-owned.
-    pub(crate) fn cardea_device_configuration(&self) -> Result<serde_json::Value> {
+    pub fn cardea_device_configuration(&self) -> Result<serde_json::Value> {
         anyhow::ensure!(
             self.id == "cardea"
                 && matches!(
@@ -544,7 +544,7 @@ impl OidcProvider {
         )
     }
 
-    pub(crate) async fn exchange_cardea_device(
+    pub async fn exchange_cardea_device(
         &self,
         token: &str,
         assertion: &str,
@@ -601,7 +601,7 @@ impl OidcProvider {
     /// Closed application-side transport for the generic authorization SDK.
     /// The provider owns the issuer and private service key; caller input
     /// cannot select a destination or obtain the service credential.
-    pub(crate) async fn cardea_authorization_post(
+    pub async fn cardea_authorization_post(
         &self,
         exchange: bool,
         body: &serde_json::Value,
@@ -675,10 +675,10 @@ impl OidcProvider {
             .map_err(|_| anyhow::anyhow!("invalid authorization response"))
     }
 
-    pub(crate) fn cardea_subject_matches(&self, subject: &str) -> bool {
+    pub fn cardea_subject_matches(&self, subject: &str) -> bool {
         self.id == "cardea" && constant_time_equal(subject.as_bytes(), self.subject.as_bytes())
     }
-    pub(crate) fn cardea_product_device_id(&self, grant: &str) -> Result<String> {
+    pub fn cardea_product_device_id(&self, grant: &str) -> Result<String> {
         let config = self.cardea_device_configuration()?;
         Ok(
             crate::admin::hex_sha256(&serde_json::to_vec(&serde_json::json!([
@@ -805,7 +805,7 @@ impl OidcProvider {
         })
     }
 
-    pub(crate) fn load_plugin(
+    pub fn load_plugin(
         contract: &AuthenticationProviderContract,
         runtime: OidcProviderRuntimeDocument,
     ) -> Result<Self> {
@@ -1877,7 +1877,7 @@ fn decode_32(value: &str, label: &str) -> Result<[u8; 32]> {
 
 /// Exact S256 verifier contract shared with Cardea's canonical consumer SDK.
 #[must_use]
-pub(crate) fn pkce_challenge(verifier: &str) -> Option<String> {
+pub fn pkce_challenge(verifier: &str) -> Option<String> {
     valid_pkce_verifier(verifier).then(|| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
     })
@@ -1891,10 +1891,10 @@ fn client_assertion(
     assertion_id: &str,
     now: u64,
 ) -> Option<String> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let fixture_endpoint = Url::parse(token_endpoint)
         .is_ok_and(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let fixture_endpoint = false;
     if !valid_oidc_token(key_id, 255)
         || !valid_oidc_token(client_id, 255)
@@ -2258,6 +2258,45 @@ fn now_seconds() -> Result<u64> {
         .as_secs())
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub fn provider_with_pinned_key(signing: &SigningKey) -> OidcProvider {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    OidcProvider {
+        id: "cardea".to_owned(),
+        display_name: "Cardea".to_owned(),
+        button_label: "Continue with Cardea".to_owned(),
+        issuer: "https://cardea.example".to_owned(),
+        authorization_endpoint: url::Url::parse("https://cardea.example/oauth2/authorize").unwrap(),
+        pushed_authorization_request_endpoint: None,
+        token_endpoint: "https://cardea.example/oauth2/token".to_owned(),
+        jwks_uri: None,
+        end_session_endpoint: Some(
+            url::Url::parse("https://cardea.example/oauth2/logout").unwrap(),
+        ),
+        post_logout_redirect_uri: Some(
+            url::Url::parse("https://cowboy.example/api/auth/logout/complete").unwrap(),
+        ),
+        scopes: "openid".to_owned(),
+        authorization_parameters: BTreeMap::new(),
+        client_id: "cowboy-production".to_owned(),
+        client_authentication: RuntimeClientAuthentication::ClientSecretPost(
+            "not-used-by-this-test".to_owned(),
+        ),
+        id_token_verifier: IdTokenVerifier::PinnedEd25519 {
+            key_id: "cardea-2026".to_owned(),
+            verifying_key: signing.verifying_key().to_bytes(),
+        },
+        subject: "draven".to_owned(),
+        account: "draven".to_owned(),
+        admin_account: Some("draven".to_owned()),
+        redirect_uri: "https://cowboy.example/api/auth/oidc/callback".to_owned(),
+        http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[tokio::test]
@@ -2357,44 +2396,7 @@ mod tests {
         }
     }
 
-    pub(super) fn provider_with_pinned_key(signing: &SigningKey) -> OidcProvider {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        OidcProvider {
-            id: "cardea".to_owned(),
-            display_name: "Cardea".to_owned(),
-            button_label: "Continue with Cardea".to_owned(),
-            issuer: "https://cardea.example".to_owned(),
-            authorization_endpoint: url::Url::parse("https://cardea.example/oauth2/authorize")
-                .unwrap(),
-            pushed_authorization_request_endpoint: None,
-            token_endpoint: "https://cardea.example/oauth2/token".to_owned(),
-            jwks_uri: None,
-            end_session_endpoint: Some(
-                url::Url::parse("https://cardea.example/oauth2/logout").unwrap(),
-            ),
-            post_logout_redirect_uri: Some(
-                url::Url::parse("https://cowboy.example/api/auth/logout/complete").unwrap(),
-            ),
-            scopes: "openid".to_owned(),
-            authorization_parameters: BTreeMap::new(),
-            client_id: "cowboy-production".to_owned(),
-            client_authentication: RuntimeClientAuthentication::ClientSecretPost(
-                "not-used-by-this-test".to_owned(),
-            ),
-            id_token_verifier: IdTokenVerifier::PinnedEd25519 {
-                key_id: "cardea-2026".to_owned(),
-                verifying_key: signing.verifying_key().to_bytes(),
-            },
-            subject: "draven".to_owned(),
-            account: "draven".to_owned(),
-            admin_account: Some("draven".to_owned()),
-            redirect_uri: "https://cowboy.example/api/auth/oidc/callback".to_owned(),
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap(),
-        }
-    }
+    pub(super) use super::provider_with_pinned_key;
 
     #[test]
     fn cardea_identity_rejects_audience_subject_binding_and_deadline_mismatch() {

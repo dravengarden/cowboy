@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     pub session_id: String,
     pub account_id: crate::provider_account::ProviderAccountId,
     pub machine_id: String,
@@ -19,7 +19,7 @@ pub(crate) struct Request {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Intent {
+pub struct Intent {
     pub request: Request,
     pub target: super::logins::NativeCompletion,
 }
@@ -28,14 +28,14 @@ pub(crate) struct Intent {
 /// behavior supplied by an untrusted UI or a stale Provider catalog projection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BindingCommit {
+pub struct BindingCommit {
     pub behavior: cowboy_provider_sdk::ProviderBehaviorContract,
 }
 
 impl Store {
     /// One database snapshot of durable progress, not live worker state or
     /// authority to resume. Never returns credentials or native identity data.
-    pub(crate) async fn native_session_transition_stage(
+    pub async fn native_session_transition_stage(
         &self,
         owner: &str,
         operation: &str,
@@ -56,7 +56,7 @@ impl Store {
     }
 
     /// Historical completion, not permission to dispatch or start a worker.
-    pub(crate) async fn native_session_transition_finished(
+    pub async fn native_session_transition_finished(
         &self,
         owner: &str,
         operation: &str,
@@ -80,7 +80,7 @@ impl Store {
         };
         Ok(finished.unwrap_or(false))
     }
-    pub(crate) async fn native_session_transition_commit(
+    pub async fn native_session_transition_commit(
         &self,
         owner: &str,
         operation: &str,
@@ -107,7 +107,7 @@ impl Store {
             .transpose()
     }
     /// Historical evidence only, never permission to change or restart a session.
-    pub(crate) async fn native_session_transition_stop(
+    pub async fn native_session_transition_stop(
         &self,
         owner: &str,
         operation: &str,
@@ -134,7 +134,7 @@ impl Store {
             .transpose()
     }
     /// Read a historical intent, not permission to dispatch or resume a worker.
-    pub(crate) async fn native_session_transition(
+    pub async fn native_session_transition(
         &self,
         owner: &str,
         operation: &str,

@@ -136,7 +136,7 @@ impl Bindings {
 }
 
 impl MachinePluginStore {
-    pub(crate) async fn recover_telemetry_binding(
+    pub async fn recover_telemetry_binding(
         &self,
         request: &RecoveryRequest,
         lease: BindingRecoveryLease,
@@ -161,7 +161,7 @@ impl MachinePluginStore {
         }
     }
 
-    pub(crate) async fn telemetry_recovery_observation(
+    pub async fn telemetry_recovery_observation(
         &self,
         request: &RecoveryRequest,
         service: Option<&str>,

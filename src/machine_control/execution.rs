@@ -5,7 +5,7 @@ use crate::machine_protocol::{
 };
 
 impl MachineControl {
-    pub(crate) async fn execution_request(
+    pub async fn execution_request(
         &self,
         machine_id: &str,
         request: Request,

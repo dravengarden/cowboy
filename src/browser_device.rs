@@ -10,15 +10,15 @@ use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier as _};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const HEADER: &str = "x-cowboy-browser-proof";
-pub(crate) const WS_PREFIX: &str = "cowboy-device.";
-pub(crate) const CHALLENGE_PATH: &str = "/api/auth/browser/challenge";
+pub const HEADER: &str = "x-cowboy-browser-proof";
+pub const WS_PREFIX: &str = "cowboy-device.";
+pub const CHALLENGE_PATH: &str = "/api/auth/browser/challenge";
 const MAX_SKEW_MS: i64 = 90_000;
 const MAX_NONCES: usize = 65_536;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Proof {
+pub struct Proof {
     pub key: String,
     pub epoch: String,
     pub origin: String,
@@ -28,7 +28,7 @@ pub(crate) struct Proof {
 }
 
 impl Proof {
-    pub(crate) fn message(&self, method: &str, target: &str) -> String {
+    pub fn message(&self, method: &str, target: &str) -> String {
         format!(
             "cowboy-browser-proof-v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
             self.epoch, self.origin, self.key, method, target, self.time, self.nonce
@@ -36,7 +36,7 @@ impl Proof {
     }
 }
 
-pub(crate) struct BrowserDevices {
+pub struct BrowserDevices {
     pub epoch: String,
     nonces: parking_lot::Mutex<ReplayNonces>,
 }
@@ -48,7 +48,7 @@ struct ReplayNonces {
 }
 
 impl BrowserDevices {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut epoch = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut epoch);
         Self {
@@ -57,7 +57,7 @@ impl BrowserDevices {
         }
     }
 
-    pub(crate) fn verify(
+    pub fn verify(
         &self,
         encoded: &str,
         method: &str,
@@ -89,7 +89,7 @@ impl BrowserDevices {
         Ok(proof)
     }
 
-    pub(crate) fn consume(&self, proof: &Proof, registered: bool, now: i64) -> Result<()> {
+    pub fn consume(&self, proof: &Proof, registered: bool, now: i64) -> Result<()> {
         let replay = format!("{}:{}", proof.key, proof.nonce);
         let mut nonces = self.nonces.lock();
         nonces.registered.retain(|_, expires| *expires >= now);
@@ -111,18 +111,13 @@ impl BrowserDevices {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(not(test), allow(unused_imports, dead_code))]
+pub mod tests {
     use super::*;
     use p256::ecdsa::{SigningKey, signature::Signer as _};
 
-    pub(crate) fn sign(
-        key: &SigningKey,
-        epoch: &str,
-        method: &str,
-        target: &str,
-        now: i64,
-    ) -> String {
+    pub fn sign(key: &SigningKey, epoch: &str, method: &str, target: &str, now: i64) -> String {
         let mut nonce = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
         let mut proof = Proof {

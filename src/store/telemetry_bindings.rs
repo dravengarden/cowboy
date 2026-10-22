@@ -29,7 +29,7 @@ fn checksum(document: &str) -> String {
 }
 
 impl Store {
-    pub(crate) async fn telemetry_binding_ledger(&self, service: &str) -> Result<Option<Ledger>> {
+    pub async fn telemetry_binding_ledger(&self, service: &str) -> Result<Option<Ledger>> {
         match &self.backend {
             StorageBackend::Postgres(db) => db.telemetry_binding_ledger(service).await,
             StorageBackend::Sqlite(db) => db.telemetry_binding_ledger(service).await,
@@ -39,7 +39,7 @@ impl Store {
     // Only the staged finite coordinator uses this. No production writer
     // endpoint exists; reader activation never inserts a row or adopts policy.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn change_telemetry_binding(
+    pub async fn change_telemetry_binding(
         &self,
         change: &Change<'_>,
         within_budget: &(dyn Fn() -> bool + Sync),

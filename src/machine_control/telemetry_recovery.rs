@@ -19,7 +19,7 @@ fn fail(certainty: CommandFailure, detail: &str) -> CommandRequestError {
 }
 
 impl MachineControl {
-    pub(crate) fn telemetry_recovery_audit_target_current(
+    pub fn telemetry_recovery_audit_target_current(
         &self,
         token: &ConnectionToken,
         query: &RecoveryAuditQuery,
@@ -32,7 +32,7 @@ impl MachineControl {
             )
     }
 
-    pub(crate) async fn telemetry_recovery_audit(
+    pub async fn telemetry_recovery_audit(
         &self,
         token: &ConnectionToken,
         query: &RecoveryAuditQuery,
@@ -77,7 +77,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) fn telemetry_recovery_target_current(
+    pub fn telemetry_recovery_target_current(
         &self,
         token: &ConnectionToken,
         request: &RecoveryRequest,
@@ -90,7 +90,7 @@ impl MachineControl {
             )
     }
 
-    pub(crate) async fn recover_telemetry_binding(
+    pub async fn recover_telemetry_binding(
         &self,
         token: &ConnectionToken,
         request: &RecoveryRequest,
@@ -154,7 +154,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) async fn telemetry_recovery_observation(
+    pub async fn telemetry_recovery_observation(
         &self,
         token: &ConnectionToken,
         request: &RecoveryRequest,

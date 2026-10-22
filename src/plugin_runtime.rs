@@ -63,7 +63,7 @@ pub struct ActivatedHostPlugin {
 /// non-serializable prevents a new private field from silently becoming part of
 /// the public API.
 #[derive(Debug, serde::Serialize)]
-pub(crate) struct PublicHostPlugin {
+pub struct PublicHostPlugin {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     plugin_version: Option<String>,
@@ -187,7 +187,7 @@ impl ActivatedHostPlugin {
     }
 
     #[must_use]
-    pub(crate) fn public_descriptor(&self, default_for_id: bool) -> PublicHostPlugin {
+    pub fn public_descriptor(&self, default_for_id: bool) -> PublicHostPlugin {
         PublicHostPlugin {
             id: self.id.clone(),
             plugin_version: self.plugin_version.clone(),
@@ -207,7 +207,7 @@ impl ActivatedHostPlugin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PluginHostIdentity {
+pub struct PluginHostIdentity {
     pub plugin_id: String,
     pub plugin_version: String,
     pub artifact_digest: String,
@@ -241,7 +241,7 @@ impl PluginRuntime {
     /// is intentionally separate from presentation defaults: a connected
     /// Machine may still be draining an older immutable release.
     #[must_use]
-    pub(crate) fn exact_usage_hosts(&self, account: &str) -> Vec<ActivatedHostPlugin> {
+    pub fn exact_usage_hosts(&self, account: &str) -> Vec<ActivatedHostPlugin> {
         self.exact_hosts
             .values()
             .filter(|host| {
@@ -257,19 +257,19 @@ impl PluginRuntime {
     }
 
     #[must_use]
-    pub(crate) fn default_hosts(&self) -> Vec<&ActivatedHostPlugin> {
+    pub fn default_hosts(&self) -> Vec<&ActivatedHostPlugin> {
         self.default_hosts.values().collect()
     }
 
     #[must_use]
-    pub(crate) fn default_host(&self, plugin_id: &str) -> Option<&ActivatedHostPlugin> {
+    pub fn default_host(&self, plugin_id: &str) -> Option<&ActivatedHostPlugin> {
         self.default_hosts.get(plugin_id)
     }
 
     /// Resolve only an exact trusted release. Supplying half an identity or an
     /// unknown generation never falls through to the mutable default.
     #[must_use]
-    pub(crate) fn exact_host(
+    pub fn exact_host(
         &self,
         plugin_id: &str,
         plugin_version: &str,
@@ -283,7 +283,7 @@ impl PluginRuntime {
     }
 
     #[must_use]
-    pub(crate) fn public_descriptors(&self) -> Vec<PublicHostPlugin> {
+    pub fn public_descriptors(&self) -> Vec<PublicHostPlugin> {
         let mut descriptors = self
             .exact_hosts
             .iter()
@@ -306,8 +306,8 @@ impl PluginRuntime {
         descriptors
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_default_hosts(hosts: Vec<ActivatedHostPlugin>) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_default_hosts(hosts: Vec<ActivatedHostPlugin>) -> Self {
         let mut runtime = Self::empty();
         for host in hosts {
             if let (Some(plugin_version), Some(artifact_digest)) =
@@ -333,7 +333,7 @@ impl PluginRuntime {
     /// A present candidate ID always owns the new default decision, including
     /// an intentional fail-closed result for an ambiguous or hostless latest
     /// release.
-    pub(crate) fn retain_previous_generations(
+    pub fn retain_previous_generations(
         &mut self,
         previous: &Self,
         candidate_plugin_ids: &std::collections::BTreeSet<String>,
@@ -381,7 +381,7 @@ impl PluginRuntime {
     /// Returns when any generation, host spec, runtime reference, or required
     /// storage migration is invalid. Callers publish the resulting immutable
     /// snapshot only after this method succeeds completely.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn activate(
         storage: &PluginStorage,
         catalog: Option<&crate::plugin_catalog::PluginCatalog>,
@@ -392,8 +392,8 @@ impl PluginRuntime {
         Self::activate_releases(storage, &releases, true).await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn activate_releases(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn activate_releases(
         storage: &PluginStorage,
         releases: &[crate::plugin_catalog::CatalogHostRelease],
         allow_bootstrap: bool,
@@ -408,7 +408,7 @@ impl PluginRuntime {
     }
 
     #[allow(clippy::too_many_lines)] // One transaction stages every authority and generation before migration.
-    pub(crate) async fn activate_selected(
+    pub async fn activate_selected(
         storage: &PluginStorage,
         releases: &[crate::plugin_catalog::CatalogHostRelease],
         allow_bootstrap: bool,

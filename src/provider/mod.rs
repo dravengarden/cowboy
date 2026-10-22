@@ -17,9 +17,9 @@ use cowboy_provider_sdk::{
     RuntimeSidecar, RuntimeSidecarTransport, RuntimeValue,
 };
 
-pub(crate) use crate::provider_behavior::legacy_behavior;
+pub use crate::provider_behavior::legacy_behavior;
 
-pub(crate) const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
+pub const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
 
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ pub struct LaunchSpec {
 
 /// Prepared exact Provider process tree. Session sidecars use `kill_on_drop`
 /// and are held here for the complete worker lifetime.
-pub(crate) struct PreparedLaunch {
+pub struct PreparedLaunch {
     pub spec: LaunchSpec,
     pub sidecars: Vec<tokio::process::Child>,
     pub execution_jsonrpc: bool,
@@ -406,7 +406,7 @@ fn apply_host_isolation(id: &str, spec: &mut LaunchSpec) -> Option<()> {
 /// Resolve and prepare the complete process tree for one detached worker.
 /// Package-less sessions retain the bounded legacy launch path; exact signed
 /// packages additionally get linked components and session-owned sidecars.
-pub(crate) async fn prepare(
+pub async fn prepare(
     id: &str,
     profile: Option<cowboy_provider_sdk::ManagedRuntimeProfile>,
 ) -> Result<PreparedLaunch> {
@@ -856,7 +856,7 @@ fn parse_process_package(bytes: &[u8]) -> Result<cowboy_provider_sdk::ProviderPa
 /// Display identity from the exact signed process package. Package-less legacy
 /// bridges deliberately fall back to the opaque id instead of a core name table.
 #[must_use]
-pub(crate) fn display_name(id: &str) -> String {
+pub fn display_name(id: &str) -> String {
     process_package(id)
         .map(|package| package.manifest.display.name)
         .unwrap_or_else(|| id.to_owned())

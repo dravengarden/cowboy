@@ -7,7 +7,7 @@ impl ProviderAuthService {
     /// The caller verifies the signed native candidate and prepares its exact
     /// intent first. A terminal operation is history only: it never writes a
     /// new credential generation. Distribution requires separate live admission.
-    pub(crate) async fn promote_prepared_grant(
+    pub async fn promote_prepared_grant(
         &self,
         store: &crate::store::Store,
         owner: &str,
@@ -33,7 +33,7 @@ impl ProviderAuthService {
         self.finish_grant(store, owner, intent, &proof).await
     }
 
-    pub(crate) async fn finish_grant(
+    pub async fn finish_grant(
         &self,
         store: &crate::store::Store,
         owner: &str,

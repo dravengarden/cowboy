@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PluginSelection {
+pub struct PluginSelection {
     pub plugin_id: String,
     pub plugin_version: String,
     pub generation_digest: String,
@@ -51,12 +51,12 @@ impl PrivateSnapshot {
 }
 
 #[cfg(feature = "full")]
-pub(crate) mod background_policy;
+pub mod background_policy;
 
 #[cfg(feature = "full")]
-pub(crate) mod controller_policy;
+pub mod controller_policy;
 
-pub(crate) mod writer_admission;
+pub mod writer_admission;
 
 fn read_private_snapshot<T: serde::de::DeserializeOwned>(
     path: &Path,
@@ -135,7 +135,7 @@ impl PluginSelection {
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ExportResult {
+pub struct ExportResult {
     pub logs_delivered: bool,
     pub metrics_delivered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,14 +144,14 @@ pub(crate) struct ExportResult {
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OtlpResult {
+pub struct OtlpResult {
     pub enabled: bool,
     pub delivered: bool,
     pub rejected_items: u64,
 }
 
 #[cfg(feature = "full")]
-pub(crate) fn controller_exporter(
+pub fn controller_exporter(
     path: Option<&Path>,
     control: std::sync::Arc<crate::machine_control::MachineControl>,
     catalog: std::sync::Arc<crate::plugin_catalog::PluginCatalog>,
@@ -256,20 +256,20 @@ mod machine {
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(crate) struct Configuration {
+    pub struct Configuration {
         pub plugin: PluginSelection,
         logs: Option<Endpoint>,
         metrics: Option<Endpoint>,
         traces: Option<Endpoint>,
     }
 
-    pub(crate) struct PreparedPolicy {
+    pub struct PreparedPolicy {
         config: Configuration,
         snapshot: PrivateSnapshot,
     }
 
     impl PreparedPolicy {
-        pub(crate) fn unchanged(&self, path: &Path) -> bool {
+        pub fn unchanged(&self, path: &Path) -> bool {
             let Ok((_, current)) = read_private_snapshot::<Configuration>(path) else {
                 return false;
             };
@@ -287,17 +287,17 @@ mod machine {
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(crate) struct LegacyPayload {
+    pub struct LegacyPayload {
         logs: String,
         metrics: String,
     }
 
-    pub(crate) enum Payload {
+    pub enum Payload {
         Legacy(LegacyPayload),
         Otlp(crate::otlp::Export),
     }
 
-    pub(crate) fn prepare(
+    pub fn prepare(
         path: &Path,
         selection: &PluginSelection,
         value: serde_json::Value,
@@ -324,10 +324,7 @@ mod machine {
     /// Read and validate local authority without creating a payload or emitting
     /// HTTP. The returned inode/bytes observation is process-local, never a
     /// durable policy credential or part of the binding receipt.
-    pub(crate) fn prepare_policy(
-        path: &Path,
-        selection: &PluginSelection,
-    ) -> Result<PreparedPolicy> {
+    pub fn prepare_policy(path: &Path, selection: &PluginSelection) -> Result<PreparedPolicy> {
         let (config, snapshot): (Configuration, _) = read_private_snapshot(path)?;
         config.plugin.validate()?;
         ensure!(
@@ -379,7 +376,7 @@ mod machine {
         }
     }
 
-    pub(crate) async fn export<F, Fut>(
+    pub async fn export<F, Fut>(
         contract: &TelemetryBackendContract,
         policy: &PreparedPolicy,
         payload: Payload,
@@ -394,7 +391,7 @@ mod machine {
 
     /// Managed callers authorize exactly one signal/attempt. No local retry,
     /// encoding downgrade, or acquisition of a second authorization here.
-    pub(crate) async fn export_once<F, Fut>(
+    pub async fn export_once<F, Fut>(
         contract: &TelemetryBackendContract,
         policy: &PreparedPolicy,
         payload: crate::otlp::Export,
@@ -747,4 +744,4 @@ mod machine {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) use machine::{PreparedPolicy, export, export_once, prepare, prepare_policy};
+pub use machine::{PreparedPolicy, export, export_once, prepare, prepare_policy};

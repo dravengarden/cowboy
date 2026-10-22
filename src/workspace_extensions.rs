@@ -6,18 +6,18 @@ use cowboy_plugin_sdk::{WorkspaceResourceFilter, WorkspaceReviewKind};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "machine-host")]
-pub(crate) mod runtime;
+pub mod runtime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     pub root: String,
     pub operation: Operation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Operation {
+pub enum Operation {
     Inventory,
     Read {
         identity: Identity,
@@ -42,7 +42,7 @@ fn first_page() -> u32 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Identity {
+pub struct Identity {
     pub plugin_id: String,
     pub plugin_version: String,
     pub generation_digest: String,
@@ -50,7 +50,7 @@ pub(crate) struct Identity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Extension {
+pub struct Extension {
     pub identity: Identity,
     pub label: String,
     pub description: String,
@@ -60,7 +60,7 @@ pub(crate) struct Extension {
 
 impl Extension {
     #[cfg(feature = "machine-host")]
-    pub(crate) fn from_contract(
+    pub fn from_contract(
         identity: Identity,
         contract: &WorkspaceExtensionContract,
         available: bool,
@@ -87,7 +87,7 @@ impl Extension {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct View {
+pub struct View {
     pub id: String,
     pub label: String,
     pub filters: Vec<WorkspaceResourceFilter>,
@@ -99,7 +99,7 @@ pub(crate) struct View {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ReviewRead {
+pub struct ReviewRead {
     pub repository_id: Option<String>,
     pub revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,7 +109,7 @@ pub(crate) struct ReviewRead {
 /// Closed discovery filters; no arbitrary CLI arguments or GitHub search syntax.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PullDiscovery {
+pub struct PullDiscovery {
     pub relation: String,
     pub state: String,
     pub current_repository: bool,
@@ -118,7 +118,7 @@ pub(crate) struct PullDiscovery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PullSummary {
+pub struct PullSummary {
     pub number: String,
     pub title: String,
     pub repository: String,
@@ -142,7 +142,7 @@ pub(crate) struct PullSummary {
 #[cfg(feature = "full")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ReviewBinding {
+pub struct ReviewBinding {
     pub plugin_id: String,
     pub view: String,
     pub host: String,
@@ -154,7 +154,7 @@ pub(crate) struct ReviewBinding {
 
 #[cfg(feature = "full")]
 impl ReviewBinding {
-    pub(crate) fn valid(&self) -> bool {
+    pub fn valid(&self) -> bool {
         let segment = |s: &str, max: usize| {
             !s.is_empty()
                 && s.len() <= max
@@ -178,7 +178,7 @@ impl ReviewBinding {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ReviewFile {
+pub struct ReviewFile {
     pub path: String,
     pub old_path: Option<String>,
     pub status: String,
@@ -190,7 +190,7 @@ pub(crate) struct ReviewFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ReviewPage {
+pub struct ReviewPage {
     pub repository_id: String,
     pub number: String,
     pub title: String,
@@ -207,7 +207,7 @@ pub(crate) struct ReviewPage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Remote {
+pub struct Remote {
     pub name: String,
     pub host: String,
     pub owner: String,
@@ -216,7 +216,7 @@ pub(crate) struct Remote {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Resource {
+pub struct Resource {
     pub id: String,
     pub title: String,
     pub url: Option<String>,
@@ -229,14 +229,14 @@ pub(crate) struct Resource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Metadata {
+pub struct Metadata {
     pub label: String,
     pub value: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Response {
+pub enum Response {
     Inventory {
         extensions: Vec<Extension>,
         remotes: Vec<Remote>,
@@ -267,7 +267,7 @@ pub(crate) enum Response {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Failure {
+pub enum Failure {
     MachineUnavailable,
     ExtensionChanged,
     DependencyUnavailable,

@@ -38,7 +38,7 @@ fn install_reply_timeout(step: &InstallStep, executing: bool, now_ms: i64) -> Du
 }
 
 impl MachineControl {
-    pub(crate) async fn plugin_installation_target(
+    pub async fn plugin_installation_target(
         &self,
         token: &ConnectionToken,
         query: &InstallTargetQuery,
@@ -99,7 +99,7 @@ impl MachineControl {
     }
 
     /// `None` is a read-only query, never a recoverable execution grant.
-    pub(crate) async fn plugin_installation_step(
+    pub async fn plugin_installation_step(
         &self,
         token: &ConnectionToken,
         step: &InstallStep,

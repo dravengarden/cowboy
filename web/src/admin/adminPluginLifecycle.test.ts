@@ -42,7 +42,7 @@ test("admin install uses the registered generic Plugin route and exact release",
       digest: release.artifact_digest,
     });
     const routes = await readFile(
-      new URL("../../../src/server.rs", import.meta.url), "utf8",
+      new URL("../../../components/server/src/server.rs", import.meta.url), "utf8",
     );
     assertStringIncludes(routes, '"/api/machines/{id}/plugins/{provider_id}"');
   } finally {

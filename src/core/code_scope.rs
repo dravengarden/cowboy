@@ -8,21 +8,21 @@ use super::{Hub, Session};
 
 /// A finite read/cache identity, not a filesystem identity proof or writer lease.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum CodeReadScope {
+pub enum CodeReadScope {
     Session(crate::machine_control::SessionReadScope),
     Workspace(crate::machine_control::WorkspaceCodeScope),
 }
 
 impl CodeReadScope {
     /// Logical string bytes retained by bounded read caches; not a wire identity.
-    pub(crate) fn string_bytes(&self) -> usize {
+    pub fn string_bytes(&self) -> usize {
         match self {
             Self::Session(scope) => scope.string_bytes(),
             Self::Workspace(scope) => scope.string_bytes(),
         }
     }
 
-    pub(crate) fn cwd(&self) -> &str {
+    pub fn cwd(&self) -> &str {
         match self {
             Self::Session(scope) => scope.session().cwd(),
             Self::Workspace(scope) => scope.cwd(),
@@ -48,7 +48,7 @@ impl Hash for CodeIncarnation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SessionCodeScope {
+pub struct SessionCodeScope {
     incarnation: CodeIncarnation,
     session_id: String,
     machine_id: String,
@@ -59,7 +59,7 @@ pub(crate) struct SessionCodeScope {
 }
 
 impl SessionCodeScope {
-    pub(crate) fn string_bytes(&self) -> usize {
+    pub fn string_bytes(&self) -> usize {
         self.session_id.len()
             + self.machine_id.len()
             + self.workspace_id.as_ref().map_or(0, String::len)
@@ -106,21 +106,21 @@ impl SessionCodeScope {
         })
     }
 
-    pub(crate) fn machine_id(&self) -> &str {
+    pub fn machine_id(&self) -> &str {
         &self.machine_id
     }
 
-    pub(crate) fn cwd(&self) -> &str {
+    pub fn cwd(&self) -> &str {
         &self.cwd
     }
 
-    pub(crate) fn owner_user_id(&self) -> Option<&str> {
+    pub fn owner_user_id(&self) -> Option<&str> {
         self.owner_user_id.as_deref()
     }
 }
 
 impl Hub {
-    pub(crate) fn session_code_scope(&self, session_id: &str) -> Option<SessionCodeScope> {
+    pub fn session_code_scope(&self, session_id: &str) -> Option<SessionCodeScope> {
         self.inner
             .sessions
             .lock()
@@ -134,7 +134,7 @@ impl Hub {
     /// lifetime, so every earlier observation is stale and none is updated in
     /// place; an unchanged value (every reconnect and snapshot of the same
     /// lineage) leaves them current.
-    pub(crate) fn set_machine_lineage(&self, session_id: &str, lineage: Option<&str>) -> bool {
+    pub fn set_machine_lineage(&self, session_id: &str, lineage: Option<&str>) -> bool {
         let mut sessions = self.inner.sessions.lock();
         let Some(session) = sessions.get_mut(session_id) else {
             return false;
@@ -153,7 +153,7 @@ impl Hub {
     /// How many Sessions of one Machine this Controller knows, and for how many it
     /// holds a Machine-reported lineage. Counts only: no Session ID or lineage
     /// value, so it can be shown without granting anything.
-    pub(crate) fn lineage_counts(&self, machine_id: &str) -> (u64, u64) {
+    pub fn lineage_counts(&self, machine_id: &str) -> (u64, u64) {
         let sessions = self.inner.sessions.lock();
         sessions
             .values()
@@ -168,7 +168,7 @@ impl Hub {
 
     /// Recheck the exact original observation. Removal, replacement or cwd ABA
     /// cannot revive it; unrelated UI/worker status does not invalidate it.
-    pub(crate) fn code_scope_is_current(&self, scope: &SessionCodeScope) -> bool {
+    pub fn code_scope_is_current(&self, scope: &SessionCodeScope) -> bool {
         self.session_code_scope(&scope.session_id).as_ref() == Some(scope)
     }
 }

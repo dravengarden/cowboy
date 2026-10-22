@@ -7,16 +7,16 @@ use tokio::sync::Mutex;
 type Entries = BTreeMap<(String, String), Arc<Slot>>;
 
 #[derive(Default, Clone)]
-pub(crate) struct Cache(Arc<parking_lot::Mutex<Entries>>);
+pub struct Cache(Arc<parking_lot::Mutex<Entries>>);
 
 #[derive(Default)]
-pub(crate) struct Slot {
+pub struct Slot {
     pub data: parking_lot::Mutex<Entry>,
     pub collection: Arc<Mutex<()>>,
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct Entry {
+pub struct Entry {
     pub scope: Option<NativeCompletion>,
     pub usage: Option<serde_json::Value>,
     pub last_attempt_at_ms: i64,

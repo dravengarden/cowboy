@@ -21,11 +21,11 @@ use crate::plugin_host::{PluginHostSpec, validate_plugin_id};
 pub const HOST_BUNDLE_SCHEMA: &str = cowboy_plugin_sdk::HOST_BUNDLE_SCHEMA;
 #[cfg(feature = "full")]
 pub const HOST_BUNDLE_SCHEMA_VERSION: u16 = cowboy_plugin_sdk::HOST_BUNDLE_SCHEMA_VERSION;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const HOST_BUNDLE_CONTENT_NAMESPACE: &str = "cowboy-plugin-hostbundle-content-v1";
 const MAX_FILES: usize = 32;
 const MAX_FILE_BYTES: usize = 1024 * 1024;
-pub(crate) const MAX_HOST_BUNDLE_BYTES: usize = 40 * 1024 * 1024;
+pub const MAX_HOST_BUNDLE_BYTES: usize = 40 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,7 +86,7 @@ impl PluginHostBundle {
     }
 
     #[must_use]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proof(&self) -> Vec<u8> {
         let mut proof = format!("{HOST_BUNDLE_CONTENT_NAMESPACE}\n").into_bytes();
         for field in [
@@ -115,7 +115,7 @@ impl PluginHostBundle {
     /// Semantic content address for the complete host sidecar. The outer
     /// Plugin release separately binds the exact serialized bundle bytes.
     #[must_use]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn content_digest(&self) -> String {
         format!("{:x}", Sha256::digest(self.proof()))
     }
@@ -123,7 +123,7 @@ impl PluginHostBundle {
     /// # Errors
     /// Returns when the sidecar is missing, malformed, not bound by the outer
     /// release, or does not match the owning Plugin package.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn load_for_package(
         path: &Path,
         plugin_id: &str,
@@ -235,7 +235,7 @@ impl PluginHostBundle {
     ///
     /// # Errors
     /// Returns when host.json is missing or a collector path is unsafe.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_plugin_dir(
         root: &Path,
         plugin_id: &str,
@@ -269,7 +269,7 @@ impl PluginHostBundle {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn reject_ui_files(dir: &Path) -> Result<()> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Ok(());
@@ -288,7 +288,7 @@ fn reject_ui_files(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn collect_sidecar_files(
     dir: &Path,
     prefix: &str,
@@ -331,7 +331,7 @@ fn collect_sidecar_files(
     Ok(())
 }
 
-pub(crate) fn validate_bundle_path(path: &str) -> Result<()> {
+pub fn validate_bundle_path(path: &str) -> Result<()> {
     if path == "host.json" {
         return Ok(());
     }

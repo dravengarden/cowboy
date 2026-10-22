@@ -27,7 +27,7 @@ fn keeps_snapshot(now: i64, replaced_at: i64, newest_snapshot_at: Option<i64>) -
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DraftDocument {
+pub struct DraftDocument {
     pub id: String,
     pub kind: DraftKind,
     pub title: String,
@@ -45,14 +45,14 @@ pub(crate) struct DraftDocument {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DraftKind {
+pub enum DraftKind {
     Document,
     Folder,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum DraftChange {
+pub enum DraftChange {
     Create {
         kind: DraftKind,
         title: String,
@@ -82,7 +82,7 @@ pub(crate) enum DraftChange {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DraftMutation {
+pub struct DraftMutation {
     pub operation_id: String,
     pub document_id: String,
     pub expected_revision: i64,
@@ -92,7 +92,7 @@ pub(crate) struct DraftMutation {
 /// One recovery snapshot without its content: what the History list shows
 /// before the user opens a version.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct DraftSnapshotSummary {
+pub struct DraftSnapshotSummary {
     pub revision: i64,
     pub body_revision: i64,
     pub updated_at_ms: i64,
@@ -118,7 +118,7 @@ impl From<&DraftDocument> for DraftSnapshotSummary {
 }
 
 #[derive(Debug)]
-pub(crate) enum DraftResult {
+pub enum DraftResult {
     Applied(DraftDocument),
     Conflict(Option<DraftDocument>),
     Invalid(String),
@@ -321,7 +321,7 @@ impl Store {
     /// Bounded metadata-only keyset page. Filtering tombstones in SQL keeps
     /// a page full even when earlier rows were trashed, without loading the
     /// owner's entire document index into the Controller for each MCP call.
-    pub(crate) async fn draft_documents_page(
+    pub async fn draft_documents_page(
         &self,
         owner: &str,
         after: Option<&str>,
@@ -355,7 +355,7 @@ impl Store {
             .collect()
     }
 
-    pub(crate) async fn draft_documents(&self, owner: &str) -> Result<Vec<DraftDocument>> {
+    pub async fn draft_documents(&self, owner: &str) -> Result<Vec<DraftDocument>> {
         macro_rules! read {
             ($db:expr) => {
                 sqlx::query_scalar::<_, String>(
@@ -376,11 +376,7 @@ impl Store {
             .collect()
     }
 
-    pub(crate) async fn draft_document(
-        &self,
-        owner: &str,
-        id: &str,
-    ) -> Result<Option<DraftDocument>> {
+    pub async fn draft_document(&self, owner: &str, id: &str) -> Result<Option<DraftDocument>> {
         macro_rules! read {
             ($db:expr) => {
                 sqlx::query_scalar::<_, String>(
@@ -402,7 +398,7 @@ impl Store {
     }
 
     /// The History list: every kept snapshot, newest first, without content.
-    pub(crate) async fn draft_history_index(
+    pub async fn draft_history_index(
         &self,
         owner: &str,
         id: &str,
@@ -416,7 +412,7 @@ impl Store {
     }
 
     /// One kept snapshot with its content.
-    pub(crate) async fn draft_history_snapshot(
+    pub async fn draft_history_snapshot(
         &self,
         owner: &str,
         id: &str,
@@ -435,7 +431,7 @@ impl Store {
             .transpose()
     }
 
-    pub(crate) async fn draft_history(&self, owner: &str, id: &str) -> Result<Vec<DraftDocument>> {
+    pub async fn draft_history(&self, owner: &str, id: &str) -> Result<Vec<DraftDocument>> {
         macro_rules! read { ($db:expr) => {
             sqlx::query_scalar::<_, String>("SELECT value FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT $3")
                 .bind(owner).bind(id).bind(HISTORY_LIMIT).fetch_all(&$db.pool).await?
@@ -450,8 +446,8 @@ impl Store {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn mutate_draft_document(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn mutate_draft_document(
         &self,
         owner: &str,
         mutation: &DraftMutation,
@@ -468,7 +464,7 @@ impl Store {
 
     /// Receipts survive a lost response and do not depend on the code sandbox.
     /// The row commits in the same transaction as its document mutation.
-    pub(crate) async fn draft_operation_document(
+    pub async fn draft_operation_document(
         &self,
         owner: &str,
         operation: &str,
@@ -483,7 +479,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn mutate_draft_document_in_workspace(
+    pub async fn mutate_draft_document_in_workspace(
         &self,
         owner: &str,
         mutation: &DraftMutation,

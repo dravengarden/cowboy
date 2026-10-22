@@ -3,7 +3,7 @@ use super::{ProviderAccountId, Receipt, Result, StorageBackend, Store};
 use anyhow::ensure;
 
 impl Store {
-    pub(crate) async fn native_login_receipts(
+    pub async fn native_login_receipts(
         &self,
         owner: &str,
         account: &ProviderAccountId,

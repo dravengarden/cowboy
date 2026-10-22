@@ -14,7 +14,7 @@ const MAX_BYTES: u64 = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "String")]
-pub(crate) struct NamespaceId(String);
+pub struct NamespaceId(String);
 
 impl TryFrom<String> for NamespaceId {
     type Error = anyhow::Error;
@@ -30,28 +30,28 @@ impl TryFrom<String> for NamespaceId {
 }
 
 impl NamespaceId {
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Source {
+pub enum Source {
     Fresh,
     AdoptLegacy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PasskeyConfig {
+pub struct PasskeyConfig {
     pub namespace_id: NamespaceId,
     pub source: Source,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Config {
+pub struct Config {
     schema: String,
     pub passkeys: PasskeyConfig,
 }
@@ -85,7 +85,7 @@ fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 impl Config {
-    pub(crate) fn load(path: Option<&Path>) -> Result<Option<Self>> {
+    pub fn load(path: Option<&Path>) -> Result<Option<Self>> {
         let Some(path) = path else { return Ok(None) };
         ensure!(
             path.is_absolute(),
@@ -104,14 +104,14 @@ impl Config {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepared,
     Ready,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "backend", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum StorageLocation {
+pub enum StorageLocation {
     Postgres {
         data_root: PathBuf,
         schema: String,
@@ -158,7 +158,7 @@ impl StorageLocation {
 /// physical namespace and data root; it is never an HTTP/public projection.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Authority {
+pub struct Authority {
     pub schema: u16,
     pub binding_id: String,
     pub passkeys: PasskeyConfig,
@@ -166,7 +166,7 @@ pub(crate) struct Authority {
 }
 
 impl Authority {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1
                 && self.binding_id.len() == 32
@@ -179,7 +179,7 @@ impl Authority {
         self.location.validate(&self.passkeys.namespace_id)
     }
 
-    pub(crate) fn inspect(dir: &crate::plugin_dir::PluginDir) -> Result<Option<Self>> {
+    pub fn inspect(dir: &crate::plugin_dir::PluginDir) -> Result<Option<Self>> {
         read_private(&dir.root().join(MARKER))?
             .map(|bytes| {
                 let record: Self =
@@ -193,7 +193,7 @@ impl Authority {
     /// Called only while the lifetime Controller lock is held, after the DB
     /// prepare has committed. Publish complete bytes atomically; never overwrite
     /// a different authority or treat a corrupt marker as absent.
-    pub(crate) fn record(&self, dir: &crate::plugin_dir::PluginDir) -> Result<()> {
+    pub fn record(&self, dir: &crate::plugin_dir::PluginDir) -> Result<()> {
         self.validate()?;
         if let Some(existing) = Self::inspect(dir)? {
             ensure!(
@@ -239,10 +239,10 @@ impl Authority {
 /// Cooperating readers hold this for the complete Controller lifetime, even in
 /// legacy mode. It fences local cutover against an already-running new reader;
 /// an older binary needs the separately accepted stopped-service reader floor.
-pub(crate) struct ControllerLock(std::fs::File);
+pub struct ControllerLock(std::fs::File);
 
 impl ControllerLock {
-    pub(crate) fn acquire(dir: &crate::plugin_dir::PluginDir) -> Result<Self> {
+    pub fn acquire(dir: &crate::plugin_dir::PluginDir) -> Result<Self> {
         ensure!(
             dir.root().symlink_metadata()?.is_dir(),
             "Controller Plugin root must be a real directory"
@@ -272,10 +272,7 @@ impl Drop for ControllerLock {
 }
 
 /// Validate paths without creating state or following namespace symlinks.
-pub(crate) fn namespace_path(
-    dir: &crate::plugin_dir::PluginDir,
-    id: &NamespaceId,
-) -> Result<PathBuf> {
+pub fn namespace_path(dir: &crate::plugin_dir::PluginDir, id: &NamespaceId) -> Result<PathBuf> {
     for path in [
         dir.root().to_owned(),
         dir.live_root(),

@@ -5,11 +5,11 @@ pub use cowboy_wire::runtime_trace::*;
 
 #[cfg(feature = "machine-host")]
 #[derive(Default)]
-pub(crate) struct MachineSpans(std::collections::BTreeMap<(String, String), SpanTimer>);
+pub struct MachineSpans(std::collections::BTreeMap<(String, String), SpanTimer>);
 
 #[cfg(feature = "machine-host")]
 impl MachineSpans {
-    pub(crate) fn start(&mut self, session: &str, command: &str, carrier: &TraceCarrier) {
+    pub fn start(&mut self, session: &str, command: &str, carrier: &TraceCarrier) {
         self.0.retain(|_, span| !span.expired());
         if session.len() > 128 || command.len() > 128 || self.0.len() >= 512 {
             return;
@@ -23,7 +23,7 @@ impl MachineSpans {
         }
     }
 
-    pub(crate) fn dispatch(&mut self, session: &str, command: &str, carrier: &mut TraceCarrier) {
+    pub fn dispatch(&mut self, session: &str, command: &str, carrier: &mut TraceCarrier) {
         let key = (session.to_owned(), command.to_owned());
         // A replay with different metadata cannot consume or replace the
         // original queued command's timer, even if the command ID matches.

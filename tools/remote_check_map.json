@@ -17,8 +17,8 @@
     "tools/execution_",
     "tools/remote_",
     "tools/matrix_execution_fixture.py",
-    "src/server/execution.rs",
-    "src/server/execution/",
+    "components/server/src/server/execution.rs",
+    "components/server/src/server/execution/",
     "src/bin/cowboy-acp-worker.rs",
     "src/worker.rs",
     "src/acp_bridge.rs",
@@ -228,8 +228,8 @@
         "src/machine_convergence",
         "src/machine_plugins",
         "src/machine_code_plugins",
-        "src/server/execution.rs",
-        "src/server/execution/",
+        "components/server/src/server/execution.rs",
+        "components/server/src/server/execution/",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
@@ -508,8 +508,8 @@
         "src/machine_convergence",
         "src/machine_plugins",
         "src/machine_code_plugins",
-        "src/server/execution.rs",
-        "src/server/execution/",
+        "components/server/src/server/execution.rs",
+        "components/server/src/server/execution/",
         "src/bin/cowboy-acp-worker.rs",
         "src/worker.rs",
         "src/acp_bridge.rs",
@@ -632,7 +632,7 @@
         "src/managed_calls/snapshot.rs",
         "src/managed_calls/snapshot/images.rs",
         "src/machine_cli/execution.rs",
-        "src/server/managed_calls/runner.rs"
+        "components/server/src/server/managed_calls/runner.rs"
       ],
       "manifests": [
         "plugins/codex/provider.json"

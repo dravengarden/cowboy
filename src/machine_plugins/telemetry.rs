@@ -8,9 +8,9 @@ use std::sync::atomic::AtomicBool;
 
 const ADMISSION_BUDGET: Duration = Duration::from_secs(15);
 
-pub(crate) mod managed;
+pub mod managed;
 
-pub(crate) struct PluginHostRequest {
+pub struct PluginHostRequest {
     pub plugin_id: String,
     pub plugin_version: String,
     pub generation_digest: String,
@@ -21,7 +21,7 @@ pub(crate) struct PluginHostRequest {
 
 // Only the connection owner constructs this. No Clone/Deserialize or caller-
 // supplied deadline; a caller cannot substitute another request after capture.
-pub(crate) struct PluginHostInvocation {
+pub struct PluginHostInvocation {
     request: PluginHostRequest,
     telemetry: Option<TelemetryExecutionLease>,
 }

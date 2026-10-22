@@ -1,8 +1,9 @@
+#![cfg_attr(not(test), allow(unused_imports, dead_code))]
 use super::writer::{Change, apply};
 use super::*;
 use crate::machine_protocol::telemetry_binding::{BindingObservationSnapshot, BindingReceipt};
 
-pub(crate) fn observed(intent: &Intent, outcome: BindingOutcome) -> BindingObservation {
+pub fn observed(intent: &Intent, outcome: BindingOutcome) -> BindingObservation {
     let step = intent.machine_step().unwrap();
     let current = match &outcome {
         BindingOutcome::Applied { after } => after.clone(),
@@ -26,7 +27,7 @@ pub(crate) fn observed(intent: &Intent, outcome: BindingOutcome) -> BindingObser
     }
 }
 
-pub(crate) fn applied(intent: &Intent) -> BindingObservation {
+pub fn applied(intent: &Intent) -> BindingObservation {
     observed(
         intent,
         BindingOutcome::Applied {

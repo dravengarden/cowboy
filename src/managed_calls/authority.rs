@@ -27,7 +27,7 @@ impl std::fmt::Debug for Authority {
 impl Authority {
     /// Both arguments must be current Controller observations. The runtime
     /// additionally fences its connection and any session reset before calling.
-    pub(crate) fn for_worker(
+    pub fn for_worker(
         service: &str,
         parent: &SessionMeta,
         worker: &WorkerSnapshot,

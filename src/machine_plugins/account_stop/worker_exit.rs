@@ -9,7 +9,7 @@ use std::{fs, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct WorkerExit {
+pub struct WorkerExit {
     schema: u32,
     pub session: String,
     pub account: ProviderAccountId,
@@ -31,7 +31,7 @@ pub(crate) struct WorkerExit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct WorkerBinding {
+pub struct WorkerBinding {
     pub(super) provider: String,
     pub(super) version: String,
     pub(super) digest: String,
@@ -121,7 +121,7 @@ fn bound_launch_survives_restart_and_rejects_generation_changes() {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SystemdWorker {
+pub struct SystemdWorker {
     pub unit: String,
     pub invocation: uuid::Uuid,
     pub boot: uuid::Uuid,
@@ -129,7 +129,7 @@ pub(crate) struct SystemdWorker {
 }
 
 impl MachinePluginStore {
-    pub(crate) fn observe_account_worker_exit(
+    pub fn observe_account_worker_exit(
         &self,
         request: &crate::provider_account::WorkerExitRequest,
     ) -> Result<Option<crate::provider_account::WorkerExitObservation>> {
@@ -160,7 +160,7 @@ impl MachinePluginStore {
     }
 
     /// Absence is unknown; reading never creates an exit observation.
-    pub(crate) fn account_worker_exit(&self, session: &str) -> Result<Option<WorkerExit>> {
+    pub fn account_worker_exit(&self, session: &str) -> Result<Option<WorkerExit>> {
         let root = self.worker_exit_root();
         match fs::symlink_metadata(&root) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -210,7 +210,7 @@ impl MachinePluginStore {
 
     /// Durable binding comparison for restart/adoption. Missing old binding
     /// metadata is unknown and cannot authorize a named worker replacement.
-    pub(crate) fn account_worker_binding_matches(
+    pub fn account_worker_binding_matches(
         &self,
         launch: &crate::runtime_wire::StartSession,
     ) -> Result<bool> {
@@ -224,15 +224,15 @@ impl MachinePluginStore {
         }))
     }
 
-    #[cfg(test)]
-    pub(crate) fn begin_bound_account_worker(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_bound_account_worker(
         &self,
         launch: &crate::runtime_wire::StartSession,
     ) -> Result<uuid::Uuid> {
         self.begin_contained_account_worker(launch, None)
     }
 
-    pub(crate) fn begin_contained_account_worker(
+    pub fn begin_contained_account_worker(
         &self,
         launch: &crate::runtime_wire::StartSession,
         containment: Option<&crate::cgroup::ContainmentIdentity>,
@@ -247,8 +247,8 @@ impl MachinePluginStore {
 
     /// Persist before spawn. Unknown prior launches cannot be overwritten even
     /// after a broker restart. A new launch invalidates the previous exit proof.
-    #[cfg(test)]
-    pub(crate) fn begin_account_worker(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_account_worker(
         &self,
         session: &str,
         account: &ProviderAccountId,
@@ -314,14 +314,14 @@ impl MachinePluginStore {
     /// A new kernel boot ends every process from the recorded old boot. The
     /// journal remains scoped to this Machine's local state; moving journals
     /// between hosts is not a supported recovery mechanism.
-    pub(crate) fn reconcile_account_worker_boot(&self, session: &str) -> Result<()> {
+    pub fn reconcile_account_worker_boot(&self, session: &str) -> Result<()> {
         self.reconcile_worker_boot(session, current_boot()?)
     }
 
     /// Explicit stop/recycle only; passive reads never kill an active worker.
     /// Reload the exact launch after the await so a stale recovery cannot mark
     /// a newer worker exited. Missing legacy containment remains unknown.
-    pub(crate) async fn terminate_account_worker_tree(&self, session: &str) -> Result<()> {
+    pub async fn terminate_account_worker_tree(&self, session: &str) -> Result<()> {
         self.reconcile_account_worker_boot(session)?;
         let Some(receipt) = self.account_worker_exit(session)? else {
             return Ok(());
@@ -358,7 +358,7 @@ impl MachinePluginStore {
     /// The owning reaper needs child wait and cgroup-empty confirmation. The
     /// spawn owner may also record a synchronous spawn failure (no execution).
     /// Stale owners cannot complete a replacement launch.
-    pub(crate) fn record_account_worker_exit(
+    pub fn record_account_worker_exit(
         &self,
         session: &str,
         account: &ProviderAccountId,
@@ -376,7 +376,7 @@ impl MachinePluginStore {
         self.persist_worker_exit(&receipt)
     }
 
-    pub(crate) fn bind_account_worker_systemd(
+    pub fn bind_account_worker_systemd(
         &self,
         session: &str,
         account: &ProviderAccountId,

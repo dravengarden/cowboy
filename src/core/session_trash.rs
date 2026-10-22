@@ -13,18 +13,18 @@ use crate::session_folders::{FolderActor, FolderOwner};
 pub const TRASHED_SESSION_REFUSAL: &str = "This session is in Trash. Restore it to continue.";
 
 /// A trashed session for the retention sweep: id, owner, trashed-at ms.
-pub(crate) type TrashedSession = (String, Option<String>, i64);
+pub type TrashedSession = (String, Option<String>, i64);
 
 /// Outcome of a Trash move, for the caller that owns worker lifecycles.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Trashed {
+pub struct Trashed {
     pub sessions: Vec<String>,
     pub folders: Vec<String>,
 }
 
 /// Outcome of a restore. `notes` explain any place or binding adjustment.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Restored {
+pub struct Restored {
     pub sessions: Vec<String>,
     pub folders: Vec<String>,
     pub notes: Vec<String>,
@@ -65,7 +65,7 @@ impl Hub {
     /// # Errors
     /// An unknown, foreign or already trashed item, or a session that is
     /// working, closing or a system session.
-    pub(crate) fn trash_items(
+    pub fn trash_items(
         &self,
         actor: &FolderActor,
         folder_ids: &[String],
@@ -172,7 +172,7 @@ impl Hub {
     ///
     /// # Errors
     /// An unknown, foreign or live item.
-    pub(crate) fn restore_items(
+    pub fn restore_items(
         &self,
         actor: &FolderActor,
         folder_ids: &[String],
@@ -263,11 +263,7 @@ impl Hub {
     /// Permanently remove trashed folders that hold no session any more.
     /// Sessions are deleted first through their own lifecycle; a folder whose
     /// session deletion is still pending stays for the next attempt.
-    pub(crate) fn purge_trashed_folders(
-        &self,
-        actor: &FolderActor,
-        folder_ids: &[String],
-    ) -> Vec<String> {
+    pub fn purge_trashed_folders(&self, actor: &FolderActor, folder_ids: &[String]) -> Vec<String> {
         let _guard = self.inner.sync_apply_gate.lock();
         let (removed, folders_by_owner) = {
             let sessions = self.inner.sessions.lock();
@@ -290,7 +286,7 @@ impl Hub {
     }
 
     /// Admit a permanent deletion of trashed folders for `actor`.
-    pub(crate) fn check_trashed_folders(
+    pub fn check_trashed_folders(
         &self,
         actor: &FolderActor,
         folder_ids: &[String],
@@ -302,7 +298,7 @@ impl Hub {
     /// Trash (deleted at `expected_trashed_at_ms` when given) and not already
     /// closing. Marks it closing under the session lock, so a concurrent
     /// restore refuses it. The caller deletes it or releases the claim.
-    pub(crate) fn claim_trash_deletion(
+    pub fn claim_trash_deletion(
         &self,
         session_id: &str,
         expected_trashed_at_ms: Option<i64>,
@@ -329,7 +325,7 @@ impl Hub {
     }
 
     /// A session's explicit folder placement, if it is filed in a folder.
-    pub(crate) fn session_folder_placement(&self, session_id: &str) -> Option<String> {
+    pub fn session_folder_placement(&self, session_id: &str) -> Option<String> {
         self.inner
             .folders
             .lock()
@@ -340,7 +336,7 @@ impl Hub {
 
     /// Every trashed session (id, owner, trashed-at ms) and trashed folder,
     /// for the retention sweep.
-    pub(crate) fn trash_contents(
+    pub fn trash_contents(
         &self,
     ) -> (
         Vec<TrashedSession>,

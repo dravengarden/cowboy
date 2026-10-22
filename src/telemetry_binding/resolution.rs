@@ -6,11 +6,11 @@ use super::*;
 use crate::machine_protocol::telemetry_binding::BindingDigest;
 use crate::operation_budget::OperationBudget;
 
-pub(crate) const MAX_RESOLUTION_BYTES: usize = 96 * 1024;
+pub const MAX_RESOLUTION_BYTES: usize = 96 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum ResolutionAction {
+pub enum ResolutionAction {
     AbortBeforeDispatch,
     AcceptApplied { observation_digest: BindingDigest },
     RecordRejected { observation_digest: BindingDigest },
@@ -18,7 +18,7 @@ pub(crate) enum ResolutionAction {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ResolutionIntent {
+pub struct ResolutionIntent {
     pub schema: u16,
     pub resolution_id: String,
     pub operation_id: String,
@@ -38,7 +38,7 @@ fn id(value: &str, minimum: usize) -> bool {
 }
 
 impl ResolutionIntent {
-    pub(crate) fn new(
+    pub fn new(
         resolution_id: String,
         actor: Actor,
         before: &Operation,
@@ -60,7 +60,7 @@ impl ResolutionIntent {
         Ok(intent)
     }
 
-    pub(crate) fn digest(&self) -> Result<BindingDigest> {
+    pub fn digest(&self) -> Result<BindingDigest> {
         let actor = match &self.actor {
             Actor::Product { user_id } => user_id,
             Actor::Admin { account } => account,
@@ -80,7 +80,7 @@ impl ResolutionIntent {
         Ok(binding_digest(&serde_json::to_vec(self)?))
     }
 
-    pub(crate) fn check_before(&self, before: &Operation) -> Result<()> {
+    pub fn check_before(&self, before: &Operation) -> Result<()> {
         self.digest()?;
         before.after()?;
         ensure!(
@@ -105,7 +105,7 @@ impl ResolutionIntent {
         Ok(())
     }
 
-    pub(crate) fn conclusion(
+    pub fn conclusion(
         &self,
         before: &Operation,
         observation: Option<BindingObservation>,
@@ -136,7 +136,7 @@ impl ResolutionIntent {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ResolutionRecord {
+pub struct ResolutionRecord {
     pub intent: ResolutionIntent,
     pub before: Operation,
     pub after: Progress,
@@ -165,7 +165,7 @@ impl ResolutionRecord {
 
 // Deliberately no Clone, Debug or serde. The core transfers the SAME original
 // confirmation budget here after rechecking its credential and fresh evidence.
-pub(crate) struct ResolutionPermit {
+pub struct ResolutionPermit {
     intent: ResolutionIntent,
     before: Operation,
     after: Progress,
@@ -173,7 +173,7 @@ pub(crate) struct ResolutionPermit {
 }
 
 impl ResolutionPermit {
-    pub(crate) fn new(
+    pub fn new(
         intent: ResolutionIntent,
         before: Operation,
         observation: Option<BindingObservation>,
@@ -189,16 +189,16 @@ impl ResolutionPermit {
         })
     }
 
-    pub(crate) fn intent(&self) -> &ResolutionIntent {
+    pub fn intent(&self) -> &ResolutionIntent {
         &self.intent
     }
 
-    pub(crate) fn within_budget(&self) -> bool {
+    pub fn within_budget(&self) -> bool {
         !self.budget.expired()
     }
 
-    #[cfg(test)]
-    pub(crate) fn expire_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expire_for_test(&self) {
         self.budget.expire_for_test();
     }
 }
@@ -263,5 +263,5 @@ pub(super) fn apply(
     })
 }
 
-#[cfg(test)]
-pub(crate) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;

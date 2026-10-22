@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 mod tests;
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct Prepare {
+pub struct Prepare {
     pub expected_revision: i64,
     pub account_id: ProviderAccountId,
     pub provider_id: String,
@@ -27,7 +27,7 @@ pub(crate) struct Prepare {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepared,
     Committed { generation: u64 },
     Cancelled,
@@ -35,7 +35,7 @@ pub(crate) enum Phase {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Receipt {
+pub struct Receipt {
     pub operation_id: String,
     pub account_id: ProviderAccountId,
     pub provider_id: String,
@@ -49,7 +49,7 @@ pub(crate) struct Receipt {
 }
 
 impl Receipt {
-    pub(crate) fn commitment(&self) -> Result<String> {
+    pub fn commitment(&self) -> Result<String> {
         let mut prepared = self.clone();
         prepared.phase = Phase::Prepared;
         Ok(crate::admin::hex_sha256(&serde_json::to_vec(&(
@@ -60,23 +60,23 @@ impl Receipt {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Applied(Receipt),
     Rejected(&'static str),
 }
 
 /// Borrowed only during a DB-serialized admission callback. No public decoder
 /// or constructor and no reusable authorization token escapes the transaction.
-pub(crate) struct Admission {
+pub struct Admission {
     receipt: Receipt,
     recipient: String,
 }
 
 impl Admission {
-    pub(crate) fn receipt(&self) -> &Receipt {
+    pub fn receipt(&self) -> &Receipt {
         &self.receipt
     }
-    pub(crate) fn recipient(&self) -> &str {
+    pub fn recipient(&self) -> &str {
         &self.recipient
     }
 }
@@ -90,10 +90,7 @@ fn digest(value: &str) -> bool {
 
 impl Store {
     /// Locator only. Callers must perform current admission before using it.
-    pub(crate) async fn provider_grant_route(
-        &self,
-        commitment: &str,
-    ) -> Result<Option<(String, String)>> {
+    pub async fn provider_grant_route(&self, commitment: &str) -> Result<Option<(String, String)>> {
         let query =
             "SELECT owner_user_id,operation_id FROM provider_grant_routes WHERE commitment=$1";
         Ok(match &self.backend {
@@ -115,7 +112,7 @@ impl Store {
     /// Linearize one synchronous action against account edits and Machine
     /// revocation. Callbacks must not await or reenter the Store. Subsequent
     /// revocation still needs its own runtime cleanup; this is not a lease.
-    pub(crate) async fn with_provider_grant_admission<T>(
+    pub async fn with_provider_grant_admission<T>(
         &self,
         owner: &str,
         operation: &str,
@@ -159,7 +156,7 @@ impl Store {
     }
 
     /// Recovery lookup only; this receipt never authorizes credential delivery.
-    pub(crate) async fn provider_grant_receipt(
+    pub async fn provider_grant_receipt(
         &self,
         owner: &str,
         operation: &str,
@@ -187,7 +184,7 @@ impl Store {
             .transpose()
     }
 
-    pub(crate) async fn prepare_provider_grant(
+    pub async fn prepare_provider_grant(
         &self,
         owner: &str,
         operation: &str,
@@ -261,7 +258,7 @@ impl Store {
     /// with stored fields; callers cannot change recipient, account or candidate.
     /// Metadata changes during login fence this attempt, including disable/enable
     /// ABA. Repeating a committed receipt observes history, not fresh authority.
-    pub(crate) async fn finish_verified_provider_grant(
+    pub async fn finish_verified_provider_grant(
         &self,
         owner: &str,
         intent: &Receipt,
@@ -283,11 +280,7 @@ impl Store {
 
     /// Cancel preparation, not an already committed grant. Vault cleanup must
     /// reconcile the returned terminal state before removing any credentials.
-    pub(crate) async fn cancel_provider_grant(
-        &self,
-        owner: &str,
-        intent: &Receipt,
-    ) -> Result<Outcome> {
+    pub async fn cancel_provider_grant(&self, owner: &str, intent: &Receipt) -> Result<Outcome> {
         self.resolve_provider_grant(owner, intent, None).await
     }
 

@@ -4,14 +4,14 @@ use anyhow::Result;
 use serde_json::Value;
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Admission {
+pub enum Admission {
     New,
     Existing(Option<Value>),
     Conflict,
 }
 
 impl Store {
-    pub(crate) async fn admit_agent_operation(
+    pub async fn admit_agent_operation(
         &self,
         owner: &str,
         parent: &str,
@@ -35,7 +35,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn finish_agent_operation(
+    pub async fn finish_agent_operation(
         &self,
         owner: &str,
         parent: &str,
@@ -56,7 +56,7 @@ impl Store {
     }
 
     /// None: never observed. Some(None): admitted, outcome still uncertain.
-    pub(crate) async fn agent_operation_receipt(
+    pub async fn agent_operation_receipt(
         &self,
         owner: &str,
         parent: &str,

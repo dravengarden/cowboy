@@ -79,7 +79,7 @@ struct NpmCatalog {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn npm_package_for_component(kind: &str, slot: &str) -> Option<&'static str> {
+pub fn npm_package_for_component(kind: &str, slot: &str) -> Option<&'static str> {
     npm_catalog()
         .by_component
         .get(kind)
@@ -89,7 +89,7 @@ pub(crate) fn npm_package_for_component(kind: &str, slot: &str) -> Option<&'stat
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
+pub fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
     npm_catalog()
         .by_plugin
         .get(plugin_id)
@@ -99,7 +99,7 @@ pub(crate) fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn npx_prefix(plugin_id: &str) -> [&'static str; 2] {
+pub fn npx_prefix(plugin_id: &str) -> [&'static str; 2] {
     ["-y", npx_package_for_plugin(plugin_id)]
 }
 
@@ -222,7 +222,7 @@ fn npm_package_from_registry_url(source: &str) -> Option<&str> {
 }
 
 #[must_use]
-pub(crate) fn acp_env_key(plugin_id: &str, suffix: &str) -> String {
+pub fn acp_env_key(plugin_id: &str, suffix: &str) -> String {
     format!(
         "COWBOY_ACP_{}_{suffix}",
         plugin_id.replace('-', "_").to_ascii_uppercase()
@@ -231,7 +231,7 @@ pub(crate) fn acp_env_key(plugin_id: &str, suffix: &str) -> String {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn adapter_plugins() -> Vec<(&'static str, &'static str)> {
+pub fn adapter_plugins() -> Vec<(&'static str, &'static str)> {
     adapter_index()
         .plugin_to_slot
         .iter()
@@ -240,7 +240,7 @@ pub(crate) fn adapter_plugins() -> Vec<(&'static str, &'static str)> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PathDetect {
+pub struct PathDetect {
     pub plugin_id: &'static str,
     pub command: &'static str,
     pub args: Option<String>,
@@ -248,7 +248,7 @@ pub(crate) struct PathDetect {
 
 /// PATH probes for canonical slot occupants, owned by provider.json entrypoints.
 #[must_use]
-pub(crate) fn path_detect() -> Vec<PathDetect> {
+pub fn path_detect() -> Vec<PathDetect> {
     let index = adapter_index();
     let mut detects = Vec::new();
     for (plugin_id, source) in npm_payloads() {
@@ -289,7 +289,7 @@ fn entrypoints() -> &'static BTreeMap<&'static str, &'static str> {
 /// Occupancy slots in first-party host order.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn occupancy_slots() -> Vec<&'static str> {
+pub fn occupancy_slots() -> Vec<&'static str> {
     let mut slots = Vec::new();
     for (plugin_id, _) in adapter_hosts() {
         let Some(slot) = adapter_slot_for_provider(plugin_id) else {
@@ -304,7 +304,7 @@ pub(crate) fn occupancy_slots() -> Vec<&'static str> {
 
 #[cfg(feature = "machine-host")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CliAuthKind(String);
+pub struct CliAuthKind(String);
 
 #[cfg(feature = "machine-host")]
 impl CliAuthKind {
@@ -312,17 +312,17 @@ impl CliAuthKind {
         Self(value.into())
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    pub(crate) fn is_exit(&self) -> bool {
+    pub fn is_exit(&self) -> bool {
         self.0 == "exit"
     }
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) struct CliAuth {
+pub struct CliAuth {
     pub kind: CliAuthKind,
     pub argv: Vec<&'static str>,
     pub rules: Option<crate::plugin_auth_probe::CliAuthRuleSet>,
@@ -330,7 +330,7 @@ pub(crate) struct CliAuth {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn cli_auth_for_slot(slot: &str) -> Option<&'static CliAuth> {
+pub fn cli_auth_for_slot(slot: &str) -> Option<&'static CliAuth> {
     let primary = provider_for_adapter_slot(slot)?;
     cli_auths().get(primary)
 }
@@ -397,7 +397,7 @@ fn parse_cli_auth(plugin_id: &str, source: &str) -> Option<CliAuth> {
 /// CLI binary name for an occupancy slot.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn cli_command_for_slot(slot: &str) -> Option<&'static str> {
+pub fn cli_command_for_slot(slot: &str) -> Option<&'static str> {
     let occupancy = adapter_slot_for_provider(slot)?;
     let primary = provider_for_adapter_slot(occupancy)?;
     Some(cli_executable(primary).unwrap_or(occupancy))
@@ -406,20 +406,20 @@ pub(crate) fn cli_command_for_slot(slot: &str) -> Option<&'static str> {
 /// Staged adapter command for an occupancy slot or plugin id.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn adapter_entrypoint(slot: &str) -> Option<&'static str> {
+pub fn adapter_entrypoint(slot: &str) -> Option<&'static str> {
     let occupancy = adapter_slot_for_provider(slot)?;
     let primary = provider_for_adapter_slot(occupancy)?;
     entrypoints().get(primary).copied()
 }
 
 #[must_use]
-pub(crate) fn provider_for_adapter_slot(slot: &str) -> Option<&'static str> {
+pub fn provider_for_adapter_slot(slot: &str) -> Option<&'static str> {
     adapter_index().slot_to_primary.get(slot).copied()
 }
 
 /// Session provider ids that occupy a Machine adapter/CLI slot.
 #[must_use]
-pub(crate) fn occupancy_provider_ids(slot: &str) -> Vec<&'static str> {
+pub fn occupancy_provider_ids(slot: &str) -> Vec<&'static str> {
     let index = adapter_index();
     let Some((&static_slot, plugins)) = index.slot_to_plugins.get_key_value(slot) else {
         return Vec::new();
@@ -443,19 +443,19 @@ struct CliExecutable {
 /// Command name of a sibling CLI that adapters should prefer over a bundled binary.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn cli_executable(plugin_id: &str) -> Option<&'static str> {
+pub fn cli_executable(plugin_id: &str) -> Option<&'static str> {
     cli_executables().get(plugin_id).map(|row| row.command)
 }
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn cli_executable_env(plugin_id: &str) -> Option<&'static str> {
+pub fn cli_executable_env(plugin_id: &str) -> Option<&'static str> {
     cli_executables().get(plugin_id).and_then(|row| row.env)
 }
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn cli_executable_plugins() -> Vec<(&'static str, &'static str)> {
+pub fn cli_executable_plugins() -> Vec<(&'static str, &'static str)> {
     adapter_hosts()
         .filter_map(|(plugin_id, _)| cli_executable(plugin_id).map(|command| (plugin_id, command)))
         .collect()
@@ -511,7 +511,7 @@ fn parse_cli_executable(plugin_id: &str, source: &str) -> CliExecutable {
 
 /// Adapter slot occupied by a session provider plugin, if declared.
 #[must_use]
-pub(crate) fn adapter_slot_for_provider(provider: &str) -> Option<&'static str> {
+pub fn adapter_slot_for_provider(provider: &str) -> Option<&'static str> {
     let index = adapter_index();
     if let Some(&slot) = index.plugin_to_slot.get(provider) {
         return Some(slot);
@@ -552,14 +552,14 @@ fn isolated_homes() -> &'static BTreeMap<&'static str, IsolatedHome> {
 /// Package-less adapter home variable declared by `host.json`.
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn isolated_home_env(plugin_id: &str) -> Option<&'static str> {
+pub fn isolated_home_env(plugin_id: &str) -> Option<&'static str> {
     isolated_homes().get(plugin_id).and_then(|home| home.env)
 }
 
 /// Plugin-owned seed values written by an isolated-home convention.
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn isolated_home_settings(
+pub fn isolated_home_settings(
     plugin_id: &str,
 ) -> Option<&'static BTreeMap<String, serde_json::Value>> {
     isolated_homes()
@@ -570,7 +570,7 @@ pub(crate) fn isolated_home_settings(
 
 /// Whether the adapter requires a readiness-checked bash/zsh path.
 #[must_use]
-pub(crate) fn isolated_shell(plugin_id: &str) -> bool {
+pub fn isolated_shell(plugin_id: &str) -> bool {
     isolated_homes()
         .get(plugin_id)
         .is_some_and(|home| home.shell)
@@ -579,7 +579,7 @@ pub(crate) fn isolated_shell(plugin_id: &str) -> bool {
 /// Plugins that pin `COWBOY_ACP_<ID>_SHELL` across the Machine worker boundary.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn isolated_shell_plugins() -> Vec<&'static str> {
+pub fn isolated_shell_plugins() -> Vec<&'static str> {
     isolated_homes()
         .iter()
         .filter(|(_, home)| home.shell)
@@ -589,7 +589,7 @@ pub(crate) fn isolated_shell_plugins() -> Vec<&'static str> {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn isolated_shell_env(plugin_id: &str) -> &'static [&'static str] {
+pub fn isolated_shell_env(plugin_id: &str) -> &'static [&'static str] {
     isolated_homes()
         .get(plugin_id)
         .map(|home| home.shell_env.as_slice())
@@ -598,7 +598,7 @@ pub(crate) fn isolated_shell_env(plugin_id: &str) -> &'static [&'static str] {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn isolated_shell_acp_key(plugin_id: &str) -> Option<&'static str> {
+pub fn isolated_shell_acp_key(plugin_id: &str) -> Option<&'static str> {
     isolated_homes()
         .get(plugin_id)
         .and_then(|home| home.shell_acp_key)
@@ -698,13 +698,13 @@ fn valid_isolated_home_env(value: &str) -> bool {
 /// Display name declared by the account's host plugin.
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn usage_product_label(account: &str) -> Option<&'static str> {
+pub fn usage_product_label(account: &str) -> Option<&'static str> {
     usage_products().get(account).copied()
 }
 
 #[must_use]
 #[cfg(all(test, feature = "full"))]
-pub(crate) fn usage_accounts() -> Vec<&'static str> {
+pub fn usage_accounts() -> Vec<&'static str> {
     usage_account_rows()
         .iter()
         .map(|(_, account)| *account)
@@ -713,7 +713,7 @@ pub(crate) fn usage_accounts() -> Vec<&'static str> {
 
 #[must_use]
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
-pub(crate) fn provider_info_urls_env(account: &str) -> String {
+pub fn provider_info_urls_env(account: &str) -> String {
     format!(
         "COWBOY_PROVIDER_INFO_{}_URLS",
         account.replace('-', "_").to_ascii_uppercase()
@@ -751,7 +751,7 @@ fn usage_account_rows() -> &'static Vec<(u16, &'static str)> {
 
 #[must_use]
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
-pub(crate) fn usage_activity_agent_ids(account: &str) -> &'static [&'static str] {
+pub fn usage_activity_agent_ids(account: &str) -> &'static [&'static str] {
     usage_activity_agents()
         .get(account)
         .map(Vec::as_slice)
@@ -826,7 +826,7 @@ fn usage_products() -> &'static BTreeMap<String, &'static str> {
 /// PostgreSQL CASE that maps session/plugin ids onto adapter slots.
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn diagnostic_agent_case_sql(column: &str) -> String {
+pub fn diagnostic_agent_case_sql(column: &str) -> String {
     let index = adapter_index();
     let mut by_slot: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (plugin, slot) in &index.plugin_to_slot {
@@ -855,7 +855,7 @@ pub(crate) fn diagnostic_agent_case_sql(column: &str) -> String {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn normalize_disabled_provider_slot(slot: &str) -> String {
+pub fn normalize_disabled_provider_slot(slot: &str) -> String {
     let index = adapter_index();
     if let Some(&adapter) = index.plugin_to_slot.get(slot)
         && index.slot_to_primary.get(adapter).copied() == Some(slot)
@@ -868,7 +868,7 @@ pub(crate) fn normalize_disabled_provider_slot(slot: &str) -> String {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn adapter_runtime_enabled(slot: &str, disabled: &[String]) -> bool {
+pub fn adapter_runtime_enabled(slot: &str, disabled: &[String]) -> bool {
     adapter_occupants(slot)
         .iter()
         .any(|id| !disabled.iter().any(|candidate| candidate == id))
@@ -893,7 +893,7 @@ fn adapter_occupants(slot: &str) -> Vec<&'static str> {
 }
 
 #[must_use]
-pub(crate) fn loopback_origin_for(plugin_id: &str) -> Option<&'static str> {
+pub fn loopback_origin_for(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
         .map(|gateway| gateway.origin)
@@ -902,7 +902,7 @@ pub(crate) fn loopback_origin_for(plugin_id: &str) -> Option<&'static str> {
 /// Inventory copy declared next to `loopback_origin`.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn loopback_detail(plugin_id: &str) -> Option<&'static str> {
+pub fn loopback_detail(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
         .and_then(|gateway| gateway.detail)
@@ -911,7 +911,7 @@ pub(crate) fn loopback_detail(plugin_id: &str) -> Option<&'static str> {
 /// Whether the loopback occupant also needs the package-less model catalog.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn loopback_requires_catalog(plugin_id: &str) -> bool {
+pub fn loopback_requires_catalog(plugin_id: &str) -> bool {
     loopback_gateways()
         .get(plugin_id)
         .is_some_and(|gateway| gateway.requires_catalog)
@@ -920,7 +920,7 @@ pub(crate) fn loopback_requires_catalog(plugin_id: &str) -> bool {
 /// Plugins that expose a loopback gateway, in host occupancy order.
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn loopback_plugins() -> Vec<(&'static str, &'static str)> {
+pub fn loopback_plugins() -> Vec<(&'static str, &'static str)> {
     adapter_hosts()
         .filter_map(|(plugin_id, _)| {
             loopback_origin_for(plugin_id).map(|origin| (plugin_id, origin))
@@ -941,14 +941,14 @@ struct LoopbackGateway {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn loopback_env(plugin_id: &str) -> Option<&'static str> {
+pub fn loopback_env(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
         .and_then(|gateway| gateway.env)
 }
 
 #[must_use]
-pub(crate) fn loopback_catalog(plugin_id: &str) -> Option<&'static str> {
+pub fn loopback_catalog(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
         .and_then(|gateway| gateway.catalog)
@@ -956,7 +956,7 @@ pub(crate) fn loopback_catalog(plugin_id: &str) -> Option<&'static str> {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub(crate) fn available_loopback_catalog(plugin_id: &str) -> Option<std::path::PathBuf> {
+pub fn available_loopback_catalog(plugin_id: &str) -> Option<std::path::PathBuf> {
     let catalog = std::path::PathBuf::from(loopback_catalog(plugin_id)?);
     catalog.is_file().then_some(catalog)
 }
@@ -976,7 +976,7 @@ fn loopback_gateways() -> &'static BTreeMap<&'static str, LoopbackGateway> {
 
 #[cfg(feature = "full")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CacheProtectionPolicy {
+pub struct CacheProtectionPolicy {
     pub min_hit_tokens: u64,
     pub min_hit_label: &'static str,
     pub interval_ms: u32,
@@ -989,7 +989,7 @@ pub(crate) struct CacheProtectionPolicy {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn cache_protection_policy() -> CacheProtectionPolicy {
+pub fn cache_protection_policy() -> CacheProtectionPolicy {
     static VALUE: OnceLock<CacheProtectionPolicy> = OnceLock::new();
     *VALUE.get_or_init(|| {
         for (plugin_id, source) in adapter_hosts() {
@@ -1003,13 +1003,13 @@ pub(crate) fn cache_protection_policy() -> CacheProtectionPolicy {
 
 #[must_use]
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
-pub(crate) fn loopback_info_url(origin: &str) -> String {
+pub fn loopback_info_url(origin: &str) -> String {
     format!("{origin}/provider-info")
 }
 
 #[must_use]
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
-pub(crate) fn loopback_info_urls() -> String {
+pub fn loopback_info_urls() -> String {
     adapter_hosts()
         .filter_map(|(plugin_id, _)| loopback_origin_for(plugin_id))
         .map(loopback_info_url)
@@ -1018,13 +1018,13 @@ pub(crate) fn loopback_info_urls() -> String {
 }
 
 #[must_use]
-pub(crate) fn launch_plugin_ids() -> Vec<&'static str> {
+pub fn launch_plugin_ids() -> Vec<&'static str> {
     npm_payloads().map(|(plugin_id, _)| plugin_id).collect()
 }
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn cli_arguments(plugin_id: &str) -> &'static [&'static str] {
+pub fn cli_arguments(plugin_id: &str) -> &'static [&'static str] {
     cli_argument_index()
         .get(plugin_id)
         .map(Vec::as_slice)
@@ -1064,7 +1064,7 @@ fn string_cli_arguments(plugin_id: &str, source: &str) -> Vec<&'static str> {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn environment(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
+pub fn environment(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
     environment_index()
         .get(plugin_id)
         .map(Vec::as_slice)
@@ -1084,7 +1084,7 @@ fn environment_index() -> &'static BTreeMap<&'static str, Vec<(&'static str, &'s
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn remove_environment(plugin_id: &str) -> &'static [&'static str] {
+pub fn remove_environment(plugin_id: &str) -> &'static [&'static str] {
     remove_environment_index()
         .get(plugin_id)
         .map(Vec::as_slice)
@@ -1108,7 +1108,7 @@ fn remove_environment_index() -> &'static BTreeMap<&'static str, Vec<&'static st
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn remove_environment_prefixes(plugin_id: &str) -> &'static [&'static str] {
+pub fn remove_environment_prefixes(plugin_id: &str) -> &'static [&'static str] {
     remove_environment_prefix_index()
         .get(plugin_id)
         .map(Vec::as_slice)
@@ -1132,11 +1132,7 @@ fn remove_environment_prefix_index() -> &'static BTreeMap<&'static str, Vec<&'st
 
 #[must_use]
 #[cfg(feature = "full")]
-pub(crate) fn isolated_config_toml(
-    plugin_id: &str,
-    catalog: &Path,
-    sidecar_origin: &str,
-) -> String {
+pub fn isolated_config_toml(plugin_id: &str, catalog: &Path, sidecar_origin: &str) -> String {
     let source = provider_source(plugin_id);
     let mut top = Vec::new();
     let mut tables: Vec<(String, Vec<(String, String)>)> = Vec::new();

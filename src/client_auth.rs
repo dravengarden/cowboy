@@ -398,7 +398,7 @@ impl DeviceAccessSessions {
         )
     }
 
-    pub(crate) fn issue_identity_device(
+    pub fn issue_identity_device(
         &self,
         device_id: &str,
         user_id: &str,
@@ -618,7 +618,7 @@ impl DeviceAccessSessions {
 
     /// Only for core continuations of an authenticated request. This does not
     /// verify/consume a new proof nonce or authorize a new HTTP request.
-    pub(crate) fn token_hash_still_valid(
+    pub fn token_hash_still_valid(
         &self,
         token_hash: &str,
         expected: &DeviceAccessIdentity,

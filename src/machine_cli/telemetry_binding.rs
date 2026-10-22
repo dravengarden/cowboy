@@ -7,7 +7,7 @@ use crate::machine_protocol::telemetry_binding::{
 };
 use std::sync::Arc;
 
-pub(crate) fn commit(
+pub fn commit(
     request_id: String,
     step: BindingStep,
     store: Arc<MachinePluginStore>,

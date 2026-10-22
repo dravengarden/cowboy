@@ -2,12 +2,12 @@ use super::data::{Entry, Metrics, Series};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(crate) const BUCKETS: &[f64] = &[
+pub const BUCKETS: &[f64] = &[
     1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0, 30000.0,
     60000.0,
 ];
 
-pub(crate) fn accumulate(groups: &mut BTreeMap<String, Series>, entry: &Entry) {
+pub fn accumulate(groups: &mut BTreeMap<String, Series>, entry: &Entry) {
     let mut key = format!("{}/{}/{}", entry.service, entry.signal, entry.event);
     if groups.len() >= 128 && !groups.contains_key(&key) {
         key = "__other_groups__".into();
@@ -52,7 +52,7 @@ fn p95(series: &Series) -> Option<f64> {
     None
 }
 
-pub(crate) fn analyze(current: Metrics, baseline: Option<Metrics>) -> Value {
+pub fn analyze(current: Metrics, baseline: Option<Metrics>) -> Value {
     let mut findings = Vec::new();
     let mut comparisons = Vec::new();
     for (key, series) in &current.groups {

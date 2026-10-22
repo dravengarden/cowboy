@@ -632,8 +632,8 @@ impl std::error::Error for CleanupRootChanged {}
 
 impl CleanupWorkspace {
     /// Test seam for a pass whose removal budget is already spent.
-    #[cfg(test)]
-    pub(crate) fn with_removal_budget(mut self, budget: Duration) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_removal_budget(mut self, budget: Duration) -> Self {
         self.removal_budget = budget;
         self
     }

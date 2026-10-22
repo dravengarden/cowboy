@@ -37,7 +37,7 @@ pub struct PluginDir {
 impl PluginDir {
     /// Resolve the layout without creating directories or mutable state.
     #[must_use]
-    pub(crate) fn inspect(data_dir: &Path) -> Self {
+    pub fn inspect(data_dir: &Path) -> Self {
         Self {
             root: data_dir.join("plugins"),
         }
@@ -53,7 +53,7 @@ impl PluginDir {
         Ok(this)
     }
 
-    pub(crate) fn initialize(&self) -> Result<()> {
+    pub fn initialize(&self) -> Result<()> {
         for dir in [
             self.blobs_dir(),
             self.catalog_dir(),
@@ -262,7 +262,7 @@ impl PluginDir {
     ///
     /// # Errors
     /// Returns when the plugin id is invalid or the current link is dangling.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn current_generation(&self, plugin_id: &str) -> Result<Option<PathBuf>> {
         let link = self.current_link(plugin_id)?;
         match fs::symlink_metadata(&link) {

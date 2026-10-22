@@ -26,17 +26,17 @@ use crate::machine_protocol::{
 };
 
 mod auth_watch;
-pub(crate) mod execution;
-pub(crate) mod host_resources;
+pub mod execution;
+pub mod host_resources;
 mod installation;
 mod liveness;
 mod login_process;
 mod native_login;
 mod native_logout;
 mod projects;
-pub(crate) mod telemetry_binding;
-pub(crate) mod telemetry_export;
-pub(crate) mod telemetry_recovery;
+pub mod telemetry_binding;
+pub mod telemetry_export;
+pub mod telemetry_recovery;
 mod workspace_identity;
 
 #[cfg(test)]

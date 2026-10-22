@@ -9,7 +9,7 @@ rust-version = "1.98.1"
 
 [workspace]
 resolver = "3"
-members = ["components/plugin-sdk", "components/provider-sdk", "components/wire"]
+members = ["components/plugin-sdk", "components/provider-sdk", "components/server", "components/wire"]
 exclude = ["plugins/zed/adapter"]
 
 [features]
@@ -17,6 +17,8 @@ default = ["full"]
 # The control plane and Machine host are separate compile-time boundaries.
 full = ["dep:cardea-authorization", "dep:cardea-core", "dep:cowboy-wire", "cowboy-wire/full"]
 machine-host = ["dep:cowboy-wire", "cowboy-wire/machine-host"]
+# Test helpers that downstream crates (cowboy-server) also need.
+test-support = ["dep:tempfile", "cowboy-wire/test-fixtures"]
 code-adapter = []
 
 [[bin]]
@@ -105,6 +107,7 @@ rand = "0.8"
 rpassword = "=7.5.4"
 cowboy-provider-sdk = { version = "=3.1.15", path = "components/provider-sdk" }
 cowboy-wire = { version = "0.1.0", path = "components/wire", optional = true }
+tempfile = { version = "3", optional = true }
 cowboy-plugin-sdk = { version = "=1.12.2", path = "components/plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }

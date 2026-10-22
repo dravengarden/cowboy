@@ -7,18 +7,18 @@ use tokio::time::Instant;
 
 const COMMAND_BUDGET: Duration = Duration::from_secs(15);
 
-pub(crate) struct CodeNavigationInvocation {
+pub struct CodeNavigationInvocation {
     request: Request,
     connection: Arc<AtomicBool>,
     deadline: Instant,
 }
 
-pub(crate) struct CodeNavigationOwner {
+pub struct CodeNavigationOwner {
     connection: Arc<AtomicBool>,
 }
 
 impl PluginExecutionScope {
-    pub(crate) fn code_navigation(&self, request: Request) -> Result<CodeNavigationInvocation> {
+    pub fn code_navigation(&self, request: Request) -> Result<CodeNavigationInvocation> {
         request.validate()?;
         ensure!(
             self.connected.load(Ordering::Acquire)
@@ -35,11 +35,11 @@ impl PluginExecutionScope {
 }
 
 impl CodeNavigationInvocation {
-    pub(crate) fn request(&self) -> &Request {
+    pub fn request(&self) -> &Request {
         &self.request
     }
 
-    pub(crate) fn remaining(&self) -> Result<Duration> {
+    pub fn remaining(&self) -> Result<Duration> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         ensure!(
             self.connection.load(Ordering::Acquire) && !remaining.is_zero(),
@@ -48,14 +48,14 @@ impl CodeNavigationInvocation {
         Ok(remaining)
     }
 
-    pub(crate) fn owner(&self) -> Result<CodeNavigationOwner> {
+    pub fn owner(&self) -> Result<CodeNavigationOwner> {
         self.remaining()?;
         Ok(CodeNavigationOwner {
             connection: Arc::clone(&self.connection),
         })
     }
 
-    pub(crate) fn check_owner(&self, owner: &CodeNavigationOwner) -> Result<()> {
+    pub fn check_owner(&self, owner: &CodeNavigationOwner) -> Result<()> {
         self.remaining()?;
         ensure!(
             Arc::ptr_eq(&self.connection, &owner.connection),

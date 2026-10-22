@@ -100,7 +100,7 @@ impl MachinePluginStore {
         Ok(resolved)
     }
 
-    pub(crate) fn validate_extension_dependencies(
+    pub fn validate_extension_dependencies(
         &self,
         package: &cowboy_plugin_sdk::PluginPackage,
     ) -> Result<()> {
@@ -141,7 +141,7 @@ impl MachinePluginStore {
         Ok((contract, dependencies))
     }
 
-    pub(crate) async fn extension_request(&self, request: Request) -> Response {
+    pub async fn extension_request(&self, request: Request) -> Response {
         let Ok(_permit) = READS.try_acquire() else {
             return Response::Unavailable {
                 code: Failure::Busy,

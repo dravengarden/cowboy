@@ -120,7 +120,7 @@ pub struct ObservabilityHealth {
 }
 
 impl ObservabilityHealth {
-    pub(crate) fn prometheus(&self) -> String {
+    pub fn prometheus(&self) -> String {
         let mut output = format!(
             "# TYPE cowboy_observability_pending_bytes gauge\ncowboy_observability_pending_bytes {}\n",
             self.pending_bytes()
@@ -189,21 +189,21 @@ impl ObservabilityHealth {
     }
 }
 
-pub(crate) struct ExportBatch {
+pub struct ExportBatch {
     pub logs: String,
     pub metrics: String,
     pub otlp: Option<crate::otlp::Export>,
 }
 
 #[derive(Default)]
-pub(crate) struct ExportReceipt {
+pub struct ExportReceipt {
     pub logs_delivered: bool,
     pub metrics_delivered: bool,
     pub traces_delivered: bool,
     pub rejected_items: u64,
 }
 
-pub(crate) type TelemetryExporter =
+pub type TelemetryExporter =
     Arc<dyn Fn(ExportBatch) -> BoxFuture<'static, ExportReceipt> + Send + Sync>;
 
 struct PendingBatch {
@@ -237,7 +237,7 @@ pub struct Observability {
 }
 
 impl Observability {
-    pub(crate) fn start(
+    pub fn start(
         store: Option<Store>,
         file: impl EvidenceSink + 'static,
         exporter: Option<TelemetryExporter>,
@@ -348,7 +348,7 @@ impl Observability {
     /// Authentication is supplied by the route, never by an OTLP resource.
     /// Reserve before aggregation: a rejected/retried request cannot increment
     /// a counter until its complete sanitized batch has entered the writer.
-    pub(crate) fn submit_otlp(
+    pub fn submit_otlp(
         &self,
         principal: &str,
         signal: crate::otlp::Signal,
@@ -366,7 +366,7 @@ impl Observability {
         self.admit_otlp(principal, signal, batch_id, body, request)
     }
 
-    pub(crate) fn begin_command_trace(text: &str) -> Option<crate::runtime_trace::SpanTimer> {
+    pub fn begin_command_trace(text: &str) -> Option<crate::runtime_trace::SpanTimer> {
         // Deserialize only propagation metadata, never copy a prompt/content
         // object into the telemetry representation.
         #[derive(Deserialize)]
@@ -386,7 +386,7 @@ impl Observability {
         )
     }
 
-    pub(crate) fn finish_command_trace(
+    pub fn finish_command_trace(
         &self,
         principal: &str,
         span: crate::runtime_trace::SpanTimer,
@@ -401,7 +401,7 @@ impl Observability {
         }
     }
 
-    pub(crate) fn bind_runtime_trace(
+    pub fn bind_runtime_trace(
         &self,
         principal: &str,
         machine: &str,
@@ -414,7 +414,7 @@ impl Observability {
             .bind(principal, machine, session, cmid, &span.record.context);
     }
 
-    pub(crate) fn dispatch_trace(
+    pub fn dispatch_trace(
         &self,
         session: &str,
         cmid: Option<&str>,
@@ -426,7 +426,7 @@ impl Observability {
         Some(carrier)
     }
 
-    pub(crate) fn finish_delivery_trace(
+    pub fn finish_delivery_trace(
         &self,
         carrier: &crate::runtime_trace::TraceCarrier,
         accepted: bool,
@@ -444,7 +444,7 @@ impl Observability {
         }
     }
 
-    pub(crate) fn record_runtime_spans(
+    pub fn record_runtime_spans(
         &self,
         machine: &str,
         session: &str,
@@ -547,7 +547,7 @@ impl Observability {
         &self.health
     }
 
-    pub(crate) async fn drain(&self) {
+    pub async fn drain(&self) {
         let _ = self.shutdown.send(true);
         let mut jobs = std::mem::take(&mut *self.jobs.lock());
         if tokio::time::timeout(
@@ -691,7 +691,7 @@ fn truncate_utf8(value: &str, maximum: usize) -> &str {
     &value[..end]
 }
 
-pub(crate) fn redact_message(value: &str) -> String {
+pub fn redact_message(value: &str) -> String {
     static COOKIE: OnceLock<regex::Regex> = OnceLock::new();
     static CREDENTIAL: OnceLock<regex::Regex> = OnceLock::new();
     static BEARER: OnceLock<regex::Regex> = OnceLock::new();
@@ -788,7 +788,7 @@ fn sensitive_key(value: &str) -> bool {
     .any(|needle| value.contains(needle))
 }
 
-pub(crate) fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Value {
+pub fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Value {
     let Some(input) = value.as_object() else {
         return serde_json::json!({});
     };

@@ -18,36 +18,36 @@ use crate::plugin_runtime::{PluginRuntime, PublicHostPlugin};
 const CONFIG_SCHEMA_V1: &str = "dravengarden.cowboy.authentication/v1";
 const CONFIG_SCHEMA_V2: &str = "dravengarden.cowboy.authentication/v2";
 const MAX_CONFIG_BYTES: u64 = 128 * 1_024;
-pub(crate) const PASSWORD_LOGIN_METHOD: &str = "password";
+pub const PASSWORD_LOGIN_METHOD: &str = "password";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CapacityEnforcement {
+pub enum CapacityEnforcement {
     Observe,
     Enforce,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SessionOverflowPolicy {
+pub enum SessionOverflowPolicy {
     RevokeOldestInactive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ActiveOverflowPolicy {
+pub enum ActiveOverflowPolicy {
     WaitOrReclaimOwn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SingleSessionMode {
+pub enum SingleSessionMode {
     Off,
     NewestWins,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct CapacityServerPolicy {
+pub struct CapacityServerPolicy {
     pub enforcement: CapacityEnforcement,
     pub authorized_clients_per_user: u32,
     pub signed_in_sessions_per_user: u32,
@@ -83,14 +83,14 @@ impl Default for CapacityServerPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ProviderLogoutPolicy {
+pub enum ProviderLogoutPolicy {
     Never,
     Offer,
     Always,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct LogoutServerPolicy {
+pub struct LogoutServerPolicy {
     pub provider_logout: ProviderLogoutPolicy,
     pub backchannel_logout: bool,
 }
@@ -105,7 +105,7 @@ impl Default for LogoutServerPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct AutomationServerPolicy {
+pub struct AutomationServerPolicy {
     pub enabled: bool,
     pub active_clients: u32,
     pub credential_max_age_ms: i64,
@@ -122,14 +122,14 @@ impl Default for AutomationServerPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct PasskeyServerPolicy {
+pub struct PasskeyServerPolicy {
     pub enabled: bool,
     pub prompt_after_login: bool,
     pub session_refresh_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct SessionServerPolicy {
+pub struct SessionServerPolicy {
     pub activity_sliding_enabled: bool,
     pub idle_timeout_ms: i64,
     pub passkey_max_age_ms: i64,
@@ -152,7 +152,7 @@ impl Default for SessionServerPolicy {
 }
 
 #[derive(Clone)]
-pub(crate) struct ProductAuthentication {
+pub struct ProductAuthentication {
     pub password_enabled: bool,
     pub passkeys: PasskeyServerPolicy,
     pub session: SessionServerPolicy,
@@ -464,7 +464,7 @@ struct AuthenticationProviderSelection {
 }
 
 impl ProductAuthentication {
-    pub(crate) fn disabled() -> Self {
+    pub fn disabled() -> Self {
         Self {
             password_enabled: false,
             passkeys: PasskeyServerPolicy {
@@ -485,8 +485,8 @@ impl ProductAuthentication {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn test_default(provider: Option<Arc<OidcProvider>>) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_default(provider: Option<Arc<OidcProvider>>) -> Self {
         let mut providers = BTreeMap::new();
         if let Some(provider) = provider {
             providers.insert(provider.id().to_owned(), provider);
@@ -510,7 +510,7 @@ impl ProductAuthentication {
         }
     }
 
-    pub(crate) fn load(
+    pub fn load(
         path: Option<&Path>,
         catalog: &PluginCatalog,
         legacy: Option<Arc<OidcProvider>>,
@@ -625,7 +625,7 @@ impl ProductAuthentication {
 
     /// The login driver and its public host must use the same exact release.
     /// Legacy hostless OIDC remains supported only during bootstrap migration.
-    pub(crate) fn configure_host_policy(&self, policy: &mut HostActivationPolicy) -> Result<()> {
+    pub fn configure_host_policy(&self, policy: &mut HostActivationPolicy) -> Result<()> {
         let catalog_only = policy.source == HostSourcePolicy::CatalogOnly;
         ensure!(
             !catalog_only
@@ -655,7 +655,7 @@ impl ProductAuthentication {
         Ok(())
     }
 
-    pub(crate) fn public_host_plugins(&self, runtime: &PluginRuntime) -> Vec<PublicHostPlugin> {
+    pub fn public_host_plugins(&self, runtime: &PluginRuntime) -> Vec<PublicHostPlugin> {
         runtime
             .default_hosts()
             .into_iter()
@@ -668,18 +668,18 @@ impl ProductAuthentication {
             .collect()
     }
 
-    pub(crate) fn provider(&self, id: &str) -> Option<&Arc<OidcProvider>> {
+    pub fn provider(&self, id: &str) -> Option<&Arc<OidcProvider>> {
         self.providers.get(id)
     }
 
-    pub(crate) fn public_providers(&self) -> Vec<crate::oidc::PublicProvider> {
+    pub fn public_providers(&self) -> Vec<crate::oidc::PublicProvider> {
         self.providers
             .values()
             .map(|provider| provider.public())
             .collect()
     }
 
-    pub(crate) fn login_method_order(&self) -> &[String] {
+    pub fn login_method_order(&self) -> &[String] {
         &self.login_method_order
     }
 }
@@ -843,7 +843,7 @@ fn read_document(path: &Path) -> Result<AuthenticationDocument> {
 
 /// JSON's default errors can echo invalid values and unknown field names from
 /// secret-bearing configuration. Keep only the category and source position.
-pub(crate) fn decode_private_json<T: serde::de::DeserializeOwned>(
+pub fn decode_private_json<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     name: &'static str,
 ) -> Result<T> {

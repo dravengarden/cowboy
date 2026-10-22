@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), allow(unused_imports, dead_code))]
 use super::*;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
@@ -15,7 +16,7 @@ fn write(path: &Path, value: &serde_json::Value) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-pub(crate) fn policy(
+pub fn policy(
     path: &Path,
     service: &str,
     machine: &str,

@@ -26,7 +26,7 @@ impl Store {
     /// Call only after the exact Broker readmission ACK. The callback checks
     /// the live runtime connection; failure rolls back the finished flag.
     #[allow(dead_code)]
-    pub(crate) async fn finish_native_session_transition(
+    pub async fn finish_native_session_transition(
         &self,
         owner: &str,
         operation: &str,
@@ -71,8 +71,8 @@ impl Store {
     }
     /// Atomic metadata commit only; the Machine fence remains in place.
     /// Caller supplies behavior from the exact signed target package.
-    #[cfg(test)]
-    pub(crate) async fn commit_native_session_transition(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn commit_native_session_transition(
         &self,
         owner: &str,
         operation: &str,
@@ -85,7 +85,7 @@ impl Store {
     /// The Controller rechecks its live connection and trusted package here,
     /// after asynchronous admission reads and before the transaction commits.
     #[allow(dead_code, reason = "public migration remains gated")]
-    pub(crate) async fn commit_native_session_transition_checked(
+    pub async fn commit_native_session_transition_checked(
         &self,
         owner: &str,
         operation: &str,
@@ -115,7 +115,7 @@ impl Store {
     /// Queue one idempotent migration stop under current account, target-login
     /// and original-session admission. The callback checks the live runtime.
     #[allow(dead_code, reason = "public migration remains gated")]
-    pub(crate) async fn dispatch_native_session_transition_stop<T>(
+    pub async fn dispatch_native_session_transition_stop<T>(
         &self,
         owner: &str,
         operation: &str,
@@ -137,7 +137,7 @@ impl Store {
     /// Call only after acknowledged quiescence and a fresh Machine tree query.
     /// The predicate must recheck the authenticated query connection under lock.
     #[allow(dead_code, reason = "public migration remains gated")]
-    pub(crate) async fn record_native_session_transition_stop(
+    pub async fn record_native_session_transition_stop(
         &self,
         owner: &str,
         operation: &str,
@@ -178,7 +178,7 @@ impl Store {
     /// Persist a migration proposal while the target login is freshly admitted.
     /// Exact replay is historical; it must not redispatch any process operation.
     #[allow(dead_code, reason = "public migration remains gated")]
-    pub(crate) async fn plan_native_session_transition(
+    pub async fn plan_native_session_transition(
         &self,
         owner: &str,
         operation: &str,
@@ -206,8 +206,8 @@ impl Store {
     /// Commit first, then publish under a fresh admission check. If revocation
     /// wins between the two transactions, its plan already contains the row.
     /// This registers metadata only; it never starts a worker.
-    #[cfg(test)]
-    pub(crate) async fn register_native_session(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn register_native_session(
         &self,
         owner: &str,
         operation: &str,
@@ -231,7 +231,7 @@ impl Store {
         .await
     }
 
-    pub(crate) async fn register_native_session_with_projection(
+    pub async fn register_native_session_with_projection(
         &self,
         owner: &str,
         operation: &str,
@@ -250,7 +250,7 @@ impl Store {
     /// The callback must not await or reenter Store; no authorization object is
     /// returned for later reuse. Callers also check their live connection and
     /// the action's own permission before enqueuing any Machine command.
-    pub(crate) async fn with_native_login_binding<T>(
+    pub async fn with_native_login_binding<T>(
         &self,
         owner: &str,
         operation: &str,
@@ -266,10 +266,7 @@ impl Store {
     /// Only for bounded transport writes or synchronous projection of an
     /// already committed binding. Hold revocation admission through the action;
     /// neither a queued frame nor a projection proves remote completion.
-    pub(crate) async fn with_native_session_binding<
-        T,
-        F: std::future::Future<Output = Result<T>>,
-    >(
+    pub async fn with_native_session_binding<T, F: std::future::Future<Output = Result<T>>>(
         &self,
         owner: &str,
         operation: &str,
@@ -293,7 +290,7 @@ impl Store {
 
     /// Admit runtime traffic for a session pinned to `version`/`digest`, which
     /// registration accepted as the login's release or a compatible later one.
-    pub(crate) async fn with_native_session_release_binding<
+    pub async fn with_native_session_release_binding<
         T,
         F: std::future::Future<Output = Result<T>>,
     >(
@@ -321,7 +318,7 @@ impl Store {
     /// Persist before projecting into Hub or starting a worker. Revocation
     /// captures the row under the same owner lock, including after a crash.
     #[allow(dead_code, reason = "named session admission remains rollout gated")]
-    pub(crate) async fn insert_native_session(
+    pub async fn insert_native_session(
         &self,
         owner: &str,
         operation: &str,

@@ -17,7 +17,7 @@ use std::time::Duration;
 /// cannot afford one descriptor per advertised root, so it detects reuse by
 /// creation time instead and refuses any root that cannot report one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct LocalRootIdentity {
+pub struct LocalRootIdentity {
     device: u64,
     inode: u64,
     created: Duration,
@@ -26,7 +26,7 @@ pub(crate) struct LocalRootIdentity {
 impl LocalRootIdentity {
     /// `None` when the path is absent, is not a directory, or cannot report a
     /// creation time. Every caller treats that as "do not execute locally".
-    pub(crate) fn observe(root: &str) -> Option<Self> {
+    pub fn observe(root: &str) -> Option<Self> {
         use std::os::unix::fs::MetadataExt as _;
         let path = Path::new(root);
         if !path.is_absolute() {
@@ -50,7 +50,7 @@ impl LocalRootIdentity {
 
     /// Re-observe the same path and require the same object. A path that has
     /// become unobservable is a change, never a pass.
-    pub(crate) fn is_current(self, root: &str) -> bool {
+    pub fn is_current(self, root: &str) -> bool {
         Self::observe(root) == Some(self)
     }
 }
@@ -63,7 +63,7 @@ impl LocalRootIdentity {
 /// separate, and it is why an absent path does not silently become a remote
 /// route or a readable one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum LocalRoot {
+pub enum LocalRoot {
     /// A remote Machine owns this root. The Controller must not stat it.
     Remote,
     /// The Controller would read it, but could not observe the object.
@@ -72,13 +72,13 @@ pub(crate) enum LocalRoot {
 }
 
 impl LocalRoot {
-    pub(crate) fn observe(root: &str) -> Self {
+    pub fn observe(root: &str) -> Self {
         LocalRootIdentity::observe(root).map_or(Self::Unobservable, Self::Observed)
     }
 
     /// Whether the recorded observation still describes the live path.
     /// A root that appeared, vanished or was replaced all end the observation.
-    pub(crate) fn is_current(self, root: &str) -> bool {
+    pub fn is_current(self, root: &str) -> bool {
         match self {
             Self::Remote => true,
             Self::Unobservable => LocalRootIdentity::observe(root).is_none(),
@@ -88,7 +88,7 @@ impl LocalRoot {
 
     /// The exact object this route may read, or a typed refusal. Never reads
     /// a root the Controller could not observe.
-    pub(crate) fn readable(self, root: &str) -> Result<(), String> {
+    pub fn readable(self, root: &str) -> Result<(), String> {
         match self {
             Self::Remote => Err("local read requested for a remote root".into()),
             Self::Unobservable => Err("local root cannot be observed".into()),
@@ -101,8 +101,8 @@ impl LocalRoot {
 /// Real directories for tests whose fixtures used to name synthetic paths.
 /// A local read route is only resolvable when its root actually exists, so
 /// these must be observable objects rather than strings.
-#[cfg(test)]
-pub(crate) fn test_root(name: &str) -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_root(name: &str) -> String {
     static SHARED: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     let root = SHARED
         .get_or_init(|| tempfile::tempdir().expect("shared test root"))

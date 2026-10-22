@@ -232,7 +232,7 @@ impl MachinePluginStore {
         admitted && self.operations.installations.writer_enabled()
     }
 
-    pub(crate) async fn installation_target(
+    pub async fn installation_target(
         &self,
         query: &InstallTargetQuery,
         service: Option<&str>,
@@ -262,7 +262,7 @@ impl MachinePluginStore {
         result.unwrap_or_else(|reason| InstallTargetObservation::Unavailable { reason })
     }
 
-    pub(crate) async fn query_installation_step(
+    pub async fn query_installation_step(
         &self,
         step: &InstallStep,
         service: Option<&str>,
@@ -301,7 +301,7 @@ impl MachinePluginStore {
         }
     }
 
-    pub(crate) async fn install_step(
+    pub async fn install_step(
         &self,
         step: &InstallStep,
         desired: &DesiredPlugin,

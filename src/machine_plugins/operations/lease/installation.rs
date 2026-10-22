@@ -4,7 +4,7 @@ use super::{
 };
 use crate::machine_protocol::plugin_install::{InstallRejection, InstallStep, InstallUnavailable};
 
-pub(crate) struct InstallationLease {
+pub struct InstallationLease {
     connected: Arc<AtomicBool>,
     digest: String,
     budget: OperationBudget,
@@ -12,7 +12,7 @@ pub(crate) struct InstallationLease {
 
 impl PluginExecutionScope {
     /// Capture synchronously on receipt, before scheduling or lock contention.
-    pub(crate) fn installation(
+    pub fn installation(
         &self,
         step: &InstallStep,
     ) -> Result<InstallationLease, InstallUnavailable> {

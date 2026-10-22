@@ -35,13 +35,13 @@ pub struct Ledger {
 
 impl Ledger {
     /// The parent's own Agent runtime Machine.
-    pub(crate) fn runtime_machine_id(&self) -> &str {
+    pub fn runtime_machine_id(&self) -> &str {
         &self.runtime_machine_id
     }
 
     /// Caller must first authorize the product principal or Machine grant. The
     /// session comes from Hub, never a CLI-supplied parent or filesystem path.
-    pub(crate) fn for_parent(store: Store, service: &str, parent: &SessionMeta) -> Result<Self> {
+    pub fn for_parent(store: Store, service: &str, parent: &SessionMeta) -> Result<Self> {
         Ok(Self {
             store,
             placement: resolve_placement(service, parent)?,

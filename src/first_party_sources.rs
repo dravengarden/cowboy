@@ -4,10 +4,10 @@
 //! inventory here gives full and Machine-only builds the same source of truth
 //! without making either build profile list Provider ids.
 
-pub(crate) const PROVIDER_SOURCES: &[(&str, &str)] =
+pub const PROVIDER_SOURCES: &[(&str, &str)] =
     include!(concat!(env!("OUT_DIR"), "/first_party_provider_sources.rs"));
 
-pub(crate) const HOST_SOURCES: &[(&str, &str)] =
+pub const HOST_SOURCES: &[(&str, &str)] =
     include!(concat!(env!("OUT_DIR"), "/first_party_host_sources.rs"));
 
 #[cfg(test)]

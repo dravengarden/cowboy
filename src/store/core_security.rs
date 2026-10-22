@@ -16,7 +16,7 @@ use crate::plugin_dir::PluginDir;
 use crate::plugin_storage::NamespaceBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HandoffPoint {
+pub enum HandoffPoint {
     Prepared,
     Marked,
     NamespacePrepared,
@@ -39,7 +39,7 @@ macro_rules! query_core {
 }
 
 impl Store {
-    pub(crate) async fn security_authority(&self) -> Result<Option<(Authority, Phase)>> {
+    pub async fn security_authority(&self) -> Result<Option<(Authority, Phase)>> {
         let row = query_core!(
             self,
             sqlx::query_as::<_, (String, String)>(
@@ -67,7 +67,7 @@ impl Store {
         .transpose()
     }
 
-    pub(crate) async fn require_legacy_security(&self) -> Result<()> {
+    pub async fn require_legacy_security(&self) -> Result<()> {
         ensure!(
             self.security_authority().await?.is_none(),
             "CoreSecurity authority requires core configuration; legacy storage fallback is forbidden"
@@ -77,7 +77,7 @@ impl Store {
 
     /// Server calls this immediately after `SQLx` migration, before restoring
     /// sessions, spawning writers, or staging any Plugin host.
-    pub(crate) async fn initialize_core_security(
+    pub async fn initialize_core_security(
         &self,
         config: Option<&Config>,
         dir: &PluginDir,
@@ -115,7 +115,7 @@ impl Store {
         }
     }
 
-    pub(crate) async fn open_core_passkeys(
+    pub async fn open_core_passkeys(
         &self,
         config: &Config,
         dir: &PluginDir,
@@ -123,8 +123,8 @@ impl Store {
         self.open_core_passkeys_with(config, dir, |_| Ok(())).await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn test_security_interruption(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn test_security_interruption(
         &self,
         config: &Config,
         dir: &PluginDir,

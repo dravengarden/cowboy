@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 /// Read authority is the host account. Remote implementations run the identical
 /// bounded query at the source; they never copy a database or ship an idle feed.
-pub(crate) trait LogSource {
+pub trait LogSource {
     fn query(&self, query: &Query) -> Result<Page>;
     fn metrics(&self, query: &Query) -> Result<Metrics>;
     fn status(&self) -> Result<Value>;
@@ -28,7 +28,7 @@ impl LogSource for SqliteStore {
     }
 }
 
-pub(crate) struct JsonlSource {
+pub struct JsonlSource {
     pub directory: PathBuf,
 }
 impl JsonlSource {
@@ -201,14 +201,14 @@ impl LogSource for JsonlSource {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Backend {
+pub enum Backend {
     #[default]
     Sqlite,
     Jsonl,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Source {
+pub struct Source {
     pub name: String,
     pub directory: PathBuf,
     #[serde(default)]
@@ -223,7 +223,7 @@ pub(crate) struct Source {
     #[serde(default = "default_command")]
     pub command: String,
 }
-pub(crate) fn default_command() -> String {
+pub fn default_command() -> String {
     "cowboy".into()
 }
 impl Source {
@@ -235,7 +235,7 @@ impl Source {
             }),
         })
     }
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.name.is_empty() && self.name.len() <= 128 && self.directory.is_absolute(),
             "invalid diagnostic source"
@@ -272,7 +272,7 @@ impl Source {
         );
         Ok(())
     }
-    pub(crate) async fn execute(&self, operation: Operation) -> Result<Value> {
+    pub async fn execute(&self, operation: Operation) -> Result<Value> {
         self.validate()?;
         if self.ssh.is_some() {
             return self.remote(operation).await;
@@ -366,13 +366,13 @@ impl Source {
         }
     }
 }
-pub(crate) fn quote(value: &str) -> String {
+pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Operation {
+pub enum Operation {
     Query {
         query: Query,
     },
@@ -387,19 +387,19 @@ pub(crate) enum Operation {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Rpc {
+pub struct Rpc {
     pub schema: u16,
     pub source: Source,
     pub operation: Operation,
 }
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Reply {
+pub struct Reply {
     pub schema: u16,
     pub result: Option<Value>,
     pub error: Option<String>,
 }
 
-pub(crate) fn execute_local(source: &Source, operation: Operation) -> Result<Value> {
+pub fn execute_local(source: &Source, operation: Operation) -> Result<Value> {
     source.validate()?;
     ensure!(
         source.ssh.is_none() && source.ssh_config.is_none(),
@@ -417,7 +417,7 @@ pub(crate) fn execute_local(source: &Source, operation: Operation) -> Result<Val
     }
 }
 
-pub(crate) fn load_sources(path: &std::path::Path) -> Result<Vec<Source>> {
+pub fn load_sources(path: &std::path::Path) -> Result<Vec<Source>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct File {

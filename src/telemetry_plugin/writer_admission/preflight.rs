@@ -16,13 +16,13 @@ enum WriterCheck {
 /// may override CLI input, and enrollment may replace it again. Inspection must
 /// not claim an effective owner or readiness from a policy's own declarations.
 #[derive(Debug, Serialize)]
-pub(crate) struct PreflightReport {
+pub struct PreflightReport {
     schema: &'static str,
     writer_policy: WriterCheck,
     not_checked: [&'static str; 6],
 }
 
-pub(crate) fn inspect(state_dir: &Path) -> Result<PreflightReport> {
+pub fn inspect(state_dir: &Path) -> Result<PreflightReport> {
     let policy = WriterAdmission::load_optional(&state_dir.join(MACHINE_POLICY_FILE))?;
     Ok(PreflightReport {
         schema: "dravengarden.cowboy.machine-telemetry-writer-preflight/v1",

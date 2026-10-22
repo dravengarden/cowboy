@@ -26,7 +26,7 @@ const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 /// Target of high-volume per-call evidence: retained in the local store,
 /// queryable with `cowboy logs`, and kept out of stderr (the journal), which
 /// otherwise repeated every executor call of every session.
-pub(crate) const EVIDENCE_ONLY: &str = "cowboy::evidence";
+pub const EVIDENCE_ONLY: &str = "cowboy::evidence";
 /// Writer health is rewritten (fsynced) at least this often, well within the
 /// 30 s staleness bound; sooner only when losses or failures change.
 const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
@@ -276,7 +276,7 @@ pub fn directory(default: &Path) -> PathBuf {
         })
 }
 
-pub(crate) fn init_stderr() {
+pub fn init_stderr() {
     // EnvFilter belongs only to stderr. A user's RUST_LOG=off must not disable
     // the independently bounded failure-evidence lane.
     let fmt = tracing_subscriber::fmt::layer()
@@ -359,7 +359,7 @@ pub fn init(directory: PathBuf, context: Context) -> Result<Guard> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Health {
+pub struct Health {
     schema: u16,
     instance: String,
     service: String,
@@ -527,17 +527,17 @@ fn health_paths(directory: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool)> 
 }
 
 #[derive(Default, Serialize, Deserialize)]
-pub(crate) struct HealthSummary {
+pub struct HealthSummary {
     compacted_records: u64,
     oldest_ms: i64,
     newest_ms: i64,
     issues: Vec<String>,
 }
 #[derive(Serialize)]
-pub(crate) struct HealthReport {
-    pub(crate) writers: Vec<Health>,
-    pub(crate) summary: HealthSummary,
-    pub(crate) inventory_truncated: bool,
+pub struct HealthReport {
+    pub writers: Vec<Health>,
+    pub summary: HealthSummary,
+    pub inventory_truncated: bool,
 }
 fn health_summary(directory: &Path) -> Result<HealthSummary> {
     let path = directory.join("writer-history.json");
@@ -546,7 +546,7 @@ fn health_summary(directory: &Path) -> Result<HealthSummary> {
     }
     Ok(serde_json::from_slice(&private_read(&path, 8192)?)?)
 }
-pub(crate) fn read_health(directory: &Path) -> Result<HealthReport> {
+pub fn read_health(directory: &Path) -> Result<HealthReport> {
     let (paths, inventory_truncated) = health_paths(directory, 4096)?;
     Ok(HealthReport {
         writers: paths
@@ -577,7 +577,7 @@ impl Health {
     }
 }
 
-pub(crate) fn health_issues(directory: &Path, from: i64) -> Result<Vec<String>> {
+pub fn health_issues(directory: &Path, from: i64) -> Result<Vec<String>> {
     let report = read_health(directory)?;
     let mut issues = Vec::new();
     if report.inventory_truncated {
@@ -596,7 +596,7 @@ pub(crate) fn health_issues(directory: &Path, from: i64) -> Result<Vec<String>> 
     }
     Ok(issues)
 }
-pub(crate) fn cleanup_health(directory: &Path, cutoff: i64) -> Result<()> {
+pub fn cleanup_health(directory: &Path, cutoff: i64) -> Result<()> {
     let mut records = Vec::new();
     for path in health_paths(directory, 8192)?.0 {
         let record: Health = serde_json::from_slice(&private_read(&path, 8192)?)?;
@@ -769,14 +769,14 @@ impl Visit for Fields {
 }
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) fn forward_runtime() -> bool {
+pub fn forward_runtime() -> bool {
     CAPTURE
         .get()
         .is_none_or(|capture| capture.forward.load(Ordering::Relaxed))
 }
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) fn runtime_spans(session: &str, records: &[crate::runtime_trace::SpanRecord]) {
+pub fn runtime_spans(session: &str, records: &[crate::runtime_trace::SpanRecord]) {
     use opentelemetry_proto::tonic::trace::v1::{Span, Status};
     let Some(capture) = CAPTURE.get() else {
         return;
@@ -813,7 +813,7 @@ pub(crate) fn runtime_spans(session: &str, records: &[crate::runtime_trace::Span
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) fn provider_usage(event: &crate::machine_protocol::ProviderUsageEvent) {
+pub fn provider_usage(event: &crate::machine_protocol::ProviderUsageEvent) {
     let Some(capture) = CAPTURE.get() else {
         return;
     };

@@ -105,7 +105,7 @@ just build
 Start a local Hub with SQLite persistence:
 
 ```sh
-COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy serve \
+COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy-controller serve \
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 

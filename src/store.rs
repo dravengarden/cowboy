@@ -34,17 +34,17 @@ use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-pub(crate) mod agent_api_operations;
+pub mod agent_api_operations;
 mod browser_devices;
 mod cardea_operations;
 mod copy;
 mod core_security;
-pub(crate) mod draft_documents;
+pub mod draft_documents;
 mod managed_calls;
-pub(crate) mod preferences;
-pub(crate) mod provider_accounts;
+pub mod preferences;
+pub mod provider_accounts;
 mod workspace_documents;
-pub(crate) use core_security::HandoffPoint;
+pub use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;
 mod sqlite;
@@ -53,7 +53,7 @@ mod usage_execution;
 
 use sqlite::SqliteStorage;
 
-pub(crate) use copy::postgres_to_sqlite;
+pub use copy::postgres_to_sqlite;
 
 use crate::core::{
     Envelope, Event, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, Status,
@@ -71,7 +71,7 @@ fn valid_machine_id(value: &str) -> bool {
 
 /// Allocate a new Machine id. Callers that omit `machine_id` from enrollment
 /// mint one of these instead of asking a person to invent a slug.
-pub(crate) fn generate_machine_id() -> Result<String> {
+pub fn generate_machine_id() -> Result<String> {
     let mut random = [0_u8; 8];
     std::fs::File::open("/dev/urandom")
         .context("opening OS randomness")?
@@ -438,7 +438,7 @@ pub struct Store {
     passkey_storage: std::sync::Arc<crate::core_passkeys::PasskeyBinding>,
 }
 
-pub(crate) struct PasskeySnapshot {
+pub struct PasskeySnapshot {
     pub user: Vec<crate::passkey::UserPasskey>,
     pub admin: Vec<crate::passkey::UserPasskey>,
     pub ceremonies: Vec<crate::passkey::ExternalPasskeyCeremonyRecord>,
@@ -1278,14 +1278,14 @@ impl Store {
         })
     }
 
-    pub(crate) async fn attach_passkey_storage(
+    pub async fn attach_passkey_storage(
         &mut self,
         namespace: &crate::plugin_storage::PluginNamespace,
     ) -> Result<()> {
         self.passkey_storage.attach(namespace, self).await
     }
 
-    pub(crate) fn artifacts(&self) -> crate::artifacts::ArtifactStore {
+    pub fn artifacts(&self) -> crate::artifacts::ArtifactStore {
         match &self.backend {
             StorageBackend::Postgres(storage) => storage.artifacts.clone(),
             StorageBackend::Sqlite(storage) => storage.artifacts.clone(),
@@ -1297,7 +1297,7 @@ impl Store {
     }
 
     #[must_use]
-    pub(crate) fn plugin_storage(
+    pub fn plugin_storage(
         &self,
         plugin_dir: crate::plugin_dir::PluginDir,
     ) -> crate::plugin_storage::PluginStorage {
@@ -1312,8 +1312,8 @@ impl Store {
         .with_core_store(self.clone())
     }
 
-    #[cfg(test)]
-    pub(crate) fn postgres_pool(&self) -> Option<&PgPool> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn postgres_pool(&self) -> Option<&PgPool> {
         match &self.backend {
             StorageBackend::Postgres(storage) => Some(&storage.pool),
             StorageBackend::Sqlite(_) => None,
@@ -1618,7 +1618,7 @@ impl Store {
         dispatch_storage!(self, reload_provider(meta))
     }
 
-    pub(crate) async fn execution_binding_matches(
+    pub async fn execution_binding_matches(
         &self,
         session_id: &str,
         record: &serde_json::Value,
@@ -1626,7 +1626,7 @@ impl Store {
         dispatch_storage!(self, execution_binding_matches(session_id, record))
     }
 
-    pub(crate) async fn commit_execution_binding(
+    pub async fn commit_execution_binding(
         &self,
         session_id: &str,
         expected: &serde_json::Value,
@@ -2363,7 +2363,7 @@ impl Store {
         dispatch_storage!(self, external_passkey_ceremony(transaction_hash, now_ms))
     }
 
-    pub(crate) async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+    pub async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
         dispatch_storage!(self, export_passkey_snapshot())
     }
 
@@ -2427,7 +2427,7 @@ impl Store {
 }
 
 impl PostgresStorage {
-    pub(crate) async fn execution_binding_matches(
+    pub async fn execution_binding_matches(
         &self,
         session_id: &str,
         record: &serde_json::Value,
@@ -2441,7 +2441,7 @@ impl PostgresStorage {
         .await?)
     }
 
-    pub(crate) async fn commit_execution_binding(
+    pub async fn commit_execution_binding(
         &self,
         session_id: &str,
         expected: &serde_json::Value,

@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, ensure};
 use sha2::{Digest as _, Sha256};
 
-pub(crate) const DEFAULT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
-pub(crate) const DEFAULT_RETAINED_FILES: usize = 8;
+pub const DEFAULT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_RETAINED_FILES: usize = 8;
 const DAY_MS: i64 = 86_400_000;
 const MIN_SEGMENT_BYTES: u64 = 64 * 1024;
 
-pub(crate) fn default_directory(data_dir: &Path) -> PathBuf {
+pub fn default_directory(data_dir: &Path) -> PathBuf {
     let identity = format!(
         "{}:{}",
         rustix::process::geteuid().as_raw(),
@@ -26,7 +26,7 @@ pub(crate) fn default_directory(data_dir: &Path) -> PathBuf {
     Path::new("/tmp").join(format!("cowboy-telemetry-{}", &digest[..20]))
 }
 
-pub(crate) struct TelemetryFile {
+pub struct TelemetryFile {
     directory: PathBuf,
     lock: WriterLock,
     file: File,
@@ -90,7 +90,7 @@ fn open_private(path: &Path) -> Result<File> {
 }
 
 impl TelemetryFile {
-    pub(crate) fn open(
+    pub fn open(
         directory: PathBuf,
         segment_bytes: u64,
         retained_files: usize,
@@ -184,7 +184,7 @@ impl TelemetryFile {
         Ok(writer)
     }
 
-    pub(crate) fn with_retention_seconds(mut self, seconds: u64) -> Result<Self> {
+    pub fn with_retention_seconds(mut self, seconds: u64) -> Result<Self> {
         ensure!(
             (60..=90 * 86400).contains(&seconds),
             "telemetry retention must be between one minute and 90 days"
@@ -305,7 +305,7 @@ impl TelemetryFile {
         Ok(())
     }
 
-    pub(crate) fn write(&mut self, records: &str, now_ms: i64) -> Result<()> {
+    pub fn write(&mut self, records: &str, now_ms: i64) -> Result<()> {
         self.validate_owner()?;
         ensure!(
             records.is_empty() || records.ends_with('\n'),

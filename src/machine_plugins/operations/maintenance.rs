@@ -46,7 +46,7 @@ fn sync_removal(plugin: &Path, projection: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn complete_absent_uninstall(
+pub fn complete_absent_uninstall(
     state_dir: &Path,
     service: &str,
     machine: &str,

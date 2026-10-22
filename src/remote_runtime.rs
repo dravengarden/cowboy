@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::core::{Event, Hub, Status, config_option_accepts};
 
-pub(crate) mod account_stop;
+pub mod account_stop;
 mod native_admission;
 mod startup_watch;
 use crate::runtime_wire::{
@@ -50,7 +50,7 @@ fn broker_retry_delay(backoff: &mut Duration, stable_connection: bool) -> Durati
 
 pub struct RemoteBootstrap {
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(dead_code, reason = "copied into Shared by the test constructor")
     )]
     socket: PathBuf,
@@ -134,7 +134,7 @@ pub struct RemoteRuntime {
     notify_rx: Mutex<Option<mpsc::UnboundedReceiver<()>>>,
 }
 
-pub(crate) struct SteeringDelivery {
+pub struct SteeringDelivery {
     shared: Arc<Shared>,
     key: (String, String),
     command_id: String,
@@ -174,7 +174,7 @@ pub struct RemoteRuntimeStats {
 }
 
 impl RemoteRuntime {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn new(
         hub: Hub,
@@ -195,7 +195,7 @@ impl RemoteRuntime {
     /// catching up. Controller restart otherwise has a multi-second window
     /// where the Machine WebSocket is authenticated but `RuntimeRouter` is
     /// empty, so a user send fails with "hawk is not connected".
-    pub(crate) fn connecting(
+    pub fn connecting(
         hub: Hub,
         socket: PathBuf,
         desired_generation: String,
@@ -242,7 +242,7 @@ impl RemoteRuntime {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn new_inner(
         hub: Hub,
         bootstrap: &RemoteBootstrap,
@@ -310,8 +310,8 @@ impl RemoteRuntime {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(hub: Hub, workers: Vec<WorkerSnapshot>) -> Arc<Self> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(hub: Hub, workers: Vec<WorkerSnapshot>) -> Arc<Self> {
         let (left, _right) = UnixStream::pair().expect("test runtime socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
@@ -330,13 +330,13 @@ impl RemoteRuntime {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn pending_for_test(&self) -> Vec<CoreCommand> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending_for_test(&self) -> Vec<CoreCommand> {
         self.shared.pending.lock().values().cloned().collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_native_transport_test(hub: Hub, recipient: String) -> Arc<Self> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_native_transport_test(hub: Hub, recipient: String) -> Arc<Self> {
         let mut runtime = Self::for_test(hub, vec![]);
         let runtime_mut = Arc::get_mut(&mut runtime).unwrap();
         Arc::get_mut(&mut runtime_mut.shared)
@@ -345,16 +345,16 @@ impl RemoteRuntime {
         runtime
     }
 
-    #[cfg(test)]
-    pub(crate) fn connect_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn connect_for_test(&self) {
         self.shared
             .account_stop_epoch
             .fetch_add(1, Ordering::AcqRel);
         self.shared.connected.store(true, Ordering::Release);
     }
 
-    #[cfg(all(test, feature = "machine-host"))]
-    pub(crate) async fn project_trace_fixture(&self, frame: Frame) {
+    #[cfg(all(any(test, feature = "test-support"), feature = "machine-host"))]
+    pub async fn project_trace_fixture(&self, frame: Frame) {
         handle_frame(&self.shared, frame, &mut tokio::io::sink())
             .await
             .unwrap();
@@ -519,7 +519,7 @@ impl RemoteRuntime {
     /// The connected worker's actual options, never the Hub's optimistic UI
     /// projection. A selected preset is not evidence that the native runtime
     /// applied it, and retained snapshots cannot admit a new managed prompt.
-    pub(crate) fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
+    pub fn observed_configuration(&self, session_id: &str) -> Option<serde_json::Value> {
         if !self.connected() || self.shared.config_startups.lock().contains(session_id) {
             return None;
         }
@@ -534,7 +534,7 @@ impl RemoteRuntime {
         worker.config_options.clone()
     }
 
-    pub(crate) fn execution_owner_matches(
+    pub fn execution_owner_matches(
         &self,
         request: &crate::execution_protocol::RuntimeRequest,
     ) -> bool {
@@ -632,7 +632,7 @@ impl RemoteRuntime {
     }
 
     /// Content-free evidence for the host Operator; never exposes prompt bodies.
-    pub(crate) fn delivery_diagnostics(&self, session_id: &str) -> serde_json::Value {
+    pub fn delivery_diagnostics(&self, session_id: &str) -> serde_json::Value {
         let prompts: Vec<_> = self
             .shared
             .pending
@@ -728,7 +728,7 @@ impl RemoteRuntime {
         self.ensure(session);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn prompt(
         &self,
         session_id: &str,
@@ -738,7 +738,7 @@ impl RemoteRuntime {
         self.prompt_traced(session_id, content, cmid, None)
     }
 
-    pub(crate) fn attach_telemetry(
+    pub fn attach_telemetry(
         &self,
         machine: String,
         telemetry: crate::observability::Observability,
@@ -746,12 +746,12 @@ impl RemoteRuntime {
         *self.shared.telemetry.lock() = Some((machine, telemetry));
     }
 
-    pub(crate) fn attach_native_admission(&self, machine: String, store: crate::store::Store) {
+    pub fn attach_native_admission(&self, machine: String, store: crate::store::Store) {
         *self.shared.native_store.lock() = Some((machine, store));
     }
 
-    #[cfg(test)]
-    pub(crate) async fn send_native_test<W: tokio::io::AsyncWrite + Unpin>(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn send_native_test<W: tokio::io::AsyncWrite + Unpin>(
         &self,
         writer: &mut W,
         command: CoreCommand,
@@ -759,8 +759,8 @@ impl RemoteRuntime {
         native_admission::send(&self.shared, writer, command).await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn snapshot_native_test(&self, worker: WorkerSnapshot) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn snapshot_native_test(&self, worker: WorkerSnapshot) -> bool {
         self.shared.workers.lock().clear();
         let id = worker.session_id.clone();
         handle_frame(
@@ -775,8 +775,8 @@ impl RemoteRuntime {
         self.shared.workers.lock().contains_key(&id)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn event_native_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn event_native_test(
         &self,
         worker: &WorkerSnapshot,
         cached: bool,
@@ -798,7 +798,7 @@ impl RemoteRuntime {
         admitted
     }
 
-    pub(crate) fn prompt_traced(
+    pub fn prompt_traced(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
@@ -825,10 +825,7 @@ impl RemoteRuntime {
         command_id
     }
 
-    pub(crate) fn delivery_controls(
-        &self,
-        session_id: &str,
-    ) -> crate::runtime_wire::DeliveryControls {
+    pub fn delivery_controls(&self, session_id: &str) -> crate::runtime_wire::DeliveryControls {
         if !self.shared.delivery_controls_protocol || !self.connected() {
             return crate::runtime_wire::DeliveryControls::default();
         }
@@ -840,7 +837,7 @@ impl RemoteRuntime {
             .unwrap_or_default()
     }
 
-    pub(crate) fn delivery_target(
+    pub fn delivery_target(
         &self,
         session_id: &str,
     ) -> Option<crate::send_delivery::DeliveryTarget> {
@@ -860,8 +857,8 @@ impl RemoteRuntime {
 
     /// Requires durable caller admission before entry. A timeout never admits
     /// a replacement prompt; its original receipt remains uncertain.
-    #[cfg(test)]
-    pub(crate) fn start_steer(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn start_steer(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
@@ -870,7 +867,7 @@ impl RemoteRuntime {
         self.start_steer_targeted(session_id, content, cmid, None, false)
     }
 
-    pub(crate) fn start_steer_targeted(
+    pub fn start_steer_targeted(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
@@ -939,7 +936,7 @@ impl RemoteRuntime {
         })
     }
 
-    pub(crate) fn start_cancel_turn(
+    pub fn start_cancel_turn(
         &self,
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
@@ -976,7 +973,7 @@ impl RemoteRuntime {
         })
     }
 
-    pub(crate) fn delivery_turn_finished(
+    pub fn delivery_turn_finished(
         &self,
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
@@ -1082,7 +1079,7 @@ impl RemoteRuntime {
         );
     }
 
-    pub(crate) fn hibernation_pending(&self, session_id: &str) -> bool {
+    pub fn hibernation_pending(&self, session_id: &str) -> bool {
         self.shared.pending.lock().values().any(|command| {
             matches!(command, CoreCommand::HibernateSession { session_id: pending, .. } if pending == session_id)
         })
@@ -1167,7 +1164,7 @@ impl RemoteRuntime {
         );
     }
 
-    pub(crate) fn worker_matches_execution(
+    pub fn worker_matches_execution(
         &self,
         session_id: &str,
         binding: &crate::execution_environment::BindingV1,
@@ -1175,7 +1172,7 @@ impl RemoteRuntime {
         self.worker_execution_binding(session_id).as_ref() == Some(binding)
     }
 
-    pub(crate) fn worker_execution_binding(
+    pub fn worker_execution_binding(
         &self,
         session_id: &str,
     ) -> Option<crate::execution_environment::BindingV1> {
@@ -1218,7 +1215,7 @@ impl RemoteRuntime {
         );
     }
 
-    pub(crate) fn retry_execution_recovery(&self, session: StartSession) {
+    pub fn retry_execution_recovery(&self, session: StartSession) {
         self.park_recovery_prompts(&session.session_id);
         self.reset(session);
     }
@@ -1243,7 +1240,7 @@ impl RemoteRuntime {
     /// handed off by the Hub has been acknowledged by its worker. If the
     /// runtime stays unavailable through the deadline, return prompts to the
     /// durable Hub queue before the Postgres writer is closed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn graceful_shutdown(&self, timeout: Duration) {
         let deadline = tokio::time::Instant::now() + timeout;
         while !self.shared.pending.lock().is_empty() && tokio::time::Instant::now() < deadline {

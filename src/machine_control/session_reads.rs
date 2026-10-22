@@ -12,7 +12,7 @@ use crate::core::SessionCodeScope;
 /// Private construction, no serde: equal names, paths or epochs cannot mint a
 /// route. Cloning borrows the original observation, never a replacement route.
 #[derive(Clone, Debug)]
-pub(crate) struct SessionReadScope {
+pub struct SessionReadScope {
     owner: Arc<()>,
     session: SessionCodeScope,
     connection: Option<ConnectionToken>,
@@ -52,15 +52,15 @@ impl Hash for SessionReadScope {
 }
 
 impl SessionReadScope {
-    pub(crate) fn session(&self) -> &SessionCodeScope {
+    pub fn session(&self) -> &SessionCodeScope {
         &self.session
     }
 
-    pub(crate) fn connection(&self) -> Option<&ConnectionToken> {
+    pub fn connection(&self) -> Option<&ConnectionToken> {
         self.connection.as_ref()
     }
 
-    pub(crate) fn string_bytes(&self) -> usize {
+    pub fn string_bytes(&self) -> usize {
         self.session.string_bytes()
             + self.remote_root.as_ref().map_or(0, String::len)
             + self.connection.as_ref().map_or(0, |connection| {
@@ -70,7 +70,7 @@ impl SessionReadScope {
 }
 
 impl MachineControl {
-    pub(crate) fn session_read_scope(
+    pub fn session_read_scope(
         &self,
         service: &str,
         session: SessionCodeScope,
@@ -107,7 +107,7 @@ impl MachineControl {
     /// Called only after original HTTP credential and Session visibility checks.
     /// Older Machines retain their explicitly legacy read path; negotiation
     /// cannot make them claim the new filesystem observation.
-    pub(crate) async fn observe_session_read_root(
+    pub async fn observe_session_read_root(
         &self,
         scope: &mut SessionReadScope,
     ) -> Result<(), String> {
@@ -162,7 +162,7 @@ impl MachineControl {
         .map_err(|_| "Session root observation timed out".to_owned())?
     }
 
-    pub(crate) async fn session_read_root_is_current(&self, scope: &SessionReadScope) -> bool {
+    pub async fn session_read_root_is_current(&self, scope: &SessionReadScope) -> bool {
         if !self.session_read_scope_is_current(scope) {
             return false;
         }
@@ -184,7 +184,7 @@ impl MachineControl {
             && self.session_read_scope_is_current(scope)
     }
 
-    pub(crate) fn session_read_scope_is_current(&self, scope: &SessionReadScope) -> bool {
+    pub fn session_read_scope_is_current(&self, scope: &SessionReadScope) -> bool {
         Arc::ptr_eq(&self.read_owner, &scope.owner)
             && scope
                 .connection
@@ -197,10 +197,7 @@ impl MachineControl {
 
     /// Local execution is chosen only from this original observation. Stored
     /// colocated flags cannot make a disconnected Machine a local executor.
-    pub(crate) fn session_read_is_colocated(
-        &self,
-        scope: &SessionReadScope,
-    ) -> Result<bool, String> {
+    pub fn session_read_is_colocated(&self, scope: &SessionReadScope) -> Result<bool, String> {
         let colocated = {
             let live = self.live.read();
             if !Arc::ptr_eq(&self.read_owner, &scope.owner) {
@@ -222,7 +219,7 @@ impl MachineControl {
         Ok(true)
     }
 
-    pub(crate) async fn code_request_in_session(
+    pub async fn code_request_in_session(
         &self,
         scope: &SessionReadScope,
         operation: CodeOperation,

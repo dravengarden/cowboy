@@ -125,7 +125,7 @@ export function agentLabel(agent: string): string {
 }
 
 /** Agents of one family review alike; an agent never calls its own family
- * (mirrors `same_family` in src/server/agent_tools.rs). */
+ * (mirrors `same_family` in components/server/src/server/agent_tools.rs). */
 export function sameFamily(left: string, right: string): boolean {
   const family = (agent: string): string =>
     ["claude", "codex"].find((name) =>

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct Preferences {
+pub struct Preferences {
     pub scope: String,
     pub revision: i64,
     pub values: Value,
@@ -13,26 +13,26 @@ pub(crate) struct Preferences {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PreferenceChange {
+pub struct PreferenceChange {
     pub scope: String,
     pub expected_revision: i64,
     pub changes: Value,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum PreferenceResult {
+pub enum PreferenceResult {
     Applied(Preferences),
     Conflict(Preferences),
     Invalid(&'static str),
 }
 
 /// Days a trashed session or folder is kept before permanent deletion.
-pub(crate) const TRASH_RETENTION_DEFAULT_DAYS: i64 = 30;
-pub(crate) const TRASH_RETENTION_MAX_DAYS: i64 = 365;
+pub const TRASH_RETENTION_DEFAULT_DAYS: i64 = 30;
+pub const TRASH_RETENTION_MAX_DAYS: i64 = 365;
 
 /// The owner's Trash retention in days, or the default for a missing or
 /// malformed value.
-pub(crate) fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
+pub fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
     preferences
         .and_then(|prefs| prefs.values.get("retention_days"))
         .and_then(Value::as_i64)
@@ -40,7 +40,7 @@ pub(crate) fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
         .unwrap_or(TRASH_RETENTION_DEFAULT_DAYS)
 }
 
-pub(crate) fn defaults(scope: &str) -> Option<Preferences> {
+pub fn defaults(scope: &str) -> Option<Preferences> {
     let values = match scope {
         "about" => json!({"usage_order":[],"machine_order":[]}),
         "subscriptions" => json!({"legacy_labels":{}}),
@@ -54,7 +54,7 @@ pub(crate) fn defaults(scope: &str) -> Option<Preferences> {
     })
 }
 
-pub(crate) fn schema() -> Value {
+pub fn schema() -> Value {
     json!({"scopes":{"zed":{"storage":"database via existing folder/mobile-review sync","ownership":"calling session or its owner's folder",
         "read":"cowboy.preferences.get('zed')",
         "update":{"action":"preferences.update","arguments":{"scope":"zed","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
@@ -119,11 +119,7 @@ fn valid(change: &PreferenceChange) -> bool {
 }
 
 impl Store {
-    pub(crate) async fn preferences(
-        &self,
-        owner: &str,
-        scope: &str,
-    ) -> Result<Option<Preferences>> {
+    pub async fn preferences(&self, owner: &str, scope: &str) -> Result<Option<Preferences>> {
         let Some(default) = defaults(scope) else {
             return Ok(None);
         };
@@ -150,7 +146,7 @@ impl Store {
         ))
     }
 
-    pub(crate) async fn preference_receipt(
+    pub async fn preference_receipt(
         &self,
         owner: &str,
         operation: &str,
@@ -166,7 +162,7 @@ impl Store {
         Ok(value.map(|v| serde_json::from_str(&v)).transpose()?)
     }
 
-    pub(crate) async fn update_preferences(
+    pub async fn update_preferences(
         &self,
         owner: &str,
         operation: &str,

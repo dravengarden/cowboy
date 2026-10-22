@@ -159,7 +159,7 @@ impl ArtifactStore {
 
     /// Explicit binary deliveries also persist small images. Callers validate
     /// the format and limits before publishing a managed artifact.
-    pub(crate) fn put_bytes(&self, bytes: &[u8], mime: &str) -> Result<String> {
+    pub fn put_bytes(&self, bytes: &[u8], mime: &str) -> Result<String> {
         let hash = format!("{:x}", Sha256::digest(bytes));
         let extension = extension_for_mime(mime);
         let name = format!("{hash}.{extension}");

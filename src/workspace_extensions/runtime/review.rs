@@ -121,7 +121,7 @@ pub(super) async fn json(program: &str, remote: &Remote, endpoint: &str) -> Resu
     serde_json::from_slice(&bytes).map_err(|_| Failure::ReviewUnavailable)
 }
 
-pub(crate) async fn read_review(
+pub async fn read_review(
     remote: &Remote,
     number: &str,
     read: &ReviewRead,

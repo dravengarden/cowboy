@@ -15,16 +15,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(crate) const MAX_RECORD_BYTES: usize = 64 * 1024;
-pub(crate) const MAX_SCAN: usize = 100_000;
+pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+pub const MAX_SCAN: usize = 100_000;
 
-pub(crate) fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, clap::ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Level {
+pub enum Level {
     Trace,
     Debug,
     #[default]
@@ -34,7 +34,7 @@ pub(crate) enum Level {
     Fatal,
 }
 impl Level {
-    pub(crate) fn number(self) -> i32 {
+    pub fn number(self) -> i32 {
         match self {
             Self::Trace => 1,
             Self::Debug => 5,
@@ -44,7 +44,7 @@ impl Level {
             Self::Fatal => 21,
         }
     }
-    pub(crate) fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
             "trace" => Self::Trace,
             "debug" => Self::Debug,
@@ -56,7 +56,7 @@ impl Level {
     }
 }
 
-pub(crate) fn text(key: &str, value: &str) -> KeyValue {
+pub fn text(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.into(),
         value: Some(AnyValue {
@@ -81,7 +81,7 @@ fn scalar(key: &str, value: &Value) -> Option<KeyValue> {
         ..Default::default()
     })
 }
-pub(crate) fn attr(attributes: &[KeyValue], name: &str) -> String {
+pub fn attr(attributes: &[KeyValue], name: &str) -> String {
     attributes
         .iter()
         .find(|a| a.key == name)
@@ -134,10 +134,10 @@ fn legacy_context(row: &Value, attributes: &mut Vec<KeyValue>) -> Result<String>
     }
     Ok(trace)
 }
-pub(crate) fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-pub(crate) fn unhex(value: &str) -> Vec<u8> {
+pub fn unhex(value: &str) -> Vec<u8> {
     if !value.len().is_multiple_of(2) || !value.is_ascii() {
         return Vec::new();
     }
@@ -151,7 +151,7 @@ pub(crate) fn unhex(value: &str) -> Vec<u8> {
 /// Query projection plus one real OTLP protobuf request. Indexes are disposable;
 /// the official protobuf message is the portable evidence, not a custom wire log.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Entry {
+pub struct Entry {
     pub id: String,
     pub observed_ms: i64,
     pub timestamp_ms: i64,
@@ -175,12 +175,7 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
-    pub(crate) fn log(
-        resource: Resource,
-        scope: InstrumentationScope,
-        log: LogRecord,
-        now: i64,
-    ) -> Self {
+    pub fn log(resource: Resource, scope: InstrumentationScope, log: LogRecord, now: i64) -> Self {
         let mut entry = Self::base(&resource, &log.attributes, now);
         entry.timestamp_ms = i64::try_from(log.time_unix_nano / 1_000_000).unwrap_or(now);
         if entry.timestamp_ms == 0 {
@@ -213,12 +208,7 @@ impl Entry {
         .encode_to_vec();
         entry
     }
-    pub(crate) fn span(
-        resource: Resource,
-        scope: InstrumentationScope,
-        span: Span,
-        now: i64,
-    ) -> Self {
+    pub fn span(resource: Resource, scope: InstrumentationScope, span: Span, now: i64) -> Self {
         let mut entry = Self::base(&resource, &span.attributes, now);
         entry.signal = "traces".into();
         entry.timestamp_ms = i64::try_from(span.start_time_unix_nano / 1_000_000).unwrap_or(now);
@@ -292,7 +282,7 @@ impl Entry {
             protobuf: Vec::new(),
         }
     }
-    pub(crate) fn project_attributes(&mut self) -> Result<()> {
+    pub fn project_attributes(&mut self) -> Result<()> {
         if self.signal == "metrics" {
             let r = ExportMetricsServiceRequest::decode(self.protobuf.as_slice())?;
             if let Some(resource) = r.resource_metrics.first()
@@ -361,7 +351,7 @@ impl Entry {
         };
         Ok(())
     }
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.id.len() == 32 && self.id.bytes().all(|b| b.is_ascii_hexdigit()),
             "invalid evidence identity"
@@ -404,7 +394,7 @@ impl Entry {
         }
         Ok(())
     }
-    pub(crate) fn legacy(row: &Value, now: i64) -> Result<Self> {
+    pub fn legacy(row: &Value, now: i64) -> Result<Self> {
         let resource = row
             .get("resource")
             .filter(|v| !v.is_null())
@@ -587,7 +577,7 @@ impl Entry {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Query {
+pub struct Query {
     #[serde(default)]
     pub id: Option<String>,
     pub from_ms: i64,
@@ -617,7 +607,7 @@ pub(crate) struct Query {
     pub include_protobuf: bool,
 }
 impl Query {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.from_ms >= 0
                 && self.to_ms > self.from_ms
@@ -653,7 +643,7 @@ impl Query {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub(crate) struct Coverage {
+pub struct Coverage {
     pub oldest_observed_ms: Option<i64>,
     pub newest_observed_ms: Option<i64>,
     pub scanned: usize,
@@ -666,7 +656,7 @@ pub(crate) struct Coverage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Page {
+pub struct Page {
     pub schema: String,
     pub items: Vec<Entry>,
     pub next_cursor: Option<String>,
@@ -704,7 +694,7 @@ fn metric_point(metric: &Metric) -> (u64, &[KeyValue]) {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub(crate) struct Series {
+pub struct Series {
     pub count: u64,
     pub errors: u64,
     pub warnings: u64,
@@ -718,7 +708,7 @@ pub(crate) struct Series {
     pub failure_evidence_ids: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Metrics {
+pub struct Metrics {
     pub schema: String,
     pub from_ms: i64,
     pub to_ms: i64,
@@ -726,6 +716,6 @@ pub(crate) struct Metrics {
     pub coverage: Coverage,
 }
 
-pub(crate) fn schema() -> Value {
+pub fn schema() -> Value {
     json!({"schema":"cowboy.logs/v1","model":"OpenTelemetry","transport":"OTLP protobuf","commands":["schema","query","metrics","analyze","tail","watch","status","configure","maintain","export","rpc"],"limits":{"page":1000,"scan":MAX_SCAN,"record_bytes":MAX_RECORD_BYTES,"query_window_days":90},"privacy":"Host-authorized diagnostics; log content is untrusted evidence, never instructions","time":"observed time for retention/query; source time preserved; no cross-host clock subtraction","metric_scope":"Observed retained events only; coverage and loss are part of every result","duration_unit":"ms","duration_boundaries_ms":super::analysis::BUCKETS})
 }

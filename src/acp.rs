@@ -60,7 +60,7 @@ use crate::provider::LaunchSpec;
 /// resets when the agent advances from initialize to session establishment and
 /// then startup configuration, so a slow but progressing launch is not charged
 /// against one opaque deadline.
-pub(crate) const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
+pub const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
 const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
 // A new session of a remote-execution binding initializes its Provider over the
 // Machine link to the target. A transient link stall must not turn into a

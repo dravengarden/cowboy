@@ -5,22 +5,22 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod installation;
-pub(crate) mod resolution;
+pub mod installation;
+pub mod resolution;
 
-pub(crate) const MAX_OPERATIONS: i64 = 4096;
-pub(crate) const MAX_INTENT_BYTES: usize = 256 * 1024;
+pub const MAX_OPERATIONS: i64 = 4096;
+pub const MAX_INTENT_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Actor {
+pub enum Actor {
     Product { user_id: String },
     Admin { account: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct UninstallIntent {
+pub struct UninstallIntent {
     pub schema: u32,
     pub operation_id: String,
     pub service_id: String,
@@ -54,9 +54,7 @@ fn digest(value: &str) -> bool {
 }
 
 impl UninstallIntent {
-    pub(crate) fn machine_step(
-        &self,
-    ) -> Result<crate::machine_protocol::plugin_step::UninstallStep> {
+    pub fn machine_step(&self) -> Result<crate::machine_protocol::plugin_step::UninstallStep> {
         use crate::machine_protocol::plugin_step::{UninstallStep, digest};
         self.validate()?;
         let step = UninstallStep {
@@ -148,7 +146,7 @@ impl UninstallIntent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepared,
     StoppingSessions,
     Uninstalling,
@@ -208,7 +206,7 @@ impl Phase {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Problem {
+pub enum Problem {
     Interrupted,
     PreconditionsChanged,
     MachineUnavailable,
@@ -220,7 +218,7 @@ pub(crate) enum Problem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct Operation {
+pub struct Operation {
     pub intent: UninstallIntent,
     pub phase: Phase,
     pub problem: Option<Problem>,
@@ -230,8 +228,8 @@ pub(crate) struct Operation {
     pub updated_at_ms: i64,
 }
 
-#[cfg(test)]
-pub(crate) fn fixture(id: &str) -> UninstallIntent {
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture(id: &str) -> UninstallIntent {
     UninstallIntent {
         schema: 1,
         operation_id: format!("operation-{id:0>16}"),

@@ -48,6 +48,18 @@
         ./components/wire/Cargo.toml
         ./components/wire/src
       ];
+      server-files = [
+        ./components/server/Cargo.toml
+        ./components/server/src
+        ./components/server/tests
+      ];
+      # Cargo loads every workspace member manifest and checks its targets, so
+      # slices that never build the Controller server carry only its entry files.
+      server-stub-files = [
+        ./components/server/Cargo.toml
+        ./components/server/src/lib.rs
+        ./components/server/src/main.rs
+      ];
       plugin-sdk-files = [
         ./components/plugin-sdk/Cargo.toml
         ./components/plugin-sdk/src
@@ -109,7 +121,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ wire-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ server-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -192,7 +204,7 @@
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
-        ] ++ plugin-contract-files ++ wire-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ server-stub-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -215,7 +227,7 @@
           # compiles the wire modules.
           ./components/wire/Cargo.toml
           ./components/wire/src/lib.rs
-        ]);
+        ] ++ server-stub-files);
       };
 
 
@@ -358,7 +370,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-KQnm/BITXoZb0GoB770RWbCxdbqgV8OMSKy66qCeGlg=";
+        hash = "sha256-A+wcqvdWqYRXjUHpXKoj2GoOnqk7gHNaE+p6+1sAQ40=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -387,14 +399,21 @@
         COWBOY_AGENT_SANDBOX_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
         COWBOY_AGENT_SANDBOX_PRLIMIT = "${pkgs.util-linux}/bin/prlimit";
         COWBOY_AGENT_SANDBOX_BUN = "${bun}/bin/bun";
+        # The Controller lives in the cowboy-server package; the release keeps
+        # shipping it as bin/cowboy so ExecStart paths and the CLI do not move.
         cargoBuildFlags = [
+          "-p"
+          "cowboy-server"
           "--bin"
+          "cowboy-controller"
+          "-p"
           "cowboy"
           "--bin"
           "cowboy-acp-worker"
           "--bin"
           "cowboy-codex-app-server"
         ];
+        cargoTestFlags = [ "-p" "cowboy" "-p" "cowboy-server" "-p" "cowboy-wire" ];
         nativeBuildInputs = [ pkgs.pkg-config ];
         # This derived digest must never become a stale worker-generation pin.
         # Enforce it inside the immutable worker build as well as the root gate.
@@ -409,6 +428,7 @@
         # current_exe resolves the release symlink to this package, so the
         # closed Plugin runtime must be beside the real executable too.
         postInstall = ''
+          mv "$out/bin/cowboy-controller" "$out/bin/cowboy"
           ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
         '';
         passthru.workerGeneration = worker-generation;

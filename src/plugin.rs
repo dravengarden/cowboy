@@ -88,7 +88,7 @@ const FIRST_PARTY_PLUGIN_SOURCES: &[&str] =
     include!(concat!(env!("OUT_DIR"), "/first_party_plugins.rs"));
 const COMPONENT_REGISTRY_SOURCE: &str = include_str!("../components/registry.json");
 
-pub(crate) fn first_party_plugins() -> &'static [PluginManifest] {
+pub fn first_party_plugins() -> &'static [PluginManifest] {
     static PLUGINS: OnceLock<Vec<PluginManifest>> = OnceLock::new();
     PLUGINS.get_or_init(|| {
         FIRST_PARTY_PLUGIN_SOURCES
@@ -107,7 +107,7 @@ pub(crate) fn first_party_plugins() -> &'static [PluginManifest] {
     })
 }
 
-pub(crate) fn active_component_release() -> &'static str {
+pub fn active_component_release() -> &'static str {
     component_registry().active_release.as_str()
 }
 

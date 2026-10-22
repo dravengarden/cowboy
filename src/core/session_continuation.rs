@@ -4,7 +4,7 @@ use crate::session_folders::FolderActor;
 use serde_json::json;
 
 impl Hub {
-    pub(crate) fn continuation_folder(
+    pub fn continuation_folder(
         &self,
         source: &str,
         actor: &FolderActor,
@@ -21,7 +21,7 @@ impl Hub {
 
     /// The caller has admitted a new, fenced destination. All sidebar changes
     /// share the normal sync gate so a concurrent move cannot split the snapshot.
-    pub(crate) fn place_continuation(
+    pub fn place_continuation(
         &self,
         source: &str,
         destination: &str,

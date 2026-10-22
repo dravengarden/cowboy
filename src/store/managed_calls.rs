@@ -94,7 +94,7 @@ impl Store {
     ) -> Result<bool> {
         dispatch!(self, dismiss_managed_call(parent, id, dismissed))
     }
-    pub(crate) async fn managed_child(&self, parent: &str, child: &str) -> Result<Option<Record>> {
+    pub async fn managed_child(&self, parent: &str, child: &str) -> Result<Option<Record>> {
         dispatch!(self, managed_child(parent, child))
     }
     pub async fn managed_call(&self, parent: &str, id: &str) -> Result<Option<Record>> {

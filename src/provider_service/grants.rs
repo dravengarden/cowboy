@@ -10,7 +10,7 @@ mod promotion;
 /// Canonical candidate binding. Only this digest, never the serialized bundle,
 /// belongs in the DB journal. The caller separately verifies the signed release
 /// and native identity evidence before preparing the operation.
-pub(crate) fn candidate_fingerprint(
+pub fn candidate_fingerprint(
     package: &ProviderPackage,
     bundle: &PortableCredentialBundle,
     identity_fingerprint: &str,
@@ -47,23 +47,23 @@ fn validate_candidate(
     Ok(())
 }
 mod refresh;
-pub(crate) mod revocation;
+pub mod revocation;
 
 /// Recovery describes history only. It is never dispatch authorization.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Recovery {
+pub struct Recovery {
     pub receipt: Receipt,
     pub cleanup_applied: bool,
 }
 
 /// Constructible only after a durable vault write or authenticated vault read.
-pub(crate) struct VerifiedCommit {
+pub struct VerifiedCommit {
     intent_hash: String,
     generation: u64,
 }
 
 impl VerifiedCommit {
-    pub(crate) fn generation_for(&self, intent: &Receipt) -> Result<u64> {
+    pub fn generation_for(&self, intent: &Receipt) -> Result<u64> {
         ensure!(
             self.intent_hash == intent_hash(intent)?,
             "Provider grant intent mismatch"
@@ -83,7 +83,7 @@ fn intent_hash(intent: &Receipt) -> Result<String> {
 impl ProviderAuthService {
     /// Resolve an exact committed operation, then recheck current authority.
     /// Missing routes never fall back to legacy credentials or another account.
-    pub(crate) async fn seal_current_grant(
+    pub async fn seal_current_grant(
         &self,
         store: &crate::store::Store,
         machine: &str,
@@ -113,7 +113,7 @@ impl ProviderAuthService {
 
     /// Called only inside current admission. The authenticated current vault
     /// generation must belong to, and not predate, this committed login lineage.
-    pub(crate) fn seal_admitted_grant(
+    pub fn seal_admitted_grant(
         &self,
         admission: &crate::store::provider_accounts::grants::Admission,
     ) -> Result<SealedProviderAuth> {
@@ -133,7 +133,7 @@ impl ProviderAuthService {
     /// Resume one durable operation after an uncertain response or restart.
     /// The Controller supplies the currently enrolled recipient; this method
     /// neither opens new grants nor executes native login/credential refresh.
-    pub(crate) async fn reconcile_grant(
+    pub async fn reconcile_grant(
         &self,
         store: &crate::store::Store,
         owner: &str,
@@ -162,7 +162,7 @@ impl ProviderAuthService {
 
     /// Reconcile a DB-cancelled promotion using compare-and-swap. Never erase a
     /// newer login or refresh. Retain a wipe tombstone for replica cleanup.
-    pub(crate) fn discard_cancelled_grant(&self, cancelled: &Receipt) -> Result<bool> {
+    pub fn discard_cancelled_grant(&self, cancelled: &Receipt) -> Result<bool> {
         ensure!(
             cancelled.phase == Phase::Cancelled,
             "Provider grant is not cancelled"
@@ -225,7 +225,7 @@ impl ProviderAuthService {
     /// Authenticate exact durable state without replaying a login or write.
     /// None means no matching commit exists; callers must not guess success from
     /// a generation number. The DB and current enrollment still govern delivery.
-    pub(crate) fn recover_grant(&self, intent: &Receipt) -> Result<Option<VerifiedCommit>> {
+    pub fn recover_grant(&self, intent: &Receipt) -> Result<Option<VerifiedCommit>> {
         let hash = self.validate_grant_intent(intent)?;
         let providers = self.providers.read();
         let Some(stored) = providers.get(&intent.provider_id) else {
@@ -246,7 +246,7 @@ impl ProviderAuthService {
 
     /// The caller has already verified the fresh native candidate, signed
     /// release and DB intent. Commit one Machine grant, never a shared scope.
-    pub(crate) fn commit_grant(
+    pub fn commit_grant(
         &self,
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,

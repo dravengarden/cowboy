@@ -42,11 +42,11 @@ pub struct PluginStorage {
 #[derive(Clone)]
 pub struct PluginNamespace {
     plugin_id: String,
-    pub(crate) backend: NamespaceBackend,
+    pub backend: NamespaceBackend,
 }
 
 #[derive(Clone)]
-pub(crate) enum NamespaceBackend {
+pub enum NamespaceBackend {
     Postgres { pool: PgPool, schema: String },
     Sqlite(SqlitePool),
 }
@@ -82,7 +82,7 @@ impl PluginStorage {
         &self.plugin_dir
     }
 
-    pub(crate) fn with_core_store(mut self, store: crate::store::Store) -> Self {
+    pub fn with_core_store(mut self, store: crate::store::Store) -> Self {
         self.core_store = Some(store);
         self
     }
@@ -399,7 +399,7 @@ fn validate_applied_migrations(
     Ok(())
 }
 
-pub(crate) async fn set_postgres_search_path(
+pub async fn set_postgres_search_path(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     schema: &str,
 ) -> Result<()> {

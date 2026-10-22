@@ -28,7 +28,7 @@ use crate::runtime_wire::{
 
 mod account_worker;
 mod cleanups;
-pub(crate) mod deletions;
+pub mod deletions;
 mod incarnations;
 mod namespace;
 mod systemd_exit;
@@ -386,7 +386,7 @@ struct DeletedWorkspace {
 /// It holds the broker weakly, so it never keeps one alive, and is empty until a
 /// broker attaches. Counts and flags only; see `crate::durable_state`.
 #[derive(Clone, Default)]
-pub(crate) struct DurableStateView(Arc<Mutex<Option<std::sync::Weak<Broker>>>>);
+pub struct DurableStateView(Arc<Mutex<Option<std::sync::Weak<Broker>>>>);
 
 impl DurableStateView {
     fn attach(&self, broker: &Arc<Broker>) {
@@ -395,7 +395,7 @@ impl DurableStateView {
 
     /// `None` until a broker is attached (or after it ended). Each dataset is
     /// read separately, so this is not an atomic snapshot across datasets.
-    pub(crate) fn status(&self) -> Option<crate::durable_state::DurableState> {
+    pub fn status(&self) -> Option<crate::durable_state::DurableState> {
         let broker = self.0.lock().as_ref()?.upgrade()?;
         Some(broker.durable_state())
     }
@@ -406,9 +406,7 @@ impl DurableStateView {
     /// its exact Provider generation) and every live worker's self-reported
     /// launch. Generation retention keeps them whatever the Controller pins.
     /// `None` until a broker is attached (or after it ended).
-    pub(crate) fn resident_provider_generations(
-        &self,
-    ) -> Option<BTreeMap<String, BTreeSet<String>>> {
+    pub fn resident_provider_generations(&self) -> Option<BTreeMap<String, BTreeSet<String>>> {
         let broker = self.0.lock().as_ref()?.upgrade()?;
         Some(broker.resident_provider_generations())
     }
@@ -3969,7 +3967,7 @@ async fn run(args: MachineBrokerArgs) -> Result<()> {
 
 /// Default production builds stay read-only. The dedicated writer build must
 /// pass its component owner's exact selection and reader-floor admission.
-pub(crate) async fn run_with_deletion_reader(
+pub async fn run_with_deletion_reader(
     args: MachineBrokerArgs,
     path: PathBuf,
     cleanup_path: PathBuf,
@@ -5123,7 +5121,7 @@ async fn handle_worker(
 }
 
 #[cfg(all(test, feature = "full"))]
-pub(crate) use tests::dispatch_trace_fixture;
+pub use tests::dispatch_trace_fixture;
 
 #[cfg(test)]
 mod launch_admission_tests {
@@ -5252,7 +5250,7 @@ mod tests {
     }
 
     #[cfg(feature = "full")]
-    pub(crate) async fn dispatch_trace_fixture(command: CoreCommand) -> WorkerCommand {
+    pub async fn dispatch_trace_fixture(command: CoreCommand) -> WorkerCommand {
         let root = tempfile::tempdir().unwrap();
         let session = command.session_id().unwrap().to_owned();
         let broker = Arc::new(Broker::new(MachineBrokerArgs {

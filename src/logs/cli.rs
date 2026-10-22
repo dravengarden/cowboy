@@ -11,7 +11,7 @@ use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub(crate) fn command_schema() -> serde_json::Value {
+pub fn command_schema() -> serde_json::Value {
     fn describe(command: &clap::Command) -> serde_json::Value {
         json!({"name":command.get_name(),"description":command.get_about().map(ToString::to_string),
             "arguments":command.get_arguments().map(|a|json!({
@@ -175,7 +175,7 @@ struct ConfigArgs {
     forward_runtime: bool,
 }
 
-pub(crate) fn duration(value: &str) -> Result<Duration> {
+pub fn duration(value: &str) -> Result<Duration> {
     let (digits, multiplier) = if let Some(v) = value.strip_suffix('s') {
         (v, 1)
     } else if let Some(v) = value.strip_suffix('m') {

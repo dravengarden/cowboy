@@ -94,7 +94,7 @@ impl MachineControl {
 
     /// Finite resolution captures this owner's original authenticated route.
     /// Reopening a Service retains its durable name, not its old connections.
-    pub(crate) fn scoped_operation_connection(
+    pub fn scoped_operation_connection(
         &self,
         service: &str,
         machine: &str,

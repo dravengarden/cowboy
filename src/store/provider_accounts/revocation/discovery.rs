@@ -4,14 +4,14 @@ use crate::store::{StorageBackend, Store};
 use anyhow::Result;
 
 #[derive(Debug)]
-pub(crate) enum LookupError {
+pub enum LookupError {
     AccountNotFound,
     AmbiguousPlan,
     ScopeMismatch,
 }
 
 impl LookupError {
-    pub(crate) fn code(&self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
             Self::AccountNotFound => "account_not_found",
             Self::AmbiguousPlan => "revocation_plan_ambiguous",
@@ -28,12 +28,12 @@ impl std::fmt::Display for LookupError {
 impl std::error::Error for LookupError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Cursor {
+pub struct Cursor {
     pub owner: String,
     pub operation: String,
 }
 
-pub(crate) struct Page {
+pub struct Page {
     pub operations: Vec<Cursor>,
     /// Advance across examined rows, including historical/inactive operations.
     pub next: Option<Cursor>,
@@ -42,7 +42,7 @@ pub(crate) struct Page {
 impl Store {
     /// Owner-scoped lookup for a different tab/device resuming the same cleanup.
     /// Reject ambiguous historical plans instead of choosing another operation.
-    pub(crate) async fn provider_account_revocation(
+    pub async fn provider_account_revocation(
         &self,
         owner: &str,
         account: &crate::provider_account::ProviderAccountId,
@@ -90,10 +90,7 @@ impl Store {
 
     /// Scan at most 32 journal rows per page. Replay locators carry no vault,
     /// process-exit or remote-dispatch authority. Each stage rechecks admission.
-    pub(crate) async fn provider_account_revocations(
-        &self,
-        after: Option<&Cursor>,
-    ) -> Result<Page> {
+    pub async fn provider_account_revocations(&self, after: Option<&Cursor>) -> Result<Page> {
         let owner = after.map_or("", |cursor| cursor.owner.as_str());
         let operation = after.map_or("", |cursor| cursor.operation.as_str());
         macro_rules! read { ($db:expr, $has_plan:literal) => {

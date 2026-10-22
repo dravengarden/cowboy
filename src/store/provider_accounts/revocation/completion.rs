@@ -10,11 +10,7 @@ impl Store {
     /// No remote effects. Evidence and completion are serialized with every
     /// account/login/grant writer. An unknown commit outcome is safe to retry
     /// with the original owner and operation; no cleanup is dispatched here.
-    pub(crate) async fn complete_provider_revocation(
-        &self,
-        owner: &str,
-        operation: &str,
-    ) -> Result<bool> {
+    pub async fn complete_provider_revocation(&self, owner: &str, operation: &str) -> Result<bool> {
         macro_rules! complete { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")

@@ -9,7 +9,7 @@
 
 mod artifact_cache;
 mod auth_refresh;
-pub(crate) mod auth_watch;
+pub mod auth_watch;
 #[cfg(all(test, target_os = "linux"))]
 mod code_navigation_conformance;
 #[cfg(all(test, target_os = "linux"))]
@@ -18,8 +18,8 @@ mod extensions;
 mod installation;
 mod native_identity;
 mod native_profile;
-pub(crate) mod native_usage;
-pub(crate) use native_profile::LogoutPreparation;
+pub mod native_usage;
+pub use native_profile::LogoutPreparation;
 mod operations;
 mod remove_projection;
 mod session_extensions;
@@ -27,13 +27,13 @@ mod telemetry;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::InstallGuard;
 
-pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
-pub(crate) use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
-pub(crate) use operations::maintenance::complete_absent_uninstall;
-pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
-pub(crate) use session_extensions::{SESSION_EXTENSIONS_DISABLED, SESSION_EXTENSIONS_ENV};
-pub(crate) use telemetry::managed::ManagedExportInvocation;
-pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
+pub use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
+pub use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
+pub use operations::maintenance::complete_absent_uninstall;
+pub use operations::{UninstallAccess, lease::PluginExecutionScope};
+pub use session_extensions::{SESSION_EXTENSIONS_DISABLED, SESSION_EXTENSIONS_ENV};
+pub use telemetry::managed::ManagedExportInvocation;
+pub use telemetry::{PluginHostInvocation, PluginHostRequest};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -88,7 +88,7 @@ const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
-pub(crate) struct ProviderLaunchContext {
+pub struct ProviderLaunchContext {
     pub package_path: PathBuf,
     pub command: String,
     pub version: String,
@@ -101,7 +101,7 @@ pub(crate) struct ProviderLaunchContext {
 }
 
 #[derive(Debug)]
-pub(crate) struct PluginHostInvocationFailure {
+pub struct PluginHostInvocationFailure {
     pub started: bool,
     pub error: anyhow::Error,
 }
@@ -175,7 +175,7 @@ fn decode_host_response(
         })
 }
 
-pub(crate) struct ExportedAuthCandidate {
+pub struct ExportedAuthCandidate {
     pub native_identity: Option<crate::provider_account::NativeIdentity>,
     pub provider_version: String,
     pub generation_digest: String,
@@ -184,7 +184,7 @@ pub(crate) struct ExportedAuthCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderAuthRefreshCandidate {
+pub struct ProviderAuthRefreshCandidate {
     pub provider_id: String,
     pub account_id: crate::provider_account::ProviderAccountId,
     pub expected_generation: u64,
@@ -195,13 +195,13 @@ pub(crate) struct ProviderAuthRefreshCandidate {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ProviderAuthRefreshObservations {
+pub struct ProviderAuthRefreshObservations {
     pub candidates: Vec<ProviderAuthRefreshCandidate>,
     pub failed_provider_ids: BTreeSet<(crate::provider_account::ProviderAccountId, String)>,
 }
 
 #[derive(Clone)]
-pub(crate) struct MachineEncryptionIdentity {
+pub struct MachineEncryptionIdentity {
     secret: StaticSecret,
     public_key: String,
 }
@@ -270,7 +270,7 @@ impl MachineEncryptionIdentity {
 }
 
 #[derive(Clone)]
-pub(crate) struct MachinePluginStore {
+pub struct MachinePluginStore {
     root: PathBuf,
     auth_root: PathBuf,
     auth_base: PathBuf,
@@ -327,11 +327,11 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
 }
 
 mod account_stop;
-pub(crate) use account_stop::SystemdWorker;
+pub use account_stop::SystemdWorker;
 mod auth_candidate;
 #[cfg(test)]
 mod startup_tests;
-pub(crate) use auth_candidate::AuthCandidateCleanup;
+pub use auth_candidate::AuthCandidateCleanup;
 
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {
@@ -410,7 +410,7 @@ impl MachinePluginStore {
         Ok(scoped)
     }
 
-    pub(crate) fn account_id(&self) -> &crate::provider_account::ProviderAccountId {
+    pub fn account_id(&self) -> &crate::provider_account::ProviderAccountId {
         &self.account_id
     }
 
@@ -426,7 +426,7 @@ impl MachinePluginStore {
 
     /// Explicit Machine writer cutover, not an inventory-read side effect.
     /// It never reconstructs a slot that already has installation authority.
-    pub(crate) async fn enable_installation_tracking(&self) -> Result<()> {
+    pub async fn enable_installation_tracking(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         let mut existing = Vec::new();
         for entry in fs::read_dir(&self.root)? {
@@ -1175,14 +1175,14 @@ impl MachinePluginStore {
         }))
     }
 
-    pub(crate) async fn navigate_code_buffer(
+    pub async fn navigate_code_buffer(
         &self,
         invocation: CodeNavigationInvocation,
     ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
         self.code_runtimes.navigate(invocation).await
     }
 
-    pub(crate) async fn synchronize_code_buffer(
+    pub async fn synchronize_code_buffer(
         &self,
         invocation: CodeBufferSyncInvocation,
     ) -> Result<crate::machine_protocol::code_buffer_sync::Snapshot> {
@@ -3990,7 +3990,7 @@ fn validate_portable_bundle(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PluginInventoryReceipt {
+pub struct PluginInventoryReceipt {
     pub provider_id: String,
     pub auth_generation: u64,
     pub auth_generation_advanced: bool,
@@ -4027,11 +4027,11 @@ struct StagedRuntimeComponent {
     artifact: PathBuf,
 }
 
-pub(crate) fn provider_auth_aad(envelope: &SealedProviderAuth) -> Vec<u8> {
+pub fn provider_auth_aad(envelope: &SealedProviderAuth) -> Vec<u8> {
     envelope.authentication_aad()
 }
 
-pub(crate) fn derive_seal_key(shared: &[u8; 32]) -> [u8; 32] {
+pub fn derive_seal_key(shared: &[u8; 32]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(AUTH_SEAL_DOMAIN);
     digest.update(shared);
@@ -5258,12 +5258,84 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, feature = "full"))]
-pub(crate) fn telemetry_release_for_test(
+#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
+pub fn telemetry_release_for_test(
     publisher: &crate::machine_auth::MachineIdentity,
     version: &str,
 ) -> DesiredPlugin {
-    tests::telemetry_release(publisher, version)
+    telemetry_release(publisher, version)
+}
+
+#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
+pub fn telemetry_release(
+    publisher: &crate::machine_auth::MachineIdentity,
+    version: &str,
+) -> DesiredPlugin {
+    let mut manifest: cowboy_plugin_sdk::PluginManifest =
+        serde_json::from_str(include_str!("../examples/telemetry/victoria/plugin.json")).unwrap();
+    let mut contract: cowboy_plugin_sdk::TelemetryBackendContract = serde_json::from_str(
+        include_str!("../examples/telemetry/victoria/telemetry.json"),
+    )
+    .unwrap();
+    if version.starts_with("1.0.") {
+        // Retained schema-one bytes remain an independent compatibility
+        // fixture when the installable example advances to OTLP schema 2.
+        contract = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"id":"victoria","version":version,"display_name":"VictoriaLogs + VictoriaMetrics",
+            "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
+            "logs":{"encoding":"json_lines","path":"/insert/jsonline","query":{"_stream_fields":"component,platform","_time_field":"timestamp","_msg_field":"message"}},
+            "metrics":{"encoding":"prometheus_text","path":"/api/v1/import/prometheus","query":{}}
+        })).unwrap();
+        manifest.component_release = "2.8.0".into();
+        for component in &mut manifest.components {
+            component.version = "1.7.0".into();
+        }
+    }
+    manifest.version = version.to_owned();
+    contract.version = version.to_owned();
+    let platforms = contract.supported_platforms.clone();
+    let package = PluginPackage::new(
+        manifest.clone(),
+        manifest.component_release.clone(),
+        PluginPayload::TelemetryBackend(contract),
+    )
+    .unwrap();
+    let bytes = package.canonical_bytes().unwrap();
+    let mut release = cowboy_plugin_sdk::PluginRelease {
+        release_schema: 1,
+        plugin_id: manifest.id,
+        plugin_version: manifest.version,
+        plugin_kind: manifest.kind,
+        package_digest: PluginPackage::artifact_digest(&bytes),
+        artifact_digest: String::new(),
+        artifact_url: format!(
+            "https://plugins.example.test/victoria/{version}/victoria.cowboy-plugin"
+        ),
+        publisher: manifest.publisher,
+        contract_fingerprint: package.contract_fingerprint,
+        component_release: manifest.component_release,
+        host_bundle_digest: None,
+        signature: String::new(),
+        runtime_artifacts: platforms
+            .iter()
+            .map(|platform| PluginRuntimeArtifacts {
+                os: platform.os.clone(),
+                architecture: platform.architecture.clone(),
+                components: Vec::new(),
+            })
+            .collect(),
+        supported_platforms: platforms,
+    };
+    release.artifact_digest = release.computed_artifact_digest().unwrap();
+    release.signature = publisher
+        .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+        .unwrap();
+    DesiredPlugin {
+        release,
+        package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        publisher_public_key: publisher.public_key().to_owned(),
+        host_bundle_base64: None,
+    }
 }
 
 #[cfg(test)]
@@ -5523,77 +5595,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    pub(super) fn telemetry_release(
-        publisher: &crate::machine_auth::MachineIdentity,
-        version: &str,
-    ) -> DesiredPlugin {
-        let mut manifest: cowboy_plugin_sdk::PluginManifest =
-            serde_json::from_str(include_str!("../examples/telemetry/victoria/plugin.json"))
-                .unwrap();
-        let mut contract: cowboy_plugin_sdk::TelemetryBackendContract = serde_json::from_str(
-            include_str!("../examples/telemetry/victoria/telemetry.json"),
-        )
-        .unwrap();
-        if version.starts_with("1.0.") {
-            // Retained schema-one bytes remain an independent compatibility
-            // fixture when the installable example advances to OTLP schema 2.
-            contract = serde_json::from_value(serde_json::json!({
-                "schema_version":1,"id":"victoria","version":version,"display_name":"VictoriaLogs + VictoriaMetrics",
-                "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
-                "logs":{"encoding":"json_lines","path":"/insert/jsonline","query":{"_stream_fields":"component,platform","_time_field":"timestamp","_msg_field":"message"}},
-                "metrics":{"encoding":"prometheus_text","path":"/api/v1/import/prometheus","query":{}}
-            })).unwrap();
-            manifest.component_release = "2.8.0".into();
-            for component in &mut manifest.components {
-                component.version = "1.7.0".into();
-            }
-        }
-        manifest.version = version.to_owned();
-        contract.version = version.to_owned();
-        let platforms = contract.supported_platforms.clone();
-        let package = PluginPackage::new(
-            manifest.clone(),
-            manifest.component_release.clone(),
-            PluginPayload::TelemetryBackend(contract),
-        )
-        .unwrap();
-        let bytes = package.canonical_bytes().unwrap();
-        let mut release = cowboy_plugin_sdk::PluginRelease {
-            release_schema: 1,
-            plugin_id: manifest.id,
-            plugin_version: manifest.version,
-            plugin_kind: manifest.kind,
-            package_digest: PluginPackage::artifact_digest(&bytes),
-            artifact_digest: String::new(),
-            artifact_url: format!(
-                "https://plugins.example.test/victoria/{version}/victoria.cowboy-plugin"
-            ),
-            publisher: manifest.publisher,
-            contract_fingerprint: package.contract_fingerprint,
-            component_release: manifest.component_release,
-            host_bundle_digest: None,
-            signature: String::new(),
-            runtime_artifacts: platforms
-                .iter()
-                .map(|platform| PluginRuntimeArtifacts {
-                    os: platform.os.clone(),
-                    architecture: platform.architecture.clone(),
-                    components: Vec::new(),
-                })
-                .collect(),
-            supported_platforms: platforms,
-        };
-        release.artifact_digest = release.computed_artifact_digest().unwrap();
-        release.signature = publisher
-            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
-            .unwrap();
-        DesiredPlugin {
-            release,
-            package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            publisher_public_key: publisher.public_key().to_owned(),
-            host_bundle_base64: None,
-        }
-    }
+    pub(super) use super::telemetry_release;
 
     #[tokio::test]
     #[cfg(feature = "full")]

@@ -8,7 +8,7 @@ impl Store {
     /// Serialize local cleanup with account edits and grant promotion. The
     /// callback must not await or reenter Store. A commit failure after the
     /// callback is an unknown outcome; retry must inspect the same vault.
-    pub(crate) async fn with_provider_grant_revocation<T>(
+    pub async fn with_provider_grant_revocation<T>(
         &self,
         owner: &str,
         operation: &str,
@@ -25,7 +25,7 @@ impl Store {
         .await
     }
 
-    pub(crate) async fn with_provider_local_wipe(
+    pub async fn with_provider_local_wipe(
         &self,
         owner: &str,
         operation: &str,

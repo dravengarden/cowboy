@@ -10,13 +10,13 @@ use serde_json::Value;
 const MAX_REPLY_BYTES: usize = 2 * 1024 * 1024;
 
 mod content;
-pub(crate) use content::{Content, ContentOutput, Query};
+pub use content::{Content, ContentOutput, Query};
 mod text;
-pub(crate) use text::{TextOutput, TextPage};
+pub use text::{TextOutput, TextPage};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
+pub enum Request {
     Language {},
     Symbols {},
     Content { content: Content, query: Query },
@@ -24,7 +24,7 @@ pub(crate) enum Request {
 }
 
 impl Request {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if let Self::Content { content, .. } = self {
             content.validate()?;
         }
@@ -35,7 +35,7 @@ impl Request {
     }
 
     #[cfg(feature = "full")]
-    pub(crate) fn support_kind(&self) -> &'static str {
+    pub fn support_kind(&self) -> &'static str {
         match self {
             Self::Content { .. } => "bufferLeaseContentSupport",
             Self::Text { .. } => "bufferLeaseTextSupport",
@@ -46,7 +46,7 @@ impl Request {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Reply<L> {
+pub struct Reply<L> {
     #[serde(rename = "type")]
     kind: ReplyKind,
     api_version: u8,
@@ -62,7 +62,7 @@ enum ReplyKind {
 }
 
 impl<L: serde::de::DeserializeOwned + PartialEq> Reply<L> {
-    pub(crate) fn parse(value: &Value, lease: &L, request: Request) -> Result<Self> {
+    pub fn parse(value: &Value, lease: &L, request: Request) -> Result<Self> {
         request.validate()?;
         // Re-decode with serde_json's depth bound as well as our byte limit.
         // A Value supplied by an in-process caller has not necessarily crossed
@@ -90,7 +90,7 @@ impl<L: serde::de::DeserializeOwned + PartialEq> Reply<L> {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct VersionEntry {
+pub struct VersionEntry {
     replica_id: u32,
     timestamp: u32,
 }
@@ -102,7 +102,7 @@ pub(crate) struct VersionEntry {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-pub(crate) enum Output {
+pub enum Output {
     Language(LanguageOutput),
     Symbols(SymbolOutput),
     Content {
@@ -154,7 +154,7 @@ impl Output {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct LanguageOutput {
+pub struct LanguageOutput {
     diagnostics_state: DiagnosticStatus,
     diagnostics: Vec<Diagnostic>,
     inlay_hints: Vec<InlayHint>,
@@ -193,7 +193,7 @@ impl LanguageOutput {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SymbolOutput {
+pub struct SymbolOutput {
     symbols: Vec<Symbol>,
 }
 
@@ -224,7 +224,7 @@ impl SymbolOutput {
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DiagnosticStatus {
+pub enum DiagnosticStatus {
     Unobserved,
     Observed,
 }
@@ -240,14 +240,14 @@ fn optional_text(value: Option<&str>) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Point {
+pub struct Point {
     row: u32,
     column: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Diagnostic {
+pub struct Diagnostic {
     start: Point,
     end: Point,
     severity: i32,
@@ -257,7 +257,7 @@ pub(crate) struct Diagnostic {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct InlayHint {
+pub struct InlayHint {
     offset: u64,
     label: String,
     kind: Option<String>,
@@ -267,7 +267,7 @@ pub(crate) struct InlayHint {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Symbol {
+pub struct Symbol {
     name: String,
     kind: i32,
     start: Point,

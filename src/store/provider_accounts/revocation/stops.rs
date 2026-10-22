@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     pub account_id: ProviderAccountId,
     pub session_id: String,
     pub machine_id: String,
@@ -16,7 +16,7 @@ pub(crate) struct Evidence {
 }
 
 impl Evidence {
-    pub(crate) fn require_transition_stop(&self, operation: &str) -> Result<()> {
+    pub fn require_transition_stop(&self, operation: &str) -> Result<()> {
         self.require_tree_exit()?;
         let command = crate::provider_account::account_stop_command_id(
             &format!("migration:{operation}"),
@@ -32,7 +32,7 @@ impl Evidence {
         );
         Ok(())
     }
-    pub(crate) fn require_tree_exit(&self) -> Result<()> {
+    pub fn require_tree_exit(&self) -> Result<()> {
         let tree = self
             .tree_exit
             .as_ref()
@@ -51,7 +51,7 @@ impl Store {
     /// Queue an idempotent stop while account and enrollment admission is
     /// locked. The callback must check the live runtime and must not await or
     /// reenter Store. A commit error after enqueue is an unknown outcome.
-    pub(crate) async fn dispatch_provider_account_stop<T>(
+    pub async fn dispatch_provider_account_stop<T>(
         &self,
         owner: &str,
         operation: &str,
@@ -93,7 +93,7 @@ impl Store {
 
     /// Historical read only, including after enrollment changes. Never use this
     /// receipt to authorize dispatch to a currently enrolled Machine.
-    pub(crate) async fn provider_account_stop(
+    pub async fn provider_account_stop(
         &self,
         owner: &str,
         operation: &str,
@@ -128,7 +128,7 @@ impl Store {
     /// it runs after validation reads under owner and Machine locks. It must not
     /// await or reenter Store. Identical historical evidence is idempotent even
     /// after enrollment changes, without invoking the admission callback.
-    pub(crate) async fn record_provider_account_stop(
+    pub async fn record_provider_account_stop(
         &self,
         owner: &str,
         operation: &str,

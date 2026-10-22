@@ -51,7 +51,7 @@ impl Reservation {
 }
 
 impl MachinePluginStore {
-    pub(crate) fn bind_native_login_process(
+    pub fn bind_native_login_process(
         &self,
         provider: &str,
         generation: u64,
@@ -75,7 +75,7 @@ impl MachinePluginStore {
         logout::persist(&directory, &profile)
     }
 
-    pub(crate) fn bind_native_logout_process(
+    pub fn bind_native_logout_process(
         &self,
         provider: &str,
         generation: u64,
@@ -109,7 +109,7 @@ impl MachinePluginStore {
 
     /// Called while reconciling the original logout, never a new operation.
     /// An active owner (including another concurrent retry) is not an orphan.
-    pub(crate) async fn recover_native_auth_processes(
+    pub async fn recover_native_auth_processes(
         &self,
         provider: &str,
         generation: u64,

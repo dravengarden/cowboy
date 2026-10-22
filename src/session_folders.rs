@@ -155,7 +155,7 @@ fn project_arg(args: &serde_json::Value) -> Result<Option<String>, String> {
 impl SessionFolders {
     /// Match the sidebar's visible folders, preserving absent vs explicit Global.
     /// Visibility never grants mutation: an untouchable match is an error.
-    pub(crate) fn effective_folder(
+    pub fn effective_folder(
         &self,
         session: &str,
         actor: &FolderActor,
@@ -195,7 +195,7 @@ impl SessionFolders {
     /// folder that still exists, trashed or not; the explicit top level is
     /// `None`), else the live folder bound to its project. Mirrors the
     /// client's `effectiveSessionFolder`.
-    pub(crate) fn display_folder(
+    pub fn display_folder(
         &self,
         actor: &FolderActor,
         session: &str,
@@ -553,8 +553,8 @@ impl SessionFolders {
         self.placement.insert(session_id, folder_id);
     }
 
-    #[cfg(test)]
-    pub(crate) fn folders(&self) -> &[SessionFolder] {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn folders(&self) -> &[SessionFolder] {
         &self.folders
     }
 
@@ -754,7 +754,7 @@ impl SessionFolders {
     /// outbox would otherwise hit "folder id already exists" forever. Any
     /// difference (owner, name, parent, project, defaults) is a genuine conflict and
     /// still fails through the normal path.
-    pub(crate) fn is_replayed_create(&self, actor: &FolderActor, args: &serde_json::Value) -> bool {
+    pub fn is_replayed_create(&self, actor: &FolderActor, args: &serde_json::Value) -> bool {
         let (Ok(id), Ok(name), Ok(parent), Ok(project), Ok(defaults)) = (
             key_arg(args, "id"),
             name_arg(args),

@@ -6,7 +6,7 @@ use anyhow::Result;
 impl Store {
     /// Import legacy Draft directories once, before the Hub's startup restore.
     /// Stable owner-scoped IDs preserve duplicate names and isolate principals.
-    pub(crate) async fn integrate_draft_folders(&self) -> Result<()> {
+    pub async fn integrate_draft_folders(&self) -> Result<()> {
         macro_rules! integrate { ($db:expr, $insert:expr) => {{
             let mut tx = $db.pool.begin().await?;
             let rows: Vec<(String, String)> = sqlx::query_as("SELECT owner_user_id, metadata FROM draft_documents ORDER BY owner_user_id, id").fetch_all(&mut *tx).await?;
@@ -56,7 +56,7 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn load_workspace_orders(&self) -> Result<Vec<(String, Vec<String>)>> {
+    pub async fn load_workspace_orders(&self) -> Result<Vec<(String, Vec<String>)>> {
         macro_rules! read {
             ($db:expr) => {
                 sqlx::query_as::<_, (String, String)>(
@@ -74,7 +74,7 @@ impl Store {
             .map(|(owner, value)| Ok((owner, serde_json::from_str(&value)?)))
             .collect()
     }
-    pub(crate) async fn update_workspace_order(&self, owner: &str, order: &[String]) -> Result<()> {
+    pub async fn update_workspace_order(&self, owner: &str, order: &[String]) -> Result<()> {
         let value = serde_json::to_string(order)?;
         macro_rules! write { ($db:expr) => { sqlx::query("INSERT INTO workspace_item_order (owner_user_id,value) VALUES ($1,$2) ON CONFLICT(owner_user_id) DO UPDATE SET value=excluded.value").bind(owner).bind(&value).execute(&$db.pool).await? }; }
         match &self.backend {

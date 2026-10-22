@@ -43,23 +43,23 @@ impl ReleaseObservation {
 /// Only exact, signature-checked Catalog lookup can construct this result.
 /// No Clone/serde: wire data and durable receipts cannot mint a live lease.
 /// Callers still need purpose-bound authority, budget, connection and CAS.
-pub(crate) struct VerifiedPluginRelease {
+pub struct VerifiedPluginRelease {
     desired: DesiredPlugin,
     observation: ReleaseObservation,
 }
 
 impl VerifiedPluginRelease {
-    pub(crate) fn desired(&self) -> &DesiredPlugin {
+    pub fn desired(&self) -> &DesiredPlugin {
         &self.desired
     }
 
-    pub(crate) fn current(&self, catalog: &PluginCatalog) -> bool {
+    pub fn current(&self, catalog: &PluginCatalog) -> bool {
         self.observation.current(catalog)
     }
 }
 
 impl PluginCatalog {
-    pub(crate) fn resolve_verified_exact(
+    pub fn resolve_verified_exact(
         &self,
         plugin_id: &str,
         version: &str,

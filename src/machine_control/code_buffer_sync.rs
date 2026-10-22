@@ -5,11 +5,11 @@ use crate::machine_protocol::code_buffer_sync::{Action, Content, Request, Snapsh
 use crate::machine_protocol::{CODE_BUFFER_SYNC_PROTOCOL_VERSION, MachineCommand};
 
 impl MachineControl {
-    pub(crate) fn supports_code_buffer_sync(&self, connection: &ConnectionToken) -> bool {
+    pub fn supports_code_buffer_sync(&self, connection: &ConnectionToken) -> bool {
         self.connection_supports(connection, CODE_BUFFER_SYNC_PROTOCOL_VERSION)
     }
 
-    pub(crate) async fn code_buffer_sync(
+    pub async fn code_buffer_sync(
         &self,
         connection: &ConnectionToken,
         request: Request,

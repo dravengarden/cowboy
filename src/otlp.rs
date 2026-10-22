@@ -23,14 +23,14 @@ mod controller {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Write as _;
 
-    pub(crate) fn now_nanos() -> u64 {
+    pub fn now_nanos() -> u64 {
         chrono::Utc::now()
             .timestamp_nanos_opt()
             .and_then(|v| u64::try_from(v).ok())
             .unwrap_or(0)
     }
 
-    pub(crate) fn text(key: &str, value: &str) -> KeyValue {
+    pub fn text(key: &str, value: &str) -> KeyValue {
         KeyValue {
             key: key.into(),
             value: Some(AnyValue {
@@ -213,7 +213,7 @@ mod controller {
     }
 
     /// Controller-only operations on the shared wire `Request`.
-    pub(crate) trait RequestControllerExt {
+    pub trait RequestControllerExt {
         fn sanitize(&mut self, principal: &str) -> Result<()>;
         fn records(&self) -> String;
     }
@@ -547,13 +547,13 @@ mod controller {
 
     /// One bounded Controller-owned writer, independent of browser resource IDs.
     #[derive(Default, Clone)]
-    pub(crate) struct Aggregator {
+    pub struct Aggregator {
         start: u64,
         streams: BTreeMap<String, metrics::Metric>,
     }
 
     impl Aggregator {
-        pub(crate) fn aggregate(&mut self, request: &mut Request) -> Result<()> {
+        pub fn aggregate(&mut self, request: &mut Request) -> Result<()> {
             let Request::Metrics(r) = request else {
                 return Ok(());
             };
@@ -691,10 +691,10 @@ mod controller {
 }
 
 #[cfg(feature = "full")]
-pub(crate) use controller::{Aggregator, RequestControllerExt};
+pub use controller::{Aggregator, RequestControllerExt};
 
 #[cfg(feature = "full")]
-pub(crate) fn runtime_span(owner: &str, record: &crate::runtime_trace::SpanRecord) -> Request {
+pub fn runtime_span(owner: &str, record: &crate::runtime_trace::SpanRecord) -> Request {
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},
         resource::v1::Resource,
@@ -765,8 +765,8 @@ pub(crate) fn runtime_span(owner: &str, record: &crate::runtime_trace::SpanRecor
     })
 }
 
-#[cfg(all(test, feature = "full"))]
-pub(crate) fn client_fixtures() -> Vec<(Signal, Vec<u8>)> {
+#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
+pub fn client_fixtures() -> Vec<(Signal, Vec<u8>)> {
     use base64::Engine as _;
     let exports: Vec<Export> =
         serde_json::from_str(include_str!("../tests/fixtures/otel-client.json")).unwrap();

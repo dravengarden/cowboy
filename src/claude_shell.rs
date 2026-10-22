@@ -91,14 +91,11 @@ fn resolve_with(
     None
 }
 
-pub(crate) fn resolve(
-    plugin_id: &str,
-    get_env: &impl Fn(&str) -> Option<String>,
-) -> Option<String> {
+pub fn resolve(plugin_id: &str, get_env: &impl Fn(&str) -> Option<String>) -> Option<String> {
     resolve_with(plugin_id, get_env, supported_executable)
 }
 
-pub(crate) fn available(plugin_id: &str) -> bool {
+pub fn available(plugin_id: &str) -> bool {
     resolve(plugin_id, &|key| std::env::var(key).ok()).is_some()
 }
 

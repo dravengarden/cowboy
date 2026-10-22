@@ -18,7 +18,7 @@ mod code_buffer_navigation;
 mod code_buffer_sync;
 mod execution;
 mod installation;
-pub(crate) mod local_roots;
+pub mod local_roots;
 #[cfg(test)]
 mod projects_tests;
 mod session_reads;
@@ -28,9 +28,9 @@ mod telemetry_recovery;
 mod telemetry_resolution;
 mod workspace;
 
-pub(crate) use session_reads::SessionReadScope;
-pub(crate) use telemetry_resolution::TelemetryInstallationLease;
-pub(crate) use workspace::WorkspaceCodeScope;
+pub use session_reads::SessionReadScope;
+pub use telemetry_resolution::TelemetryInstallationLease;
+pub use workspace::WorkspaceCodeScope;
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
@@ -44,8 +44,7 @@ use crate::machine_protocol::{
 
 const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 // Ten sequential Git commands may each take 30 seconds on the Machine.
-pub(crate) const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(330);
+pub const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
 const PROVIDER_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PROVIDER_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 const PLUGIN_HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
@@ -55,7 +54,7 @@ const MAX_PENDING_PER_MACHINE: usize = 256;
 /// Created only by installing an authenticated channel. Not deserializable;
 /// even accidentally reusing an epoch string creates a distinct incarnation.
 #[derive(Clone, Debug)]
-pub(crate) struct ConnectionToken(Arc<ConnectionIdentity>);
+pub struct ConnectionToken(Arc<ConnectionIdentity>);
 
 #[derive(Debug)]
 struct ConnectionIdentity {
@@ -64,17 +63,17 @@ struct ConnectionIdentity {
 }
 
 impl ConnectionToken {
-    pub(crate) fn machine_id(&self) -> &str {
+    pub fn machine_id(&self) -> &str {
         &self.0.machine_id
     }
 
-    pub(crate) fn same(&self, other: &Self) -> bool {
+    pub fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
 /// Core-originated login projection, never a remote RPC response or inventory.
-pub(crate) struct ServiceLoginNotice {
+pub struct ServiceLoginNotice {
     pub request_id: String,
     pub provider: String,
     pub state: crate::machine_protocol::AuthState,
@@ -83,7 +82,7 @@ pub(crate) struct ServiceLoginNotice {
 }
 
 #[derive(Debug)]
-pub(crate) struct PluginHostRequestError {
+pub struct PluginHostRequestError {
     /// Conservative: true after enqueue means execution may have started.
     /// Losing a connection/receipt is not evidence that an effect was undone.
     pub started: bool,
@@ -92,14 +91,14 @@ pub(crate) struct PluginHostRequestError {
 
 /// Receipt certainty, not an assumption that a rejected command had no effects.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CommandFailure {
+pub enum CommandFailure {
     NotSent,
     Rejected,
     Unknown,
 }
 
 #[derive(Debug)]
-pub(crate) struct CommandRequestError {
+pub struct CommandRequestError {
     pub certainty: CommandFailure,
     pub detail: String,
 }
@@ -123,7 +122,7 @@ enum RequestBinding<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct RetainedPluginTarget<'a> {
+pub struct RetainedPluginTarget<'a> {
     pub plugin_id: &'a str,
     pub version: &'a str,
     pub digest: &'a str,
@@ -131,7 +130,7 @@ pub(crate) struct RetainedPluginTarget<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ConnectedPluginInventory {
+pub struct ConnectedPluginInventory {
     pub machine_id: String,
     pub plugin: PluginInventory,
 }
@@ -139,7 +138,7 @@ pub(crate) struct ConnectedPluginInventory {
 /// A single local remote-port binding; contains no secret or serialized grant.
 /// The Machine still independently authorizes and validates the exact release.
 #[derive(Debug)]
-pub(crate) struct PluginHostBinding {
+pub struct PluginHostBinding {
     connection: ConnectionToken,
     inventory_revision: Arc<()>,
     plugin: PluginInventory,
@@ -170,7 +169,7 @@ enum ReplyKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum PluginUninstallTransport {
+pub enum PluginUninstallTransport {
     Legacy,
     Leased,
 }
@@ -178,7 +177,7 @@ pub(crate) enum PluginUninstallTransport {
 /// One refused adapter request. `detail` stays a diagnostic string; only the
 /// closed `refusal` may end a Controller observation.
 #[derive(Debug, Clone)]
-pub(crate) struct AdapterFailure {
+pub struct AdapterFailure {
     detail: String,
     refusal: Option<crate::machine_protocol::AdapterRefusal>,
 }
@@ -191,7 +190,7 @@ impl AdapterFailure {
         }
     }
 
-    pub(crate) fn workspace_root_identity_changed(&self) -> bool {
+    pub fn workspace_root_identity_changed(&self) -> bool {
         self.refusal == Some(crate::machine_protocol::AdapterRefusal::WorkspaceRootIdentityChanged)
     }
 }
@@ -500,7 +499,7 @@ pub struct MachineControl {
     host_resources: RwLock<HashMap<String, crate::machine_protocol::ObservedHostResources>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MachineControl {
     fn default() -> Self {
         Self::new(crate::service_identity::ServiceIdentity::fixture())
@@ -508,7 +507,7 @@ impl Default for MachineControl {
 }
 
 impl MachineControl {
-    pub(crate) fn new(service: crate::service_identity::ServiceIdentity) -> Self {
+    pub fn new(service: crate::service_identity::ServiceIdentity) -> Self {
         Self {
             service,
             read_owner: Arc::new(()),
@@ -520,7 +519,7 @@ impl MachineControl {
 
     /// Machines whose latest report shows less available disk than their
     /// declared low watermark, with that report.
-    pub(crate) fn below_disk_watermark(
+    pub fn below_disk_watermark(
         &self,
     ) -> Vec<(String, crate::machine_protocol::ObservedHostResources)> {
         self.host_resources
@@ -532,7 +531,7 @@ impl MachineControl {
     }
 
     /// Every Machine's latest host resources.
-    pub(crate) fn all_host_resources(
+    pub fn all_host_resources(
         &self,
     ) -> Vec<(String, crate::machine_protocol::ObservedHostResources)> {
         self.host_resources
@@ -543,14 +542,14 @@ impl MachineControl {
     }
 
     /// Latest host resources a Machine reported, if any.
-    pub(crate) fn host_resources(
+    pub fn host_resources(
         &self,
         machine_id: &str,
     ) -> Option<crate::machine_protocol::ObservedHostResources> {
         self.host_resources.read().get(machine_id).cloned()
     }
 
-    pub(crate) fn install(
+    pub fn install(
         &self,
         machine_id: String,
         epoch: String,
@@ -578,7 +577,7 @@ impl MachineControl {
     }
 
     #[must_use]
-    pub(crate) fn is_current(&self, token: &ConnectionToken) -> bool {
+    pub fn is_current(&self, token: &ConnectionToken) -> bool {
         self.live.read().is_current(token)
     }
 
@@ -592,7 +591,7 @@ impl MachineControl {
             .map(|connection| connection.connected_at.elapsed())
     }
 
-    pub(crate) fn remove_if_current(&self, token: &ConnectionToken) {
+    pub fn remove_if_current(&self, token: &ConnectionToken) {
         let mut live = self.live.write();
         if live.is_current(token) {
             live.disconnect(&token.0.machine_id);
@@ -604,12 +603,12 @@ impl MachineControl {
         self.live.write().disconnect(machine_id);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn send(&self, machine_id: &str, command: MachineCommand) -> Result<(), String> {
         self.send_on_connection(&self.operation_connection(machine_id)?, command)
     }
 
-    pub(crate) fn send_on_connection(
+    pub fn send_on_connection(
         &self,
         token: &ConnectionToken,
         command: MachineCommand,
@@ -641,7 +640,7 @@ impl MachineControl {
         Ok(())
     }
 
-    pub(crate) fn record_service_login(&self, machine_id: &str, notice: ServiceLoginNotice) {
+    pub fn record_service_login(&self, machine_id: &str, notice: ServiceLoginNotice) {
         self.live.write().remember(
             machine_id,
             MachineEvent::LoginState {
@@ -657,7 +656,7 @@ impl MachineControl {
     /// Remote callers cannot invent a source Machine/epoch. Late or mismatched
     /// replies are dropped before touching a waiter or retaining their payload.
     #[allow(clippy::too_many_lines)] // Keep the closed reply dispatch under one correlation lock.
-    pub(crate) fn record_remote(&self, token: &ConnectionToken, event: MachineEvent) {
+    pub fn record_remote(&self, token: &ConnectionToken, event: MachineEvent) {
         let mut live = self.live.write();
         if !live.is_current(token) {
             return;
@@ -974,7 +973,7 @@ impl MachineControl {
         ))
     }
 
-    pub(crate) async fn project_request(
+    pub async fn project_request(
         &self,
         machine_id: &str,
         request: crate::machine_protocol::projects::Request,
@@ -1020,7 +1019,7 @@ impl MachineControl {
 
     /// Keep a multi-call operation on its original authenticated connection.
     /// This is transport continuity, not Session/native resource authority.
-    pub(crate) async fn adapter_request_on_connection(
+    pub async fn adapter_request_on_connection(
         &self,
         connection: &ConnectionToken,
         adapter: &str,
@@ -1099,7 +1098,7 @@ impl MachineControl {
     /// Short-lived connection evidence. Never saved in the operation journal or
     /// reacquired after restart to replay an old destructive command.
     /// The current connection and its negotiated protocol, if connected.
-    pub(crate) fn connection_protocol(&self, machine_id: &str) -> Option<(ConnectionToken, u16)> {
+    pub fn connection_protocol(&self, machine_id: &str) -> Option<(ConnectionToken, u16)> {
         self.live
             .read()
             .connections
@@ -1107,7 +1106,7 @@ impl MachineControl {
             .map(|connection| (connection.token.clone(), connection.protocol))
     }
 
-    pub(crate) fn operation_connection(&self, machine_id: &str) -> Result<ConnectionToken, String> {
+    pub fn operation_connection(&self, machine_id: &str) -> Result<ConnectionToken, String> {
         self.live
             .read()
             .connections
@@ -1116,7 +1115,7 @@ impl MachineControl {
             .ok_or_else(|| "Machine is not connected".to_owned())
     }
 
-    pub(crate) fn plugin_uninstall_transport(
+    pub fn plugin_uninstall_transport(
         &self,
         token: &ConnectionToken,
         step: &UninstallStep,
@@ -1148,11 +1147,11 @@ impl MachineControl {
     }
 
     /// Historical receipt queries retain their original protocol floor.
-    pub(crate) fn durable_plugin_steps(&self, token: &ConnectionToken) -> bool {
+    pub fn durable_plugin_steps(&self, token: &ConnectionToken) -> bool {
         self.connection_supports(token, crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION)
     }
 
-    pub(crate) fn leased_plugin_steps(&self, token: &ConnectionToken) -> bool {
+    pub fn leased_plugin_steps(&self, token: &ConnectionToken) -> bool {
         self.connection_supports(
             token,
             crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION,
@@ -1160,7 +1159,7 @@ impl MachineControl {
     }
 
     /// Whether the Machine's current connection negotiated at least `minimum`.
-    pub(crate) fn machine_supports(&self, machine_id: &str, minimum: u16) -> bool {
+    pub fn machine_supports(&self, machine_id: &str, minimum: u16) -> bool {
         self.live
             .read()
             .connections
@@ -1176,7 +1175,7 @@ impl MachineControl {
             .is_some_and(|c| c.token.same(token) && c.protocol >= minimum)
     }
 
-    pub(crate) async fn plugin_uninstall_step(
+    pub async fn plugin_uninstall_step(
         &self,
         token: &ConnectionToken,
         step: &UninstallStep,
@@ -1245,7 +1244,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) async fn plugin_uninstall_recovery(
+    pub async fn plugin_uninstall_recovery(
         &self,
         token: &ConnectionToken,
         step: &UninstallStep,
@@ -1299,7 +1298,7 @@ impl MachineControl {
     // Reader bridge for the forthcoming durable Service coordinator. No live
     // mutation endpoint can manufacture an operation or invoke this as a grant.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn telemetry_binding_observation(
+    pub async fn telemetry_binding_observation(
         &self,
         token: &ConnectionToken,
         step: &BindingStep,
@@ -1350,7 +1349,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) fn telemetry_binding_target_current(
+    pub fn telemetry_binding_target_current(
         &self,
         token: &ConnectionToken,
         step: &BindingStep,
@@ -1367,7 +1366,7 @@ impl MachineControl {
             && live.telemetry_target_matches(token, step, lease)
     }
 
-    pub(crate) async fn commit_telemetry_binding(
+    pub async fn commit_telemetry_binding(
         &self,
         token: &ConnectionToken,
         step: &BindingStep,
@@ -1438,7 +1437,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) async fn command_on_connection(
+    pub async fn command_on_connection(
         &self,
         connection: &ConnectionToken,
         request_id: String,
@@ -1456,7 +1455,7 @@ impl MachineControl {
 
     /// Reject an observed replacement before enqueue. The older Machine
     /// protocol still has no durable installation-CAS; this is NOT that proof.
-    pub(crate) async fn reactivate_plugin_on_connection(
+    pub async fn reactivate_plugin_on_connection(
         &self,
         connection: &ConnectionToken,
         request_id: String,
@@ -1477,7 +1476,7 @@ impl MachineControl {
         .await
     }
 
-    pub(crate) async fn query_native_profile(
+    pub async fn query_native_profile(
         &self,
         connection: &ConnectionToken,
         login: &crate::store::provider_accounts::logins::Receipt,
@@ -1512,7 +1511,7 @@ impl MachineControl {
 
     /// Enqueue under the owner's current native-login transaction. The returned
     /// future owns only this request's waiter, not reusable account authority.
-    pub(crate) fn begin_native_usage<'a>(
+    pub fn begin_native_usage<'a>(
         &'a self,
         connection: &'a ConnectionToken,
         profile: &crate::provider_account::NativeProfileReceipt,
@@ -1556,7 +1555,7 @@ impl MachineControl {
 
     /// Caller must admit the owner-scoped revocation and confirm session stops.
     /// A generic command ACK never completes this typed request.
-    pub(crate) fn begin_native_logout<'a>(
+    pub fn begin_native_logout<'a>(
         &'a self,
         connection: &'a ConnectionToken,
         machine: &str,
@@ -1598,7 +1597,7 @@ impl MachineControl {
 
     /// Preparation is not readmission. Require the exact typed receipt on the
     /// same authenticated connection, never a generic command acknowledgement.
-    pub(crate) async fn prepare_native_binding(
+    pub async fn prepare_native_binding(
         &self,
         connection: &ConnectionToken,
         machine: &str,
@@ -1631,7 +1630,7 @@ impl MachineControl {
     }
 
     /// Read only retained evidence on the exact authenticated connection.
-    pub(crate) async fn query_worker_exit(
+    pub async fn query_worker_exit(
         &self,
         connection: &ConnectionToken,
         machine: &str,
@@ -1666,7 +1665,7 @@ impl MachineControl {
     }
 
     /// Read only retained evidence on the exact authenticated connection.
-    pub(crate) async fn query_login_stop(
+    pub async fn query_login_stop(
         &self,
         connection: &ConnectionToken,
         machine: &str,
@@ -1737,7 +1736,7 @@ impl MachineControl {
         }
     }
 
-    pub(crate) fn bind_plugin_host(
+    pub fn bind_plugin_host(
         &self,
         machine_id: &str,
         plugin: &PluginInventory,
@@ -1771,7 +1770,7 @@ impl MachineControl {
         self.invoke_plugin_host(binding, payload).await
     }
 
-    pub(crate) async fn invoke_plugin_host(
+    pub async fn invoke_plugin_host(
         &self,
         binding: PluginHostBinding,
         payload: serde_json::Value,
@@ -1843,7 +1842,7 @@ impl MachineControl {
     }
 
     #[must_use]
-    pub(crate) fn connected_plugin_inventory(&self) -> Vec<ConnectedPluginInventory> {
+    pub fn connected_plugin_inventory(&self) -> Vec<ConnectedPluginInventory> {
         let live = self.live.read();
         let mut inventory = live
             .connections

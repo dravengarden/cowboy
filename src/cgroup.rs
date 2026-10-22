@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "machine-host")]
 mod containment;
 #[cfg(feature = "machine-host")]
-pub(crate) use containment::{Containment, ContainmentIdentity, ProcessOwner};
+pub use containment::{Containment, ContainmentIdentity, ProcessOwner};
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 

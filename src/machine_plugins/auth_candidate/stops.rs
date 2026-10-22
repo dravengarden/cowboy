@@ -7,7 +7,7 @@ use std::fs;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)] // Independent historical evidence, not lifecycle states.
-pub(crate) struct Receipt {
+pub struct Receipt {
     schema: u32,
     account: crate::provider_account::ProviderAccountId,
     provider: String,
@@ -22,7 +22,7 @@ pub(crate) struct Receipt {
 }
 
 impl MachinePluginStore {
-    pub(crate) fn observe_login_stop(
+    pub fn observe_login_stop(
         &self,
         request: &crate::provider_account::LoginStopRequest,
     ) -> Result<Option<crate::provider_account::LoginStopObservation>> {
@@ -71,11 +71,7 @@ impl MachinePluginStore {
     }
 
     /// Absence is unknown. Never creates state or infers exit from a missing home.
-    pub(crate) fn auth_candidate_stop(
-        &self,
-        provider: &str,
-        request: &str,
-    ) -> Result<Option<Receipt>> {
+    pub fn auth_candidate_stop(&self, provider: &str, request: &str) -> Result<Option<Receipt>> {
         super::super::validate_plugin_id(provider)?;
         super::super::validate_auth_candidate_id(request)?;
         let root = self.auth_provider_root(provider);
