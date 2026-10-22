@@ -129,6 +129,7 @@ import {
   planProjectFolders,
   sessionFolderMutators,
   type SessionFoldersValue,
+  TOP_LEVEL_PLACEMENT,
 } from "./sessionFolders";
 import { syncedKeyList } from "./sessionTree";
 import { isTrashedFolder, liveFolderView, splitTrashedSessions } from "./trashModel";
@@ -3641,6 +3642,14 @@ export async function trashFolderKeeping(
   if (keep.length > 0) {
     placeSessions(keep, destination);
     await waitForState(() => foldersSync.pending() === 0, "Move kept sessions");
+    // A placement that failed locally leaves nothing pending either. Only an
+    // applied destination proves the kept sessions are out of the folder;
+    // otherwise nothing is deleted.
+    const target = destination ?? TOP_LEVEL_PLACEMENT;
+    const placement = foldersSync.view().placement;
+    if (keep.some((id) => placement[id] !== target)) {
+      throw new Error("Could not move the sessions to keep. Nothing was moved to Trash.");
+    }
   }
   await trashItems({ folders: [folder] });
 }

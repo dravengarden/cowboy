@@ -16651,6 +16651,9 @@ async fn api_session_prompt(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    if info.meta.trashed_at_ms.is_some() {
+        return (StatusCode::CONFLICT, session_trash::TRASHED_REFUSAL).into_response();
+    }
     if info
         .meta
         .execution_binding

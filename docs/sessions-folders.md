@@ -510,10 +510,22 @@ run (execution environment stop, then the 3-day storage purge).
   confirm stops), deletes expired sessions through the normal lifecycle and
   then removes expired folders that hold no session. A folder whose remote
   session is still stopping is retried on the next pass.
+- Permanent deletion first claims the session under the Hub lock: it must
+  still be in Trash since the exact time it was judged by, and it is marked
+  closing, so a concurrent restore is refused instead of reporting success
+  for a session about to vanish. A failed owner preference read skips that
+  owner's sweep rather than falling back to the default.
+- Recursive operations reach only folders the actor may change. Restore
+  persists the sessions' Trash state before their folders and trashing does
+  the reverse, so a crash between writes never leaves a restored folder
+  holding sessions that retention would delete.
+- `POST /api/sessions/{id}/prompt` refuses a trashed session with 409; any
+  other admitted work (a scheduled wakeup) stays queued, never dispatched.
 - Drafts keep their own document Trash (`deleted`). A Draft inside a trashed
   folder is shown in that folder in Trash; if the folder is deleted
   permanently, the Draft moves to Draft Trash at the nearest live ancestor
-  instead of resurfacing.
+  instead of resurfacing. Nothing new can be created in or moved into a
+  trashed folder.
 
 Why 30 days: it is the convention users already know (macOS Finder, Google
 Drive, Gmail, Notion) and long enough to notice a mistaken folder deletion

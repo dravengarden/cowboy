@@ -124,6 +124,14 @@ macro_rules! reparent_workspace_documents {
                         trash |= purged.contains(id);
                         parent = removed.get(id).cloned().flatten();
                     }
+                    // A Draft of a purged folder lands at the nearest live
+                    // ancestor, walking on through ancestors still in Trash.
+                    while trash {
+                        let Some(id) = parent.clone() else { break; };
+                        let Some(folder) = $folders.iter().find(|folder| folder.id == id) else { parent = None; break; };
+                        if folder.trashed_at_ms.is_none() || !seen.insert(id) { break; }
+                        parent = folder.parent.clone();
+                    }
                     if parent == metadata.parent_id { continue; }
                     let value: String = sqlx::query_scalar("SELECT value FROM draft_documents WHERE owner_user_id=$1 AND id=$2")
                         .bind(&owner).bind(&metadata.id).fetch_one(&mut *$tx).await?;

@@ -777,6 +777,9 @@ impl Supervisor {
 
     /// Build the idempotent worker launch declaration for a persisted session.
     fn start_session(&self, session_id: &str) -> Result<StartSession, String> {
+        // Every launch, revive, reset, reload and Provider upgrade builds its
+        // declaration here, so this is the one boundary Trash must hold.
+        refuse_trashed(&self.hub, session_id)?;
         self.session_declaration(session_id, None)
     }
 

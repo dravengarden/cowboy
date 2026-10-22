@@ -6260,6 +6260,9 @@ impl Hub {
                 // fall through to the addressed confirmation below
             } else if wired
                 && !s.meta.paused
+                // A trashed session keeps admitted work queued (a scheduled
+                // wakeup is preserved, never consumed) until it is restored.
+                && s.meta.trashed_at_ms.is_none()
                 && Self::ready(s, true)
                 && s.queue.is_empty()
                 && self.context_allows_dispatch(session_id, cmid.as_deref())
@@ -6851,9 +6854,7 @@ impl Hub {
     /// (the user removed/activated it before it fired — the timer was cancelled,
     /// but a fire already in-flight is harmless here).
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
-        // A trashed session keeps its scheduled drafts unsent; they stay
-        // visible (overdue) if the session is restored.
-        if self.is_managed_child(session_id) || self.session_is_trashed(session_id) {
+        if self.is_managed_child(session_id) {
             return;
         }
         let fired = {
@@ -6861,6 +6862,12 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // A trashed session keeps its scheduled Drafts unsent; they stay
+            // visible (overdue) if the session is restored. Checked under the
+            // lock that removes the Draft, so a concurrent Trash cannot slip in.
+            if s.meta.trashed_at_ms.is_some() {
+                return;
+            }
             s.drafts
                 .iter()
                 .position(|m| m.id == draft_id)

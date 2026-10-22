@@ -154,7 +154,15 @@ impl Hub {
                 folders_by_owner,
             )
         };
-        self.persist_trash(&trashed.sessions, Some(now_ms), pins, folders_by_owner);
+        // Folders and placements first: a crash before the session write
+        // leaves sessions live, never a trashed session outside its folder.
+        self.persist_trash(
+            &trashed.sessions,
+            Some(now_ms),
+            pins,
+            folders_by_owner,
+            false,
+        );
         Ok(trashed)
     }
 
@@ -179,9 +187,6 @@ impl Hub {
             let mut targets: Vec<String> = Vec::new();
             for id in session_ids {
                 let session = sessions.get(id).ok_or("Session no longer exists")?;
-                if !actor.sees_all && session.meta.owner_user_id != actor.user_id {
-                    return Err("not allowed to change this session".into());
-                }
                 if session.meta.trashed_at_ms.is_none() {
                     return Err(format!("\"{}\" is not in Trash", session.meta.title));
                 }
@@ -195,6 +200,18 @@ impl Hub {
                         .is_some_and(|folder| restored_folders.iter().any(|r| r == folder))
                 {
                     targets.push(id.clone());
+                }
+            }
+            // Every target, chosen or carried by its folder, must belong to
+            // the actor, and none may already be on its way to deletion: a
+            // restore must never report success for a session about to vanish.
+            for id in &targets {
+                let meta = &sessions[id].meta;
+                if !actor.sees_all && meta.owner_user_id != actor.user_id {
+                    return Err("not allowed to change this session".into());
+                }
+                if meta.closing {
+                    return Err(format!("\"{}\" is being deleted permanently", meta.title));
                 }
             }
             let mut pins = Vec::new();
@@ -236,7 +253,10 @@ impl Hub {
                 folders_by_owner,
             )
         };
-        self.persist_trash(&restored.sessions, None, pins, folders_by_owner);
+        // Sessions leave Trash in storage before their folders do: a crash in
+        // between must never leave a restored folder holding sessions that
+        // retention would still delete.
+        self.persist_trash(&restored.sessions, None, pins, folders_by_owner, true);
         Ok(restored)
     }
 
@@ -264,9 +284,48 @@ impl Hub {
             (removed, folders_by_owner)
         };
         if !removed.is_empty() {
-            self.persist_trash(&[], None, Vec::new(), folders_by_owner);
+            self.persist_trash(&[], None, Vec::new(), folders_by_owner, false);
         }
         removed
+    }
+
+    /// Admit a permanent deletion of trashed folders for `actor`.
+    pub(crate) fn check_trashed_folders(
+        &self,
+        actor: &FolderActor,
+        folder_ids: &[String],
+    ) -> Result<(), String> {
+        self.inner.folders.lock().check_trashed(actor, folder_ids)
+    }
+
+    /// Claim a trashed session for permanent deletion: it must still be in
+    /// Trash (deleted at `expected_trashed_at_ms` when given) and not already
+    /// closing. Marks it closing under the session lock, so a concurrent
+    /// restore refuses it. The caller deletes it or releases the claim.
+    pub(crate) fn claim_trash_deletion(
+        &self,
+        session_id: &str,
+        expected_trashed_at_ms: Option<i64>,
+    ) -> bool {
+        let claimed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(session)
+                    if !session.meta.closing
+                        && session.meta.trashed_at_ms.is_some()
+                        && expected_trashed_at_ms
+                            .is_none_or(|at| session.meta.trashed_at_ms == Some(at)) =>
+                {
+                    session.meta.closing = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if claimed {
+            self.broadcast_sessions();
+        }
+        claimed
     }
 
     /// A session's explicit folder placement, if it is filed in a folder.
@@ -311,22 +370,34 @@ impl Hub {
         trashed_at_ms: Option<i64>,
         pins: Vec<(String, Option<String>)>,
         folders_by_owner: Vec<(FolderOwner, Vec<crate::session_folders::SessionFolder>)>,
+        sessions_first: bool,
     ) {
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            for (owner_user_id, folders) in folders_by_owner {
-                let _ = tx.send(StoreWrite::ReplaceSessionFolders {
-                    owner_user_id,
-                    folders,
-                });
-            }
+            let session_write = (!sessions.is_empty()).then(|| StoreWrite::SetSessionsTrashed {
+                session_ids: sessions.to_vec(),
+                trashed_at_ms,
+            });
+            let mut writes: Vec<StoreWrite> = folders_by_owner
+                .into_iter()
+                .map(
+                    |(owner_user_id, folders)| StoreWrite::ReplaceSessionFolders {
+                        owner_user_id,
+                        folders,
+                    },
+                )
+                .collect();
             if !pins.is_empty() {
-                let _ = tx.send(StoreWrite::UpdateSessionPlacement { placements: pins });
+                writes.push(StoreWrite::UpdateSessionPlacement { placements: pins });
             }
-            if !sessions.is_empty() {
-                let _ = tx.send(StoreWrite::SetSessionsTrashed {
-                    session_ids: sessions.to_vec(),
-                    trashed_at_ms,
-                });
+            if let Some(write) = session_write {
+                if sessions_first {
+                    writes.insert(0, write);
+                } else {
+                    writes.push(write);
+                }
+            }
+            for write in writes {
+                let _ = tx.send(write);
             }
         }
         self.sync_broadcast("folders", Vec::new());
@@ -536,5 +607,22 @@ mod tests {
         hub.restore_items(&actor, &[], &ids(&["s"])).unwrap();
         assert!(placement(&hub, "s").is_null());
         assert!(hub.restore_items(&actor, &[], &ids(&["s"])).is_err());
+    }
+
+    #[test]
+    fn a_claimed_deletion_refuses_restore_and_a_stale_claim_is_skipped() {
+        let hub = hub(&["s", "t"]);
+        let actor = FolderActor::local();
+        hub.trash_items(&actor, &[], &ids(&["s", "t"]), 10).unwrap();
+        // Judged at time 10, restored and trashed again at 20: the old
+        // judgement can no longer claim it.
+        hub.restore_items(&actor, &[], &ids(&["t"])).unwrap();
+        hub.trash_items(&actor, &[], &ids(&["t"]), 20).unwrap();
+        assert!(!hub.claim_trash_deletion("t", Some(10)));
+        assert!(hub.claim_trash_deletion("s", Some(10)));
+        assert!(!hub.claim_trash_deletion("s", None));
+        let error = hub.restore_items(&actor, &[], &ids(&["s"])).unwrap_err();
+        assert!(error.contains("being deleted"), "{error}");
+        assert!(hub.session_is_trashed("s"));
     }
 }

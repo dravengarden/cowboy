@@ -108,15 +108,10 @@ pub(super) fn purge(
 ) -> Result<(), String> {
     let actor = trash_actor(state, principal)?;
     mutable_sessions(state, principal, session_ids)?;
+    // Ownership of every folder, and of everything below it, is checked
+    // before anything is deleted or queued for a retry.
+    state.hub.check_trashed_folders(&actor, folder_ids)?;
     let (trashed_sessions, trashed_folders) = state.hub.trash_contents();
-    for folder in folder_ids {
-        if !trashed_folders
-            .iter()
-            .any(|candidate| &candidate.id == folder)
-        {
-            return Err("Only items in Trash can be deleted permanently".into());
-        }
-    }
     let mut doomed: Vec<String> = Vec::new();
     for session_id in session_ids {
         if !trashed_sessions.iter().any(|(id, _, _)| id == session_id) {
@@ -150,7 +145,7 @@ pub(super) fn purge(
     mutable_sessions(state, principal, &doomed)?;
     let mut first_error = None;
     for session_id in &doomed {
-        if let Err(error) = delete_now(state, session_id) {
+        if let Err(error) = delete_claimed(state, session_id, None) {
             first_error.get_or_insert(error);
         }
     }
@@ -188,6 +183,28 @@ fn folder_is_below(
     false
 }
 
+/// Permanently delete a trashed session once it is claimed: still in Trash
+/// (since `expected_trashed_at_ms`, when given) and not already closing. The
+/// claim marks it closing atomically, so a concurrent restore is refused. A
+/// session that was restored or is already being deleted is skipped.
+fn delete_claimed(
+    state: &Arc<AppState>,
+    session_id: &str,
+    expected_trashed_at_ms: Option<i64>,
+) -> Result<(), String> {
+    if !state
+        .hub
+        .claim_trash_deletion(session_id, expected_trashed_at_ms)
+    {
+        return Ok(());
+    }
+    let result = delete_now(state, session_id);
+    if result.is_err() {
+        state.hub.set_closing(session_id, false);
+    }
+    result
+}
+
 /// The one permanent session deletion: stop the agent first (so it pushes no
 /// more events into a soon-to-be-gone Hub session), then drop Hub state and
 /// broadcast. A remote environment confirms its stop before the row goes.
@@ -223,69 +240,92 @@ pub(super) async fn run_retention(state: Arc<AppState>) {
     }
 }
 
+/// The owner's retention, or `None` when it cannot be read now: a failed
+/// read must never shorten retention to the default and delete early.
 async fn retention_days(
     state: &Arc<AppState>,
-    cache: &mut HashMap<Option<String>, i64>,
+    cache: &mut HashMap<Option<String>, Option<i64>>,
     owner: Option<&String>,
-) -> i64 {
+) -> Option<i64> {
     if let Some(days) = cache.get(&owner.cloned()) {
         return *days;
     }
-    let preferences = match (owner, state.store.as_ref()) {
-        (Some(owner), Some(store)) => store.preferences(owner, "trash").await.ok().flatten(),
-        _ => None,
+    let days = match (owner, state.store.as_ref()) {
+        (Some(owner), Some(store)) => match store.preferences(owner, "trash").await {
+            Ok(preferences) => Some(crate::store::preferences::trash_retention_days(
+                preferences.as_ref(),
+            )),
+            Err(error) => {
+                tracing::warn!(%error, "Trash retention skipped an owner: preferences unavailable");
+                None
+            }
+        },
+        _ => Some(crate::store::preferences::trash_retention_days(None)),
     };
-    let days = crate::store::preferences::trash_retention_days(preferences.as_ref());
     cache.insert(owner.cloned(), days);
     days
 }
 
+/// One retention pass. Every owner's retention is read first; the decisions
+/// then use one fresh, synchronous snapshot, and each deletion is claimed
+/// against the exact Trash time it was judged by, so an item restored (or
+/// trashed again) meanwhile is never deleted.
 pub(super) async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
     const DAY_MS: i64 = 86_400_000;
     let (sessions, folders) = state.hub.trash_contents();
     let mut cache = HashMap::new();
+    for owner in sessions
+        .iter()
+        .map(|(_, owner, _)| owner.clone())
+        .chain(folders.iter().map(|folder| folder.owner_user_id.clone()))
+    {
+        retention_days(state, &mut cache, owner.as_ref()).await;
+    }
+    let expired = |owner: &Option<String>, at: i64| {
+        cache
+            .get(owner)
+            .copied()
+            .flatten()
+            .is_some_and(|days| at.saturating_add(days.saturating_mul(DAY_MS)) <= now_ms)
+    };
+    let (sessions, folders) = state.hub.trash_contents();
     for (session_id, owner, trashed_at_ms) in sessions {
-        let days = retention_days(state, &mut cache, owner.as_ref()).await;
-        if trashed_at_ms.saturating_add(days.saturating_mul(DAY_MS)) > now_ms
-            || state
-                .hub
-                .session_info(&session_id)
-                .is_some_and(|info| info.meta.closing)
-        {
+        if !expired(&owner, trashed_at_ms) {
             continue;
         }
-        match delete_now(state, &session_id) {
+        match delete_claimed(state, &session_id, Some(trashed_at_ms)) {
             Ok(()) => {
-                tracing::info!(session = %session_id, days, "deleted session after Trash retention")
+                tracing::info!(session = %session_id, "deleted session after Trash retention")
             }
             Err(error) => {
-                tracing::warn!(session = %session_id, %error, "Trash retention could not delete session")
+                tracing::warn!(session = %session_id, %error, "Trash retention could not delete session");
             }
         }
     }
-    let mut expired: Vec<String> = PENDING_FOLDER_PURGES.lock().drain().collect();
+    let mut purge: Vec<String> = PENDING_FOLDER_PURGES.lock().drain().collect();
     for folder in folders {
-        let days = retention_days(state, &mut cache, folder.owner_user_id.as_ref()).await;
         if folder
             .trashed_at_ms
-            .is_some_and(|at| at.saturating_add(days.saturating_mul(DAY_MS)) <= now_ms)
+            .is_some_and(|at| expired(&folder.owner_user_id, at))
+            && !purge.contains(&folder.id)
         {
-            expired.push(folder.id);
+            purge.push(folder.id);
         }
     }
-    if !expired.is_empty() {
-        let removed = state
-            .hub
-            .purge_trashed_folders(&FolderActor::local(), &expired);
-        if !removed.is_empty() {
-            tracing::info!(folders = removed.len(), "deleted folders from Trash");
-        }
-        // Keep requested deletions that are still waiting for a session stop.
-        let (_, remaining) = state.hub.trash_contents();
-        PENDING_FOLDER_PURGES.lock().extend(
-            expired.into_iter().filter(|id| {
-                !removed.contains(id) && remaining.iter().any(|folder| folder.id == *id)
-            }),
-        );
+    if purge.is_empty() {
+        return;
     }
+    let removed = state
+        .hub
+        .purge_trashed_folders(&FolderActor::local(), &purge);
+    if !removed.is_empty() {
+        tracing::info!(folders = removed.len(), "deleted folders from Trash");
+    }
+    // Keep requested deletions that are still waiting for a session stop.
+    let (_, remaining) = state.hub.trash_contents();
+    PENDING_FOLDER_PURGES.lock().extend(
+        purge
+            .into_iter()
+            .filter(|id| !removed.contains(id) && remaining.iter().any(|folder| folder.id == *id)),
+    );
 }
