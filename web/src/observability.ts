@@ -1,3 +1,4 @@
+import { longTaskEntriesSupported, STALL_TICK_MS, stallDetector } from "./mainThreadStalls";
 import { newUuid } from "./uuid";
 import { cleanTelemetryAttributes, cleanTelemetryMessage, retryTelemetryStatus, TelemetryQueue } from "./telemetryQueue.ts";
 import { type ClientSpan, createClientOtel } from "./otel.ts";
@@ -194,7 +195,19 @@ function beaconFlush(): void {
 }
 
 function installPerformanceObservers(): void {
-  if (!("PerformanceObserver" in globalThis)) return;
+  if (!longTaskEntriesSupported()) {
+    const tick = stallDetector({
+      now: () => performance.now(),
+      visible: () => globalThis.document?.visibilityState === "visible",
+    });
+    globalThis.setInterval(() => {
+      const stall = tick();
+      if (stall === null) return;
+      reportClientMetric("long_task_count", 1);
+      reportClientMetric("long_task_duration_ms", stall);
+    }, STALL_TICK_MS);
+    return;
+  }
   try {
     const observer = new PerformanceObserver((list) => {
       const entries = list.getEntries();
