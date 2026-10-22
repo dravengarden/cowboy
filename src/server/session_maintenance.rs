@@ -99,6 +99,27 @@ fn resource_block(state: &AppState, machine: &str) -> Option<&'static str> {
     memory_wait(state, machine)
 }
 
+/// A prompt waiting for its rebooting execution Machine is only retried once
+/// that Machine is connected again; until then the queue is left untouched.
+fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    let Some(record) = &meta.execution_binding else {
+        return true;
+    };
+    let Some(target) = record
+        .decode()
+        .ok()
+        .map(|binding| binding.environment.machine_id)
+        .or_else(|| {
+            record
+                .recovery()
+                .map(|intent| intent.previous.environment.machine_id)
+        })
+    else {
+        return true;
+    };
+    state.machine_control.operation_connection(&target).is_ok()
+}
+
 pub(super) fn clear_wait(hub: &Hub, session: &str) {
     hub.set_resource_wait(session, None);
     let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");
@@ -259,6 +280,9 @@ pub(super) fn start(state: &Arc<AppState>) {
                 if !meta.paused && matches!(meta.status, Status::Exited | Status::Running) {
                     // Avoid popping/re-persisting the entire message on every
                     // blocked tick. The dispatcher still atomically rechecks.
+                    if !execution_target_connected(&state, meta) {
+                        continue;
+                    }
                     if !holds_worker_slot(&state.runtime_router, meta) {
                         if let Some(reason) = resource_block(&state, &meta.machine_id) {
                             wait(&state.hub, &meta.id, reason);

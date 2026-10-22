@@ -3566,6 +3566,9 @@ fn retain_failed_dispatch(
             error = %error,
             "queued dispatch deferred until Machine runtime is ready"
         );
+        // Maintenance retries the wait. A target Machine can reconnect after
+        // the runtime's reconnect already drained this prompt into a refusal.
+        session_maintenance::wait(hub, &session_id, "waiting for Machine connection");
         return;
     }
     // Restore-timeout holds already explain the queue and the next step.
@@ -3586,6 +3589,38 @@ fn is_transient_machine_disconnect(error: &str) -> bool {
 #[cfg(test)]
 mod dispatcher_failure_tests {
     use super::*;
+
+    #[test]
+    fn a_disconnected_machine_keeps_the_prompt_in_a_retried_wait() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let key = format!(
+            "{}s",
+            crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        );
+        assert!(hub.setting(&key).is_none());
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "after the reboot".into(),
+            vec![],
+            Some("cmid-1".into()),
+            "Machine is not connected",
+        );
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        assert_eq!(
+            hub.setting(&key)
+                .and_then(|value| value.get("reason").cloned()),
+            Some(serde_json::json!("waiting for Machine connection"))
+        );
+    }
 
     #[tokio::test]
     async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
