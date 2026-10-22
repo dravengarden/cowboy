@@ -521,7 +521,10 @@ export function DesktopCommandHost({
   ]);
 
   const normalized = query.trim().toLowerCase();
-  const available = registry.list().filter((command) =>
+  // Only an open palette lists commands: each row evaluates its `when`
+  // predicate (often a DOM query), and this host re-renders on every
+  // workspace change.
+  const available = !paletteOpen ? [] : registry.list().filter((command) =>
     command.id !== "commandPalette.open" &&
     (!normalized ||
       `${command.title} ${command.id} ${command.group} ${command.description ?? ""}`

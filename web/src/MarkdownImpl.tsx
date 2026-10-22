@@ -49,6 +49,7 @@ import {
   oneLight,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { normalizeSyntaxLanguage } from "./syntaxLanguages";
+import { installPrismTheme } from "./prismThemeCss";
 import {
   chunkCodeForRendering,
   previewCodeForRendering,
@@ -299,8 +300,14 @@ function CodeBlock({
   // entries. A native horizontally scrolled <pre> otherwise keeps its old
   // scrollLeft and makes the next file/diff appear clipped from the left.
   // Reset only when the underlying block changes; ordinary reading scrolls are
-  // left untouched.
+  // left untouched. A freshly mounted <pre> already starts at 0; writing it
+  // anyway forces a layout per code block while a transcript mounts.
+  const scrollResetMounted = useRef(false);
   useLayoutEffect(() => {
+    if (!scrollResetMounted.current) {
+      scrollResetMounted.current = true;
+      return;
+    }
     const pre = rootRef.current?.querySelector("pre");
     if (pre) pre.scrollLeft = 0;
   }, [highlightedCode, syntaxLanguage, wrapOnTouch]);
@@ -380,9 +387,11 @@ function CodeBlock({
       {copied && <Box component="span">Copied</Box>}
     </IconButton>
   );
+  const prismScope = installPrismTheme(codeTheme, dark ? "cowboy-prism-dark" : "cowboy-prism-light");
   return (
     <Box
       ref={rootRef}
+      className={prismScope}
       data-code-lines={code.includes("\n") ? "multiple" : "single"}
       sx={{
         my: 1,
@@ -502,6 +511,10 @@ function CodeBlock({
           <SyntaxHighlighter
             language={syntaxLanguage}
             style={codeTheme}
+            // Class names + the theme stylesheet installed above. Inline mode
+            // recomputes the whole theme selector list for every token.
+            useInlineStyles={false}
+            className={`language-${syntaxLanguage}`}
             // overflowX on the inline customStyle (highest specificity) so it wins
             // over the prism theme's own pre style — the long-line scroll must not
             // depend on the emotion class losing/winning the cascade.

@@ -67,7 +67,12 @@ routinely breaks another.
   (product login off) with `just dev-web`, or a fixture suite, in an
   anonymous or disposable Chrome context. Real-user behaviour comes from the
   `cowboy-web` client events in VictoriaLogs (for example per-surface
-  `transcript_sync_completed` rates).
+  `transcript_sync_completed` rates). For Desktop performance, run
+  `just desktop-perf-profile` before and after a change that touches the
+  Sessions list, store fan-out, Transcript or Markdown rendering, and compare
+  the long-task totals per scenario. A `sessions` frame must not re-render
+  unchanged rows (`sessionIdentity.ts`, `SessionRowMemo`), and highlighted
+  code stays on class names (`prismThemeCss.ts`), never inline token styles.
 - Desktop keyboard, leader, label, modal or Draft-page changes must pass
   `just desktop-browser-gate` (pinned Firefox and Chromium in both themes, then
   trusted-input acceptance with screenshots on hawk Chrome). Exit code 3 means

@@ -171,6 +171,7 @@ import {
   TRANSCRIPT_SESSION_CACHE_LIMIT,
 } from "./transcriptSessionCache";
 import { createPrefetchRunner, prefetchCandidates } from "./hydrationScheduler";
+import { reuseUnchangedSessions } from "./sessionIdentity";
 import {
   announceProductAuthSession,
   PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
@@ -3559,7 +3560,10 @@ function commitSessions(): void {
   const titles = titleSync.view();
   setState({
     ...state,
-    sessions: deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
+    sessions: reuseUnchangedSessions(
+      state.sessions,
+      deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
+    ),
     titleOverrides: titles,
     sessionFolders: foldersSync.view(),
     sessionFoldersReady: foldersSync.ready(),

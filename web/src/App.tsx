@@ -745,6 +745,16 @@ const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
     "cowboy:desktop-rename": "rename",
 };
 
+/** Re-render one list row only when one of its `deps` changed (`Object.is`). */
+const SessionRowMemo = memo(
+    function SessionRowMemo({ render }: { deps: readonly unknown[]; render: () => React.JSX.Element }): React.JSX.Element {
+        return render();
+    },
+    (previous, next) =>
+        previous.deps.length === next.deps.length &&
+        previous.deps.every((value, index) => Object.is(value, next.deps[index])),
+);
+
 function SessionList({
     sessions,
     drafts,
@@ -862,6 +872,9 @@ function SessionList({
     // Desktop P3 prefetch: a mouse resting on a row for 150 ms fetches that
     // session's tail so the switch paints at once (docs/offline-first-sync.md §3).
     const hoverPrefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    // Memoized session rows read these at event time, never from a stale render.
+    const rowLive = useRef({ onPick, onDraftCopy, onRequestInfo, activeId });
+    rowLive.current = { onPick, onDraftCopy, onRequestInfo, activeId };
     // --- Folders (docs/sessions-folders.md) ---------------------------------
     // The synced folder tree is overlaid on the display-ordered session list.
     // Both surfaces render the same direction — the synced `"order"` array
@@ -2057,7 +2070,22 @@ function SessionList({
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id) || s.closing === true;
                     const jumpLabel = sessionLabelsShown ? jumpLabels.get(s) : undefined;
+                    const pulse = fold.pulseSx(s.id);
+                    const copyTargeted = copyTarget?.kind === "session" && copyTarget.session.id === s.id;
+                    // A `sessions` frame for one busy session must not
+                    // re-render every row: a row re-renders only when what it
+                    // draws changed. Handlers read the latest callbacks through
+                    // `rowLive`; an active drag re-renders every row.
                     return (
+                    <SessionRowMemo
+                        key={s.id}
+                        deps={[
+                            s, s.id === activeId, deleting, jumpLabel, desktop, pinned, copyTargeted,
+                            row.depth, sortable.drag, dropFolderName, dropHighlight(row, s.id),
+                            pulse === undefined ? null : (pulse as { animation?: string }).animation,
+                            accounts, mobileDrawer,
+                        ]}
+                        render={() => (
                     <ReliableListItemButton
                         key={s.id}
                         data-haptic="selection"
@@ -2065,7 +2093,7 @@ function SessionList({
                         data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
-                        data-workspace-copy-target={copyTarget?.kind === "session" && copyTarget.session.id === s.id ? "true" : undefined}
+                        data-workspace-copy-target={copyTargeted ? "true" : undefined}
                         data-session-deleting={deleting ? "true" : undefined}
                         aria-busy={deleting || undefined}
                         aria-disabled={deleting || undefined}
@@ -2081,11 +2109,11 @@ function SessionList({
                             const documentId = event.dataTransfer.getData(DRAFT_DRAG_TYPE);
                             if (!desktop || !documentId) return;
                             event.preventDefault();
-                            onDraftCopy(documentId, s);
+                            rowLive.current.onDraftCopy(documentId, s);
                         }}
                         onPointerEnter={desktop
                             ? (event): void => {
-                                if (event.pointerType !== "mouse" || s.id === activeId) return;
+                                if (event.pointerType !== "mouse" || s.id === rowLive.current.activeId) return;
                                 clearTimeout(hoverPrefetchTimer.current);
                                 hoverPrefetchTimer.current = setTimeout(
                                     () => prefetchSessionTail(s.id),
@@ -2099,7 +2127,7 @@ function SessionList({
                         onActivate={(): void => {
                             if (deleting) return;
                             setPinned(false);
-                            onPick(s.id);
+                            rowLive.current.onPick(s.id);
                         }}
                         // The Mobile rail owns its safe-area inset once. Keep
                         // row gutters compact while preserving 44px controls.
@@ -2140,7 +2168,7 @@ function SessionList({
                             }),
                             // A brief ring so the eye finds the current row
                             // after the fold button reflows the list.
-                            ...fold.pulseSx(s.id),
+                            ...pulse,
                             // The lifted row is opaque so the rows it passes
                             // over never show through its text.
                             ...(sortable.drag?.id === s.id && {
@@ -2221,7 +2249,7 @@ function SessionList({
                                     </Typography>
                                     <SessionMachineBadge
                                         session={s}
-                                        onInfo={() => onRequestInfo(s)}
+                                        onInfo={() => rowLive.current.onRequestInfo(s)}
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
@@ -2311,6 +2339,8 @@ function SessionList({
                                 : <MoreVert sx={{ fontSize: "1.5rem" }} />}
                         </IconButton>
                     </ReliableListItemButton>
+                        )}
+                    />
                     );
                 })}
                 {sessions.length === 0 && (

@@ -5,7 +5,8 @@ import { build } from "../web/node_modules/vite/dist/node/index.js";
 const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
 if (
-  suite !== "desktop-viewport" && suite !== "idb" && suite !== "idb-outbox" &&
+  suite !== "desktop-viewport" && suite !== "desktop-perf" && suite !== "idb" &&
+  suite !== "idb-outbox" &&
   suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
@@ -93,7 +94,8 @@ await build({
     minify: false,
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
-    ...(suite === "desktop-viewport" || suite === "review-diff" ||
+    ...(suite === "desktop-viewport" || suite === "desktop-perf" ||
+        suite === "review-diff" ||
         suite === "review-document-refresh" ||
         suite === "review-destination" || suite === "review-recovery" ||
         suite === "workspace-extensions" || suite === "desktop-composer" ||
@@ -116,6 +118,8 @@ await build({
           ? "../web/src/clientUpdateBrowserFixture.tsx"
           : suite === "desktop-viewport"
           ? "../web/src/desktopViewportBrowserConformance.tsx"
+          : suite === "desktop-perf"
+          ? "../web/src/desktopPerfBrowserFixture.tsx"
           : suite === "loading-progress"
           ? "../web/src/loadingProgressBrowserConformance.tsx"
           : suite === "review-context"
