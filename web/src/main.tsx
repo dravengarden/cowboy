@@ -114,7 +114,7 @@ function Root(): React.JSX.Element {
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
             <Suspense fallback={<BootSkeleton />}>{subscriptionSignIn ? <SubscriptionSignInHandoff key={subscriptionSignIn} hash={subscriptionSignIn} /> : app}</Suspense>
-            <DocumentNotifications />
+            <DocumentNotifications mobile={!desktop} />
             <EditorExtensionsDialog />
           </DeviceAuthorizationRoute>
         </ProductAuthGate>

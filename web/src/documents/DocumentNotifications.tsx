@@ -26,7 +26,9 @@ const subscribe = (listener: () => void): () => void => {
   };
 };
 const read = (): Notice | null => notice;
-export function DocumentNotifications(): React.JSX.Element {
+export function DocumentNotifications(
+  { mobile = false }: { mobile?: boolean } = {},
+): React.JSX.Element {
   const current = useSyncExternalStore(subscribe, read, read);
   const [busy, setBusy] = useState(false);
   const close = (): void => {
@@ -43,9 +45,20 @@ export function DocumentNotifications(): React.JSX.Element {
       onClose={(_, reason) => {
         if (reason !== "clickaway" && !busy) close();
       }}
+      anchorOrigin={{
+        vertical: "bottom",
+        horizontal: mobile ? "center" : "left",
+      }}
+      // Mobile keeps floating chrome (the Sessions toolbar, the composer
+      // actions) on the bottom edge. Lift the notice above it like the
+      // app-level error toast instead of covering the controls.
+      sx={mobile
+        ? { bottom: "calc(env(safe-area-inset-bottom, 0px) + 96px)" }
+        : undefined}
     >
       <Alert
         severity="info"
+        sx={mobile ? { width: "100%", alignItems: "center" } : undefined}
         onClose={busy ? undefined : close}
         action={current?.undo
           ? (
