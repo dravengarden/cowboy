@@ -201,7 +201,10 @@ async fn replacement_login_preserves_pinned_session(
         .cancel_provider_login("login-owner", "replacement")
         .await
         .unwrap();
-    abandoned_replacement_falls_back(store, completion, hub, meta, &input).await;
+    Box::pin(abandoned_replacement_falls_back(
+        store, completion, hub, meta, &input,
+    ))
+    .await;
 }
 
 async fn abandoned_replacement_falls_back(
