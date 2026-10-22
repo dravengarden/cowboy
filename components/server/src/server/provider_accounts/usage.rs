@@ -82,13 +82,19 @@ async fn target(
             machine.id.clone(),
         )
     });
-    let mut outdated = false;
+    let (mut outdated, mut pending) = (false, false);
     for machine in machines {
         let Some((operation, completion)) = store
             .native_login_for_session(owner, id, &machine.id)
             .await
             .map_err(|_| "unavailable")?
         else {
+            // An unfinished newer sign-in blocks this Machine; say so instead
+            // of implying the account must sign in from scratch.
+            pending |= store
+                .native_login_pending(owner, id, &machine.id)
+                .await
+                .unwrap_or(false);
             continue;
         };
         let Ok(installed) = active_machine_plugin(
@@ -143,7 +149,9 @@ async fn target(
             source: binding.product_label().into(),
         });
     }
-    Err(if outdated {
+    Err(if pending {
+        "native_login_pending"
+    } else if outdated {
         "native_login_outdated"
     } else {
         "native_login_required"
@@ -155,6 +163,9 @@ fn error_message(code: &str) -> &str {
         "account_disabled" => "This account is disabled.",
         "account_usage_unsupported" => "This Provider does not support background account usage.",
         "native_login_required" => "Sign in on a Machine to query this account's usage.",
+        "native_login_pending" => {
+            "A newer sign-in has not finished. Finish or cancel it in Settings → Subscriptions."
+        }
         "native_login_outdated" => {
             "The Provider was updated after this account signed in. Sign in again to use it and query its usage."
         }
@@ -525,6 +536,8 @@ mod tests {
         let outdated = error_message("native_login_outdated");
         assert_ne!(outdated, error_message("native_login_required"));
         assert!(outdated.contains("updated") && outdated.contains("Sign in again"));
+        let pending = error_message("native_login_pending");
+        assert!(pending.contains("Finish or cancel"), "{pending}");
     }
 
     #[test]

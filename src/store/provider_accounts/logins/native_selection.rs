@@ -51,45 +51,96 @@ impl Store {
         account: &ProviderAccountId,
         machine: &str,
     ) -> Result<Option<(String, NativeCompletion)>> {
+        let Some((generation, _)) = self.effective_native_login(owner, account, machine).await?
+        else {
+            return Ok(None);
+        };
+        self.select_native_login(owner, account, machine, Some(i64::try_from(generation)?))
+            .await
+    }
+
+    /// Whether an unfinished sign-in (waiting, unknown or still verifying)
+    /// is the effective login, so new sessions wait for it to finish or be
+    /// cancelled instead of needing a fresh sign-in. Advisory only.
+    pub async fn native_login_pending(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+        machine: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .effective_native_login(owner, account, machine)
+            .await?
+            .and_then(|(_, receipt)| receipt)
+            .is_some_and(|receipt| {
+                !abandoned(&receipt)
+                    && receipt.native_logout.is_none()
+                    && receipt.native_binding_revision.is_none()
+            }))
+    }
+
+    /// The effective generation and its receipt, if any generation is reserved.
+    async fn effective_native_login(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+        machine: &str,
+    ) -> Result<Option<(u64, Option<Receipt>)>> {
         ensure!(!account.is_default(), "named_account_required");
         let query = "SELECT generation FROM provider_native_generations WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3";
-        let receipts_query = "SELECT value FROM provider_login_operations WHERE owner_user_id=$1";
-        let (latest, values): (Option<i64>, Vec<String>) = match &self.backend {
+        let (latest, receipts) = match &self.backend {
             StorageBackend::Postgres(db) => (
-                sqlx::query_scalar(query)
+                sqlx::query_scalar::<_, i64>(query)
                     .bind(owner)
                     .bind(account.as_str())
                     .bind(machine)
                     .fetch_optional(&db.pool)
                     .await?,
-                sqlx::query_scalar(receipts_query)
-                    .bind(owner)
-                    .fetch_all(&db.pool)
-                    .await?,
+                self.owner_login_receipts(owner).await?,
             ),
             StorageBackend::Sqlite(db) => (
-                sqlx::query_scalar(query)
+                sqlx::query_scalar::<_, i64>(query)
                     .bind(owner)
                     .bind(account.as_str())
                     .bind(machine)
                     .fetch_optional(&db.pool)
                     .await?,
-                sqlx::query_scalar(receipts_query)
-                    .bind(owner)
-                    .fetch_all(&db.pool)
-                    .await?,
+                self.owner_login_receipts(owner).await?,
             ),
         };
         let Some(latest) = latest else {
             return Ok(None);
         };
-        let receipts: Vec<Receipt> = values
+        let generation = effective_generation(&receipts, account, machine, u64::try_from(latest)?);
+        let receipt = receipts.into_iter().find(|receipt| {
+            &receipt.input.account_id == account
+                && receipt.input.machine_id == machine
+                && receipt.native_generation == Some(generation)
+        });
+        Ok(Some((generation, receipt)))
+    }
+
+    /// Every login receipt of one owner; unreadable rows are skipped.
+    pub(super) async fn owner_login_receipts(&self, owner: &str) -> Result<Vec<Receipt>> {
+        let query = "SELECT value FROM provider_login_operations WHERE owner_user_id=$1";
+        let values: Vec<String> = match &self.backend {
+            StorageBackend::Postgres(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+            StorageBackend::Sqlite(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .fetch_all(&db.pool)
+                    .await?
+            }
+        };
+        Ok(values
             .iter()
             .filter_map(|value| serde_json::from_str(value).ok())
-            .collect();
-        let generation = effective_generation(&receipts, account, machine, u64::try_from(latest)?);
-        self.select_native_login(owner, account, machine, Some(i64::try_from(generation)?))
-            .await
+            .collect())
     }
 
     /// Discovery for an existing durable session, never a fallback for creation.

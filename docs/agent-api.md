@@ -714,6 +714,14 @@ Provider request) and disables an account whose login is outdated or missing
 with that reason; creation still rechecks the exact Machine and reports either
 refusal as a readable "sign in (again) from Settings → Subscriptions" message.
 
+When the effective login on a Machine is an unfinished newer sign-in (waiting,
+unknown or still verifying), usage, the picker and creation report
+`native_login_pending` ("finish or cancel it") instead of
+`native_login_required`, because cancelling it restores the previous working
+login without a fresh sign-in. The per-Machine login list shows the effective
+login: a newer attempt that was cancelled or refused before completing never
+hides the login that still admits sessions.
+
 The internal native-session writer checks this binding and inserts the session
 in one transaction under the account admission lock. Concurrent revocation
 either captures the committed session in its cleanup plan or denies insertion;

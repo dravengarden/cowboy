@@ -10,7 +10,7 @@
 
 use crate::execution_protocol::{Event, Invocation, Outcome, Refusal};
 use sha2::{Digest as _, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
@@ -22,6 +22,8 @@ const MAX_EVENTS_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES: usize = 2 * 1024 * 1024;
 /// Far beyond the worker's 180 s wait for one request and its 30 s resend.
 const TOMBSTONE_RETENTION: Duration = Duration::from_secs(15 * 60);
+/// Bound on native process identities tracked for unattended reaping.
+const MAX_PROCESSES: usize = 4096;
 
 pub(super) enum EventError {
     Full(serde_json::Value),
@@ -73,6 +75,8 @@ pub(super) struct Ledger {
     acknowledged: u64,
     pub event_changed: watch::Sender<u64>,
     pub event_space: watch::Sender<u64>,
+    /// Native processes started through this keeper and not yet closed.
+    processes: BTreeSet<String>,
 }
 
 impl Ledger {
@@ -93,7 +97,14 @@ impl Ledger {
             acknowledged: 0,
             event_changed: watch::channel(0).0,
             event_space: watch::channel(0).0,
+            processes: BTreeSet::new(),
         }
+    }
+
+    /// Release every tracked process identity for termination. A process the
+    /// executor already closed is absent; one that closes later is harmless.
+    pub fn take_processes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.processes).into_iter().collect()
     }
 
     pub fn admit(&mut self, invocation: &Invocation) -> Result<Admission, Refusal> {
@@ -117,6 +128,12 @@ impl Ledger {
             || self.pending_bytes + serialized.len() > MAX_PENDING_BYTES
         {
             return Err(Refusal::Capacity);
+        }
+        if invocation.method == "process/start"
+            && let Some(process) = invocation.params["processId"].as_str()
+            && self.processes.len() < MAX_PROCESSES
+        {
+            self.processes.insert(process.to_owned());
         }
         let (outcome, receiver) = watch::channel(Outcome::Pending);
         let id = self.next_id;
@@ -227,6 +244,11 @@ impl Ledger {
             // Backpressure then reaches the native executor and its processes.
             return Err(EventError::Full(message));
         }
+        if message["method"] == "process/closed"
+            && let Some(process) = message["params"]["processId"].as_str()
+        {
+            self.processes.remove(process);
+        }
         self.sequence += 1;
         self.events.push_back((
             Event {
@@ -287,6 +309,33 @@ impl Ledger {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn started_processes_are_tracked_until_the_executor_closes_them() {
+        let mut ledger = Ledger::new();
+        for (operation, process) in [("start-1", "mcp"), ("start-2", "server")] {
+            let invocation = Invocation {
+                operation_id: operation.into(),
+                method: "process/start".into(),
+                params: json!({"processId": process, "argv": ["true"]}),
+            };
+            assert!(matches!(
+                ledger.admit(&invocation),
+                Ok(Admission::New { .. })
+            ));
+        }
+        let read = Invocation {
+            operation_id: "read-1".into(),
+            method: "process/read".into(),
+            params: json!({"processId": "other"}),
+        };
+        ledger.admit(&read).unwrap();
+        ledger
+            .push_event(json!({"method": "process/closed", "params": {"processId": "server"}}))
+            .unwrap();
+        assert_eq!(ledger.take_processes(), vec!["mcp".to_owned()]);
+        assert!(ledger.take_processes().is_empty());
+    }
 
     fn invocation() -> Invocation {
         Invocation {
