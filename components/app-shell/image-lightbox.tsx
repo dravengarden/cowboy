@@ -45,6 +45,8 @@ import { haptic as fireHaptic } from "./haptics.ts";
 // The frosted-dark-glass backdrop. Also the colour the standalone status bar
 // takes while the overlay is up (see the theme-color effect below).
 const BACKDROP_COLOR = "#0b0b0e";
+// Breathing room between the figure's resting edge and the control dock.
+const DOCK_GAP = 8;
 
 interface GalleryMediaBase {
   alt: string;
@@ -125,6 +127,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
   // a hook behind `&&`.)
   const isDarkMode = useTheme().palette.mode === "dark";
   const overlayRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<LightboxMediaElement>(null);
   const inlineSvgHostRef = useRef<HTMLDivElement>(null);
 
@@ -250,6 +253,29 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     };
   }, [current, open, onImageLoad, plateBg]);
 
+  // The dock's real height (caption, key map, controls, home indicator and any
+  // host clearance) becomes the stage's bottom inset, so a figure never fits
+  // or pans underneath the controls. Re-measured whenever either box changes.
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    const dock = dockRef.current;
+    if (!open || !overlay || !dock) return undefined;
+    let previous = "";
+    const measure = (): void => {
+      const next = `${Math.max(0, overlay.clientHeight - dock.offsetTop) + DOCK_GAP}px`;
+      if (next === previous) return;
+      previous = next;
+      overlay.style.setProperty("--lightbox-dock-clearance", next);
+      onImageLoad();
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(overlay);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [open, onImageLoad, controlsBottom, keyHints]);
+
   // Key shortcuts while open. No body-scroll lock — see the file header.
   useEffect(() => {
     if (!open) {
@@ -366,6 +392,14 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        // The unobstructed stage (see measureGeometry): fit and pan bounds stay
+        // clear of the status bar / Dynamic Island, landscape notches and the
+        // measured control dock, while the backdrop still covers everything.
+        boxSizing: "border-box",
+        paddingTop: "max(env(safe-area-inset-top, 0px), 12px)",
+        paddingLeft: "env(safe-area-inset-left, 0px)",
+        paddingRight: "env(safe-area-inset-right, 0px)",
+        paddingBottom: "var(--lightbox-dock-clearance, max(env(safe-area-inset-bottom, 0px), 16px))",
         overflow: "hidden",
         touchAction: "none",
         "@keyframes shared-lightbox-in": {
@@ -459,6 +493,8 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
           dismiss. */
       }
       <div
+        ref={dockRef}
+        data-lightbox-dock
         style={{
           ...dockStyle,
           ...(controlsBottom === undefined ? {} : { bottom: controlsBottom, paddingBottom: 0 }),

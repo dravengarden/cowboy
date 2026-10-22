@@ -144,11 +144,31 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     const padding = Number.parseFloat(
       globalThis.getComputedStyle(img).paddingTop || "0",
     ) / bakedScale.current;
+    // The overlay's padding is the unobstructed stage (safe areas and the
+    // control dock, PhotoSwipe's `padding` model): the figure fits and centres
+    // inside it, and a zoomed figure's edges stop at it instead of under the
+    // Dynamic Island, the status bar or the dock. Content still paints
+    // full-bleed while it is panned through the middle.
+    const inset = globalThis.getComputedStyle(overlay);
+    const edge = (value: string): number => {
+      const parsed = Number.parseFloat(value || "0");
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const top = edge(inset.paddingTop);
+    const left = edge(inset.paddingLeft);
+    const viewportWidth = Math.max(
+      0,
+      overlay.clientWidth - left - edge(inset.paddingRight),
+    );
+    const viewportHeight = Math.max(
+      0,
+      overlay.clientHeight - top - edge(inset.paddingBottom),
+    );
     geometry.current = {
-      centerX: rect.left + overlay.clientWidth / 2,
-      centerY: rect.top + overlay.clientHeight / 2,
-      viewportWidth: overlay.clientWidth,
-      viewportHeight: overlay.clientHeight,
+      centerX: rect.left + left + viewportWidth / 2,
+      centerY: rect.top + top + viewportHeight / 2,
+      viewportWidth,
+      viewportHeight,
       padding: Number.isFinite(padding) ? padding : 0,
       // SVG has no offsetWidth/offsetHeight. Its client rect includes the
       // current transform, so divide out the logical scale to recover the
@@ -404,7 +424,12 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     // figure never had. Freeze the animation into the model first.
     stopSettle();
     measureGeometry();
-    zoomAt({ factor, cx: globalThis.innerWidth / 2, cy: globalThis.innerHeight / 2, animate: true });
+    zoomAt({
+      factor,
+      cx: geometry.current?.centerX ?? globalThis.innerWidth / 2,
+      cy: geometry.current?.centerY ?? globalThis.innerHeight / 2,
+      animate: true,
+    });
     schedulePanLayer(240);
   }, [stopSettle, measureGeometry, zoomAt, schedulePanLayer]);
 
