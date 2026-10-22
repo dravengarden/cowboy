@@ -66,16 +66,21 @@ test("plain HTTP failures allow a corrected send while successful handoffs leave
 test("context bootstrap does not swallow or duplicate the user's message", () => {
   const reminder =
     '<system-reminder>\nLinked Cowboy sessions: [{"session_id":"old","before":9}]\nRead evidence.\n</system-reminder>';
+  // The links follow the first dispatched authored prompt, which may be an
+  // ordinary composer message when the queued bootstrap was removed.
   for (
-    const texts of [[reminder, "Continue with this fix"], [
-      reminder + "Continue with this fix",
-    ]]
+    const [cmid, texts] of [
+      ["context-once", [reminder, "Continue with this fix"]],
+      ["context-once", [reminder + "Continue with this fix"]],
+      ["c-composer", [reminder, "Continue with this fix"]],
+      ["c-composer", [reminder + "Continue with this fix"]],
+    ] as const
   ) {
     const timeline: Envelope[] = texts.map((text, index) => ({
       session_id: "new",
       seq: index + 1,
       kind: "update",
-      cmid: "context-once",
+      cmid,
       update: {
         sessionUpdate: "user_message_chunk",
         content: { type: "text", text },
