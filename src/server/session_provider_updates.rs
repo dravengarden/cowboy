@@ -405,7 +405,8 @@ async fn pass(
             super::session_maintenance::policy(&state.hub, &state.service_config, &meta.machine_id)
                 .auto_update_idle_sessions
                 == Some(true);
-        if meta.status == Status::Starting || meta.closing {
+        // A trashed session is never updated: an update reloads its worker.
+        if meta.status == Status::Starting || meta.closing || meta.trashed_at_ms.is_some() {
             continue;
         }
         if !state.runtime_router.connected(&meta.machine_id)

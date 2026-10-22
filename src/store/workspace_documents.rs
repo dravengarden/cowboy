@@ -93,11 +93,17 @@ impl Store {
 // same per-owner writer lock as content mutations before loading document values.
 macro_rules! reparent_workspace_documents {
     ($tx:expr, $owner:expr, $folders:expr) => {{
-        let old: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT id,parent_id FROM session_folders WHERE owner_user_id IS NOT DISTINCT FROM $1"
+        let old: Vec<(String, Option<String>, Option<i64>)> = sqlx::query_as(
+            "SELECT id,parent_id,trashed_at_ms FROM session_folders WHERE owner_user_id IS NOT DISTINCT FROM $1"
         ).bind($owner).fetch_all(&mut *$tx).await?;
+        // A trashed folder leaves the set only when its Trash retention ends;
+        // the Drafts it still holds go to Draft Trash instead of resurfacing.
+        let purged: std::collections::HashSet<String> = old.iter()
+            .filter(|(id, _, trashed)| trashed.is_some() && !$folders.iter().any(|folder| &folder.id == id))
+            .map(|(id, _, _)| id.clone()).collect();
         let removed: std::collections::HashMap<String, Option<String>> = old.into_iter()
-            .filter(|(id, _)| !$folders.iter().any(|folder| &folder.id == id)).collect();
+            .filter(|(id, _, _)| !$folders.iter().any(|folder| &folder.id == id))
+            .map(|(id, parent, _)| (id, parent)).collect();
         if !removed.is_empty() {
             let owners: Vec<String> = sqlx::query_scalar("SELECT owner_user_id FROM draft_document_owners ORDER BY owner_user_id")
                 .fetch_all(&mut *$tx).await?;
@@ -112,15 +118,26 @@ macro_rules! reparent_workspace_documents {
                     if metadata.kind != $crate::store::draft_documents::DraftKind::Document { continue; }
                     let mut parent = metadata.parent_id.clone();
                     let mut seen = std::collections::HashSet::new();
+                    let mut trash = false;
                     while let Some(id) = parent.as_ref().filter(|id| removed.contains_key(*id)) {
                         if !seen.insert(id.clone()) { parent = None; break; }
+                        trash |= purged.contains(id);
                         parent = removed.get(id).cloned().flatten();
+                    }
+                    // A Draft of a purged folder lands at the nearest live
+                    // ancestor, walking on through ancestors still in Trash.
+                    while trash {
+                        let Some(id) = parent.clone() else { break; };
+                        let Some(folder) = $folders.iter().find(|folder| folder.id == id) else { parent = None; break; };
+                        if folder.trashed_at_ms.is_none() || !seen.insert(id) { break; }
+                        parent = folder.parent.clone();
                     }
                     if parent == metadata.parent_id { continue; }
                     let value: String = sqlx::query_scalar("SELECT value FROM draft_documents WHERE owner_user_id=$1 AND id=$2")
                         .bind(&owner).bind(&metadata.id).fetch_one(&mut *$tx).await?;
                     let mut document: $crate::store::draft_documents::DraftDocument = serde_json::from_str(&value)?;
                     document.parent_id = parent;
+                    document.deleted |= trash;
                     document.revision += 1;
                     document.metadata_revision += 1;
                     let mut metadata = document.clone(); metadata.body.clear(); metadata.attachments.clear();

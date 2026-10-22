@@ -12,7 +12,10 @@ import { draftMissingDirectory, type DraftMetadata } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
-import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, WorkspaceDraftTrash, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
+import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
+import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
+import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
+import { folderDeletePlan, liveDrafts, sessionIsWorking, TRASH_ROOT_KEY, TRASH_URGENT_MS, type TrashRow } from "./trashModel";
 import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
 import { copyDraftToSession } from "./documents/transfer";
@@ -172,6 +175,9 @@ import {
     canApplyUpdateNow,
     createSessionFolder,
     deleteSession,
+    restoreItems,
+    stopAndTrashSession,
+    trashItems,
     holdStorePresentation,
     markSessionHydrated,
     moveSessionFolder,
@@ -193,6 +199,7 @@ import {
     folderAncestors,
     normalizeSessionFolderName,
     sessionFolderById,
+    sessionFolderLocation,
     unboundProjectLabels,
 } from "./sessionFolders";
 import {
@@ -210,7 +217,6 @@ import {
     type SessionTreeRow,
 } from "./sessionTree";
 import {
-    DeleteFolderShell,
     FolderNameShell,
     InAppRoot,
     FolderPickerShell,
@@ -895,6 +901,21 @@ function SessionList({
     // grip, so only sessions drag, but they still open the gap.
     const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [collapsed, setCollapsed] = useCollapsedSessionFolders();
+    // Trash (docs/sessions-folders.md#trash): pinned after the tree, closed
+    // until toggled; its rows never join the sortable tree.
+    const trashFolders = useStoreSelector((snapshot) => snapshot.trashFolders);
+    const treeDrafts = useMemo(() => liveDrafts(drafts, trashFolders), [drafts, trashFolders]);
+    const [trashExpanded, toggleTrash] = useTrashExpanded();
+    const trashRetention = useTrashRetention(connected);
+    const trashTree = useTrashTree(drafts, trashExpanded, trashRetention.days);
+    // Countdowns tick while Trash is open, or while its closed header shows
+    // a deadline under a day.
+    const trashNow = useMinuteClock(
+        trashExpanded.has(TRASH_ROOT_KEY) ||
+            (trashTree.soonest !== null && trashTree.soonest - Date.now() < TRASH_URGENT_MS),
+    );
+    const [trashRow, setTrashRow] = useState<TrashRow | null>(null);
+    const [trashMenu, setTrashMenu] = useState(false);
     const displayedSessions = useMemo(() => displayedSessionOrder(sessions), [sessions]);
     // `␣␣` labels (FOCUS.md "Leader"): letters in flat displayed order.
     const jumpLabels = useMemo(() => sessionJumpLabels(displayedSessions), [displayedSessions]);
@@ -932,10 +953,10 @@ function SessionList({
             displayedSessions,
             sessionFolders,
             movePicking ? NO_COLLAPSED_FOLDERS : collapsed,
-            drafts,
+            treeDrafts,
             workspaceOrder,
         ),
-        [collapsed, displayedSessions, sessionFolders, drafts, workspaceOrder, movePicking],
+        [collapsed, displayedSessions, sessionFolders, treeDrafts, workspaceOrder, movePicking],
     );
     const listRows = movePicking && movePick
         ? tree.rows.filter((row) => row.kind === "folder" || sessionTreeRowKey(row) === movePick.key)
@@ -1245,6 +1266,21 @@ function SessionList({
         el: HTMLElement,
         detail: { toggle?: boolean } = {},
     ): void => {
+        if (rowKey.startsWith("trash:")) {
+            // Trash rows: Enter/l toggles a folder or opens an entry's actions,
+            // h closes, s opens actions. Nothing else applies to deleted items.
+            const row = trashTree.rows.find((candidate) => candidate.key === rowKey);
+            if (rowKey === TRASH_ROOT_KEY) {
+                if (command === "open") toggleTrash(TRASH_ROOT_KEY, detail.toggle ? undefined : true);
+                else if (command === "left") toggleTrash(TRASH_ROOT_KEY, false);
+                else if (command === "settings") setTrashMenu(true);
+            } else if (row?.kind === "trash-folder" && (command === "open" || command === "left")) {
+                if (command === "left" && !row.expanded) focusRow(TRASH_ROOT_KEY);
+                else toggleTrash(rowKey, command === "left" ? false : detail.toggle ? undefined : true);
+            } else if (row && (command === "open" || command === "settings")) setTrashRow(row);
+            else if (row && command === "left") focusRow(TRASH_ROOT_KEY);
+            return;
+        }
         const folderId = folderIdFromRowKey(rowKey);
         const folder = folderId ? sessionFolderById(sessionFolders, folderId) : undefined;
         const session = folderId ? undefined : byId.get(rowKey);
@@ -1651,9 +1687,24 @@ function SessionList({
     const folderMenuCount = folderMenuFolder
         ? tree.rows.find((r) => r.kind === "folder" && r.folder.id === folderMenuFolder.id)
         : undefined;
-    const deleteFolderCount = deleteFolder
-        ? sessions.filter((session) => tree.folderOf.get(session.id) === deleteFolder.id).length
-        : 0;
+    const deleteFolderPlan = useMemo(
+        // Captured when the dialog opens: a live recount would move the
+        // checkboxes under the reader.
+        () => deleteFolder ? folderDeletePlan(deleteFolder.id, sessions, sessionFolders, treeDrafts) : null,
+        [deleteFolder],
+    );
+    const trashRowSx = (depth: number) => ({
+        ...(desktop && desktopListItemSx()),
+        ...flushRowSx,
+        ...treeGuideSx(depth),
+        ...rowIndentSx(depth),
+        pr: ROW_END_PR,
+        "@media (pointer: fine) and (hover: hover)": {
+            ...rowIndentSx(depth)["@media (pointer: fine) and (hover: hover)"],
+            pr: 0,
+            py: 0.25,
+        },
+    });
     return (
         <Stack
             sx={{
@@ -1671,7 +1722,6 @@ function SessionList({
                 minHeight: 0,
             }}
         >
-            <WorkspaceDraftTrash />
             {copyTarget?.kind === "session" && <Box role="status" sx={{ px: 2, py: 0.75, fontSize: "0.75rem", color: "primary.main" }}>
                 Add to {copyTarget.session.title} · Original kept
             </Box>}
@@ -2354,6 +2404,19 @@ function SessionList({
                     />
                     );
                 })}
+                {loaded && !movePicking && (
+                    <SessionTrashSection
+                        tree={trashTree}
+                        expanded={trashExpanded}
+                        onToggle={(key): void => toggleTrash(key)}
+                        retentionDays={trashRetention.days}
+                        now={trashNow}
+                        desktop={desktop}
+                        rowSx={trashRowSx}
+                        onOpenRow={setTrashRow}
+                        onOpenMenu={(): void => setTrashMenu(true)}
+                    />
+                )}
                 {sessions.length === 0 && (
                     loaded
                         ? (
@@ -2574,7 +2637,7 @@ function SessionList({
                     <ListItemIcon>
                         <DeleteOutline fontSize="medium" color="error" />
                     </ListItemIcon>
-                    <ListItemText primary="Delete" />
+                    <ListItemText primary="Move to Trash" />
                 </MenuItem>
             </Menu>
             {desktop && (
@@ -2675,7 +2738,7 @@ function SessionList({
                             })}
                             <Divider sx={{ my: 0.5 }} />
                             <Button data-session-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete</Box>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to Trash</Box>
                                 <Kbd keys="X" />
                             </Button>
                         </Stack>
@@ -2924,21 +2987,37 @@ function SessionList({
                     onClose={(): void => setProjectPicker(null)}
                 />
             )}
-            {deleteFolder && (
-                <DeleteFolderShell
+            {deleteFolder && deleteFolderPlan && (
+                <DeleteFolderToTrashShell
                     folder={deleteFolder}
-                    sessionCount={deleteFolderCount}
-                    draftCount={drafts.filter((draft) => draft.parent_id === deleteFolder.id).length}
-                    childCount={sessionFolders.folders.filter((folder) => folder.parent === deleteFolder.id).length}
-                    onSelectSessions={(): void => { setSelectFolderSessions(deleteFolder.id); setDeleteFolder(null); }}
-                    destination={deleteFolder.parent
-                        ? sessionFolderById(sessionFolders, deleteFolder.parent)?.name ?? null
-                        : null}
+                    plan={deleteFolderPlan}
+                    destination={deleteFolder.parent}
+                    destinationName={sessionFolderLocation(sessionFolders, deleteFolder.parent)}
+                    retentionDays={trashRetention.days}
                     onClose={(): void => setDeleteFolder(null)}
-                    onConfirm={(): void => {
+                    onDeleteFolderOnly={(): void => {
                         removeSessionFolder(deleteFolder.id);
                         setDeleteFolder(null);
                     }}
+                />
+            )}
+            {trashRow && (
+                <TrashItemSheet
+                    row={trashRow}
+                    retentionDays={trashRetention.days}
+                    now={Date.now()}
+                    onClose={(): void => setTrashRow(null)}
+                    onOpenSession={(id): void => {
+                        revealSession(id);
+                        onPick(id);
+                    }}
+                />
+            )}
+            {trashMenu && (
+                <TrashMenuSheet
+                    tree={trashTree}
+                    retention={trashRetention}
+                    onClose={(): void => setTrashMenu(false)}
                 />
             )}
         </Stack>
@@ -4118,6 +4197,15 @@ export function App({
     const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(
         null,
     );
+    // Delete moves an idle session to Trash at once, with Undo: it is
+    // reversible, so it needs no confirmation. A working one asks first.
+    const requestDelete = (session: SessionMeta): void => {
+        if (sessionIsWorking(session)) {
+            setPendingDelete(session);
+            return;
+        }
+        movedToTrash(session, trashItems({ sessions: [session.id] }));
+    };
     // Same pattern for rename — single dialog instance prefilled with the
     // session's current title; Mobile/desktop shell split mirrors the rest.
     // Folder a "New session here" request files its created session into.
@@ -4140,15 +4228,16 @@ export function App({
     // The collapsed Sessions rail shows the folder structure (fully expanded,
     // independent of this device's folds).
     const railFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const railTrashFolders = useStoreSelector((snapshot) => snapshot.trashFolders);
     const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
     const collapsedRail = useMemo(() => {
         if (!sessionsCollapsed) return { groups: [] };
         const ordered = displayedSessionOrder(sessionsForView);
-        const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS, draftLibrary.entries, workspaceOrder).rows;
+        const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS, liveDrafts(draftLibrary.entries, railTrashFolders), workspaceOrder).rows;
         return {
             groups: sessionsRailGroups(rows, draftRoute.id ? `draft:${draftRoute.id}` : activeId),
         };
-    }, [activeId, railFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
+    }, [activeId, railFolders, railTrashFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
     const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession);
     // Desktop jump list (`␣⇥` previous, `␣O` Recent): every opened Session or
     // Draft, newest first, kept per device.
@@ -4493,7 +4582,7 @@ export function App({
             onOpenAbout={mobile
                 ? (): void => openAppSettings({ tab: "info" })
                 : undefined}
-            onRequestDelete={(s): void => setPendingDelete(s)}
+            onRequestDelete={requestDelete}
             onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestReload={(s): void => setPendingReload(s)}
             onRequestRename={(s): void => {
@@ -6019,10 +6108,12 @@ export function App({
             <DeleteSessionShell
                 session={pendingDelete}
                 onClose={(): void => setPendingDelete(null)}
-                onConfirm={(): void => {
-                    if (pendingDelete) {
-                        void deleteSession(pendingDelete.id);
-                    }
+                onStopAndTrash={(): void => {
+                    if (pendingDelete) movedToTrash(pendingDelete, stopAndTrashSession(pendingDelete.id));
+                    setPendingDelete(null);
+                }}
+                onDeletePermanently={(): void => {
+                    if (pendingDelete) void deleteSession(pendingDelete.id);
                     setPendingDelete(null);
                 }}
             />
@@ -8331,25 +8422,41 @@ function SettingsShell({
 // and portrait iPad; centred Dialog on desktop and landscape iPad. Replaces
 // the browser `window.confirm` which is unstyled, blocks input, and can't
 // adapt its layout per viewport.
+/** Report a Trash move with Undo, or why it was refused. */
+function movedToTrash(session: SessionMeta, move: Promise<void>): void {
+    const title = session.title || "Session";
+    void move.then(() => {
+        documentNotice(`"${title}" moved to Trash`, () => restoreItems({ sessions: [session.id] }));
+    }).catch((error: unknown) => {
+        documentNotice(error instanceof Error ? error.message : `Could not move "${title}" to Trash.`);
+    });
+}
+
+/** Only a working session asks before Delete: a running turn must stop
+ *  first, and background work cannot sleep in Trash, so it can only be
+ *  deleted permanently. */
 function DeleteSessionShell({
     session,
     onClose,
-    onConfirm,
+    onStopAndTrash,
+    onDeletePermanently,
 }: {
     session: SessionMeta | null;
     onClose: () => void;
-    onConfirm: () => void;
+    onStopAndTrash: () => void;
+    onDeletePermanently: () => void;
 }): React.JSX.Element | null {
     // Hooks before the early return (rules of hooks).
     const navbarAtBottom = useNavbarAtBottom();
-    useConfirmEnter(session !== null, onConfirm);
+    const turnRunning = session?.status === "busy";
+    useConfirmEnter(session !== null, turnRunning ? onStopAndTrash : onDeletePermanently);
     if (!session) return null;
     return (
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
-            title="Delete this session?"
+            title={turnRunning ? "Stop this session and move it to Trash?" : "Delete this session permanently?"}
             mobileDismiss="none"
             actions={
                 <>
@@ -8357,15 +8464,26 @@ function DeleteSessionShell({
                         Cancel
                         <Kbd keys="Esc" />
                     </Button>
-                    <Button onClick={onConfirm} color="error" variant="contained">
-                        Delete
-                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                    </Button>
+                    {turnRunning
+                        ? (
+                            <Button onClick={onStopAndTrash} color="error" variant="contained">
+                                Stop and move to Trash
+                                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                            </Button>
+                        )
+                        : (
+                            <Button onClick={onDeletePermanently} color="error" variant="contained">
+                                Delete permanently
+                                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                            </Button>
+                        )}
                 </>
             }
         >
             <Typography variant="body2" color="text.secondary">
-                Any in-flight turn is cancelled. The agent transcript on this session will be lost.
+                {turnRunning
+                    ? "Its current turn is cancelled. The session then moves to Trash, where it can be restored with its transcript and worktree."
+                    : "It is still running background work, which cannot wait in Trash. Deleting it now stops that work and removes the transcript. This cannot be undone."}
             </Typography>
         </Sheet>
     );

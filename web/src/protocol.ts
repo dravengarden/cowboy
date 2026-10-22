@@ -182,6 +182,10 @@ export interface SessionMeta {
    *  confirm it stopped. The row disappears on confirmation, or returns without
    *  this flag (status Crashed) when the stop stays unconfirmed. Transient. */
   closing?: boolean;
+  /** Epoch ms when the session moved to Trash; absent while it is live. A
+   *  trashed session is read-only and never wakes until restored
+   *  (docs/sessions-folders.md#trash). */
+  trashed_at_ms?: number;
   /** Context-window usage the agent reports over ACP `usage_update`:
    *  `context_used` tokens of a `context_size`-token window (drives the composer's
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
@@ -457,6 +461,9 @@ export type Inbound =
     option_id?: string;
   }
   | { type: "delete_session"; session_id: string }
+  | { type: "trash_items"; session_ids: string[]; folder_ids: string[] }
+  | { type: "restore_items"; session_ids: string[]; folder_ids: string[] }
+  | { type: "purge_items"; session_ids: string[]; folder_ids: string[] }
   | { type: "rename_session"; session_id: string; title: string }
   // Generic optimistic-sync mutation (state-sync): `state` selects the
   // synced value ("title"/"order"/…), `name`+`args` are the mutator + args, `id`

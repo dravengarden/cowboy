@@ -31,6 +31,10 @@ pub const TOP_LEVEL: &str = "";
 /// is disabled (every folder is then shared by the single local user).
 pub type FolderOwner = Option<String>;
 
+/// Restored folder ids, the owners whose folder set changed, and a
+/// user-facing note per adjustment.
+pub type FolderRestore = (Vec<String>, Vec<FolderOwner>, Vec<String>);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionFolder {
     pub id: String,
@@ -44,6 +48,11 @@ pub struct SessionFolder {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub defaults: FolderDefaults,
+    /// Epoch ms when this folder moved to Trash, `None` while it is live. A
+    /// trashed folder keeps its place in the tree so restore can rebuild it;
+    /// it accepts no new contents and binds no project meanwhile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at_ms: Option<i64>,
 }
 
 /// Who is mutating: the product principal reduced to what folders care about.
@@ -171,15 +180,330 @@ impl SessionFolders {
                 return Ok(Some(Some(placed.clone())));
             }
         }
-        let folder = self
-            .folders
-            .iter()
-            .filter(visible)
-            .find(|folder| project.is_some() && folder.project.as_deref() == project);
+        let folder = self.folders.iter().filter(visible).find(|folder| {
+            project.is_some()
+                && folder.trashed_at_ms.is_none()
+                && folder.project.as_deref() == project
+        });
         if let Some(folder) = folder {
             self.touchable(actor, &folder.id)?;
         }
         Ok(folder.map(|folder| Some(folder.id.clone())))
+    }
+
+    /// The folder a session shows in for `actor`: its explicit placement (a
+    /// folder that still exists, trashed or not; the explicit top level is
+    /// `None`), else the live folder bound to its project. Mirrors the
+    /// client's `effectiveSessionFolder`.
+    pub(crate) fn display_folder(
+        &self,
+        actor: &FolderActor,
+        session: &str,
+        project: Option<&str>,
+    ) -> Option<String> {
+        let visible = |folder: &&SessionFolder| {
+            actor.sees_all
+                || folder.owner_user_id.is_none()
+                || folder.owner_user_id == actor.user_id
+        };
+        if let Some(placed) = self.placement.get(session) {
+            if placed == TOP_LEVEL {
+                return None;
+            }
+            if self
+                .folders
+                .iter()
+                .filter(visible)
+                .any(|folder| folder.id == *placed)
+            {
+                return Some(placed.clone());
+            }
+        }
+        self.folders
+            .iter()
+            .filter(visible)
+            .find(|folder| {
+                project.is_some()
+                    && folder.trashed_at_ms.is_none()
+                    && folder.project.as_deref() == project
+            })
+            .map(|folder| folder.id.clone())
+    }
+
+    /// Whether `id` names a folder that is in Trash.
+    #[must_use]
+    pub fn is_trashed(&self, id: &str) -> bool {
+        self.find(id)
+            .is_some_and(|folder| folder.trashed_at_ms.is_some())
+    }
+
+    /// `id` and every folder below it, parents first; cycle-safe.
+    #[must_use]
+    pub fn subtree(&self, id: &str) -> Vec<String> {
+        let mut out = vec![id.to_owned()];
+        let mut index = 0;
+        while index < out.len() && out.len() <= self.folders.len() {
+            let parent = out[index].clone();
+            for folder in &self.folders {
+                if folder.parent.as_deref() == Some(parent.as_str()) && !out.contains(&folder.id) {
+                    out.push(folder.id.clone());
+                }
+            }
+            index += 1;
+        }
+        out
+    }
+
+    /// The nearest folder at or above `id` that exists and is not in Trash;
+    /// `None` is the top level.
+    #[must_use]
+    pub fn nearest_live(&self, id: Option<&str>) -> Option<String> {
+        let mut cursor = id;
+        for _ in 0..=self.folders.len() {
+            let folder = self.find(cursor?)?;
+            if folder.trashed_at_ms.is_none() {
+                return Some(folder.id.clone());
+            }
+            cursor = folder.parent.as_deref();
+        }
+        None
+    }
+
+    /// The explicit placement of a session, if any (`""` = top level).
+    #[must_use]
+    pub fn placement_of(&self, session: &str) -> Option<&str> {
+        self.placement.get(session).map(String::as_str)
+    }
+
+    /// Pin sessions to explicit placements (`None` = explicit top level) and
+    /// return the rows to persist.
+    pub fn pin(&mut self, pins: &[(String, Option<String>)]) -> Vec<(String, Option<String>)> {
+        pins.iter()
+            .map(|(session, folder)| {
+                let target = folder.clone().unwrap_or_else(|| TOP_LEVEL.to_owned());
+                self.placement.insert(session.clone(), target.clone());
+                (session.clone(), Some(target))
+            })
+            .collect()
+    }
+
+    /// `id` and every folder below it, all of which the actor may change:
+    /// recursive Trash operations never reach another owner's folder.
+    fn owned_subtree(&self, actor: &FolderActor, id: &str) -> Result<Vec<String>, String> {
+        let subtree = self.subtree(id);
+        for below in &subtree {
+            self.touchable(actor, below)
+                .map_err(|_| "this folder contains a folder you cannot change".to_owned())?;
+        }
+        Ok(subtree)
+    }
+
+    fn owners_of(&self, ids: &[String]) -> Vec<FolderOwner> {
+        let mut owners = Vec::new();
+        for folder in self
+            .folders
+            .iter()
+            .filter(|folder| ids.contains(&folder.id))
+        {
+            if !owners.contains(&folder.owner_user_id) {
+                owners.push(folder.owner_user_id.clone());
+            }
+        }
+        owners
+    }
+
+    /// Admit a permanent deletion: every id is a trashed folder whose whole
+    /// subtree the actor may change.
+    ///
+    /// # Errors
+    /// An unknown, foreign or live folder.
+    pub fn check_trashed(&self, actor: &FolderActor, ids: &[String]) -> Result<(), String> {
+        for id in ids {
+            let folder = self.touchable(actor, id)?;
+            if folder.trashed_at_ms.is_none() {
+                return Err("Only items in Trash can be deleted permanently".into());
+            }
+            self.owned_subtree(actor, id)?;
+        }
+        Ok(())
+    }
+
+    /// Move live folders and everything below them to Trash at `now_ms`.
+    /// Descendants already in Trash keep their own time. Returns every folder
+    /// id newly trashed and the owners whose folder set changed.
+    ///
+    /// # Errors
+    /// An unknown, foreign or already trashed folder, or one holding a folder
+    /// the actor may not change.
+    pub fn trash(
+        &mut self,
+        actor: &FolderActor,
+        ids: &[String],
+        now_ms: i64,
+    ) -> Result<(Vec<String>, Vec<FolderOwner>), String> {
+        let mut trashed = Vec::new();
+        for id in ids {
+            let folder = self.touchable(actor, id)?;
+            if folder.trashed_at_ms.is_some() {
+                return Err(format!("\"{}\" is already in Trash", folder.name));
+            }
+            for below in self.owned_subtree(actor, id)? {
+                if !trashed.contains(&below) && !self.is_trashed(&below) {
+                    trashed.push(below);
+                }
+            }
+        }
+        for folder in &mut self.folders {
+            if trashed.contains(&folder.id) {
+                folder.trashed_at_ms = Some(now_ms);
+            }
+        }
+        let owners = self.owners_of(&trashed);
+        Ok((trashed, owners))
+    }
+
+    /// Restore trashed folders with everything below them. A folder whose
+    /// parent is gone or still in Trash returns under the nearest live
+    /// ancestor (or the top level). Project bindings are reserved across the
+    /// whole batch: live folders keep theirs, restored folders claim in order
+    /// and a later duplicate drops its binding. Returns the restored ids,
+    /// changed owners and a user-facing note per adjustment.
+    ///
+    /// # Errors
+    /// An unknown, foreign or live folder, or one holding a folder the actor
+    /// may not change.
+    pub fn restore(
+        &mut self,
+        actor: &FolderActor,
+        ids: &[String],
+    ) -> Result<FolderRestore, String> {
+        let mut restored = Vec::new();
+        let mut roots = Vec::new();
+        for id in ids {
+            let folder = self.touchable(actor, id)?;
+            if folder.trashed_at_ms.is_none() {
+                return Err(format!("\"{}\" is not in Trash", folder.name));
+            }
+            roots.push(id.clone());
+            for below in self.owned_subtree(actor, id)? {
+                if !restored.contains(&below) && self.is_trashed(&below) {
+                    restored.push(below);
+                }
+            }
+        }
+        // Roots whose parent stays in Trash (or is gone) step out to the
+        // nearest live ancestor, after its existing children.
+        let mut notes = Vec::new();
+        for id in &roots {
+            let parent = self.find(id).and_then(|folder| folder.parent.clone());
+            let parent_stays = parent.as_deref().is_some_and(|parent| {
+                self.find(parent).is_none()
+                    || (self.is_trashed(parent) && !restored.iter().any(|r| r == parent))
+            });
+            if !parent_stays {
+                continue;
+            }
+            let target = self.nearest_live(parent.as_deref());
+            let owner = self
+                .find(id)
+                .and_then(|folder| folder.owner_user_id.clone());
+            let position = self.next_position(owner.as_deref(), target.as_deref());
+            let name = target
+                .as_deref()
+                .and_then(|target| self.find(target))
+                .map_or_else(|| "Global".to_owned(), |folder| folder.name.clone());
+            if let Some(folder) = self.folders.iter_mut().find(|folder| folder.id == *id) {
+                notes.push(format!(
+                    "\"{}\" was restored to {name}; its original parent is not available.",
+                    folder.name
+                ));
+                folder.parent = target;
+                folder.position = position;
+            }
+        }
+        let mut taken: HashSet<(FolderOwner, String)> = self
+            .folders
+            .iter()
+            .filter(|folder| folder.trashed_at_ms.is_none())
+            .filter_map(|folder| {
+                folder
+                    .project
+                    .clone()
+                    .map(|project| (folder.owner_user_id.clone(), project))
+            })
+            .collect();
+        for id in &restored {
+            let Some(folder) = self.folders.iter_mut().find(|folder| folder.id == *id) else {
+                continue;
+            };
+            let Some(project) = folder.project.clone() else {
+                continue;
+            };
+            if !taken.insert((folder.owner_user_id.clone(), project.clone())) {
+                folder.project = None;
+                notes.push(format!(
+                    "\"{}\" no longer auto-files \"{project}\"; another folder holds that project now.",
+                    folder.name
+                ));
+            }
+        }
+        for folder in &mut self.folders {
+            if restored.contains(&folder.id) {
+                folder.trashed_at_ms = None;
+            }
+        }
+        self.folders
+            .sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
+        let owners = self.owners_of(&restored);
+        Ok((restored, owners, notes))
+    }
+
+    /// Permanently remove trashed folders whose subtree holds no session any
+    /// more (`occupied` lists folders that still have one). Returns the
+    /// removed ids and the owners whose set changed; occupied folders stay.
+    pub fn purge(
+        &mut self,
+        actor: &FolderActor,
+        ids: &[String],
+        occupied: &HashSet<String>,
+    ) -> (Vec<String>, Vec<FolderOwner>) {
+        let mut removed = Vec::new();
+        for id in ids {
+            let Ok(folder) = self.touchable(actor, id) else {
+                continue;
+            };
+            if folder.trashed_at_ms.is_none() {
+                continue;
+            }
+            let Ok(subtree) = self.owned_subtree(actor, id) else {
+                continue;
+            };
+            if subtree
+                .iter()
+                .any(|below| occupied.contains(below) || !self.is_trashed(below))
+            {
+                continue;
+            }
+            for below in subtree {
+                if !removed.contains(&below) {
+                    removed.push(below);
+                }
+            }
+        }
+        let owners = self.owners_of(&removed);
+        self.folders.retain(|folder| !removed.contains(&folder.id));
+        self.placement.retain(|_, folder| !removed.contains(folder));
+        (removed, owners)
+    }
+
+    /// Every trashed folder of every owner, for the retention sweep.
+    #[must_use]
+    pub fn trashed(&self) -> Vec<SessionFolder> {
+        self.folders
+            .iter()
+            .filter(|folder| folder.trashed_at_ms.is_some())
+            .cloned()
+            .collect()
     }
 
     /// Resolve only within the owning user's tree, with provenance and cycle protection.
@@ -287,7 +611,16 @@ impl SessionFolders {
         Ok(folder)
     }
 
-    /// `Some(parent)` must exist and belong to the actor; `None` is the root.
+    /// A live (not trashed) folder the actor may mutate, by id.
+    fn live_touchable(&self, actor: &FolderActor, id: &str) -> Result<&SessionFolder, String> {
+        let folder = self.touchable(actor, id)?;
+        if folder.trashed_at_ms.is_some() {
+            return Err(format!("\"{}\" is in Trash; restore it first", folder.name));
+        }
+        Ok(folder)
+    }
+
+    /// `Some(parent)` must exist, be live and belong to the actor; `None` is the root.
     fn resolve_parent(
         &self,
         actor: &FolderActor,
@@ -296,7 +629,7 @@ impl SessionFolders {
         match parent {
             None => Ok(None),
             Some(id) => {
-                self.touchable(actor, id)
+                self.live_touchable(actor, id)
                     .map_err(|_| "unknown parent folder".to_owned())?;
                 Ok(Some(id.to_owned()))
             }
@@ -332,6 +665,7 @@ impl SessionFolders {
     fn project_taken(&self, owner: Option<&str>, project: &str, except: &str) -> bool {
         self.folders.iter().any(|folder| {
             folder.id != except
+                && folder.trashed_at_ms.is_none()
                 && folder.owner_user_id.as_deref() == owner
                 && folder.project.as_deref() == Some(project)
         })
@@ -361,7 +695,7 @@ impl SessionFolders {
                 if inherit.iter().any(|key| patch.contains_key(key)) {
                     return Err("a default cannot be set and inherited together".into());
                 }
-                let owner = self.touchable(actor, &id)?.owner_user_id.clone();
+                let owner = self.live_touchable(actor, &id)?.owner_user_id.clone();
                 let folder = self
                     .folders
                     .iter_mut()
@@ -380,7 +714,7 @@ impl SessionFolders {
             "rename" => {
                 let id = key_arg(args, "id")?;
                 let name = name_arg(args)?;
-                let owner = self.touchable(actor, &id)?.owner_user_id.clone();
+                let owner = self.live_touchable(actor, &id)?.owner_user_id.clone();
                 if let Some(folder) = self.folders.iter_mut().find(|folder| folder.id == id) {
                     folder.name = name;
                 }
@@ -394,7 +728,7 @@ impl SessionFolders {
             "bind" => {
                 let id = key_arg(args, "id")?;
                 let project = project_arg(args)?;
-                let owner = self.touchable(actor, &id)?.owner_user_id.clone();
+                let owner = self.live_touchable(actor, &id)?.owner_user_id.clone();
                 if let Some(project) = project.as_deref()
                     && self.project_taken(owner.as_deref(), project, &id)
                 {
@@ -470,6 +804,7 @@ impl SessionFolders {
             position,
             project,
             defaults,
+            trashed_at_ms: None,
         });
         Ok(FolderEffects {
             replaced_owner: Some(owner),
@@ -484,7 +819,7 @@ impl SessionFolders {
     ) -> Result<FolderEffects, String> {
         let id = key_arg(args, "id")?;
         let parent = self.resolve_parent(actor, optional_key_arg(args, "parent")?.as_deref())?;
-        let owner = self.touchable(actor, &id)?.owner_user_id.clone();
+        let owner = self.live_touchable(actor, &id)?.owner_user_id.clone();
         if self.is_descendant(parent.as_deref(), &id) {
             return Err("a folder cannot move into itself".to_owned());
         }
@@ -548,7 +883,7 @@ impl SessionFolders {
     ) -> Result<FolderEffects, String> {
         let folder = optional_key_arg(args, "folder")?;
         if let Some(id) = folder.as_deref() {
-            self.touchable(actor, id)?;
+            self.live_touchable(actor, id)?;
         }
         let session_ids: Vec<String> = args
             .get("session_ids")
@@ -579,7 +914,7 @@ impl SessionFolders {
         args: &serde_json::Value,
     ) -> Result<FolderEffects, String> {
         let id = key_arg(args, "id")?;
-        let removed = self.touchable(actor, &id)?.clone();
+        let removed = self.live_touchable(actor, &id)?.clone();
         let owner = removed.owner_user_id.clone();
         let parent = removed.parent.clone();
         // Children step up one level, after the parent's existing siblings, in
@@ -1099,6 +1434,7 @@ mod tests {
                 parent: None,
                 position: 1,
                 project: None,
+                trashed_at_ms: None,
             },
             SessionFolder {
                 id: "f-a".to_owned(),
@@ -1108,6 +1444,7 @@ mod tests {
                 parent: None,
                 position: 0,
                 project: Some("cowboy".to_owned()),
+                trashed_at_ms: None,
             },
         ]);
         folders.restore_placement("s1".to_owned(), "f-a".to_owned());
@@ -1117,5 +1454,124 @@ mod tests {
         assert_eq!(value["folders"][1]["id"], "f-b");
         assert_eq!(value["placement"]["s1"], "f-a");
         assert!(value["placement"].get("s2").is_none());
+    }
+
+    #[test]
+    fn trashed_folders_bind_nothing_and_accept_nothing() {
+        let mut folders = SessionFolders::default();
+        create(&mut folders, &local(), "f-a", "A", None);
+        folders
+            .apply(
+                &local(),
+                "bind",
+                &serde_json::json!({"id": "f-a", "project": "cowboy"}),
+            )
+            .unwrap();
+        folders.trash(&local(), &["f-a".to_owned()], 7).unwrap();
+        assert_eq!(folders.display_folder(&local(), "s", Some("cowboy")), None);
+        assert!(
+            folders
+                .apply(
+                    &local(),
+                    "rename",
+                    &serde_json::json!({"id": "f-a", "name": "B"})
+                )
+                .unwrap_err()
+                .contains("in Trash")
+        );
+        assert!(
+            folders
+                .apply(
+                    &local(),
+                    "create",
+                    &serde_json::json!({"id": "f-b", "name": "B", "parent": "f-a"})
+                )
+                .is_err()
+        );
+        // Another folder may take the project meanwhile; restore then unbinds.
+        folders
+            .apply(
+                &local(),
+                "create",
+                &serde_json::json!({"id": "f-c", "name": "C", "parent": null, "project": "cowboy"}),
+            )
+            .unwrap();
+        let (restored, _, notes) = folders.restore(&local(), &["f-a".to_owned()]).unwrap();
+        assert_eq!(restored, vec!["f-a".to_owned()]);
+        assert_eq!(notes.len(), 1);
+        assert!(folders.find("f-a").unwrap().project.is_none());
+    }
+
+    #[test]
+    fn restore_steps_out_of_a_parent_still_in_trash() {
+        let mut folders = SessionFolders::default();
+        create(&mut folders, &local(), "f-a", "A", None);
+        create(&mut folders, &local(), "f-b", "B", Some("f-a"));
+        create(&mut folders, &local(), "f-c", "C", Some("f-b"));
+        let (trashed, _) = folders.trash(&local(), &["f-a".to_owned()], 1).unwrap();
+        assert_eq!(
+            trashed,
+            vec!["f-a".to_owned(), "f-b".to_owned(), "f-c".to_owned()]
+        );
+        let (restored, _, _) = folders.restore(&local(), &["f-b".to_owned()]).unwrap();
+        assert_eq!(restored, vec!["f-b".to_owned(), "f-c".to_owned()]);
+        assert_eq!(folders.find("f-b").unwrap().parent, None);
+        assert_eq!(folders.find("f-c").unwrap().parent.as_deref(), Some("f-b"));
+        assert!(folders.is_trashed("f-a"));
+        assert_eq!(folders.nearest_live(Some("f-a")), None);
+        // A live folder is never purged, an empty trashed one is.
+        let (removed, _) = folders.purge(
+            &local(),
+            &["f-b".to_owned(), "f-a".to_owned()],
+            &HashSet::new(),
+        );
+        assert_eq!(removed, vec!["f-a".to_owned()]);
+    }
+
+    #[test]
+    fn a_batch_restore_never_duplicates_a_project_binding() {
+        let mut folders = SessionFolders::default();
+        let bind = |folders: &mut SessionFolders, id: &str| {
+            folders
+                .apply(
+                    &local(),
+                    "bind",
+                    &serde_json::json!({"id": id, "project": "cowboy"}),
+                )
+                .unwrap();
+        };
+        create(&mut folders, &local(), "f-a", "A", None);
+        bind(&mut folders, "f-a");
+        folders.trash(&local(), &["f-a".to_owned()], 1).unwrap();
+        create(&mut folders, &local(), "f-b", "B", None);
+        bind(&mut folders, "f-b");
+        folders.trash(&local(), &["f-b".to_owned()], 2).unwrap();
+        let (_, _, notes) = folders
+            .restore(&local(), &["f-a".to_owned(), "f-b".to_owned()])
+            .unwrap();
+        let bound: Vec<_> = folders
+            .folders()
+            .iter()
+            .filter(|folder| folder.project.is_some())
+            .map(|folder| folder.id.clone())
+            .collect();
+        assert_eq!(bound, vec!["f-a".to_owned()]);
+        assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn recursive_trash_never_reaches_another_owners_folder() {
+        let mut folders = SessionFolders::default();
+        create(&mut folders, &user("a"), "f-a", "A", None);
+        // An owner-role actor can nest another user's folder below it.
+        folders
+            .apply(
+                &local(),
+                "create",
+                &serde_json::json!({"id": "f-x", "name": "X", "parent": "f-a"}),
+            )
+            .unwrap();
+        assert!(folders.trash(&user("a"), &["f-a".to_owned()], 1).is_err());
+        assert!(!folders.is_trashed("f-a"));
     }
 }

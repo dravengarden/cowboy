@@ -18,6 +18,8 @@ export interface SessionFolder {
   readonly position: number;
   readonly project: string | null;
   readonly defaults?: FolderDefaults;
+  /** Epoch ms when the folder moved to Trash; absent while it is live. */
+  readonly trashed_at_ms?: number;
 }
 
 /** Placement value for "explicitly at the top level" (the Controller's
@@ -118,6 +120,8 @@ export function projectFolderIndex(
 ): ReadonlyMap<string, string> {
   const index = new Map<string, string>();
   for (const folder of value.folders) {
+    // A trashed folder keeps its binding for restore but files nothing.
+    if (folder.trashed_at_ms !== undefined) continue;
     if (folder.project && !index.has(folder.project)) {
       index.set(folder.project, folder.id);
     }

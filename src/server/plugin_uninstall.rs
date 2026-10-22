@@ -32,6 +32,7 @@ pub(super) fn requires_runtime_fence(command: &Inbound) -> bool {
             | Inbound::RetryTurn { .. }
             | Inbound::SetConfigOption { .. }
             | Inbound::DeleteSession { .. }
+            | Inbound::PurgeItems { .. }
     )
 }
 

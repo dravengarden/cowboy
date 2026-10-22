@@ -144,6 +144,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
         next_schedule_ms: None,
         owner_user_id: None,
         owner_username: None,
+        trashed_at_ms: None,
     };
     let absent = serde_json::to_value(&meta).expect("serialize unowned session");
     assert!(absent.get("owner_user_id").is_none());

@@ -241,7 +241,24 @@ fn apply(
             }
         }
     }
-    validate_next(entries, next, now, shared)
+    validate_next(entries, next, now, shared, &mutation.change)
+}
+
+/// Nothing new is filed into Trash (a trashed folder's whole subtree is
+/// trashed); a Draft already there may still be edited or moved out.
+fn files_into_trash(
+    change: &DraftChange,
+    next: &DraftDocument,
+    shared: &[crate::session_folders::SessionFolder],
+) -> bool {
+    matches!(
+        change,
+        DraftChange::Create { .. } | DraftChange::Move { .. }
+    ) && next.parent_id.as_deref().is_some_and(|parent| {
+        shared
+            .iter()
+            .any(|folder| folder.id == parent && folder.trashed_at_ms.is_some())
+    })
 }
 
 fn validate_next(
@@ -249,7 +266,11 @@ fn validate_next(
     mut next: DraftDocument,
     now: i64,
     shared: &[crate::session_folders::SessionFolder],
+    change: &DraftChange,
 ) -> DraftResult {
+    if files_into_trash(change, &next, shared) {
+        return DraftResult::Invalid("The destination folder is in Trash".to_owned());
+    }
     let Some(title) = normalized_title(&next.title) else {
         return DraftResult::Invalid("Use a title of 1–160 characters".to_owned());
     };

@@ -8,6 +8,12 @@ const source = await readFile(
 const appSource = await readFile(
   new URL("./App.tsx", import.meta.url), "utf8",
 );
+const trashSource = await readFile(
+  new URL("./SessionTrash.tsx", import.meta.url), "utf8",
+);
+const deleteFolderSource = await readFile(
+  new URL("./DeleteFolderToTrash.tsx", import.meta.url), "utf8",
+);
 
 test("folder sheets mount beside the session shells, not inline and not on body", () => {
   // SessionList renders inside the drawer: a transformed, overflow-hidden
@@ -19,7 +25,7 @@ test("folder sheets mount beside the session shells, not inline and not on body"
   // placement proven on devices is the Rename shell's, so every sheet of this
   // module portals into the host App renders next to it.
   const sheets = [...source.matchAll(/<(?:ConfirmSheet|Sheet)\b([\s\S]*?)>/g)];
-  assert(sheets.length >= 4);
+  assert(sheets.length >= 3);
   for (const [, props] of sheets) {
     assertEquals(/^\s*portal\b/m.test((props ?? "").replace("portal={false}", "")), false);
   }
@@ -29,7 +35,14 @@ test("folder sheets mount beside the session shells, not inline and not on body"
   );
   assert(source.includes("createPortal(children, host)"));
   assertEquals(source.includes("document.body"), false);
-  assert(source.includes("portal={false}"));
+  // Trash confirmations follow the same placement: portalled to the host,
+  // never through ConfirmSheet's own <body> portal.
+  for (const trash of [trashSource, deleteFolderSource]) {
+    const confirms = [...trash.matchAll(/<ConfirmSheet\b([\s\S]*?)>/g)];
+    assert(confirms.length >= 1);
+    for (const [, props] of confirms) assert((props ?? "").includes("portal={false}"));
+    assertEquals((trash.match(/<InAppRoot>/g) ?? []).length, confirms.length);
+  }
 
   const host = appSource.indexOf(
     '<div {...{ [SESSION_FOLDER_SHEET_HOST]: "" }} />',
@@ -48,7 +61,9 @@ test("folder sheets mount beside the session shells, not inline and not on body"
       "<FolderNameShell",
       "<FolderPickerShell",
       "<ProjectPickerShell",
-      "<DeleteFolderShell",
+      "<DeleteFolderToTrashShell",
+      "<TrashItemSheet",
+      "<TrashMenuSheet",
     ]
   ) assert(body.includes(shell));
 });

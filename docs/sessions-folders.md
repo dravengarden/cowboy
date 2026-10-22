@@ -31,7 +31,8 @@ drive every deviation below:
    automatically.
 2. **Sessions are live agents.** A folder must surface the state of what it
    contains (a busy or attention-needing session inside a collapsed folder),
-   and deleting a folder must never delete sessions.
+   and deleting a folder must never delete a session the user did not
+   choose; everything deleted stays restorable in [Trash](#trash).
 3. **Two products share one list component.** Both surfaces render the same
    session direction; Mobile adds paint-only chrome inside the swipe
    compositor, while Desktop is keyboard-first with a checked-in binding
@@ -77,9 +78,11 @@ reconnect, projected per principal.
   like Obsidian's localStorage folds; it is presentation, not shared data.
   Folders start expanded. Opening a session (row tap, `Alt/Option+1…0`, push,
   Desktop region entry) reveals it by expanding its ancestors.
-- Deleting a folder moves its subfolders and sessions to its parent (root for
-  a top-level folder). Nothing else is destructive; sessions are deleted only
-  through their own existing Delete flow.
+- Deleting a folder moves it, its subfolders and the sessions and Drafts the
+  user leaves checked to [Trash](#trash); unchecked items move to its parent
+  first. **Delete folder only** keeps the original behaviour: subfolders and
+  contents move to the parent (root for a top-level folder) and nothing is
+  trashed.
 
 ### Mutations (client mutator → arbiter)
 
@@ -450,6 +453,9 @@ the selection panel while requests run still reports failures globally. This is
 client orchestration of the existing single-session operation, not a new deletion
 policy or protocol. No directories or Drafts are included in the session batch.
 
+Since Trash shipped, the batch moves sessions to Trash instead of deleting
+them; working sessions are refused per item and stay selected.
+
 **Delete folder only** uses the shared compact confirmation surface and explains
 the destination of explicitly placed sessions, Drafts and immediate subdirectories,
 which are preserved. Sessions filed only by the deleted project's binding return
@@ -457,3 +463,120 @@ to Global, matching the existing derived-placement rule. It also explains that
 inherited defaults follow the new parent, and
 offers a separate route to select sessions for deletion. Folder confirmations
 stay in the keyboard-resized App host instead of adding a body-level portal.
+Since Trash shipped it is the secondary action of the folder Delete sheet
+described below.
+
+## Trash
+
+Status: implemented 2026-10-22. Scope: sessions, folders and Drafts on both
+surfaces, the Controller retention sweep and the Cowboy agent API.
+
+Delete is reversible. A deleted session or folder goes to Trash with its
+structure and stays restorable until the owner's retention ends; only then,
+or on an explicit **Delete permanently**, does the existing session deletion
+run (execution environment stop, then the 3-day storage purge).
+
+### Model
+
+- `sessions.trashed_at_ms` and `session_folders.trashed_at_ms` (PostgreSQL
+  0074, SQLite 0048). The row, transcript, queue, Drafts, worktree, native
+  thread and explicit placement all stay. `SessionMeta.trashed_at_ms` and
+  `SessionFolder.trashed_at_ms` carry it to clients.
+- A trashed session accepts no work: the WebSocket refuses every
+  session-scoped command except delete, cancel, rename and open; open never
+  wakes it; the supervisor refuses every launch, resume, reset or reload; the
+  queue drain and scheduled Drafts hold. Moving it to Trash hibernates its
+  idle worker. A working session (turn in flight, or native background work)
+  refuses the move, because hibernation would lose that work: the Delete
+  confirmation offers **Stop and move to Trash** for a running turn and
+  **Delete permanently** for background work.
+- A trashed folder keeps its place in the tree but accepts nothing (create,
+  move, place, rename, bind and defaults refuse it) and binds no project, so
+  a new session of its project lands at the top level, and another folder may
+  take the project meanwhile.
+- Moving a folder to Trash takes every live folder below it and every session
+  filed anywhere in it, atomically, and pins each one to its folder so a
+  later project rebinding cannot scatter the structure. All-or-nothing: one
+  working session refuses the request.
+- Restore brings a folder back with everything below it. An item whose
+  parent is gone or still in Trash returns to the nearest live ancestor (or
+  Global); a restored folder whose project another folder took meanwhile
+  drops that binding. Restored sessions stay asleep until opened and sent
+  work.
+- Retention is the owner's `preferences.trash.retention_days` (1–365, default
+  30), stored on the Controller so every device and agent agree. It applies to
+  everything already in Trash: the deadline is `trashed_at + retention`. The
+  sweep runs every minute (after a two-minute start delay so Machines can
+  confirm stops), deletes expired sessions through the normal lifecycle and
+  then removes expired folders that hold no session. A folder whose remote
+  session is still stopping is retried on the next pass.
+- Permanent deletion first claims the session under the Hub lock: it must
+  still be in Trash since the exact time it was judged by, and it is marked
+  closing, so a concurrent restore is refused instead of reporting success
+  for a session about to vanish. A failed owner preference read skips that
+  owner's sweep rather than falling back to the default.
+- Recursive operations reach only folders the actor may change. Restore
+  persists the sessions' Trash state before their folders and trashing does
+  the reverse, so a crash between writes never leaves a restored folder
+  holding sessions that retention would delete.
+- `POST /api/sessions/{id}/prompt` refuses a trashed session with 409; any
+  other admitted work (a scheduled wakeup) stays queued, never dispatched.
+- Drafts keep their own document Trash (`deleted`). A Draft inside a trashed
+  folder is shown in that folder in Trash; if the folder is deleted
+  permanently, the Draft moves to Draft Trash at the nearest live ancestor
+  instead of resurfacing. Nothing new can be created in or moved into a
+  trashed folder.
+
+Why 30 days: it is the convention users already know (macOS Finder, Google
+Drive, Gmail, Notion) and long enough to notice a mistaken folder deletion
+after a weekend or a trip. Storage is not the constraint: a trashed session is
+asleep and its rows and worktree are what a live session holds anyway. Users
+who delete heavily can shorten it to 1, 3, 7 or 14 days; 365 is the maximum.
+
+### Commands
+
+| WebSocket `type` | Agent API | Effect |
+|---|---|---|
+| `trash_items {session_ids, folder_ids}` | `sessions.trash` | Move to Trash; viewers refused; an agent may not trash its own session |
+| `restore_items {session_ids, folder_ids}` | `sessions.restore` | Restore as above |
+| `purge_items {session_ids, folder_ids}` | `sessions.purge` | Delete items already in Trash now; a folder takes its trashed contents |
+| `delete_session {session_id}` | `sessions.delete` | Unchanged permanent delete, used by Trash and retention |
+
+Retention is `preferences.update` with scope `trash`.
+
+### Interface
+
+- **Trash** is one container pinned after the whole tree, separated by a rule,
+  on both surfaces. It starts collapsed and only a direct toggle opens it:
+  reveal, Focus, Expand all and drag never do. Its fold state, and that of the
+  folders inside it, is per device. Its count is the number of top-level
+  entries; when closed it shows the soonest deadline only if it is under a
+  day.
+- Inside, deleted folders keep their structure (subfolders first, then items,
+  newest first) and top-level entries are newest first, like "Recently
+  deleted". A top-level entry names where it came from ("from Global ›
+  Cowboy"). Every session and folder row carries a countdown pill (`29d`,
+  `5h`, `12m`), amber under a day, with the exact deadline as its tooltip and
+  a spelled-out accessible label. Rows are dimmed and cannot be dragged.
+- Tapping an entry (or its kebab, or `Enter`/`s` on Desktop) opens its sheet:
+  when and where it was deleted, when it will be deleted permanently,
+  **Restore** (primary, `Mod+Enter`), **Restore and open** for a session and
+  **Delete permanently…** behind a second confirmation. The Trash kebab offers
+  the retention picker and **Empty Trash…**, also behind confirmation.
+- Deleting an idle session needs no confirmation: it moves to Trash at once
+  and the snackbar offers **Undo**. A working session asks first (see above).
+- Deleting a folder lists every session and Draft inside, all checked. The
+  primary action names the outcome ("Move to Trash", "Trash 3, keep 2").
+  Unchecking an item keeps it: it moves to the folder's parent before the
+  folder goes to Trash. Working sessions start unchecked and say why. **Delete
+  all** and **Keep all** reset the list. **Delete folder only** keeps the
+  original non-destructive behaviour. The snackbar offers **Undo**.
+- Desktop keyboard: Trash rows join the `sessions.list` cursor (`j/k`).
+  `Enter`/`l` toggles a folder or opens an entry's sheet, `h` closes or goes to
+  the Trash header, `s` opens the sheet. No other row command applies.
+
+### Not yet
+
+- A read-only transcript preview inside Trash; the sheet shows metadata.
+- Permanent deletion of an individual Draft; Drafts still use Draft Trash.
+- A per-item "keep longer" override.

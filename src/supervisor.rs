@@ -708,6 +708,7 @@ impl Supervisor {
     }
 
     fn ensure_alive_inner(&self, session_id: &str) -> Result<bool, String> {
+        refuse_trashed(&self.hub, session_id)?;
         // Native restore timeouts are session-local hydrate failures. Open,
         // reconnect, send, and Retry must not recycle the worker and pay the
         // same unbounded resume again. Reload remains the explicit retry.
@@ -776,6 +777,9 @@ impl Supervisor {
 
     /// Build the idempotent worker launch declaration for a persisted session.
     fn start_session(&self, session_id: &str) -> Result<StartSession, String> {
+        // Every launch, revive, reset, reload and Provider upgrade builds its
+        // declaration here, so this is the one boundary Trash must hold.
+        refuse_trashed(&self.hub, session_id)?;
         self.session_declaration(session_id, None)
     }
 
@@ -914,6 +918,7 @@ impl Supervisor {
     /// its permanent-delete tombstone cannot poison the replacement launch.
     pub fn reset_session(&self, session_id: &str) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        refuse_trashed(&self.hub, session_id)?;
         // A dormant session has no worker to replace. Its native id is already
         // forgotten, so the next prompt's wake starts a fresh context.
         if self.hub.status(session_id) == Some(Status::Exited)
@@ -941,6 +946,7 @@ impl Supervisor {
         confirm_active_turn: bool,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        refuse_trashed(&self.hub, session_id)?;
         let meta = self
             .hub
             .session_list()
@@ -1206,6 +1212,7 @@ impl Supervisor {
     }
 
     fn prepare_session_inner(&self, session_id: &str) -> Result<bool, String> {
+        refuse_trashed(&self.hub, session_id)?;
         let migrated = self.resolve_and_persist_cwd(session_id)?;
         let session = self
             .hub
@@ -1321,6 +1328,15 @@ impl Supervisor {
             .runtime(&machine_id)
             .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
+}
+
+/// A trashed session never launches, resumes or replaces a worker: every
+/// wake path (open, send, queue drain, schedule, wakeup, reload) passes here.
+fn refuse_trashed(hub: &crate::core::Hub, session_id: &str) -> Result<(), String> {
+    if hub.session_is_trashed(session_id) {
+        return Err(crate::core::TRASHED_SESSION_REFUSAL.to_owned());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ import { Search } from "@mui/icons-material";
 import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
 import { DirectoryWorkbench } from "./DirectoryWorkbench";
-import { deleteSession, notify, useStoreSelector } from "./store";
+import { notify, trashItems, useStoreSelector } from "./store";
 import {
   effectiveSessionFolder,
   sessionFolderById,
@@ -45,10 +45,10 @@ export function DirectorySessionsSheet(
       tree={tree}
       sessions={sessions}
       deleting={deleting}
-      removeSession={(sessionId) => deleteSession(sessionId, { quiet: true })}
+      removeSession={(sessionId) => trashItems({ sessions: [sessionId] })}
       onBackgroundFailure={(count) =>
         notify(
-          `${count} session delete requests could not be confirmed. Check Sessions and retry.`,
+          `${count} sessions could not move to Trash. Check Sessions and retry.`,
         )}
     />
   );
@@ -177,7 +177,7 @@ export function DirectorySessionsView(
               disabled={busy || actionable.length === 0 || !folder}
               onClick={() => setConfirm([...actionable])}
             >
-              Delete ({actionable.length})
+              Move to Trash ({actionable.length})
             </Button>
           </Stack>
         }
@@ -199,7 +199,7 @@ export function DirectorySessionsView(
             </Alert>
           )}
           <Typography variant="body2" color="text.secondary">
-            Select sessions to delete. Directories and Drafts are kept.
+            Select sessions to move to Trash. Directories and Drafts are kept.
           </Typography>
           <FormControlLabel
             control={
@@ -267,8 +267,8 @@ export function DirectorySessionsView(
           {(busy || submitted.size > 0) && (
             <Typography role="status" variant="body2">
               {busy
-                ? "Sending delete requests…"
-                : `${deleted} deleted${
+                ? "Moving to Trash…"
+                : `${deleted} moved to Trash${
                   pending.length
                     ? ` · ${pending.length} waiting for the environment to stop`
                     : ""
@@ -360,7 +360,7 @@ export function DirectorySessionsView(
         portal={false}
         open={confirm !== null}
         onClose={() => setConfirm(null)}
-        title={`Delete ${confirm?.length ?? 0} sessions?`}
+        title={`Move ${confirm?.length ?? 0} sessions to Trash?`}
         actions={
           <>
             <Button onClick={() => setConfirm(null)}>
@@ -372,16 +372,15 @@ export function DirectorySessionsView(
               disabled={busy || !folder}
               onClick={() => void remove()}
             >
-              Delete {confirm?.length ?? 0}{" "}
-              sessions<Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+              Move {confirm?.length ?? 0} to Trash<Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
             </Button>
           </>
         }
       >
         <Stack spacing={1}>
           <Typography>
-            Any in-flight turns will be cancelled. These sessions’ agent
-            transcripts will be lost.
+            They can be restored from Trash with their transcripts and
+            worktrees. A working session is not moved; stop it first.
           </Typography>
           <Typography variant="body2" color="text.secondary">
             {folder?.name}
