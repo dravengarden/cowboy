@@ -1,5 +1,4 @@
 import {
-  Box,
   Button,
   IconButton,
   List,
@@ -9,11 +8,9 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  DeleteOutline,
   DescriptionOutlined,
   DragIndicator,
   MoreVert,
-  RestoreFromTrashOutlined,
 } from "@mui/icons-material";
 import { type MutableRefObject, useState } from "react";
 import { flushSync } from "react-dom";
@@ -301,45 +298,5 @@ export function WorkspaceDraftActions(
     >
       <Typography>The document can be restored from Trash.</Typography>
     </ConfirmSheet>
-  );
-}
-
-export function WorkspaceDraftTrash(): React.JSX.Element {
-  const library = useDraftLibrary();
-  const [open, setOpen] = useState(false);
-  const trash = library.entries.filter((entry) =>
-    entry.kind === "document" && entry.deleted
-  );
-  if (!trash.length && !open) return <></>;
-  return (
-    <>
-      <Button
-        startIcon={<DeleteOutline />}
-        onClick={() => setOpen(true)}
-        sx={{ textTransform: "none", minHeight: "2.75rem" }}
-      >
-        Trash{trash.length ? ` · ${trash.length}` : ""}
-      </Button>
-      <Sheet open={open} onClose={() => setOpen(false)} title="Draft Trash">
-        <List>
-          {trash.map((draft) => (
-            <ListItemButton
-              key={draft.id}
-              onClick={() => {
-                void draftRepository().document(draft.id).hydrate().then(() =>
-                  draftRepository().document(draft.id).change({
-                    type: "restore",
-                  })
-                ).catch((error: Error) => documentNotice(error.message));
-              }}
-            >
-              <RestoreFromTrashOutlined sx={{ mr: 1 }} />
-              <ListItemText primary={draft.title} secondary="Restore" />
-            </ListItemButton>
-          ))}
-        </List>
-        {trash.length === 0 && <Box sx={{ p: 2 }}>Trash is empty.</Box>}
-      </Sheet>
-    </>
   );
 }

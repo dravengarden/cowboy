@@ -29,7 +29,9 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 mod code_scope;
 mod review_defaults;
 mod session_continuation;
+mod session_trash;
 pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
+pub use session_trash::TRASHED_SESSION_REFUSAL;
 mod product_permissions;
 pub(crate) use product_permissions::ProductPermissionObservation;
 mod persistence_queue;
@@ -508,6 +510,13 @@ pub struct SessionMeta {
     /// Crashed detail when the stop stays unconfirmed. Transient.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closing: bool,
+    /// Epoch ms when the session was moved to Trash, `None` while it is live.
+    /// A trashed session keeps its transcript, worktree and native thread but
+    /// accepts no work and never launches a worker until it is restored; the
+    /// Controller deletes it permanently once the owner's retention elapses
+    /// (`docs/sessions-folders.md#trash`). Persisted as `sessions.trashed_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at_ms: Option<i64>,
     /// True for a machine-driven system session: visible and watchable in the
     /// UI but view-only. The composer is hidden and user turns are rejected;
     /// only the backend wake endpoint drives it. Persisted for compatibility.
@@ -1264,6 +1273,30 @@ pub enum Inbound {
     /// remove the entry from the Hub, and broadcast the updated session list
     /// to every connected client (so other surfaces auto-clear).
     DeleteSession { session_id: String },
+    /// Move sessions and folders to Trash (`docs/sessions-folders.md#trash`).
+    /// A folder takes everything filed in it. All-or-nothing: a working
+    /// session refuses the whole request.
+    TrashItems {
+        #[serde(default)]
+        session_ids: Vec<String>,
+        #[serde(default)]
+        folder_ids: Vec<String>,
+    },
+    /// Restore trashed sessions and folders to where they were.
+    RestoreItems {
+        #[serde(default)]
+        session_ids: Vec<String>,
+        #[serde(default)]
+        folder_ids: Vec<String>,
+    },
+    /// Permanently delete trashed sessions and folders now, before their
+    /// retention ends. Live items are refused; use `trash_items` first.
+    PurgeItems {
+        #[serde(default)]
+        session_ids: Vec<String>,
+        #[serde(default)]
+        folder_ids: Vec<String>,
+    },
     /// Rename a session — the user-customizable title shown in the `AppBar`
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
@@ -1743,6 +1776,11 @@ pub enum StoreWrite {
     /// Persist explicit sidebar placements (`None` = back to the root).
     UpdateSessionPlacement {
         placements: Vec<(String, Option<String>)>,
+    },
+    /// Persist the Trash state of sessions (`None` = restored).
+    SetSessionsTrashed {
+        session_ids: Vec<String>,
+        trashed_at_ms: Option<i64>,
     },
     /// Persist one session's Mobile-only code-review workspace state.
     UpdateMobileReviewState {
@@ -3412,6 +3450,7 @@ impl Hub {
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
+            trashed_at_ms: None,
         }
     }
 
@@ -5949,7 +5988,8 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if !Self::ready(s, allow_revive) {
+            // A trashed session holds its queue until it is restored.
+            if s.meta.trashed_at_ms.is_some() || !Self::ready(s, allow_revive) {
                 return;
             }
             // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
@@ -6811,7 +6851,9 @@ impl Hub {
     /// (the user removed/activated it before it fired — the timer was cancelled,
     /// but a fire already in-flight is harmless here).
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
-        if self.is_managed_child(session_id) {
+        // A trashed session keeps its scheduled drafts unsent; they stay
+        // visible (overdue) if the session is restored.
+        if self.is_managed_child(session_id) || self.session_is_trashed(session_id) {
             return;
         }
         let fired = {
@@ -8048,6 +8090,7 @@ mod runtime_reconciliation_tests {
             parent: None,
             position: 0,
             project: None,
+            trashed_at_ms: None,
         }]);
         let mut filed = restored_busy("filed");
         filed.folder_id = Some("f-a".to_owned());
@@ -8158,6 +8201,7 @@ mod runtime_reconciliation_tests {
                 next_schedule_ms: None,
                 owner_user_id: None,
                 owner_username: None,
+                trashed_at_ms: None,
             },
             log: Vec::new(),
             event_count: 0,

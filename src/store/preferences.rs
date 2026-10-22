@@ -26,10 +26,25 @@ pub(crate) enum PreferenceResult {
     Invalid(&'static str),
 }
 
+/// Days a trashed session or folder is kept before permanent deletion.
+pub(crate) const TRASH_RETENTION_DEFAULT_DAYS: i64 = 30;
+pub(crate) const TRASH_RETENTION_MAX_DAYS: i64 = 365;
+
+/// The owner's Trash retention in days, or the default for a missing or
+/// malformed value.
+pub(crate) fn trash_retention_days(preferences: Option<&Preferences>) -> i64 {
+    preferences
+        .and_then(|prefs| prefs.values.get("retention_days"))
+        .and_then(Value::as_i64)
+        .filter(|days| (1..=TRASH_RETENTION_MAX_DAYS).contains(days))
+        .unwrap_or(TRASH_RETENTION_DEFAULT_DAYS)
+}
+
 pub(crate) fn defaults(scope: &str) -> Option<Preferences> {
     let values = match scope {
         "about" => json!({"usage_order":[],"machine_order":[]}),
         "subscriptions" => json!({"legacy_labels":{}}),
+        "trash" => json!({"retention_days": TRASH_RETENTION_DEFAULT_DAYS}),
         _ => return None,
     };
     Some(Preferences {
@@ -49,6 +64,9 @@ pub(crate) fn schema() -> Value {
         "fields":{"legacy_labels":{"type":"provider_label_map","default":{}}},
         "provider_label_map":{"max_items":128,"provider_pattern":"^[a-z0-9-]{1,64}$","label_max_utf8_bytes":128},
         "semantics":"Display names for each Provider's legacy default account. Replace the complete map using the observed revision; omitted entries restore Existing account. Labels must be trimmed, nonempty and contain no control characters. Does not change account identity, credentials, admission or session defaults."},
+        "trash":{"storage":"database","ownership":"current_user",
+        "fields":{"retention_days":{"type":"integer","min":1,"max":365,"default":30}},
+        "semantics":"Days a session or folder stays in Trash before the Controller deletes it permanently. Applies to items already in Trash: each deadline is trashed_at + retention_days. Move items with sessions.trash, bring them back with sessions.restore."},
         "about":{"storage":"database","ownership":"current_user",
         "fields":{"usage_order":{"type":"unique_id_array","default":[]},
                   "machine_order":{"type":"unique_id_array","default":[]}},
@@ -62,6 +80,12 @@ fn valid(change: &PreferenceChange) -> bool {
         && change.changes.as_object().is_some_and(|fields| {
             !fields.is_empty()
                 && fields.iter().all(|(key, value)| {
+                    if change.scope == "trash" {
+                        return key == "retention_days"
+                            && value.as_i64().is_some_and(|days| {
+                                (1..=TRASH_RETENTION_MAX_DAYS).contains(&days)
+                            });
+                    }
                     if change.scope == "subscriptions" {
                         return key == "legacy_labels"
                             && value.as_object().is_some_and(|labels| {

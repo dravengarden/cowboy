@@ -142,7 +142,7 @@ impl Hub {
 }
 
 /// Match sessionProjectLabel in the Web sidebar, including legacy checkouts.
-fn sidebar_project(meta: &super::SessionMeta) -> Option<&str> {
+pub(super) fn sidebar_project(meta: &super::SessionMeta) -> Option<&str> {
     meta.workspace_name
         .as_deref()
         .into_iter()

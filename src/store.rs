@@ -1665,6 +1665,15 @@ impl Store {
         dispatch_storage!(self, update_session_placement(placements))
     }
 
+    /// Move sessions into Trash (`Some(ms)`) or restore them (`None`).
+    pub async fn set_sessions_trashed(
+        &self,
+        session_ids: &[String],
+        trashed_at_ms: Option<i64>,
+    ) -> Result<()> {
+        dispatch_storage!(self, set_sessions_trashed(session_ids, trashed_at_ms))
+    }
+
     pub async fn upsert_event_batch(
         &self,
         events: &[Envelope],
@@ -3255,7 +3264,7 @@ impl PostgresStorage {
              provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, folder_id, \
+             config_options, config_preferences, mobile_review_state, folder_id, trashed_at_ms, \
              owner_user_id, \
              (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -6081,7 +6090,7 @@ impl PostgresStorage {
     /// If the SELECT fails.
     pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
         let rows: Vec<SessionFolderRow> = sqlx::query_as::<_, SessionFolderRow>(
-            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json \
+            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json, trashed_at_ms \
              FROM session_folders ORDER BY position ASC, created_at ASC, id ASC",
         )
         .fetch_all(&self.pool)
@@ -6120,11 +6129,12 @@ impl PostgresStorage {
         .context("DELETE stale session_folders")?;
         for folder in folders {
             sqlx::query(
-                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position, defaults_json) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position, defaults_json, trashed_at_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
                  name = excluded.name, parent_id = excluded.parent_id, \
-                 project = excluded.project, position = excluded.position, defaults_json = excluded.defaults_json, updated_at = now()",
+                 project = excluded.project, position = excluded.position, defaults_json = excluded.defaults_json, \
+                 trashed_at_ms = excluded.trashed_at_ms, updated_at = now()",
             )
             .bind(&folder.id)
             .bind(folder.owner_user_id.as_deref())
@@ -6133,6 +6143,7 @@ impl PostgresStorage {
             .bind(folder.project.as_deref())
             .bind(folder.position)
             .bind(crate::session_folders::defaults::stored_json(&folder.defaults, previous.get(&folder.id).map(String::as_str))?)
+            .bind(folder.trashed_at_ms)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("UPSERT session_folder {}", folder.id))?;
@@ -6163,6 +6174,28 @@ impl PostgresStorage {
         tx.commit()
             .await
             .context("commit update_session_placement")?;
+        Ok(())
+    }
+
+    /// Record the Trash state of sessions in one transaction.
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn set_sessions_trashed(
+        &self,
+        session_ids: &[String],
+        trashed_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for session_id in session_ids {
+            sqlx::query("UPDATE sessions SET trashed_at_ms = $1, updated_at = now() WHERE id = $2")
+                .bind(trashed_at_ms)
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE trashed_at_ms for {session_id}"))?;
+        }
+        tx.commit().await.context("commit set_sessions_trashed")?;
         Ok(())
     }
 
@@ -8836,6 +8869,7 @@ struct SessionFolderRow {
     project: Option<String>,
     position: i64,
     defaults_json: String,
+    trashed_at_ms: Option<i64>,
 }
 
 impl SessionFolderRow {
@@ -8851,6 +8885,7 @@ impl SessionFolderRow {
                 &self.defaults_json,
             )?)
             .map_err(anyhow::Error::msg)?,
+            trashed_at_ms: self.trashed_at_ms,
         })
     }
 }
@@ -8882,6 +8917,7 @@ struct SessionRow {
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
     folder_id: Option<String>,
+    trashed_at_ms: Option<i64>,
     owner_user_id: Option<String>,
     owner_username: Option<String>,
 }
@@ -8933,6 +8969,7 @@ impl SessionRow {
             next_schedule_ms: None,
             owner_user_id: self.owner_user_id,
             owner_username: self.owner_username,
+            trashed_at_ms: self.trashed_at_ms,
         }
     }
 }
@@ -8982,6 +9019,7 @@ mod storage_contract_tests {
             next_schedule_ms: None,
             owner_user_id: None,
             owner_username: None,
+            trashed_at_ms: None,
         }
     }
 
@@ -10510,6 +10548,7 @@ mod storage_contract_tests {
                 &serde_json::json!({"machine":"hawk","preset":"claude-code/opus-default"}),
             )
             .unwrap(),
+            trashed_at_ms: None,
         };
         store
             .replace_session_folders(
@@ -10523,6 +10562,7 @@ mod storage_contract_tests {
             .await?;
         let mut renamed = folder("f-child", Some("f-root"), 0);
         renamed.name = "Child renamed".to_owned();
+        renamed.trashed_at_ms = Some(1_700_000_000_000);
         // A whole-set write drops the owner's rows that left the set and only
         // touches that owner's slot.
         store
@@ -10542,6 +10582,9 @@ mod storage_contract_tests {
                 (session_id.to_owned(), Some("f-child".to_owned())),
                 (companion_id.clone(), None),
             ])
+            .await?;
+        store
+            .set_sessions_trashed(&[session_id.to_owned()], Some(1_700_000_000_001))
             .await?;
 
         let loaded = store.load_all().await?;
@@ -10584,6 +10627,7 @@ mod storage_contract_tests {
         assert_eq!(restored.config_preferences["model"], "gpt-test");
         assert_eq!(restored.mobile_review_state["mode"], "code");
         assert_eq!(restored.folder_id.as_deref(), Some("f-child"));
+        assert_eq!(restored.meta.trashed_at_ms, Some(1_700_000_000_001));
         assert!(
             loaded
                 .iter()
@@ -10597,6 +10641,8 @@ mod storage_contract_tests {
         assert_eq!(folders[0].owner_user_id.as_deref(), Some("user-b"));
         assert_eq!(folders[1].name, "Child renamed");
         assert_eq!(folders[1].parent.as_deref(), Some("f-root"));
+        assert_eq!(folders[1].trashed_at_ms, Some(1_700_000_000_000));
+        assert!(folders[2].trashed_at_ms.is_none());
         assert!(folders[2].owner_user_id.is_none());
         assert_eq!(folders[2].project.as_deref(), Some("cowboy"));
         assert_eq!(folders[2].defaults, folder("f-root", None, 0).defaults);

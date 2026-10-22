@@ -375,6 +375,7 @@ struct SqliteSessionRow {
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
     folder_id: Option<String>,
+    trashed_at_ms: Option<i64>,
     owner_user_id: Option<String>,
     owner_username: Option<String>,
 }
@@ -1590,6 +1591,7 @@ impl SqliteSessionRow {
             next_schedule_ms: None,
             owner_user_id: self.owner_user_id,
             owner_username: self.owner_username,
+            trashed_at_ms: self.trashed_at_ms,
         }
     }
 }
@@ -2291,7 +2293,7 @@ impl SqliteStorage {
              provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, folder_id, \
+             config_options, config_preferences, mobile_review_state, folder_id, trashed_at_ms, \
              owner_user_id, \
              (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at_ms IS NULL \
@@ -5192,7 +5194,7 @@ impl SqliteStorage {
 
     pub(super) async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
         let rows: Vec<SessionFolderRow> = sqlx::query_as(
-            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json \
+            "SELECT id, owner_user_id, name, parent_id, project, position, defaults_json, trashed_at_ms \
              FROM session_folders ORDER BY position ASC, created_at_ms ASC, id ASC",
         )
         .fetch_all(&self.pool)
@@ -5247,12 +5249,13 @@ impl SqliteStorage {
         for folder in folders {
             sqlx::query(
                 "INSERT INTO session_folders \
-                 (id, owner_user_id, name, parent_id, project, position, created_at_ms, updated_at_ms, defaults_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8) \
+                 (id, owner_user_id, name, parent_id, project, position, created_at_ms, updated_at_ms, defaults_json, trashed_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9) \
                  ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
                  name = excluded.name, parent_id = excluded.parent_id, \
                  project = excluded.project, position = excluded.position, \
-                 defaults_json = excluded.defaults_json, updated_at_ms = excluded.updated_at_ms",
+                 defaults_json = excluded.defaults_json, trashed_at_ms = excluded.trashed_at_ms, \
+                 updated_at_ms = excluded.updated_at_ms",
             )
             .bind(&folder.id)
             .bind(folder.owner_user_id.as_deref())
@@ -5262,6 +5265,7 @@ impl SqliteStorage {
             .bind(folder.position)
             .bind(timestamp)
             .bind(crate::session_folders::defaults::stored_json(&folder.defaults, existing.get(&folder.id).map(String::as_str))?)
+            .bind(folder.trashed_at_ms)
             .execute(&mut *transaction)
             .await
             .with_context(|| format!("UPSERT SQLite session_folder {}", folder.id))?;
@@ -5270,6 +5274,33 @@ impl SqliteStorage {
             .commit()
             .await
             .context("commit SQLite session folders")?;
+        Ok(())
+    }
+
+    pub(super) async fn set_sessions_trashed(
+        &self,
+        session_ids: &[String],
+        trashed_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin SQLite session-trash transaction")?;
+        let timestamp = now_ms();
+        for session_id in session_ids {
+            sqlx::query("UPDATE sessions SET trashed_at_ms = ?1, updated_at_ms = ?2 WHERE id = ?3")
+                .bind(trashed_at_ms)
+                .bind(timestamp)
+                .bind(session_id)
+                .execute(&mut *transaction)
+                .await
+                .with_context(|| format!("UPDATE SQLite trashed_at_ms for {session_id}"))?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("commit SQLite session trash")?;
         Ok(())
     }
 

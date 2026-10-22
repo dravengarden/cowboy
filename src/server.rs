@@ -23,6 +23,7 @@ mod session_create_replay;
 mod session_maintenance;
 mod session_provider_updates;
 mod session_reclaim;
+mod session_trash;
 mod web_roots;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -2894,6 +2895,14 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
         }
         StoreWrite::UpdateSessionPlacement { placements } => {
             store.update_session_placement(placements).await
+        }
+        StoreWrite::SetSessionsTrashed {
+            session_ids,
+            trashed_at_ms,
+        } => {
+            store
+                .set_sessions_trashed(session_ids, *trashed_at_ms)
+                .await
         }
         StoreWrite::UpdateMobileReviewState { session_id, value } => {
             store.update_mobile_review_state(session_id, value).await
@@ -10819,6 +10828,7 @@ async fn serve_axum(
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
+    let trash_retention_task = tokio::spawn(session_trash::run_retention(Arc::clone(&state)));
     let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
     let native_usage_task = tokio::spawn(provider_accounts::usage::run(Arc::clone(&state)));
@@ -10835,6 +10845,7 @@ async fn serve_axum(
     convergence_task.abort();
     provider_update_task.abort();
     generation_retention_task.abort();
+    trash_retention_task.abort();
     account_recovery_task.abort();
     usage_broadcast_task.abort();
     native_usage_task.abort();
@@ -21444,6 +21455,9 @@ fn handle_command(
         | Inbound::NewSession { .. }
         | Inbound::ReorderSessions { .. }
         | Inbound::Sync { .. }
+        | Inbound::TrashItems { .. }
+        | Inbound::RestoreItems { .. }
+        | Inbound::PurgeItems { .. }
         | Inbound::SetSetting { .. } => None,
     };
     // A client-authored prompt or draft carries its `cmid` from a durable
@@ -21509,6 +21523,33 @@ fn handle_command(
                 CommandOutcome::Rejected,
                 "view-only system session: input is disabled",
             );
+        }
+        return false;
+    }
+    // A trashed session is read-only until restored: it takes no work, no
+    // configuration and never wakes. Deletion, cancel and open stay allowed.
+    if let Some(sid) = &session_id_for_err
+        && !matches!(
+            &cmd,
+            Inbound::DeleteSession { .. }
+                | Inbound::Cancel { .. }
+                | Inbound::CancelSubmitted { .. }
+                | Inbound::OpenSession { .. }
+                | Inbound::RenameSession { .. }
+        )
+        && state.hub.session_is_trashed(sid)
+    {
+        if let Some(cmid) = &authored_cmid {
+            state.hub.command_result(
+                sid,
+                cmid,
+                CommandOutcome::Rejected,
+                session_trash::TRASHED_REFUSAL,
+            );
+        } else {
+            state
+                .hub
+                .broadcast_error(Some(sid.clone()), session_trash::TRASHED_REFUSAL.into());
         }
         return false;
     }
@@ -21628,27 +21669,19 @@ fn handle_command(
                 option_id,
             },
         ),
-        Inbound::DeleteSession { session_id } => {
-            // Order: tear down agent thread first (so it doesn't push more
-            // events into a soon-to-be-gone Hub session), then drop Hub state
-            // + broadcast updated list.
-            let binding = state
-                .hub
-                .session_info(&session_id)
-                .and_then(|info| info.meta.execution_binding);
-            if binding.as_ref().is_some_and(|binding| binding.managed().is_some()) {
-                managed_calls::delete_child(state, &session_id)
-            } else if binding.is_some() {
-                let result = execution::sessions::delete(state, &session_id);
-                managed_calls::parent_deleted(state, &session_id);
-                result
-            } else {
-                state.supervisor.delete_session(&session_id);
-                state.hub.delete_session(&session_id);
-                managed_calls::parent_deleted(state, &session_id);
-                Ok(())
-            }
-        }
+        Inbound::DeleteSession { session_id } => session_trash::delete_now(state, &session_id),
+        Inbound::TrashItems {
+            session_ids,
+            folder_ids,
+        } => session_trash::trash(state, principal, &folder_ids, &session_ids),
+        Inbound::RestoreItems {
+            session_ids,
+            folder_ids,
+        } => session_trash::restore(state, principal, &folder_ids, &session_ids),
+        Inbound::PurgeItems {
+            session_ids,
+            folder_ids,
+        } => session_trash::purge(state, principal, &folder_ids, &session_ids),
         Inbound::RenameSession { session_id, title } => {
             // Empty title is a UI bug; reject server-side so the toast lands.
             let trimmed = title.trim().to_owned();
@@ -21705,6 +21738,8 @@ fn handle_command(
         },
         // Opening is inspection; stopped sessions remain stopped until work is
         // submitted. Live ownership is reconciled without a throwaway prompt.
+        // Opening a trashed session is inspection only; it never wakes.
+        Inbound::OpenSession { session_id } if state.hub.session_is_trashed(&session_id) => Ok(()),
         Inbound::OpenSession { session_id } => {
             // Do NOT revive an INTERRUPTED session on open. Reviving would flip it
             // to Starting→Running, hiding the fact that its last turn was cut off

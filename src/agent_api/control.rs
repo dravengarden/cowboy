@@ -74,7 +74,10 @@ operations! {
     "sessions.cancel", true, "{session_id:string}; accepted means cancellation requested, not confirmed stopped";
     "sessions.retry", true, "{session_id:string}; explicitly repeats the last failed prompt";
     "sessions.reset", true, "{session_id:string}; destructive: clears conversation context";
-    "sessions.delete", true, "{session_id:string}; accepted means close/delete requested; observe session absence before assuming deletion";
+    "sessions.delete", true, "{session_id:string}; PERMANENT, skips Trash: accepted means close/delete requested; observe session absence before assuming deletion. Prefer sessions.trash";
+    "sessions.trash", true, "{session_ids?:string[],folder_ids?:string[]}; move to Trash (recoverable until the owner's preferences.trash retention_days). A folder takes every session filed in it. All-or-nothing: a working session refuses the request. Observe trashed_at_ms on the sessions";
+    "sessions.restore", true, "{session_ids?:string[],folder_ids?:string[]}; restore from Trash to the original folder, or its nearest live ancestor. A folder restores everything below it. Restored sessions stay asleep until opened or sent work";
+    "sessions.purge", true, "{session_ids?:string[],folder_ids?:string[]}; PERMANENT deletion of items already in Trash; a folder takes its trashed contents";
     "queue.submit", true, "{session_id:string,text:string,content?:unknown[],delivery?:'next_turn'|'current_turn'|'next_checkpoint'|'interrupt'|'session_default',target?:{worker_epoch:string,turn_id:string},front?:boolean,force?:boolean}; omitted delivery is next_turn. Read queue.options for exact target and native controls. next_checkpoint consumes after foreground tools or at turn end. interrupt requires target, cancels that turn and sends once while preserving Pause/other rows. session_default resolves before self-steer checks. Observe pending/unknown receipts; never retry with a new operation";
     "queue.edit", true, "{session_id:string,id:string,text:string,content:unknown[]}; explicit complete replacement; preserve existing attachment blocks";
     "queue.delivery_receipt", false, "{session_id:string,operation:string}; observe an HTTP/CLI current-turn delivery without resending; MCP control.apply uses its existing control receipt";

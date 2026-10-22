@@ -2897,6 +2897,7 @@ mod tests {
             next_schedule_ms: None,
             owner_user_id: None,
             owner_username: None,
+            trashed_at_ms: None,
         }
     }
 

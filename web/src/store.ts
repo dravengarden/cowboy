@@ -131,6 +131,7 @@ import {
   type SessionFoldersValue,
 } from "./sessionFolders";
 import { syncedKeyList } from "./sessionTree";
+import { isTrashedFolder, liveFolderView, splitTrashedSessions } from "./trashModel";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
   acceptsMachineSnapshot,
@@ -283,6 +284,12 @@ export interface State {
   // list by `buildSessionTree` in the sidebar; never mutates `sessions`.
   sessionFolders: SessionFoldersValue;
   sessionFoldersReady: boolean;
+  /** Sessions in Trash (docs/sessions-folders.md#trash), in the same title +
+   *  order overlay as `sessions`, which never contains them. */
+  trashedSessions: SessionMeta[];
+  /** The complete `"folders"` value, trashed folders included. Only the Trash
+   *  view reads it; every live surface reads `sessionFolders`. */
+  trashFolders: SessionFoldersValue;
   workspaceOrder: readonly string[];
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
@@ -330,6 +337,8 @@ let state: State = {
   titleOverrides: {},
   sessionFolders: EMPTY_SESSION_FOLDERS,
   sessionFoldersReady: false,
+  trashedSessions: [],
+  trashFolders: EMPTY_SESSION_FOLDERS,
   workspaceOrder: [],
   mobileReviewStates: {},
   mobileReviewReady: new Set(),
@@ -3239,7 +3248,7 @@ function registerSync<T, M extends Mutators<T>>(
   mutators: M,
   initial: T,
   onChange: () => void = commitSessions,
-): { view: () => T; ready: () => boolean; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
+): { view: () => T; ready: () => boolean; pending: () => number; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
   if (productSessionAbandoned) throw new Error("product sync owner is closed");
   const previews = new Map<string, (value: T) => T>();
   let ready = false;
@@ -3293,6 +3302,7 @@ function registerSync<T, M extends Mutators<T>>(
   }
   return {
     ready: () => ready,
+    pending: () => previews.size + store.pending().length,
     view: (): T => {
       let value = store.get();
       for (const project of previews.values()) value = project(value);
@@ -3554,16 +3564,137 @@ function deriveSessions(raw: SessionMeta[], titles: TitleMap, order: OrderList):
 
 /** Re-derive the rendered session list from the raw list + every synced overlay
  *  and commit it. Called on a `sessions` broadcast and on any sync patch/mutate. */
+let liveFoldersCache: { raw: SessionFoldersValue; live: SessionFoldersValue } | null = null;
+
+/** The live projection of the `"folders"` value, stable per raw value. */
+function liveFolders(raw: SessionFoldersValue): SessionFoldersValue {
+  if (liveFoldersCache?.raw !== raw) liveFoldersCache = { raw, live: liveFolderView(raw) };
+  return liveFoldersCache.live;
+}
+
 function commitSessions(): void {
   const titles = titleSync.view();
+  const folders = foldersSync.view();
+  // Trashed sessions leave every live surface; only the Trash view reads them.
+  const { live, trashed } = splitTrashedSessions(
+    deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
+  );
   setState({
     ...state,
-    sessions: deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
+    sessions: live,
+    trashedSessions: trashed.length === 0 && state.trashedSessions.length === 0
+      ? state.trashedSessions
+      : trashed,
     titleOverrides: titles,
-    sessionFolders: foldersSync.view(),
+    sessionFolders: liveFolders(folders),
+    trashFolders: folders,
     sessionFoldersReady: foldersSync.ready(),
     workspaceOrder: syncedKeyList(workspaceOrderSync.view()),
   });
+}
+
+// --- Sessions Trash (docs/sessions-folders.md#trash) ------------------------
+// Trash, restore and permanent deletion are Controller commands, not
+// optimistic sync: a working session refuses the whole request, so the UI
+// waits for the authoritative `sessions` + `"folders"` broadcast.
+
+export interface TrashSelection {
+  readonly sessions?: readonly string[];
+  readonly folders?: readonly string[];
+}
+
+function trashCommand(
+  type: "trash_items" | "restore_items" | "purge_items",
+  items: TrashSelection,
+  settled: (snapshot: State) => boolean,
+  label: string,
+): Promise<void> {
+  const errorBefore = state.lastError?.seq ?? 0;
+  const refused = (snapshot: State): boolean =>
+    (snapshot.lastError?.seq ?? 0) > errorBefore && snapshot.lastError?.sessionId === undefined;
+  return sendWithAck(
+    {
+      type,
+      session_ids: [...(items.sessions ?? [])],
+      folder_ids: [...(items.folders ?? [])],
+    },
+    (snapshot) => settled(snapshot) || refused(snapshot),
+    label,
+  ).then(() => {
+    if (!settled(state) && refused(state)) throw new Error(state.lastError?.message ?? `${label} failed`);
+  });
+}
+
+function folderTrashed(snapshot: State, id: string): boolean | undefined {
+  const folder = snapshot.trashFolders.folders.find((candidate) => candidate.id === id);
+  return folder ? isTrashedFolder(folder) : undefined;
+}
+
+/** Move a folder to Trash, first filing the sessions to keep into
+ *  `destination` (`null` = Global). The placements must reach the Controller
+ *  before the folder does, or it would take them along. */
+export async function trashFolderKeeping(
+  folder: string,
+  keep: readonly string[],
+  destination: string | null,
+): Promise<void> {
+  if (keep.length > 0) {
+    placeSessions(keep, destination);
+    await waitForState(() => foldersSync.pending() === 0, "Move kept sessions");
+  }
+  await trashItems({ folders: [folder] });
+}
+
+/** Stop a working session's turn, then move it to Trash once it is idle. */
+export async function stopAndTrashSession(sessionId: string): Promise<void> {
+  if (!cancelTurn(sessionId)) throw new Error("Needs a connection to stop this session.");
+  await waitForState((snapshot) => {
+    const session = snapshot.sessions.find((candidate) => candidate.id === sessionId);
+    return session === undefined || session.status !== "busy";
+  }, "Stop session");
+  await trashItems({ sessions: [sessionId] });
+}
+
+/** Move sessions and folders to Trash. Rejects with the Controller's reason
+ *  (for example a working session) and leaves everything in place. */
+export function trashItems(items: TrashSelection): Promise<void> {
+  return trashCommand(
+    "trash_items",
+    items,
+    (snapshot) =>
+      (items.sessions ?? []).every((id) => snapshot.trashedSessions.some((session) => session.id === id)) &&
+      (items.folders ?? []).every((id) => folderTrashed(snapshot, id) === true),
+    "Move to Trash",
+  );
+}
+
+export function restoreItems(items: TrashSelection): Promise<void> {
+  return trashCommand(
+    "restore_items",
+    items,
+    (snapshot) =>
+      (items.sessions ?? []).every((id) => snapshot.sessions.some((session) => session.id === id)) &&
+      (items.folders ?? []).every((id) => folderTrashed(snapshot, id) === false),
+    "Restore",
+  );
+}
+
+/** Delete trashed items permanently. A remote session can take a moment to
+ *  confirm its stop; it shows as deleting until then. */
+export function purgeItems(items: TrashSelection): Promise<void> {
+  return trashCommand(
+    "purge_items",
+    items,
+    (snapshot) =>
+      (items.sessions ?? []).every((id) =>
+        !snapshot.trashedSessions.some((session) => session.id === id && !session.closing)
+      ) &&
+      (items.folders ?? []).every((id) =>
+        folderTrashed(snapshot, id) === undefined ||
+        snapshot.trashedSessions.some((session) => session.closing)
+      ),
+    "Delete permanently",
+  );
 }
 
 // --- Sessions-sidebar folders (docs/sessions-folders.md) --------------------

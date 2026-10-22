@@ -171,6 +171,11 @@ fn scoped_targets(
     if let Some(id) = input.get("to_session") {
         target(hub, parent, &json!({"session_id":id}))?;
     }
+    if let Some(ids) = input.get("session_ids") {
+        for id in ids.as_array().ok_or("invalid_argument")? {
+            target(hub, parent, &json!({"session_id":id}))?;
+        }
+    }
     if name != "sync.apply" {
         return Ok(());
     }
@@ -469,6 +474,9 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
         "sessions.retry" => ("retry_turn", "session_id"),
         "sessions.reset" => ("reset_session", "session_id"),
         "sessions.delete" => ("delete_session", "session_id"),
+        "sessions.trash" => ("trash_items", "session_ids folder_ids"),
+        "sessions.restore" => ("restore_items", "session_ids folder_ids"),
+        "sessions.purge" => ("purge_items", "session_ids folder_ids"),
         "queue.submit" => ("submit", "session_id text content front force delivery"),
         "queue.edit" => ("edit_queued", "session_id id text content"),
         "queue.remove" => ("remove_queued", "session_id id"),
@@ -772,6 +780,13 @@ async fn dispatch(
             crate::send_delivery::DeliveryMode::ToolBoundary => "next_checkpoint",
             crate::send_delivery::DeliveryMode::NextTurn => "next_turn",
         });
+    }
+    if matches!(name, "sessions.trash" | "sessions.purge")
+        && input["session_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == parent.id.as_str()))
+    {
+        return Err("would_interrupt_caller".into());
     }
     if input["session_id"] == parent.id
         && ((name == "queue.submit"
