@@ -1224,6 +1224,9 @@ fn call_error(op: &str, echo: &str, error: String) -> Value {
         }
         "invalid_help" => format!("; topics: {}", crate::agent_api::HELP_TOPICS.join(", ")),
         "unknown_operation" => "; discover names with cowboy.control.list(domain)".to_owned(),
+        "selection_too_large" => {
+            "; pass {describe:true} first, then a deeper path or smaller limit/chars".to_owned()
+        }
         "page_required" => {
             "; pass an explicit limit and continue from the returned cursor".to_owned()
         }

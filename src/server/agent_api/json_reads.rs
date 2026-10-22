@@ -2,12 +2,28 @@
 use super::*;
 const PAGE_BYTES: usize = 32 * 1024;
 
-pub(super) fn select(value: &Value, args: &Value) -> Result<Value, String> {
+/// The selection's JSON pointer. Agents often omit its leading slash
+/// (`"plugins"`, `"0"`); that spelling has only one meaning, so accept it.
+fn pointer(args: &Value) -> Result<String, String> {
     let path = match args.get("path") {
-        None => "",
-        Some(Value::String(path)) if valid_pointer(path) => path,
+        None | Some(Value::Null) => "",
+        Some(Value::String(path)) => path.as_str(),
         _ => return Err("invalid_argument".into()),
     };
+    let path = if path.is_empty() || path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    if valid_pointer(&path) {
+        Ok(path)
+    } else {
+        Err("invalid_argument".into())
+    }
+}
+
+pub(super) fn select(value: &Value, args: &Value) -> Result<Value, String> {
+    let path = &pointer(args)?;
     let selected = value.pointer(path).ok_or("not_found")?;
     let describe = if args.get("describe").is_none() {
         path.is_empty()
@@ -33,15 +49,12 @@ pub(super) fn select(value: &Value, args: &Value) -> Result<Value, String> {
     }
     let mut query = args.clone();
     query["describe"] = json!(describe);
+    query["path"] = json!(path);
     page(Some(value), &query)
 }
 
 pub(super) fn page(data: Option<&Value>, args: &Value) -> Result<Value, String> {
-    let path = match args.get("path") {
-        None | Some(Value::Null) => "",
-        Some(Value::String(path)) if valid_pointer(path) => path,
-        _ => return Err("invalid_argument".into()),
-    };
+    let path = &pointer(args)?;
     let limit = page_limit(args, 50, 200)?;
     let offset =
         usize::try_from(arg_u64(args, "offset", 0, u64::MAX)?).map_err(|_| "invalid_argument")?;

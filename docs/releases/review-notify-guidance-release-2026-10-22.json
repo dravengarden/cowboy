@@ -1,0 +1,37 @@
+{
+  "schema": "cowboy.review-notify-guidance-release/v1",
+  "date": "2026-10-22",
+  "source_commit": "4371b2a6",
+  "plugin": "review",
+  "previous_version": "1.0.4",
+  "version": "1.0.6",
+  "package_digest": "sha256:f9e333c66070f57bd14638445bbd57bacb23e2aec4d5d526435141d90cc52a72",
+  "artifact_digest": "sha256:6141cdf2883ecaffef7decbbea6b6901b64c34befe0497b12a40b32da036311d",
+  "component_release": "3.60.0",
+  "publisher": "cowboy-first-party",
+  "motivation": "445 cowboy CLI commands in 19 sessions after the Agent API shipped, mostly blocking reviews and shell loops over `cowboy call wait`",
+  "change": "guidance starts reviews with notify:true (CLI --notify), ends the turn and reads calls.result when the Cowboy notice arrives; 1.0.5 (SDK bump only) was never published",
+  "controller": {
+    "revision": "4371b2a6",
+    "outcome": "succeeded",
+    "live_checks": [
+      "selection path '0' read as '/0'",
+      "selection_too_large message names describe:true"
+    ]
+  },
+  "publication": {
+    "published_at": "2026-10-22T01:58:31.800Z",
+    "url_digest_rehashed": true
+  },
+  "installation": {
+    "machine": "ovh",
+    "operation_id": "ovh-review-1-0-6-notify-guidance",
+    "http_status": 204,
+    "observed": "plugins.installations reports review 1.0.6 active with the published artifact digest"
+  },
+  "not_changed": [
+    "machine-plugins.json declares review on no Machine; OVH keeps unlisted Plugins and was upgraded by exact install",
+    "existing sessions keep their pinned guidance",
+    "the `cowboy` CLI with --notify reaches Machines only at their next Machine maintenance release"
+  ]
+}

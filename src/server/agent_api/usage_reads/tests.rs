@@ -167,8 +167,11 @@ fn json_pages_bound_large_history_and_allow_discovery_without_copying_it() {
     .unwrap();
     assert_eq!(keys["data"], json!({"b":2}));
     assert_eq!(keys["range"]["next"], 2);
+    assert_eq!(
+        json_page(Some(&data), &json!({"path":"invalid"})),
+        Err("not_found".into())
+    );
     for args in [
-        json!({"path":"invalid"}),
         json!({"path":"/~2"}),
         json!({"limit":0}),
         json!({"limit":201}),
