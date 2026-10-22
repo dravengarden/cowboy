@@ -301,8 +301,11 @@ impl Store {
                 && session.provider_account_id == profile.account_id
                 && session.machine_id == completion.machine_id
                 && session.provider == profile.provider_id
-                && session.provider_version == profile.provider_version
-                && session.provider_generation_digest == profile.generation_digest
+                // The release may differ from the one used to sign in when its
+                // authentication contract matches; registration resolves that
+                // and the Machine verifies it before launch.
+                && !session.provider_version.is_empty()
+                && !session.provider_generation_digest.is_empty()
                 && session.provider_auth_generation == Some(profile.generation)
                 && session.status == crate::core::Status::Starting,
             "native_session_scope_mismatch"

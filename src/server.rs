@@ -16947,9 +16947,19 @@ fn resolve_provider_generation_with_auth(
             package.manifest.authentication.required,
             service_auth,
         )?,
-        SchedulingAuthentication::Native(profile) => Some(
-            provider_accounts::native_generation::resolve(profile, installed, &package.manifest)?,
-        ),
+        SchedulingAuthentication::Native(profile) => {
+            let signed_in = catalog.package(
+                provider_id,
+                &profile.provider_version,
+                &profile.generation_digest,
+            );
+            Some(provider_accounts::native_generation::resolve(
+                profile,
+                installed,
+                &package.manifest,
+                signed_in.as_ref().map(|signed_in| &signed_in.manifest),
+            )?)
+        }
     };
     Ok(ResolvedProviderGeneration {
         version: installed.plugin_version.clone(),
@@ -17811,9 +17821,9 @@ mod machine_provider_tests {
                 tenant: Some("personal-org".into()),
             },
         };
-        assert_eq!(resolve(&profile, &installed, &manifest), Ok(7));
+        assert_eq!(resolve(&profile, &installed, &manifest, None), Ok(7));
         installed.auth_generation = None;
-        assert_eq!(resolve(&profile, &installed, &manifest), Ok(7));
+        assert_eq!(resolve(&profile, &installed, &manifest, None), Ok(7));
         for field in 0..9 {
             let mut bad = profile.clone();
             match field {
@@ -17828,12 +17838,27 @@ mod machine_provider_tests {
                 _ => bad.identity.tenant = None,
             }
             assert!(
-                resolve(&bad, &installed, &manifest).is_err(),
+                resolve(&bad, &installed, &manifest, None).is_err(),
                 "field {field}"
             );
         }
+        // A later release keeps the login only with identical signed
+        // authentication, verified against the Catalog's signed-in release.
+        let mut next = manifest.clone();
+        next.version = "999.0.0".into();
+        let mut upgraded = installed.clone();
+        upgraded.plugin_version = next.version.clone();
+        upgraded.generation_digest = "sha256:next".into();
+        assert_eq!(resolve(&profile, &upgraded, &next, Some(&manifest)), Ok(7));
+        assert!(resolve(&profile, &upgraded, &next, None).is_err());
+        let mut renamed = manifest.clone();
+        renamed.version = "0.0.1".into();
+        assert!(resolve(&profile, &upgraded, &next, Some(&renamed)).is_err());
+        let mut changed = next.clone();
+        changed.authentication.methods.pop();
+        assert!(resolve(&profile, &upgraded, &changed, Some(&manifest)).is_err());
         installed.plugin_version = "upgraded".into();
-        assert!(resolve(&profile, &installed, &manifest).is_err());
+        assert!(resolve(&profile, &installed, &manifest, None).is_err());
     }
 
     #[test]

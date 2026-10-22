@@ -61,8 +61,10 @@ pub(super) async fn contract(store: &Store, completion: &NativeCompletion, repla
             1 => bad.provider_account_id = crate::provider_account::ProviderAccountId::default(),
             2 => bad.machine_id = "other".into(),
             3 => bad.provider = "codex".into(),
-            4 => bad.provider_version = "other".into(),
-            5 => bad.provider_generation_digest = "other".into(),
+            // A compatible later release is resolved by registration and
+            // verified by the Machine; the row still needs an exact release.
+            4 => bad.provider_version = String::new(),
+            5 => bad.provider_generation_digest = String::new(),
             6 => bad.provider_auth_generation = None,
             _ => bad.status = crate::core::Status::Exited,
         }

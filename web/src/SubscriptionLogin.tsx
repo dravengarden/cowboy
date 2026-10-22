@@ -5,20 +5,21 @@ import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
 import { SubscriptionAuthorization } from "./SubscriptionAuthorization";
+import { loginReasonText } from "./loginReasons";
 import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
-export function SubscriptionLogin({ scope, label, disabled, request, status, startLabel = "Sign in…", onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; status?: string; startLabel?: string; onChange?: () => void }): React.JSX.Element {
+export function SubscriptionLogin({ scope, label, disabled, request, status, startLabel = "Sign in…", machine, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; status?: string; startLabel?: string; machine?: string; onChange?: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const close = () => { setOpen(false); onChange?.(); };
   return <>
     <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? status === "completed" ? "Details" : "Continue sign-in" : startLabel}</Button>
     <ConfirmSheet open={open} onClose={close} title={label} wide>
-      {open && <SubscriptionLoginForm scope={scope} label={label} onClose={close} {...(request ? { request } : {})} />}
+      {open && <SubscriptionLoginForm scope={scope} label={label} onClose={close} {...(request ? { request } : {})} {...(machine ? { machine } : {})} />}
     </ConfirmSheet>
   </>;
 }
 
-interface LoginFormProps { scope: LoginScope; label: string; onClose: () => void; request?: string; onStarted?: (request: string) => void }
+interface LoginFormProps { scope: LoginScope; label: string; onClose: () => void; request?: string; machine?: string; onStarted?: (request: string) => void }
 export function SubscriptionLoginForm(props: LoginFormProps): React.JSX.Element {
   const { scope, request } = props;
   // A changed account/request is a different form, including its async owner,
@@ -26,9 +27,10 @@ export function SubscriptionLoginForm(props: LoginFormProps): React.JSX.Element 
   return <ScopedSubscriptionLoginForm key={JSON.stringify([scope.owner, scope.dataset, scope.provider, scope.account, request])} {...props} />;
 }
 
-function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted }: LoginFormProps): React.JSX.Element {
+function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: initialMachine, onStarted }: LoginFormProps): React.JSX.Element {
   const machines = useStoreSelector((state) => state.machines);
-  const [machine, setMachine] = useState("");
+  // "Sign in again" names the Machine whose login is outdated.
+  const [machine, setMachine] = useState(initialMachine ?? "");
   const [options, setOptions] = useState<LoginOptions>();
   const [method, setMethod] = useState("");
   const [error, setError] = useState("");
@@ -154,9 +156,9 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, onStarted
     {view.submissionError && !done && !cancelling && !failure && <Alert severity="warning">{view.submissionError}</Alert>}
     {failure && <Alert severity="error">{failure}</Alert>}
     {alreadySignedIn && <Alert severity="success" role="status">Signed in on this Machine. No further action is needed.</Alert>}
-    {options && !options.available && !view.pending && <Alert severity="info">Sign-in unavailable: {options.reason ?? "native_identity_verification_unavailable"}</Alert>}
+    {options && !options.available && !view.pending && <Alert severity="info">{loginReasonText(options.reason ?? "native_identity_verification_unavailable")}</Alert>}
     {!reference && !view.pending && showLoginSetup && options && options.methods.length > 1 && <TextField select label="Sign-in method" size="small" value={method} onChange={(event) => setMethod(event.target.value)}>
-      {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${entry.reason ?? "Unavailable"}` : ""}</MenuItem>)}
+      {options.methods.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.available} sx={{ whiteSpace: "normal" }}>{entry.label ?? entry.id}{!entry.available ? ` · ${loginReasonText(entry.reason)}` : ""}</MenuItem>)}
     </TextField>}
     {!reference && !view.pending && showLoginSetup && options?.methods.length === 1 && <Typography variant="body2">{options.methods[0]!.label ?? options.methods[0]!.id}</Typography>}
     {done && <Alert severity="success" role="status">Signed in on this Machine</Alert>}

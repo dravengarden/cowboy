@@ -72,11 +72,16 @@ impl MachinePluginStore {
         self.validate_native_usage(profile)
             .context("native_usage_profile_changed")?;
         let mut payload = serde_json::json!({"operation":"collect"});
+        // Use the active release; launch preparation checks its authentication
+        // contract against this login before any native process starts.
+        let (active, active_digest) = self
+            .active_package(&profile.provider_id)?
+            .context("native_usage_collector_unavailable")?;
         let resolved = self
             .resolve_host_invocation(
                 &profile.provider_id,
-                &profile.provider_version,
-                &profile.generation_digest,
+                &active.manifest.version,
+                &active_digest,
                 HostAuthentication::Native(profile),
                 PluginHostOperation::CollectUsage,
                 &mut payload,
@@ -117,7 +122,7 @@ impl MachinePluginStore {
             .context("native_usage_profile_changed")?;
         self.validate_host_installation(
             &profile.provider_id,
-            &profile.generation_digest,
+            &active_digest,
             resolved.installation_revision.as_ref(),
         )
         .context("native_usage_installation_changed")?;

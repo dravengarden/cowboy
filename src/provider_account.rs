@@ -6,6 +6,23 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "full", feature = "machine-host", test))]
 pub(crate) mod portable_contract;
 
+/// Whether a native login made under `signed_in` may be used, in place, by the
+/// `target` release. The authentication contract fingerprint alone is not
+/// enough: it deliberately excludes native identity recipes. Require the whole
+/// signed authentication section (methods, identity recipes, credential
+/// layout) to be identical as well, so no login, home or credential changes.
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+pub(crate) fn native_release_compatible(
+    signed_in: &cowboy_provider_sdk::ProviderManifest,
+    target: &cowboy_provider_sdk::ProviderManifest,
+) -> bool {
+    signed_in.id == target.id
+        && signed_in.compatibility.auth_contract_fingerprint
+            == target.compatibility.auth_contract_fingerprint
+        && serde_json::to_value(&signed_in.authentication).ok()
+            == serde_json::to_value(&target.authentication).ok()
+}
+
 /// One bounded native authorization response. Validate at every ingress, not
 /// just the CLI: embedded newlines would become additional native commands.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
@@ -244,6 +261,28 @@ impl std::str::FromStr for ProviderAccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_login_follows_only_releases_with_identical_signed_authentication() {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+        let signed_in = source.compile().unwrap();
+        let mut next = signed_in.clone();
+        next.version = "999.0.0".into();
+        next.runtime = signed_in.runtime.clone();
+        assert!(native_release_compatible(&signed_in, &next));
+        // The fingerprint excludes native identity recipes; any change to the
+        // signed authentication section (methods, recipes, layout) refuses.
+        let mut recipe = next.clone();
+        recipe.authentication.methods.pop();
+        assert!(!native_release_compatible(&signed_in, &recipe));
+        let mut contract = next.clone();
+        contract.compatibility.auth_contract_fingerprint = "sha256:other".into();
+        assert!(!native_release_compatible(&signed_in, &contract));
+        let mut provider = next;
+        provider.id = "claude-deepseek".into();
+        assert!(!native_release_compatible(&signed_in, &provider));
+    }
 
     #[test]
     fn authorization_input_is_one_bounded_line() {

@@ -73,6 +73,7 @@ export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope
     </Stack>)}
     {expanded && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy}
+        {...(page?.logins.find(outdated) ? { machine: page.logins.find(outdated)!.machine_id } : {})}
         startLabel={page?.logins.some(outdated) ? "Sign in again…"
           : page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />
       <Button disabled={busy} onClick={() => void load()}>Refresh status</Button>

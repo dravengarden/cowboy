@@ -96,7 +96,9 @@ export async function accountIdentityBrowser(observe?: (surface: string, stage: 
     const settings = container.querySelector("[data-session-account]")!;
     check(settings.textContent!.includes("Claude · Otter") && !settings.textContent!.includes("Lynx") &&
       settings.textContent!.includes("No quota reported"), "named session settings never borrow Service identity or quota");
-    check(!requests.some((url) => /\/usage|\/auth/.test(url)) && !container.textContent!.includes("Sign out"),
+    // The owner's named-account quota cache (/api/provider-accounts/usage) is
+    // expected here; Service usage and credential endpoints are not.
+    check(!requests.some((url) => /^\/api\/usage|\/auth/.test(url)) && !container.textContent!.includes("Sign out"),
       "opening named settings does not query or mount the Service credential controls");
     check(container.scrollWidth <= container.clientWidth + 1, "account metadata fits a narrow settings panel");
     await observe?.("mobile", "account-identity");

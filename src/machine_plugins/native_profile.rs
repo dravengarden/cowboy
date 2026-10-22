@@ -507,7 +507,17 @@ impl MachinePluginStore {
         digest: &str,
     ) -> Result<()> {
         let (_, profile) = self.read_native_profile(package, generation)?;
-        ensure!(profile.digest == digest, "native profile release mismatch");
+        if profile.digest != digest {
+            // `package` must be exactly the release the caller resolved, and
+            // read_native_profile already proved it compatible with the login.
+            let (resolved, _) = self
+                .package_for_generation(&package.manifest.id, digest)
+                .context("native profile release mismatch")?;
+            ensure!(
+                resolved.manifest.version == package.manifest.version,
+                "native profile release mismatch"
+            );
+        }
         Ok(())
     }
 
@@ -519,10 +529,24 @@ impl MachinePluginStore {
         let (directory, profile) =
             self.read_native_profile_metadata(&package.manifest.id, generation)?;
         ensure!(
-            profile.contract == package.manifest.compatibility.auth_contract_fingerprint
-                && profile.version == package.manifest.version,
+            profile.contract == package.manifest.compatibility.auth_contract_fingerprint,
             "native profile scope or contract mismatch"
         );
+        // A later release may use this login's home in place only when its
+        // signed authentication is identical to the retained signed-in release.
+        if profile.version != package.manifest.version {
+            let (signed_in, _) = self
+                .package_for_generation(&package.manifest.id, &profile.digest)
+                .context("native profile release is not retained")?;
+            ensure!(
+                signed_in.manifest.version == profile.version
+                    && crate::provider_account::native_release_compatible(
+                        &signed_in.manifest,
+                        &package.manifest
+                    ),
+                "native profile scope or contract mismatch"
+            );
+        }
         Ok((directory, profile))
     }
 

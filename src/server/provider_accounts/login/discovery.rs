@@ -69,6 +69,26 @@ pub(in crate::server) async fn logins_value(
             )
             && (installed.plugin_version != completion.profile.provider_version
                 || installed.generation_digest != completion.profile.generation_digest)
+            // The same rule as admission: a release with identical signed
+            // authentication keeps the login, so it is not outdated.
+            && !state
+                .provider_catalog
+                .package(
+                    &found.provider_id,
+                    &installed.plugin_version,
+                    &installed.generation_digest,
+                )
+                .zip(state.provider_catalog.package(
+                    &found.provider_id,
+                    &completion.profile.provider_version,
+                    &completion.profile.generation_digest,
+                ))
+                .is_some_and(|(current, signed_in)| {
+                    crate::provider_account::native_release_compatible(
+                        &signed_in.manifest,
+                        &current.manifest,
+                    )
+                })
         {
             // Local metadata only: the Machine now runs another Provider
             // release, so this login cannot admit new sessions there.

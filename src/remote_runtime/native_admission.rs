@@ -95,8 +95,8 @@ pub(super) async fn snapshot(
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
         crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) || meta.provider != profile.provider_id
-        || meta.provider_version != profile.provider_version
-        || meta.provider_generation_digest != profile.generation_digest
+        // A compatible later release keeps the login (see native_generation);
+        // the Machine re-verifies the authentication contract at launch.
         || meta.provider_auth_generation != Some(profile.generation)
     {
         return false;
@@ -226,8 +226,6 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         return Ok(false);
     }
     if meta.provider != profile.provider_id
-        || meta.provider_version != profile.provider_version
-        || meta.provider_generation_digest != profile.generation_digest
         || meta.provider_auth_generation != Some(profile.generation)
     {
         return Ok(false);

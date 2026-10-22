@@ -684,12 +684,26 @@ generation; a newer pending login never falls back to an earlier success.
 The response rechecks current binding, enrollment and cancellation, but is still
 an advisory snapshot: scheduling must repeat admission around its actual effect.
 It contains no identity fields, credentials or reusable authorization token.
-The native profile must also match the active trusted Provider version, digest,
-authentication contract and native identity recipe. Its auth generation comes
+The native profile must also match the active trusted Provider release (or a
+compatible later release, below), authentication contract and native identity
+recipe. Its auth generation comes
 from that Machine's native login, independently of the default account's Service
-authentication or replicated credentials. A Provider upgrade that no longer
-matches the login makes this readiness projection null; it never substitutes
-the default account. Account usage then reports `native_login_outdated`
+authentication or replicated credentials.
+
+A login follows a later Provider release in place, without a new sign-in, when
+that release keeps the login's authentication contract fingerprint *and* an
+identical signed `authentication` section (methods, native identity recipes,
+credential layout). The fingerprint alone is insufficient because it excludes
+native identity recipes. The Controller compares against the Catalog's
+signed-in release; the Machine compares again against the retained signed-in
+release before every launch and usage read, and native usage runs the active
+compatible collector. The native home, identity and credentials are never
+copied or rewritten; new sessions and dormant re-pins use the compatible release
+while existing sessions keep their own.
+
+A Provider upgrade that does not satisfy this rule makes this readiness
+projection null; it never substitutes the default account. Account usage then
+reports `native_login_outdated`
 ("sign in again") instead of `native_login_required`, and the login list marks
 that completed login `outdated` with its signed-in and installed Provider
 versions. Existing sessions keep their exact retained generation; a new login
