@@ -1,6 +1,11 @@
 //! Cowboy-owned policy for process-local `DeepSeek` prompt-cache protection.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use cowboy_provider_sdk::ConfigurationBehavior;
 use sha2::{Digest as _, Sha256};

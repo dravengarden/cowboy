@@ -1,6 +1,11 @@
 //! Machine evaluation for data-only CLI authentication probe contracts.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 #[cfg(feature = "machine-host")]
 use std::path::PathBuf;

@@ -50,22 +50,16 @@ axum = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
 prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
-png = "0.18"
 sha2 = "0.10"
-argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
-password-hash = { version = "0.5", default-features = false, features = ["alloc"] }
 url = "2"
 uuid = { version = "1", default-features = false, features = ["std"] }
 webauthn-rs = { version = "0.5", default-features = false, features = [
   "danger-allow-state-serialisation",
 ] }
-flate2 = "1"
-tar = "0.4"
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
 # every other task's lock-acquire panic too — a daemon-wide cascade. Hub holds
@@ -77,17 +71,11 @@ rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
-shell-words = "1"
 mime_guess = "2"
-notify = "8"
-web-push-native = { version = "0.5", default-features = false }
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
-ring = "0.17"
 rand = "0.8"
-rpassword = "=7.5.4"
 cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
 cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
-chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"
 fs2 = "0.4"
@@ -96,9 +84,6 @@ rustix = { version = "1", features = ["process", "fs"] }
 regex = "1"
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.
-ignore = "0.4"
-nucleo-matcher = "0.3"
-toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
 
 [target.'cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))'.dependencies]
 tikv-jemallocator = "0.7"
@@ -106,7 +91,6 @@ tikv-jemallocator = "0.7"
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", features = ["test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
-syn = { version = "2", features = ["full"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 
@@ -118,3 +102,7 @@ unsafe_code = "deny"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "allow", priority = -1 }
 
+
+[package.metadata.cargo-machete]
+# cowboy-wire is only listed to enable its test fixtures for server tests.
+ignored = ["cowboy-wire"]

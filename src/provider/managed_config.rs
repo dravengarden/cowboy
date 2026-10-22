@@ -7,6 +7,11 @@
 //! Provider-specific option id.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use cowboy_provider_sdk::ConfigurationBehavior;
 

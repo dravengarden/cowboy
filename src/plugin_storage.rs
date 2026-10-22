@@ -6,6 +6,11 @@
 //! the candidate runtime; an explicitly selected host must activate at startup.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::str::FromStr as _;
 use std::time::Duration;
@@ -82,6 +87,7 @@ impl PluginStorage {
         &self.plugin_dir
     }
 
+    #[must_use]
     pub fn with_core_store(mut self, store: crate::store::Store) -> Self {
         self.core_store = Some(store);
         self

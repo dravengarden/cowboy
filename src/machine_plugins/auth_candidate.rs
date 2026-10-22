@@ -344,6 +344,7 @@ impl AuthCandidateCleanup {
     }
 
     /// Move cleanup responsibility without a moment in which it is unowned.
+    #[must_use]
     pub fn transfer(&mut self) -> Self {
         let guard = Self {
             store: self.store.clone(),

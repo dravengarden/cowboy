@@ -6,6 +6,11 @@
 //! selected only through the data-only renderer map in `host.json`.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::BTreeMap;
 #[cfg(any(feature = "full", test))]

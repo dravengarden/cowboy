@@ -4,6 +4,11 @@
 //! separate from diagnostic files and cannot wait behind remote delivery.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use crate::otlp::RequestControllerExt as _;
 use std::collections::{BTreeMap, VecDeque};

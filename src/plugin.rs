@@ -5,6 +5,11 @@
 //! owns identity and lifecycle for both kinds.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;

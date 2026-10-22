@@ -1,4 +1,9 @@
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::io::{self, IsTerminal as _};
 #[cfg(feature = "full")]
@@ -763,7 +768,7 @@ impl ServeArgs {
         let Command::Serve(mut args) = cli.command else {
             panic!("serve command expected");
         };
-        args.data_dir = data_dir.to_owned();
+        data_dir.clone_into(&mut args.data_dir);
         args.plugin_catalog_dir = None;
         args.plugin_host_config = None;
         args.core_security_config = None;

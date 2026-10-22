@@ -7,6 +7,11 @@
 //! The supervisor talks to that thread only through a `Send` command channel.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -189,6 +194,7 @@ impl Supervisor {
                 .is_ok_and(|runtime| !runtime.has_worker(session_id)))
     }
 
+    #[must_use]
     pub fn with_runtime_restrictions(
         mut self,
         restrictions: Arc<crate::project_placement::RuntimeRestrictions>,

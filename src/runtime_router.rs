@@ -1,6 +1,11 @@
 //! Machine-aware registry for detached ACP runtimes.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::HashMap;
 use std::sync::Arc;

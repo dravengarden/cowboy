@@ -6,6 +6,11 @@
 //! implementation prerequisites of that signed Provider package.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 mod artifact_cache;
 mod auth_refresh;
@@ -5266,7 +5271,7 @@ pub fn telemetry_release_for_test(
     telemetry_release(publisher, version)
 }
 
-#[cfg(all(any(test, feature = "test-support"), feature = "full"))]
+#[cfg(any(test, feature = "test-support"))]
 pub fn telemetry_release(
     publisher: &crate::machine_auth::MachineIdentity,
     version: &str,
@@ -5291,8 +5296,8 @@ pub fn telemetry_release(
             component.version = "1.7.0".into();
         }
     }
-    manifest.version = version.to_owned();
-    contract.version = version.to_owned();
+    version.clone_into(&mut manifest.version);
+    version.clone_into(&mut contract.version);
     let platforms = contract.supported_platforms.clone();
     let package = PluginPackage::new(
         manifest.clone(),

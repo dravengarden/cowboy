@@ -1,6 +1,11 @@
 //! Durable local outbox for provider usage observed by Machine-local gateways.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt as _;

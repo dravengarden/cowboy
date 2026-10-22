@@ -20,6 +20,11 @@
 //! `./migrations/`. Run [`Store::migrate`] once on startup.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;

@@ -5,6 +5,11 @@
 //! to the registry's current stable checkout without touching Codex state.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -4,6 +4,11 @@
 //! still NOT grants: Operator/standing policy, time budget, durable namespace
 //! CAS and Machine-private policy remain independently required by the caller.
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use crate::machine_control::{
     CommandFailure, CommandRequestError, ConnectionToken, MachineControl,

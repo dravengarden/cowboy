@@ -6,6 +6,11 @@
 //! Catalog authority; they cannot replace a missing signed release.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::BTreeMap;
 use std::path::Path;

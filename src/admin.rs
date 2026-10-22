@@ -4,6 +4,11 @@
 //! [`RegistrationPublicStatus`] only — never the invite table.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::HashMap;

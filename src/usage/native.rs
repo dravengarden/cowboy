@@ -41,6 +41,7 @@ impl Cache {
 }
 
 impl Entry {
+    #[must_use]
     pub fn snapshot(&self, completion: &NativeCompletion) -> Self {
         if self.scope.as_ref() == Some(completion) {
             self.clone()

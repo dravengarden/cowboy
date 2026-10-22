@@ -5,6 +5,9 @@
 //! local IPC contract. Application modules remain crate-private so the runtime
 //! wire protocol — not Rust's module layout — is the compatibility boundary.
 
+// Modules that used to be crate-private are now public so cowboy-server can use them.
+#![allow(clippy::len_without_is_empty, clippy::new_without_default)]
+
 #[cfg(feature = "full")]
 pub mod acp;
 #[cfg(feature = "full")]

@@ -134,6 +134,7 @@ impl Limiter {
         this
     }
 
+    #[must_use]
     pub fn with_config(mut self, config: Handle) -> Self {
         self.config = config;
         self

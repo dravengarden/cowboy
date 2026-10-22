@@ -5,6 +5,11 @@
 //! reset times, credits, and account activity when an official interface exists.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -287,11 +292,13 @@ impl UsageService {
         }
     }
 
+    #[must_use]
     pub fn with_config(mut self, config: crate::config::Handle) -> Self {
         self.limiter = self.limiter.with_config(config);
         self
     }
 
+    #[must_use]
     pub fn with_runtime_restrictions(
         mut self,
         restrictions: Arc<crate::project_placement::RuntimeRestrictions>,

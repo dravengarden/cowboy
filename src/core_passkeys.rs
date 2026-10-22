@@ -5,6 +5,11 @@
 //! an atomic first import before a typed store can be attached.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use anyhow::{Context as _, Result, ensure};
 use sha2::{Digest as _, Sha256};

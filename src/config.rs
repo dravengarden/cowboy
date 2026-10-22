@@ -11,6 +11,11 @@
 //! stay command-line or environment inputs. See `docs/configuration.md`.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 pub mod cli;
 pub mod file_buffers;

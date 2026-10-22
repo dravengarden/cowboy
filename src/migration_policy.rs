@@ -1,6 +1,11 @@
 //! Guard the consolidated startup-migration contract.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use sha2::Digest as _;
 

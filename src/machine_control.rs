@@ -4,6 +4,11 @@
 //! lock. No lock survives an await. Transport scope is NOT session ownership.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::HashMap;
 use std::sync::{
