@@ -143,6 +143,7 @@ test("every prefix continuation has one stable command meaning", () => {
     ".": "sync.retry",
     r: "item.rename",
     o: "session.recent",
+    i: "undo.history",
     " ": "session.switch",
     tab: "session.alternate",
     k: "commandPalette.open",

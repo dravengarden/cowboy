@@ -5681,14 +5681,21 @@ export function addDraft(sessionId: string, text: string, attachments: Attachmen
 
 /** A writing-document handoff is a new unsent row. The source document stays
  * independent; the receipt targets exactly this row, never a whole session. */
-export async function copyDocumentToSession(sessionId: string, text: string, attachments: Attachment[]): Promise<{ undo: () => Promise<void> }> {
+export async function copyDocumentToSession(sessionId: string, text: string, attachments: Attachment[]): Promise<{ undo: () => Promise<void>; cmid: string }> {
   const cmid = newCmid();
   if (!text.trim() && attachments.length === 0) throw new Error("The draft is empty");
   await qAdd("drafts", sessionId, text, attachments, { cmid });
-  return { undo: async () => {
+  return { cmid, undo: () => removeCopiedDraft(sessionId, cmid, text, attachments) };
+}
+
+/** Undo a copied unsent row: only while it is unchanged. A row this page just
+ *  queued is awaited first; after a reload the Controller is asked directly. */
+export async function removeCopiedDraft(sessionId: string, cmid: string, text: string, attachments: readonly Attachment[]): Promise<void> {
+  const client = qClients.get(sessionId);
+  if (client && client.pending().some((mutation) => mutation.id === cmid)) {
     await waitForState(() => qClients.get(sessionId)?.baseValue().drafts.some((row) => row.cmid === cmid) === true, "Undo copy");
-    await removeDraftIfUnchanged(sessionId, cmid, text, attachments);
-  } };
+  }
+  await removeDraftIfUnchanged(sessionId, cmid, text, attachments);
 }
 
 export async function removeDraftIfUnchanged(sessionId: string, identity: string, text: string, attachments: readonly Attachment[]): Promise<void> {

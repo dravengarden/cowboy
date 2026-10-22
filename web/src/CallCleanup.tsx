@@ -2,6 +2,7 @@ import { Button, Checkbox, FormControlLabel, Stack, Typography } from "@mui/mate
 import { useState } from "react";
 import { ConfirmSheet } from "./Sheet";
 import { callActive, callModelLabel, callTitle, dismissCalls, type ManagedCallSummary, startedLabel } from "./managedCalls";
+import { recordUndo } from "./undoActions";
 
 /** Selection is frozen when opening: newly finished calls are never swept up. */
 export function CallCleanup({ parent, calls, onChange }: {
@@ -11,16 +12,20 @@ export function CallCleanup({ parent, calls, onChange }: {
 }): React.JSX.Element {
   const [candidates, setCandidates] = useState<ManagedCallSummary[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
-  const [removed, setRemoved] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const settled = calls.filter((call) => !callActive(call.state));
-  const change = async (ids: string[], dismissed: boolean): Promise<void> => {
+  const clear = async (ids: string[]): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
-      const changed = await dismissCalls(parent, ids, dismissed);
-      setRemoved(dismissed ? changed : []);
+      const changed = await dismissCalls(parent, ids, true);
+      if (changed.length > 0) {
+        recordUndo(
+          changed.length === 1 ? "1 call cleared" : `${String(changed.length)} calls cleared`,
+          [{ kind: "restore_calls", parent, ids: changed }],
+        );
+      }
       setCandidates(null);
       onChange();
     } catch (reason) {
@@ -37,10 +42,6 @@ export function CallCleanup({ parent, calls, onChange }: {
           setSelected(settled.map((call) => call.call_id));
           setError(null);
         }}>Clear ended calls…</Button>
-        {removed.length > 0 && <>
-          <Typography variant="caption" role="status">{removed.length} cleared</Typography>
-          <Button disabled={busy} onClick={() => void change(removed, false)}>Undo</Button>
-        </>}
       </Stack>
       {error && <Typography variant="caption" color="error" role="alert">{error}</Typography>}
       <ConfirmSheet open={candidates !== null} onClose={() => { if (!busy) setCandidates(null); }}
@@ -48,7 +49,7 @@ export function CallCleanup({ parent, calls, onChange }: {
         actions={<Stack direction="row" spacing={1}>
           <Button disabled={busy} onClick={() => setCandidates(null)}>Cancel</Button>
           <Button color="error" variant="contained" disabled={busy || selected.length === 0}
-            onClick={() => void change(selected, true)}>Clear {selected.length}</Button>
+            onClick={() => void clear(selected)}>Clear {selected.length}</Button>
         </Stack>}
       >
         <Stack spacing={1}>

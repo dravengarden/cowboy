@@ -89,6 +89,7 @@ test("workspace navigation has no global bare-letter shortcut", () => {
     "f",
     "g",
     "h",
+    "i",
     "j",
     "k",
     "l",

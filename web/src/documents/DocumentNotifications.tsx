@@ -1,10 +1,15 @@
-import { Alert, Button, Snackbar } from "@mui/material";
+import { History } from "@mui/icons-material";
+import { Alert, Button, IconButton, Snackbar, Tooltip } from "@mui/material";
 import { useState, useSyncExternalStore } from "react";
+import { UNDO_NOTICE_MS } from "../undoHistory";
+import { undoEntry } from "../undoActions";
+import { openUndoHistory } from "../UndoHistorySheet";
 
 interface Notice {
   id: number;
   message: string;
-  undo?: () => Promise<void>;
+  /** Undo history entry this notice offers. */
+  undoId?: string;
 }
 let notice: Notice | null = null;
 let sequence = 0;
@@ -12,11 +17,13 @@ const listeners = new Set<() => void>();
 function emit(): void {
   for (const listener of listeners) listener();
 }
-export function documentNotice(
-  message: string,
-  undo?: () => Promise<void>,
-): void {
-  notice = { id: ++sequence, message, ...(undo ? { undo } : {}) };
+/** A transient message. Undoable changes use recordUndo (undoActions.ts),
+ *  which keeps them in Undo history after this notice disappears. */
+export function documentNotice(message: string): void {
+  showNotice(message);
+}
+export function showNotice(message: string, undoId?: string): void {
+  notice = { id: ++sequence, message, ...(undoId ? { undoId } : {}) };
   emit();
 }
 const subscribe = (listener: () => void): () => void => {
@@ -37,11 +44,14 @@ export function DocumentNotifications(
       emit();
     }
   };
+  const undoId = current?.undoId;
   return (
     <Snackbar
       key={current?.id}
       open={current !== null}
-      autoHideDuration={busy ? null : 9000}
+      // One duration for every notice; hovering pauses it, and an Undo in
+      // flight holds it until the outcome is known.
+      autoHideDuration={busy ? null : UNDO_NOTICE_MS}
       onClose={(_, reason) => {
         if (reason !== "clickaway" && !busy) close();
       }}
@@ -60,24 +70,39 @@ export function DocumentNotifications(
         severity="info"
         sx={mobile ? { width: "100%", alignItems: "center" } : undefined}
         onClose={busy ? undefined : close}
-        action={current?.undo
+        action={undoId
           ? (
-            <Button
-              disabled={busy}
-              color="inherit"
-              onClick={() => {
-                const undo = current.undo!;
-                setBusy(true);
-                void undo().then(close).catch((e: unknown) =>
-                  documentNotice(
-                    e instanceof Error ? e.message : "Could not undo",
+            <>
+              <Button
+                disabled={busy}
+                color="inherit"
+                onClick={() => {
+                  setBusy(true);
+                  void undoEntry(undoId).then(close).catch((e: unknown) =>
+                    documentNotice(
+                      e instanceof Error ? e.message : "Could not undo",
+                    )
                   )
-                )
-                  .finally(() => setBusy(false));
-              }}
-            >
-              {busy ? "Undoing…" : "Undo"}
-            </Button>
+                    .finally(() => setBusy(false));
+                }}
+              >
+                {busy ? "Undoing…" : "Undo"}
+              </Button>
+              <Tooltip title="Undo history">
+                <IconButton
+                  aria-label="Undo history"
+                  color="inherit"
+                  size="small"
+                  disabled={busy}
+                  onClick={() => {
+                    close();
+                    openUndoHistory();
+                  }}
+                >
+                  <History fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </>
           )
           : undefined}
       >

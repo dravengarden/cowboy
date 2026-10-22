@@ -11,6 +11,8 @@ import { useDraftLibrary } from "./documents/store";
 import { draftMissingDirectory, type DraftMetadata } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
+import { recordUndo } from "./undoActions";
+import { UNDO_NOTICE_MS } from "./undoHistory";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
@@ -175,7 +177,6 @@ import {
     canApplyUpdateNow,
     createSessionFolder,
     deleteSession,
-    restoreItems,
     stopAndTrashSession,
     trashItems,
     holdStorePresentation,
@@ -6198,7 +6199,8 @@ export function App({
             />
             <Snackbar
                 open={errorOpen}
-                autoHideDuration={providerAuthShortcut ? 8000 : 5000}
+                // One duration for every notice (hover pauses it).
+                autoHideDuration={UNDO_NOTICE_MS}
                 onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
                 anchorOrigin={{
                     vertical: "bottom",
@@ -8475,7 +8477,7 @@ function SettingsShell({
 function movedToTrash(session: SessionMeta, move: Promise<void>): void {
     const title = session.title || "Session";
     void move.then(() => {
-        documentNotice(`"${title}" moved to Trash`, () => restoreItems({ sessions: [session.id] }));
+        recordUndo(`"${title}" moved to Trash`, [{ kind: "restore_trash", sessions: [session.id] }]);
     }).catch((error: unknown) => {
         documentNotice(error instanceof Error ? error.message : `Could not move "${title}" to Trash.`);
     });

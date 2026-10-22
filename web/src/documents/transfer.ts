@@ -1,5 +1,5 @@
 import { copyDocumentToSession } from "../store";
-import { documentNotice } from "./DocumentNotifications";
+import { recordUndo } from "../undoActions";
 import { draftRepository } from "./store";
 
 export async function copyDraftToSession(
@@ -17,9 +17,15 @@ export async function copyDraftToSession(
   const receipt = await copyDocumentToSession(sessionId, document.body, [
     ...document.attachments,
   ]);
-  documentNotice(
+  recordUndo(
     `Copied to ${sessionTitle || "Session"} · Drafts. Original kept.`,
-    receipt.undo,
+    [{
+      kind: "remove_session_draft",
+      sessionId,
+      cmid: receipt.cmid,
+      text: document.body,
+      attachments: [...document.attachments],
+    }],
   );
 }
 
@@ -42,11 +48,14 @@ export async function moveDraftToSession(
     ...document.attachments,
   ]);
   await owner.change({ type: "trash" });
-  documentNotice(
-    `Moved to ${sessionTitle || "Session"} · Drafts.`,
-    async () => {
-      await owner.change({ type: "restore" });
-      await receipt.undo();
+  recordUndo(`Moved to ${sessionTitle || "Session"} · Drafts.`, [
+    { kind: "restore_draft", id: documentId },
+    {
+      kind: "remove_session_draft",
+      sessionId,
+      cmid: receipt.cmid,
+      text: document.body,
+      attachments: [...document.attachments],
     },
-  );
+  ]);
 }

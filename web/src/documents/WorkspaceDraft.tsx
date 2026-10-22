@@ -34,6 +34,7 @@ import {
 import { DRAFT_DRAG_TYPE, type DraftChange, type DraftMetadata } from "./model";
 import { draftRepository, useDraftLibrary } from "./store";
 import { documentNotice } from "./DocumentNotifications";
+import { recordUndo } from "../undoActions";
 import { copyDraftToSession, moveDraftToSession } from "./transfer";
 
 export type WorkspaceDraftAction = {
@@ -178,10 +179,9 @@ export function WorkspaceDraftActions(
       await owner.change(change);
       if (change.type === "trash") {
         if (activeId === request.draft.id) onRemoved();
-        documentNotice(
-          "Moved to Trash",
-          () => owner.change({ type: "restore" }),
-        );
+        recordUndo(`"${request.draft.title || "Draft"}" moved to Trash`, [
+          { kind: "restore_draft", id: request.draft.id },
+        ]);
       }
     });
   useConfirmEnter(

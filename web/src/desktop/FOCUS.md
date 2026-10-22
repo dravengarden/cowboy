@@ -97,6 +97,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
+| `␣I` | Undo history: this device's undoable changes from the last 24 hours |
 | `␣[` `␣]` | Previous, next tab (see "Tabs") |
 | `␣1`…`␣9` | Open the nth tab (a pending approval takes the digits; see "Tabs") |
 | `␣B` + `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: close this, others, right, left, all; pin, keep, reopen; move |

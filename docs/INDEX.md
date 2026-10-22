@@ -204,6 +204,7 @@ primary phone/desktop product path.
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
 - [`offline-first-sync.md`](offline-first-sync.md) — Offline-first design: local replica boot, prioritized hydration, one sync status, outbox classes, conflict catalog and required server changes
 - [`sessions-folders.md`](sessions-folders.md) — Sessions folders: atomic creation, inherited session/Zed defaults, searchable project tree, scoped batch deletion, CLI and keyboard UX
+- [`undo-history.md`](undo-history.md) — 3 s notices, device-local Undo history with Can undo/Undone/Unavailable states, 24-hour TTL and entry points
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
 - [`machine-plugin-membership.md`](machine-plugin-membership.md) — Service-side declaration of which Plugins a Machine runs, and why a declared Machine has no client lifecycle actions
 - [`machine-component-convergence.md`](machine-component-convergence.md) — Continuous convergence of signed automatic Machine components: authority, drain, backoff and reported state

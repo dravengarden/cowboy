@@ -18,6 +18,7 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopLeaderOptional } from "./leaderContext";
 import { DesktopRecentDialog } from "./DesktopRecentDialog";
+import { openUndoHistory } from "../../UndoHistorySheet";
 import type { DesktopRecentItem } from "../sessionVisits";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { DesktopLeaderMenu } from "./DesktopLeaderMenu";
@@ -197,6 +198,14 @@ export function DesktopCommandHost({
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.recentSessions),
       when: () => !!live.current.onOpenRecent,
       run: () => setRecentOpen(true),
+    },
+    {
+      id: "undo.history",
+      title: "Undo history…",
+      description: "Changes from the last 24 hours on this device; undo any that still can be",
+      group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.undoHistory),
+      run: openUndoHistory,
     },
     {
       // A Draft's name is its title: `␣T` (document.title) goes there.

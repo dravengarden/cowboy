@@ -168,6 +168,10 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
     description: "1–9 open a row at once; J/K move, L or Enter open, H or Esc close. It opens on the previous item",
   },
   {
+    keys: [DESKTOP_SHORTCUTS.undoHistory],
+    title: "Undo history: changes from the last 24 hours you can still undo",
+  },
+  {
     keys: [DESKTOP_SHORTCUTS.rename],
     title: "Rename the current Session",
   },

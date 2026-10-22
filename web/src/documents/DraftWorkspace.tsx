@@ -66,7 +66,7 @@ import {
 } from "./model";
 import { draftRepository, useDraftLibrary } from "./store";
 import { leaveDrafts, openDrafts } from "./navigation";
-import { documentNotice } from "./DocumentNotifications";
+import { recordUndo } from "../undoActions";
 import { copyDraftToSession } from "./transfer";
 
 export function DraftWorkspace(
@@ -859,10 +859,9 @@ function DraftWorkspaceBody(
                     await change(entry, { type: "trash" });
                     setDeleting(null);
                     if (id === entry.id) await navigate(null);
-                    documentNotice("Moved to Trash", () =>
-                      draftRepository().document(entry.id).change({
-                        type: "restore",
-                      }));
+                    recordUndo(`"${entry.title || "Draft"}" moved to Trash`, [
+                      { kind: "restore_draft", id: entry.id },
+                    ]);
                   })}
               >
                 Move to Trash

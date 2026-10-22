@@ -10,13 +10,14 @@ import { ChatBubbleOutline, DeleteOutline, DescriptionOutlined } from "@mui/icon
 import { useMemo, useState } from "react";
 import { draftRepository } from "./documents/store";
 import { documentNotice } from "./documents/DocumentNotifications";
+import { recordUndo } from "./undoActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
 import type { SessionFolder } from "./sessionFolders";
 import type { FolderDeletePlan } from "./trashModel";
-import { restoreItems, trashFolderKeeping } from "./store";
+import { trashFolderKeeping } from "./store";
 import { desktopSize } from "./surface/desktopSize";
 
 interface PlanItem {
@@ -97,9 +98,9 @@ export function DeleteFolderToTrashShell(
       );
     })().then(() => {
       onClose();
-      documentNotice(
+      recordUndo(
         kept ? `"${folder.name}" moved to Trash; ${String(kept)} kept in ${destinationName}` : `"${folder.name}" moved to Trash`,
-        () => restoreItems({ folders: [folder.id] }),
+        [{ kind: "restore_trash", folders: [folder.id] }],
       );
     }).catch((error: unknown) => {
       documentNotice(error instanceof Error ? error.message : "Could not move the folder to Trash.");

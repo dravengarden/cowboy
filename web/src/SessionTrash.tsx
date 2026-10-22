@@ -22,6 +22,7 @@ import {
   DescriptionOutlined,
   ExpandMore,
   FolderOutlined,
+  History,
   MoreVert,
   RestoreFromTrashOutlined,
   ChatBubbleOutline,
@@ -30,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DraftMetadata } from "./documents/model";
 import { draftRepository } from "./documents/store";
 import { documentNotice } from "./documents/DocumentNotifications";
+import { openUndoHistory } from "./UndoHistorySheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ReliableListItemButton } from "./ReliableListItemButton";
@@ -596,6 +598,17 @@ export function TrashMenuSheet(
                   </MenuItem>
                 ))}
               </TextField>
+              <Button
+                color="inherit"
+                startIcon={<History />}
+                onClick={(): void => {
+                  onClose();
+                  openUndoHistory();
+                }}
+                sx={{ alignSelf: "flex-start" }}
+              >
+                Undo history
+              </Button>
               <Button
                 color="error"
                 startIcon={<DeleteForeverOutlined />}

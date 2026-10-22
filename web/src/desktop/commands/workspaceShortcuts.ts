@@ -102,6 +102,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   alternateSession: DESKTOP_LEADER_TAB,
   // Open recent, Vim's jump list (`Ctrl-O`): the last Sessions and Drafts.
   recentSessions: "O",
+  // Undo history: every undoable change this device made in the last day.
+  undoHistory: "I",
   // Step through the tab strip (Vim's `[b` / `]b`).
   previousTab: "[",
   nextTab: "]",
@@ -239,6 +241,7 @@ export const DESKTOP_SHORTCUTS = {
   recentSessions: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.recentSessions,
   ),
+  undoHistory: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.undoHistory),
   rename: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.rename),
 } as const;
 
@@ -283,6 +286,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   ".": "sync.retry",
   r: "item.rename",
   o: "session.recent",
+  i: "undo.history",
   " ": "session.switch",
   tab: "session.alternate",
   k: "commandPalette.open",

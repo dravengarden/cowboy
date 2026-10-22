@@ -1,8 +1,8 @@
 import { type Attachment, fileToAttachment } from "../attachments";
 import type { QueuedMessage } from "../store";
-import { copyDocumentToSession, removeDraftIfUnchanged } from "../store";
+import { removeDraftIfUnchanged } from "../store";
 import { draftRepository } from "./store";
-import { documentNotice } from "./DocumentNotifications";
+import { recordUndo } from "../undoActions";
 
 /** A standalone document must retain its image bytes even if its originating
  * Session is later purged and that Session's artifacts are collected. */
@@ -61,11 +61,13 @@ export async function moveSessionDraftToDocument(
     message.attachments,
   );
   const revision = owner.get().document!.revision;
-  documentNotice(`Moved to Drafts: ${title}`, async () => {
-    await copyDocumentToSession(sessionId, message.text, [
-      ...message.attachments,
-    ]);
-    await owner.change({ type: "trash" }, revision);
-    await owner.whenSynced();
-  });
+  recordUndo(`Moved to Drafts: ${title}`, [
+    {
+      kind: "copy_to_session",
+      sessionId,
+      text: message.text,
+      attachments: [...message.attachments],
+    },
+    { kind: "trash_draft", id, revision },
+  ]);
 }
