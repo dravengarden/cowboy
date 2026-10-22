@@ -71,8 +71,9 @@ routinely breaks another.
   `just desktop-perf-profile` before and after a change that touches the
   Sessions list, store fan-out, Transcript or Markdown rendering, and compare
   the long-task totals per scenario. A `sessions` frame must not re-render
-  unchanged rows (`sessionIdentity.ts`, `SessionRowMemo`), and highlighted
-  code stays on class names (`prismThemeCss.ts`), never inline token styles.
+  unchanged rows (`sessionIdentity.ts`, `SessionRowMemo`; time-relative row
+  content keeps its own clock), and highlighted code keeps the cached
+  renderer (`syntaxRenderer.ts`), never the library's per-token default.
 - Desktop keyboard, leader, label, modal or Draft-page changes must pass
   `just desktop-browser-gate` (pinned Firefox and Chromium in both themes, then
   trusted-input acceptance with screenshots on hawk Chrome). Exit code 3 means

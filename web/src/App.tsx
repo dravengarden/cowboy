@@ -603,8 +603,19 @@ function FolderActivityBadges({
 function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | null {
     const ms = meta.next_schedule_ms;
     if (ms === undefined) return null;
+    return <ScheduleBadgeIcon ms={ms} />;
+}
+
+// Its own clock: a memoized session row does not re-render merely because
+// time passed, so the relative label must refresh itself.
+function ScheduleBadgeIcon({ ms }: { ms: number }): React.JSX.Element {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timer = globalThis.setInterval(() => setNow(Date.now()), 30_000);
+        return () => globalThis.clearInterval(timer);
+    }, []);
     return (
-        <Tooltip title={`定时发送 · ${fireLabel(ms)}（${fireRel(ms)}）`} enterDelay={300}>
+        <Tooltip title={`定时发送 · ${fireLabel(ms, now)}（${fireRel(ms, now)}）`} enterDelay={300}>
             <Schedule sx={{ fontSize: desktopSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );

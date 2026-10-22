@@ -49,7 +49,7 @@ import {
   oneLight,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { normalizeSyntaxLanguage } from "./syntaxLanguages";
-import { installPrismTheme } from "./prismThemeCss";
+import { cachedInlineRenderer } from "./syntaxRenderer";
 import {
   chunkCodeForRendering,
   previewCodeForRendering,
@@ -387,11 +387,9 @@ function CodeBlock({
       {copied && <Box component="span">Copied</Box>}
     </IconButton>
   );
-  const prismScope = installPrismTheme(codeTheme, dark ? "cowboy-prism-dark" : "cowboy-prism-light");
   return (
     <Box
       ref={rootRef}
-      className={prismScope}
       data-code-lines={code.includes("\n") ? "multiple" : "single"}
       sx={{
         my: 1,
@@ -511,10 +509,9 @@ function CodeBlock({
           <SyntaxHighlighter
             language={syntaxLanguage}
             style={codeTheme}
-            // Class names + the theme stylesheet installed above. Inline mode
-            // recomputes the whole theme selector list for every token.
-            useInlineStyles={false}
-            className={`language-${syntaxLanguage}`}
+            // The library renderer recomputes the theme's selector list for
+            // every token; this one caches each class list's style.
+            renderer={cachedInlineRenderer}
             // overflowX on the inline customStyle (highest specificity) so it wins
             // over the prism theme's own pre style — the long-line scroll must not
             // depend on the emotion class losing/winning the cascade.
