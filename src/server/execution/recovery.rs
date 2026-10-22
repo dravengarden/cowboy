@@ -57,6 +57,92 @@ impl Readiness {
     }
 }
 
+pub(in crate::server) const LOST_TURN_DETAIL: &str = "The execution Machine restarted and this session's execution environment was lost, so the turn was stopped. Send a message to continue: Cowboy recreates the environment first. Commands whose outcome is unknown are not run again.";
+
+/// How long an ended turn may take to settle before it is left to the
+/// ordinary cancel handling without an explanation.
+const LOST_TURN_SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Active turns already ended for one lost lifetime (`session/incarnation`).
+#[derive(Default)]
+pub(in crate::server) struct LostTurns {
+    ended: parking_lot::Mutex<std::collections::HashSet<String>>,
+}
+
+impl LostTurns {
+    /// True only for the first report of this lifetime.
+    fn first(&self, session: &str, binding: &BindingV1) -> bool {
+        let mut ended = self.ended.lock();
+        // Each lifetime ends at most one turn; forgetting old ones only
+        // allows one more cancel of a turn that is already over.
+        if ended.len() >= 4096 {
+            ended.clear();
+        }
+        ended.insert(format!("{session}/{}", binding.environment.incarnation))
+    }
+}
+
+/// A target-proven lost lifetime fails every later call of the active turn
+/// the same way, so a native agent would retry against the dead keeper until
+/// the turn gives up. End that turn once. Recovery itself still waits for an
+/// idle session: the next dispatch's preflight recreates the lifetime.
+pub(in crate::server) fn end_turn_for_lost_environment(
+    state: &Arc<AppState>,
+    session: &str,
+    binding: &BindingV1,
+) {
+    let Some(busy @ (Status::Busy, _)) = state.hub.status_revision(session) else {
+        return;
+    };
+    if !state.lost_turns.first(session, binding) {
+        return;
+    }
+    tracing::warn!(
+        event_name = "cowboy.execution.lost_environment_turn_ended",
+        session,
+        environment_id = %binding.environment.id,
+        "target proved the execution lifetime lost; ending the active turn"
+    );
+    if let Err(error) = state.supervisor.send(session, AgentCommand::Cancel) {
+        tracing::warn!(session, %error, "could not end the turn of a lost execution lifetime");
+        return;
+    }
+    tokio::spawn(explain_lost_turn(
+        state.hub.clone(),
+        session.to_owned(),
+        busy,
+        LOST_TURN_SETTLE,
+    ));
+}
+
+/// Mark the cancelled turn's own end Interrupted with its cause. An idle
+/// Running snapshot does not hide it, so the reason stays until the next
+/// turn. A newer turn or a terminal state already tells its own story.
+async fn explain_lost_turn(
+    hub: Hub,
+    session: String,
+    busy: (Status, u64),
+    settle: std::time::Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + settle;
+    while tokio::time::Instant::now() < deadline {
+        match hub.status_revision(&session) {
+            Some(current) if current == busy => {}
+            Some(current @ (Status::Running, _)) => {
+                return hub.set_status_if_revision(
+                    &session,
+                    Some(current),
+                    Status::Interrupted,
+                    Some(LOST_TURN_DETAIL.to_owned()),
+                );
+            }
+            _ => return false,
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    false
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct RecoverRequest {
@@ -542,6 +628,83 @@ async fn prepare_auto_recovery(
 #[cfg(test)]
 mod dispatch_safety_tests {
     use super::*;
+
+    fn hub_with_busy(id: &str) -> Hub {
+        let hub = Hub::new();
+        hub.create_local_session(
+            id.to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "t".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status(id, Status::Busy, None);
+        hub
+    }
+
+    #[test]
+    fn a_lost_lifetime_ends_one_turn_per_incarnation() {
+        let binding = crate::execution_environment::fixture().decode().unwrap();
+        let turns = LostTurns::default();
+        assert!(turns.first("sess-1", &binding));
+        assert!(!turns.first("sess-1", &binding));
+        assert!(turns.first("sess-2", &binding));
+        let mut recovered = binding.clone();
+        recovered.environment.incarnation = "44444444444444444444444444444444".into();
+        assert!(turns.first("sess-1", &recovered));
+    }
+
+    #[tokio::test]
+    async fn the_cancelled_turn_end_is_explained_and_survives_an_idle_snapshot() {
+        let hub = hub_with_busy("lost");
+        let busy = hub.status_revision("lost").unwrap();
+        let explained = tokio::spawn(explain_lost_turn(
+            hub.clone(),
+            "lost".into(),
+            busy,
+            std::time::Duration::from_secs(5),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // The worker reports the cancelled turn's end.
+        hub.set_status("lost", Status::Running, None);
+        assert!(explained.await.unwrap());
+        assert_eq!(hub.status("lost"), Some(Status::Interrupted));
+        hub.project_runtime_status("lost", Status::Running, None);
+        assert_eq!(hub.status("lost"), Some(Status::Interrupted));
+    }
+
+    #[tokio::test]
+    async fn a_newer_turn_or_terminal_state_is_not_relabelled() {
+        let hub = hub_with_busy("newer");
+        let busy = hub.status_revision("newer").unwrap();
+        hub.set_status("newer", Status::Running, None);
+        hub.set_status("newer", Status::Busy, None);
+        assert!(
+            !explain_lost_turn(
+                hub.clone(),
+                "newer".into(),
+                busy,
+                std::time::Duration::from_secs(1)
+            )
+            .await
+        );
+        assert_eq!(hub.status("newer"), Some(Status::Busy));
+
+        let hub = hub_with_busy("crashed");
+        let busy = hub.status_revision("crashed").unwrap();
+        hub.set_status("crashed", Status::Crashed, None);
+        assert!(
+            !explain_lost_turn(
+                hub.clone(),
+                "crashed".into(),
+                busy,
+                std::time::Duration::from_secs(1)
+            )
+            .await
+        );
+        assert_eq!(hub.status("crashed"), Some(Status::Crashed));
+    }
 
     #[test]
     fn surviving_old_worker_reconstructs_the_original_committed_wake_identity() {
