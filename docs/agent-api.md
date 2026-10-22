@@ -683,7 +683,11 @@ authentication contract and native identity recipe. Its auth generation comes
 from that Machine's native login, independently of the default account's Service
 authentication or replicated credentials. A Provider upgrade that no longer
 matches the login makes this readiness projection null; it never substitutes
-the default account.
+the default account. Account usage then reports `native_login_outdated`
+("sign in again") instead of `native_login_required`, and the login list marks
+that completed login `outdated` with its signed-in and installed Provider
+versions. Existing sessions keep their exact retained generation; a new login
+on the updated release is required for new sessions and usage.
 
 The internal native-session writer checks this binding and inserts the session
 in one transaction under the account admission lock. Concurrent revocation
