@@ -405,6 +405,15 @@ def main():
                 require(status == 200, "session missing")
                 return value
 
+            def send(text):
+                # Explicit recovery keeps the queue paused for inspection; a
+                # paused queue holds ordinary sends, so the user sends now. Both
+                # take the same dispatch preflight that recovers a lost target.
+                body = {"text": text}
+                if info().get("paused"):
+                    body["delivery"] = "interrupt"
+                return call("POST", f"/api/sessions/{session}/prompt", body)[0]
+
             meta = wait(lambda: (value if (value := info()).get("execution_binding", {}).get("workspace") else None), "target preparation")
             binding = meta["execution_binding"]
             cwd = Path(binding["workspace"]["cwd"])
@@ -666,8 +675,10 @@ def main():
                     repeated_log = Path(logs[-1].name)
                     time.sleep(0.2)
                     require(repeated_process.poll() is None, "recovery observation did not wait for target")
-                    require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run while observing recovery"})[0] == 202,
-                            "recovered prompt refused")
+                    # Explicit recovery pauses the queue for inspection; a user's
+                    # send-now still runs while the saved receipt is observed.
+                    require(info().get("paused") is True, "explicit recovery did not pause for inspection")
+                    require(send("Run while observing recovery") == 202, "recovered prompt refused")
                     wait(lambda: info()["status"] == "busy", "tool during receipt observation")
                     time.sleep(0.5)
                     require(info()["status"] == "busy", "receipt observation fenced healthy tool calls")
@@ -720,7 +731,7 @@ def main():
                     machines["target"] = (start("target-after-host-boot", target_command), target_command)
                     wait(lambda: connected("target"), "reboot target reconnect")
                     require(effects.read_bytes() == expected, "host loss replayed an old command")
-                    require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run after host reboot"})[0] == 202, "cold postboot prompt refused")
+                    require(send("Run after host reboot") == 202, "cold postboot prompt refused")
                     wait(lambda: info()["execution_binding"].get("revision") == old["revision"] + 1, "automatic lost-lifetime recovery")
                     wait(lambda: effects.read_bytes() == expected + first_effect, "single postboot target command")
                     wait(lambda: info()["status"] == "running", "postboot native turn end")
@@ -770,7 +781,7 @@ def main():
                      "idle old worker lifecycle after reconnect")
                 require(info()["execution_binding"] == committed and effects.read_bytes() == before_effects,
                         "committed recovery was replaced again or replayed commands")
-                require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Finish committed worker recovery"})[0] == 202,
+                require(send("Finish committed worker recovery") == 202,
                         "committed recovery resume refused")
                 wait(lambda: effects.read_bytes() == before_effects + first_effect, "committed recovery next command")
                 wait(lambda: info()["status"] == "running", "committed recovery next turn end")
@@ -839,7 +850,7 @@ def main():
                 lines = Path(log.name).read_text(errors="replace").splitlines()
                 # Fixture setup tokens and cookies never appear in diagnostics.
                 lines = [line for line in lines if "token" not in line.lower() and "cookie" not in line.lower()]
-                print(Path(log.name).name + "\n" + "\n".join(lines[-12:]), file=sys.stderr)
+                print(Path(log.name).name + "\n" + "\n".join(lines[-int(os.environ.get("COWBOY_CONFORMANCE_LOG_TAIL", "12")):]), file=sys.stderr)
             raise
         finally:
             for child in reversed(children):
