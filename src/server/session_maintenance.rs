@@ -8,6 +8,8 @@ use crate::core::settings_keys::{MACHINE_MAINTENANCE_PREFIX, SESSION_RESOURCE_WA
 use crate::machine_protocol::MachineCapacity;
 
 pub(super) const WAIT_PREFIX: &str = "Waiting for resources: ";
+/// The wait of an admitted prompt whose execution Machine is offline or booting.
+pub(super) const TARGET_WAIT_REASON: &str = "the execution Machine is not ready";
 const WAKE_HEADROOM: u64 = 1 << 30;
 
 #[derive(Default)]
@@ -131,10 +133,8 @@ pub(super) fn clear_wait(hub: &Hub, session: &str) {
 pub(super) fn has_waiters(state: &AppState, machine: &str) -> bool {
     state.hub.session_list().iter().any(|s| {
         s.machine_id == machine
-            && state
-                .hub
-                .setting(&format!("{SESSION_RESOURCE_WAIT_PREFIX}{}", s.id))
-                .is_some()
+            // Waiting for an execution Machine needs no runtime worker slot.
+            && waiting(&state.hub, &s.id).is_some_and(|(_, reason)| reason != TARGET_WAIT_REASON)
             && state
                 .hub
                 .session_info(&s.id)
@@ -265,6 +265,7 @@ pub(super) fn start(state: &Arc<AppState>) {
             waiting_sessions.sort_by_key(|(since, meta, _)| (*since, meta.id.as_str()));
             let mut resumed = std::collections::HashSet::new();
             for (_, meta, reason) in waiting_sessions {
+                let target_wait = reason == TARGET_WAIT_REASON;
                 state.hub.set_resource_wait(&meta.id, Some(reason));
                 let Some(info) = state.hub.session_info(&meta.id) else {
                     continue;
@@ -273,11 +274,16 @@ pub(super) fn start(state: &Arc<AppState>) {
                     clear_wait(&state.hub, &meta.id);
                     continue;
                 }
-                if matches!(meta.status, Status::Crashed | Status::Interrupted) {
+                // An admitted send to a crashed or interrupted session that only
+                // waits for its execution Machine still revives once; any other
+                // wait in those states stops automatic delivery.
+                if matches!(meta.status, Status::Crashed | Status::Interrupted) && !target_wait {
                     clear_wait(&state.hub, &meta.id);
                     continue;
                 }
-                if !meta.paused && matches!(meta.status, Status::Exited | Status::Running) {
+                if !meta.paused
+                    && (target_wait || matches!(meta.status, Status::Exited | Status::Running))
+                {
                     // Avoid popping/re-persisting the entire message on every
                     // blocked tick. The dispatcher still atomically rechecks.
                     if !execution_target_connected(&state, meta) {

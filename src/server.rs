@@ -3566,11 +3566,11 @@ fn retain_failed_dispatch(
             error = %error,
             "queued dispatch deferred until Machine runtime is ready"
         );
-        // Maintenance retries the wait. A target Machine can reconnect after
-        // the runtime's reconnect already drained this prompt into a refusal.
-        session_maintenance::wait(hub, &session_id, "waiting for Machine connection");
         return;
     }
+    // A refusal that is not a wait ends an earlier retry: the prompt stays
+    // queued for explicit intervention instead of failing every two seconds.
+    session_maintenance::clear_wait(hub, &session_id);
     // Restore-timeout holds already explain the queue and the next step.
     // Prefixing "send failed:" makes a protective refusal look like a
     // transport crash.
@@ -3591,7 +3591,7 @@ mod dispatcher_failure_tests {
     use super::*;
 
     #[test]
-    fn a_disconnected_machine_keeps_the_prompt_in_a_retried_wait() {
+    fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         let hub = Hub::new();
         hub.create_local_session(
             "s".into(),
@@ -3605,21 +3605,40 @@ mod dispatcher_failure_tests {
             "{}s",
             crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
         );
-        assert!(hub.setting(&key).is_none());
+        let not_ready = format!(
+            "{}{}",
+            session_maintenance::WAIT_PREFIX,
+            session_maintenance::TARGET_WAIT_REASON
+        );
         retain_failed_dispatch(
             &hub,
             "s".into(),
-            "after the reboot".into(),
+            "p".into(),
             vec![],
-            Some("cmid-1".into()),
+            Some("c1".into()),
+            &not_ready,
+        );
+        assert!(hub.setting(&key).is_some());
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            "Execution target unavailable or identity changed; retained prompt was not delivered",
+        );
+        assert!(hub.setting(&key).is_none());
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        // A transient disconnect alone keeps relying on the reconnect edge.
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
             "Machine is not connected",
         );
-        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
-        assert_eq!(
-            hub.setting(&key)
-                .and_then(|value| value.get("reason").cloned()),
-            Some(serde_json::json!("waiting for Machine connection"))
-        );
+        assert!(hub.setting(&key).is_none());
     }
 
     #[tokio::test]

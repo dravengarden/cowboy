@@ -270,6 +270,11 @@ async fn checked(
     let intent = request.intent;
     intent.validate()?;
     let machine = &intent.previous.environment.machine_id;
+    // An offline target has no protocol to compare yet: automatic recovery
+    // waits for it instead of reporting it unsupported.
+    if grant.is_none() && state.machine_control.operation_connection(machine).is_err() {
+        return Err(target_not_ready());
+    }
     if !state.machine_control.machine_supports(
         machine,
         crate::machine_protocol::EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -345,17 +350,16 @@ async fn checked(
     }
     // Only automatic recovery retries a target that is not ready; an explicit
     // Operator request keeps its exact diagnostic and repeats on request.
-    let not_ready = |error: String| {
-        if grant.is_none() {
-            target_not_ready()
-        } else {
-            error
-        }
-    };
     let target_connection = state
         .machine_control
         .operation_connection(machine)
-        .map_err(not_ready)?;
+        .map_err(|error| {
+            if grant.is_none() {
+                target_not_ready()
+            } else {
+                error
+            }
+        })?;
     let response = state
         .machine_control
         .execution_request(
@@ -370,7 +374,13 @@ async fn checked(
             },
         )
         .await
-        .map_err(not_ready)?;
+        .map_err(|error| {
+            if grant.is_none() {
+                unanswered(state, &target_connection, error)
+            } else {
+                error
+            }
+        })?;
     let binding = match response {
         Response::Prepared { binding } => binding,
         Response::Refused { reason } if grant.is_none() && transient(reason) => {
@@ -503,9 +513,27 @@ fn replaceable_worker(delivery: &serde_json::Value) -> bool {
 /// another unrelated event.
 fn target_not_ready() -> String {
     format!(
-        "{}the execution Machine is not ready",
-        crate::server::session_maintenance::WAIT_PREFIX
+        "{}{}",
+        crate::server::session_maintenance::WAIT_PREFIX,
+        crate::server::session_maintenance::TARGET_WAIT_REASON
     )
+}
+
+/// A request the target never answered: its connection went away or was
+/// replaced, or the reply did not arrive. Validation failures (an old
+/// protocol, an identity) keep their own diagnostic.
+fn unanswered(
+    state: &AppState,
+    connection: &crate::machine_control::ConnectionToken,
+    error: String,
+) -> String {
+    if !state.machine_control.is_current(connection)
+        || error.starts_with("Execution response unavailable")
+    {
+        target_not_ready()
+    } else {
+        error
+    }
 }
 
 fn transient(reason: crate::machine_protocol::execution::Refusal) -> bool {
@@ -591,7 +619,7 @@ pub(in crate::server) async fn before_dispatch(
                 },
             )
             .await
-            .map_err(|_| target_not_ready())?;
+            .map_err(|error| unanswered(state, &target_connection, error))?;
         match response {
             Response::Call { response: KeeperResponse::Ready { scope, .. } } if scope == Scope::from_binding(&previous) => {
                 state.execution_readiness.remember(&state.machine_control, session, &previous, target_connection);
