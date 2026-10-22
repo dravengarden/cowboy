@@ -349,6 +349,10 @@ struct WorkerPeer {
     epoch: String,
     tx: mpsc::UnboundedSender<Frame>,
     snapshot: WorkerSnapshot,
+    /// Highest event sequence a Controller consumed (its ACK, relayed here).
+    /// `snapshot.last_runtime_seq` also counts events emitted while no
+    /// Controller was attached, which no Controller has seen.
+    acked_runtime_seq: u64,
     last_seen: Instant,
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
@@ -697,16 +701,14 @@ impl Broker {
     /// it the live controller. Installing first would let a concurrent worker
     /// event reach the socket ahead of `Welcome`, which the Controller rejects
     /// as a protocol violation. Anything published between the `Welcome`
-    /// snapshot and the install is recovered afterwards: workers replay from
-    /// the sequence the Controller was told about, and changed snapshots are
-    /// resent.
+    /// snapshot and the install is recovered afterwards: workers replay every
+    /// event after the last one a Controller acknowledged, and changed
+    /// snapshots are resent. Events emitted while no Controller was attached
+    /// were never consumed, even though the snapshot already counts them; a
+    /// turn that finished during a Controller restart keeps its transcript.
     fn attach_controller(&self, protocol: u16, tx: &mpsc::UnboundedSender<Frame>) -> u64 {
         let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
         let welcome = self.snapshots();
-        let welcomed_seq: HashMap<String, u64> = welcome
-            .iter()
-            .map(|worker| (worker.session_id.clone(), worker.last_runtime_seq))
-            .collect();
         let _ = tx.send(Frame::Welcome {
             protocol,
             controller_epoch: lease,
@@ -721,10 +723,7 @@ impl Broker {
             let _ = worker.tx.send(Frame::Replay {
                 session_id: session_id.clone(),
                 worker_epoch: worker.epoch.clone(),
-                after_runtime_seq: welcomed_seq
-                    .get(session_id)
-                    .copied()
-                    .unwrap_or(worker.snapshot.last_runtime_seq),
+                after_runtime_seq: worker.acked_runtime_seq,
             });
         }
         for current in self.snapshots() {
@@ -1198,9 +1197,12 @@ impl Broker {
         let tx = self
             .workers
             .lock()
-            .get(session_id)
+            .get_mut(session_id)
             .filter(|worker| worker.connection_id == connection_id && worker.epoch == worker_epoch)
-            .map(|worker| worker.tx.clone());
+            .map(|worker| {
+                worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
+                worker.tx.clone()
+            });
         if let Some(tx) = tx {
             let _ = tx.send(Frame::Ack {
                 session_id: session_id.to_owned(),
@@ -1321,6 +1323,7 @@ impl Broker {
                     background_tasks: None,
                     incarnation: None,
                 },
+                acked_runtime_seq: 0,
                 last_seen: Instant::now(),
                 receive_probe: None,
             },
@@ -4572,9 +4575,10 @@ async fn handle_core(
                     worker_epoch,
                     runtime_seq,
                 } => {
-                    if let Some(worker) = broker.workers.lock().get(&session_id)
+                    if let Some(worker) = broker.workers.lock().get_mut(&session_id)
                         && worker.epoch == worker_epoch
                     {
+                        worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
                         let _ = worker.tx.send(Frame::Ack {
                             session_id,
                             worker_epoch,
@@ -8080,13 +8084,13 @@ mod tests {
     #[test]
     fn attach_controller_sends_welcome_before_any_live_frame() {
         let (broker, _launch, mut worker_rx) = reconnecting_worker_fixture();
-        broker
-            .workers
-            .lock()
-            .get_mut("sess-1")
-            .expect("worker")
-            .snapshot
-            .last_runtime_seq = 7;
+        {
+            let mut workers = broker.workers.lock();
+            let worker = workers.get_mut("sess-1").expect("worker");
+            // Events 6 and 7 were emitted while no Controller was attached.
+            worker.snapshot.last_runtime_seq = 7;
+            worker.acked_runtime_seq = 5;
+        }
         let (tx, mut rx) = mpsc::unbounded_channel();
         let lease = broker.attach_controller(PROTOCOL_VERSION, &tx);
         broker.send_controller(Frame::Heartbeat);
@@ -8102,7 +8106,7 @@ mod tests {
             .find(|frame| matches!(frame, Frame::Replay { .. }));
         assert!(matches!(
             replay,
-            Some(Frame::Replay { session_id, after_runtime_seq: 7, .. }) if session_id == "sess-1"
+            Some(Frame::Replay { session_id, after_runtime_seq: 5, .. }) if session_id == "sess-1"
         ));
     }
 
@@ -10504,12 +10508,14 @@ mod tests {
         .expect("replay timeout")
         .expect("replay read")
         .expect("replay frame");
+        // The departed Controller read event 1 but never acknowledged it, so
+        // the next one must receive it again.
         assert!(matches!(
             replay,
             Frame::Replay {
                 session_id,
                 worker_epoch,
-                after_runtime_seq: 1,
+                after_runtime_seq: 0,
             } if session_id == "sess-1" && worker_epoch == "epoch-1"
         ));
         write_frame(&mut worker_writer, &event)

@@ -1930,6 +1930,9 @@ struct HubInner {
     /// do not settle this set; a bounded server-side grace timer finalizes the
     /// remainder as genuine interruptions.
     runtime_reconciliation: Mutex<HashSet<String>>,
+    /// Sessions marked Interrupted because their restored turn was absent
+    /// from the reconnecting worker's snapshot.
+    restart_interrupted: Mutex<HashSet<String>>,
     /// Config values a client set that the agent has not yet reported back,
     /// per session. A preset sends several options in a row and the agent
     /// answers each with a full snapshot; the answer to the first still
@@ -2147,6 +2150,7 @@ impl Hub {
                 context_edits: Mutex::new(HashSet::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
+                restart_interrupted: Mutex::new(HashSet::new()),
                 config_in_flight: Mutex::new(HashMap::new()),
                 provider_update_offers: Mutex::new(HashMap::new()),
                 automatic_update_failures: Mutex::new(HashMap::new()),
@@ -2813,11 +2817,27 @@ impl Hub {
     }
 
     fn record_restart_interruption(&self, session_id: &str) {
+        self.inner
+            .restart_interrupted
+            .lock()
+            .insert(session_id.to_owned());
         self.set_status(
             session_id,
             Status::Interrupted,
             Some("turn cut off by a cowboy restart — it never finished".to_owned()),
         );
+    }
+
+    /// A worker snapshot reflects events the Controller may not have
+    /// received yet. When the restored turn's own end is replayed after
+    /// the snapshot, the turn did finish: undo the restart interruption
+    /// instead of reporting a completed answer as cut off.
+    pub fn settle_restart_interruption(&self, session_id: &str) {
+        if self.inner.restart_interrupted.lock().remove(session_id)
+            && self.status(session_id) == Some(Status::Interrupted)
+        {
+            self.set_status(session_id, Status::Running, None);
+        }
     }
 
     /// The newest event sequence already assigned in a session, used as a
@@ -8462,6 +8482,33 @@ mod core_tests {
                 .execution_binding,
             Some(ready)
         );
+    }
+
+    #[test]
+    fn a_replayed_end_of_the_restored_turn_undoes_the_restart_interruption() {
+        let hub = hub_with_session("restored");
+        hub.set_status("restored", Status::Busy, None);
+        hub.record_restart_interruption("restored");
+        assert_eq!(hub.status("restored"), Some(Status::Interrupted));
+        // The idle snapshot alone keeps the interruption visible.
+        hub.project_runtime_status("restored", Status::Running, None);
+        assert_eq!(hub.status("restored"), Some(Status::Interrupted));
+        hub.settle_restart_interruption("restored");
+        assert_eq!(hub.status("restored"), Some(Status::Running));
+        // Only once: a later Interrupted state has its own cause.
+        hub.set_status("restored", Status::Interrupted, Some("other".into()));
+        hub.settle_restart_interruption("restored");
+        assert_eq!(hub.status("restored"), Some(Status::Interrupted));
+    }
+
+    #[test]
+    fn a_newer_turn_is_not_relabelled_by_a_late_settle() {
+        let hub = hub_with_session("newer");
+        hub.set_status("newer", Status::Busy, None);
+        hub.record_restart_interruption("newer");
+        hub.set_status("newer", Status::Busy, None);
+        hub.settle_restart_interruption("newer");
+        assert_eq!(hub.status("newer"), Some(Status::Busy));
     }
 
     #[test]

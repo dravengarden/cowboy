@@ -63,6 +63,15 @@ impl RuntimeRouter {
         }
     }
 
+    /// Stop consuming every runtime's events before persistence closes. An
+    /// event this Controller does not consume is not acknowledged, so its
+    /// worker replays it to the next Controller instead of losing it.
+    pub fn disconnect_all(&self) {
+        for runtime in self.runtimes.read().values() {
+            runtime.disconnect();
+        }
+    }
+
     /// Fence and remove whichever runtime currently owns this Machine id.
     /// Administrative identity revocation uses this form because it is not
     /// tied to one connection epoch.

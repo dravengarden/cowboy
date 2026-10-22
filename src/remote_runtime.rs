@@ -1570,6 +1570,11 @@ async fn connected(
         tokio::select! {
             incoming = reader.next() => {
                 let Some(frame) = incoming? else { anyhow::bail!("Machine broker closed") };
+                // A stopping Controller can no longer persist what it consumes;
+                // leaving the frame unacknowledged lets the worker replay it.
+                if shared.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 last_broker_frame = tokio::time::Instant::now();
                 handle_frame(shared, frame, &mut writer).await?;
             }
@@ -2811,6 +2816,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                     Status::Crashed,
                     Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
                 );
+            }
+            if !refused {
+                hub.settle_restart_interruption(session_id);
             }
             // TurnEnded is the authoritative terminal edge. Do not rely
             // solely on a following Busy -> Running status transition to release
@@ -6077,6 +6085,58 @@ mod tests {
             .expect("worker event");
         }
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Running));
+    }
+
+    #[tokio::test]
+    async fn a_stopping_controller_leaves_later_events_unacknowledged() {
+        let hub = Hub::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let (client, mut broker) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = client.into_split();
+        // Persistence is about to close: nothing consumed from here on could
+        // be stored, so nothing may be acknowledged. No stop notification is
+        // pending, so the buffered event is what the loop sees.
+        runtime.shared.shutdown.store(true, Ordering::Release);
+        write_frame(
+            &mut broker,
+            &Frame::WorkerEvent {
+                session_id: "s".into(),
+                worker_epoch: "epoch-1".into(),
+                runtime_seq: 1,
+                event: RuntimeEvent::TurnStarted {
+                    turn_id: "turn-1".into(),
+                    command_id: "command-1".into(),
+                },
+                diagnostics: Vec::new(),
+            },
+        )
+        .await
+        .expect("event written");
+        let (_notify_tx, mut notify_rx) = mpsc::unbounded_channel();
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(2),
+            connected(
+                &runtime.shared,
+                FrameReader::new(reader),
+                writer,
+                Vec::new(),
+                &mut notify_rx,
+            ),
+        )
+        .await;
+        assert!(
+            matches!(stopped, Ok(Ok(()))),
+            "a stopping Controller kept consuming runtime events"
+        );
+        drop(stopped);
+        while let Ok(Ok(Some(frame))) =
+            tokio::time::timeout(Duration::from_millis(200), read_frame(&mut broker)).await
+        {
+            assert!(
+                !matches!(frame, Frame::Ack { .. }),
+                "a stopping Controller acknowledged an event it cannot persist"
+            );
+        }
     }
 
     #[tokio::test]

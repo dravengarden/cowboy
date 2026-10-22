@@ -1954,7 +1954,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     });
 
+    let runtime_router = Arc::clone(&state.runtime_router);
     let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
+    // Persistence closes below; events consumed after this point would be
+    // acknowledged but never stored.
+    runtime_router.disconnect_all();
     if let Err(error) = catalog_watcher.shutdown().await {
         tracing::error!(%error, "Catalog observer failed during shutdown");
     }
