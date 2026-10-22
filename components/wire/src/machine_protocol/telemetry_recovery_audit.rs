@@ -15,7 +15,7 @@ pub struct RecoveryAuditQuery {
 }
 
 impl RecoveryAuditQuery {
-    pub(crate) fn digest(&self) -> Result<BindingDigest> {
+    pub fn digest(&self) -> Result<BindingDigest> {
         // The original deadline is evidence, never revived authority.
         self.step.validate_commit()?;
         let bytes = serde_json::to_vec(self)?;
@@ -48,7 +48,7 @@ pub enum RecoveryAuditObservation {
 }
 
 impl RecoveryAuditObservation {
-    pub(crate) fn matches(&self, query: &RecoveryAuditQuery) -> bool {
+    pub fn matches(&self, query: &RecoveryAuditQuery) -> bool {
         let Ok(digest) = query.digest() else {
             return false;
         };

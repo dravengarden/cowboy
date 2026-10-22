@@ -7,12 +7,6 @@ use crate::machine_protocol::telemetry_binding::{
     BindingCommitFailure as WriteError, BindingCommitResult, BindingRejection,
 };
 
-impl From<BindingRejection> for WriteError {
-    fn from(reason: BindingRejection) -> Self {
-        Self::Rejected(reason)
-    }
-}
-
 type WriteResult<T> = std::result::Result<T, WriteError>;
 
 impl Ledger {

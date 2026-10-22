@@ -12,7 +12,7 @@ use anyhow::Result;
 use cowboy_provider_sdk::{AuthenticationContract, ProviderPackage};
 use sha2::{Digest as _, Sha256};
 
-pub(crate) fn contract(package: &ProviderPackage) -> Cow<'_, AuthenticationContract> {
+pub fn contract(package: &ProviderPackage) -> Cow<'_, AuthenticationContract> {
     let auth = &package.manifest.authentication;
     if package.manifest.id != "claude-code"
         || !auth
@@ -29,7 +29,7 @@ pub(crate) fn contract(package: &ProviderPackage) -> Cow<'_, AuthenticationContr
     Cow::Owned(legacy)
 }
 
-pub(crate) fn fingerprint(package: &ProviderPackage) -> Result<String> {
+pub fn fingerprint(package: &ProviderPackage) -> Result<String> {
     match contract(package) {
         Cow::Borrowed(_) => Ok(package
             .manifest
@@ -50,7 +50,10 @@ mod tests {
     use super::*;
 
     fn source() -> cowboy_provider_sdk::StandardProviderSource {
-        serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap()
+        serde_json::from_str(include_str!(
+            "../../../../plugins/claude-code/provider.json"
+        ))
+        .unwrap()
     }
 
     #[test]

@@ -41,7 +41,7 @@ fn id(value: &str) -> bool {
 }
 
 impl InstallTarget {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if let Self::Installed {
             generation_digest, ..
         } = self
@@ -54,7 +54,7 @@ impl InstallTarget {
         Ok(())
     }
 
-    pub(crate) fn revision(&self) -> Option<&InstallationRevision> {
+    pub fn revision(&self) -> Option<&InstallationRevision> {
         match self {
             Self::Vacant {} => None,
             Self::Installed { revision, .. } | Self::Removed { revision } => Some(revision),
@@ -72,7 +72,7 @@ pub struct InstallTargetQuery {
 }
 
 impl InstallTargetQuery {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1
                 && !self.service_id.is_empty()
@@ -85,7 +85,7 @@ impl InstallTargetQuery {
         Ok(())
     }
 
-    pub(crate) fn digest(&self) -> Result<String> {
+    pub fn digest(&self) -> Result<String> {
         self.validate()?;
         Ok(digest(&serde_json::to_vec(self)?))
     }
@@ -113,7 +113,7 @@ pub struct InstallStep {
 }
 
 impl InstallStep {
-    pub(crate) fn target_query(&self) -> InstallTargetQuery {
+    pub fn target_query(&self) -> InstallTargetQuery {
         InstallTargetQuery {
             schema: 1,
             service_id: self.service_id.clone(),
@@ -122,7 +122,7 @@ impl InstallStep {
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.target_query().validate()?;
         self.expected.validate()?;
         ensure!(
@@ -157,12 +157,12 @@ impl InstallStep {
         Ok(())
     }
 
-    pub(crate) fn request_digest(&self) -> Result<String> {
+    pub fn request_digest(&self) -> Result<String> {
         self.validate()?;
         Ok(digest(&serde_json::to_vec(self)?))
     }
 
-    pub(crate) fn matches_envelope(&self, desired: &DesiredPlugin) -> bool {
+    pub fn matches_envelope(&self, desired: &DesiredPlugin) -> bool {
         self.validate().is_ok()
             && self.plugin_id == desired.release.plugin_id
             && self.plugin_kind == desired.release.plugin_kind
@@ -173,7 +173,7 @@ impl InstallStep {
     }
 
     #[cfg(feature = "machine-host")]
-    pub(crate) fn key(&self) -> Result<String> {
+    pub fn key(&self) -> Result<String> {
         self.validate()?;
         Ok(digest(&serde_json::to_vec(&(
             &self.service_id,
@@ -235,7 +235,7 @@ impl InstallOutcome {
     /// completed failure that still names `Staging` proves the active
     /// installation was never touched. A fresh install still needs new
     /// Service authority and an exact target CAS.
-    pub(crate) const fn retryable_staging_failure(&self) -> bool {
+    pub const fn retryable_staging_failure(&self) -> bool {
         matches!(
             self,
             Self::Unknown {
@@ -248,12 +248,12 @@ impl InstallOutcome {
 
 #[cfg(any(feature = "machine-host", test))]
 impl InstallOutcome {
-    pub(crate) fn fenced(&self) -> bool {
+    pub fn fenced(&self) -> bool {
         matches!(self, Self::Pending { .. } | Self::Unknown { .. })
             && !self.retryable_staging_failure()
     }
 
-    pub(crate) fn follows(&self, previous: &Self) -> bool {
+    pub fn follows(&self, previous: &Self) -> bool {
         use InstallPhase::{Activating, Prepared, ProjectingAuthentication, Staging};
         match (previous, self) {
             (Self::Pending { phase: left }, Self::Unknown { phase: right, .. }) => left == right,
@@ -284,7 +284,7 @@ pub struct InstallReceipt {
 }
 
 impl InstallReceipt {
-    pub(crate) fn matches(&self, step: &InstallStep) -> bool {
+    pub fn matches(&self, step: &InstallStep) -> bool {
         &self.step == step
             && step
                 .request_digest()
@@ -342,8 +342,8 @@ pub enum InstallTargetObservation {
     },
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> InstallStep {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> InstallStep {
     InstallStep {
         schema: 1,
         operation_id: "installation-fixture-0001".into(),

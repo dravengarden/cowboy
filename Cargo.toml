@@ -9,14 +9,14 @@ rust-version = "1.98.1"
 
 [workspace]
 resolver = "3"
-members = ["components/plugin-sdk", "components/provider-sdk"]
+members = ["components/plugin-sdk", "components/provider-sdk", "components/wire"]
 exclude = ["plugins/zed/adapter"]
 
 [features]
 default = ["full"]
 # The control plane and Machine host are separate compile-time boundaries.
-full = ["dep:cardea-authorization", "dep:cardea-core"]
-machine-host = []
+full = ["dep:cardea-authorization", "dep:cardea-core", "dep:cowboy-wire", "cowboy-wire/full"]
+machine-host = ["dep:cowboy-wire", "cowboy-wire/machine-host"]
 code-adapter = []
 
 [[bin]]
@@ -104,6 +104,7 @@ ring = "0.17"
 rand = "0.8"
 rpassword = "=7.5.4"
 cowboy-provider-sdk = { version = "=3.1.15", path = "components/provider-sdk" }
+cowboy-wire = { version = "0.1.0", path = "components/wire", optional = true }
 cowboy-plugin-sdk = { version = "=1.12.2", path = "components/plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
@@ -125,6 +126,7 @@ toml = { version = "1", default-features = false, features = ["parse", "display"
 tikv-jemallocator = "0.7"
 
 [dev-dependencies]
+cowboy-wire = { version = "0.1.0", path = "components/wire", features = ["test-fixtures"] }
 syn = { version = "2", features = ["full"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

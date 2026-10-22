@@ -609,7 +609,7 @@ mod machine {
                     }
                     // No retries for partial success (including warning-only),
                     // invalid response bodies or a successful HTTP receipt.
-                    return match payload.signal.rejected(&bytes, count) {
+                    return match crate::otlp::signal_rejected(payload.signal, &bytes, count) {
                         Ok(rejected_items) => OtlpResult {
                             enabled: true,
                             delivered: rejected_items == 0,

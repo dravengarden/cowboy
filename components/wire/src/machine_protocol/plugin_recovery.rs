@@ -96,7 +96,7 @@ fn canonical_digest(value: &str) -> bool {
 
 #[cfg(any(feature = "full", test))]
 impl RecoveryObservation {
-    pub(crate) fn matches(&self, step: &UninstallStep) -> bool {
+    pub fn matches(&self, step: &UninstallStep) -> bool {
         let Ok(expected) = step.request_digest() else {
             return false;
         };
@@ -135,7 +135,7 @@ impl RecoveryObservation {
 
     /// The caller must still re-authorize and re-verify a FUTURE effect. In
     /// particular, neither an absent link nor a tombstone resolves Unknown.
-    pub(crate) fn basis(&self, step: &UninstallStep) -> RecoveryBasis {
+    pub fn basis(&self, step: &UninstallStep) -> RecoveryBasis {
         if !self.matches(step) {
             return RecoveryBasis::Unavailable {
                 reason: StepUnavailable::InvalidRequest,

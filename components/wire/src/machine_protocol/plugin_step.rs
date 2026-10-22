@@ -32,12 +32,12 @@ fn id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
-pub(crate) fn digest(bytes: &[u8]) -> String {
+pub fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 impl UninstallStep {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             matches!(
                 (self.schema, &self.installation_revision),
@@ -85,13 +85,13 @@ impl UninstallStep {
         Ok(())
     }
 
-    pub(crate) fn request_digest(&self) -> Result<String> {
+    pub fn request_digest(&self) -> Result<String> {
         self.validate()?;
         Ok(digest(&serde_json::to_vec(self)?))
     }
 
     #[cfg(feature = "machine-host")]
-    pub(crate) fn key(&self) -> Result<String> {
+    pub fn key(&self) -> Result<String> {
         self.validate()?;
         // Step identity is the closed `uninstall` primitive, not caller argv.
         Ok(digest(&serde_json::to_vec(&(
@@ -134,7 +134,7 @@ pub struct StepReceipt {
 }
 
 impl StepReceipt {
-    pub(crate) fn matches(&self, step: &UninstallStep) -> bool {
+    pub fn matches(&self, step: &UninstallStep) -> bool {
         &self.step == step
             && step
                 .request_digest()
@@ -169,8 +169,8 @@ pub struct StepObservation {
     pub result: StepLookup,
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> UninstallStep {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> UninstallStep {
     UninstallStep {
         schema: 1,
         operation_id: "fixture-operation-0001".into(),

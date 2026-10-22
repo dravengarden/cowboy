@@ -6,19 +6,19 @@ use std::collections::BTreeMap;
 
 pub use super::code_buffer_sync::{BufferRef, Content};
 
-pub(crate) const MAX_LOCATIONS: usize = 256;
-pub(crate) const MAX_TARGETS: usize = 32;
+pub const MAX_LOCATIONS: usize = 256;
+pub const MAX_TARGETS: usize = 32;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NavigationRef {
-    pub(crate) instance: String,
-    pub(crate) id: String,
+    pub instance: String,
+    pub id: String,
 }
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl NavigationRef {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let id = self.id.strip_prefix("navigation:").unwrap_or("");
         BufferRef {
             instance: self.instance.clone(),
@@ -31,8 +31,8 @@ impl NavigationRef {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Point {
-    pub(crate) row: u32,
-    pub(crate) column: u32,
+    pub row: u32,
+    pub column: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,7 +80,7 @@ pub struct Request {
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl Request {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             crate::service_identity::valid_service_id(&self.service_id)
                 && !self.machine_id.is_empty()
@@ -125,14 +125,14 @@ impl Request {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Location {
-    pub(crate) path: String,
-    pub(crate) content: Content,
-    pub(crate) start: Point,
-    pub(crate) end: Point,
+    pub path: String,
+    pub content: Content,
+    pub start: Point,
+    pub end: Point,
 }
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
-pub(crate) fn validate_locations(locations: &[Location]) -> Result<()> {
+pub fn validate_locations(locations: &[Location]) -> Result<()> {
     ensure!(
         locations.len() <= MAX_LOCATIONS,
         "too many navigation locations"
@@ -182,8 +182,8 @@ pub enum Phase {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Destination {
-    pub(crate) destination: u32,
-    pub(crate) lease: BufferRef,
+    pub destination: u32,
+    pub lease: BufferRef,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -201,7 +201,7 @@ pub struct Snapshot {
 
 #[cfg_attr(not(feature = "full"), allow(dead_code))]
 impl Snapshot {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(self.api_version == 1, "unsupported navigation observation");
         self.navigation.validate()?;
         validate_locations(&self.locations)?;

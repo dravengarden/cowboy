@@ -44,7 +44,7 @@ impl PolicyEpoch {
     /// The Machine issues exactly one next epoch on a new binding commit.
     /// Restoring a selection does not restore its old policy authority.
     #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
-    pub(crate) fn next(self) -> Result<Self> {
+    pub fn next(self) -> Result<Self> {
         self.0
             .checked_add(1)
             .map(Self)
@@ -79,7 +79,7 @@ impl From<BindingDigest> for String {
     }
 }
 
-pub(crate) fn binding_digest(bytes: &[u8]) -> BindingDigest {
+pub fn binding_digest(bytes: &[u8]) -> BindingDigest {
     BindingDigest(digest(bytes))
 }
 
@@ -100,7 +100,7 @@ fn id(value: &str, minimum: usize) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
-pub(crate) fn valid_service(value: &str) -> bool {
+pub fn valid_service(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
@@ -126,7 +126,7 @@ pub struct BindingSnapshot {
 }
 
 impl BindingSnapshot {
-    pub(crate) const fn initial() -> Self {
+    pub const fn initial() -> Self {
         Self {
             revision: BindingRevision(0),
             policy_epoch: PolicyEpoch(0),
@@ -134,7 +134,7 @@ impl BindingSnapshot {
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.revision.0 == 0 {
             ensure!(self == &Self::initial(), "invalid initial binding snapshot");
         }
@@ -196,7 +196,7 @@ fn namespace<'de, D: serde::Deserializer<'de>>(
 }
 
 impl BindingStep {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             matches!(
                 (self.schema, self.expected_namespace),
@@ -224,13 +224,13 @@ impl BindingStep {
         self.after()?.validate()
     }
 
-    pub(crate) fn validate_commit(&self) -> Result<()> {
+    pub fn validate_commit(&self) -> Result<()> {
         self.validate()?;
         ensure!(self.schema == 2, "binding mutation requires namespace CAS");
         Ok(())
     }
 
-    pub(crate) fn after(&self) -> Result<BindingSnapshot> {
+    pub fn after(&self) -> Result<BindingSnapshot> {
         let (selection, policy_epoch) = match &self.change {
             BindingChange::Select {
                 installation,
@@ -260,7 +260,7 @@ impl BindingStep {
         })
     }
 
-    pub(crate) fn request_digest(&self) -> Result<BindingDigest> {
+    pub fn request_digest(&self) -> Result<BindingDigest> {
         self.validate()?;
         Ok(binding_digest(&serde_json::to_vec(self)?))
     }
@@ -286,6 +286,12 @@ pub enum BindingCommitFailure {
     Rejected(BindingRejection),
     Fenced,
     Capacity,
+}
+
+impl From<BindingRejection> for BindingCommitFailure {
+    fn from(reason: BindingRejection) -> Self {
+        Self::Rejected(reason)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,7 +328,7 @@ pub struct BindingReceipt {
 }
 
 impl BindingReceipt {
-    pub(crate) fn matches(&self, step: &BindingStep) -> bool {
+    pub fn matches(&self, step: &BindingStep) -> bool {
         self.step == *step
             && step
                 .request_digest()
@@ -335,7 +341,7 @@ impl BindingReceipt {
             }
     }
 
-    pub(crate) const fn unresolved(&self) -> bool {
+    pub const fn unresolved(&self) -> bool {
         matches!(
             self.outcome,
             BindingOutcome::Prepared {} | BindingOutcome::Unknown {}
@@ -374,7 +380,7 @@ pub enum BindingObservation {
 }
 
 impl BindingObservation {
-    pub(crate) fn matches(&self, step: &BindingStep) -> bool {
+    pub fn matches(&self, step: &BindingStep) -> bool {
         let Ok(expected) = step.request_digest() else {
             return false;
         };
@@ -405,8 +411,8 @@ impl BindingObservation {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> BindingStep {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> BindingStep {
     BindingStep {
         schema: 1,
         operation_id: "binding-operation-0001".into(),
@@ -431,8 +437,8 @@ pub(crate) fn fixture() -> BindingStep {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn execution_fixture() -> BindingStep {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn execution_fixture() -> BindingStep {
     let mut step = fixture();
     step.schema = 2;
     step.expected_namespace = Some(BindingNamespace::Unmanaged);

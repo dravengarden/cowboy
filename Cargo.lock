@@ -833,6 +833,7 @@ dependencies = [
  "clap",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
+ "cowboy-wire",
  "ed25519-dalek",
  "flate2",
  "fs2",
@@ -906,6 +907,30 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "cowboy-wire"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "cowboy-plugin-sdk",
+ "cowboy-provider-sdk",
+ "libc",
+ "opentelemetry-proto",
+ "prost",
+ "rand 0.8.8",
+ "rustix",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

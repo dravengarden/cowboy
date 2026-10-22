@@ -8,15 +8,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BufferRef {
-    pub(crate) instance: String,
-    pub(crate) id: String,
+    pub instance: String,
+    pub id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationRef {
-    pub(crate) instance: String,
-    pub(crate) id: String,
+    pub instance: String,
+    pub id: String,
 }
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
@@ -36,14 +36,14 @@ fn reference(instance: &str, id: &str) -> Result<()> {
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl BufferRef {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         reference(&self.instance, &self.id)
     }
 }
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl OperationRef {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         reference(&self.instance, &self.id)
     }
 }
@@ -51,12 +51,12 @@ impl OperationRef {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Content {
-    pub(crate) sha256: String,
-    pub(crate) utf8_bytes: u32,
+    pub sha256: String,
+    pub utf8_bytes: u32,
 }
 
 impl Content {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.utf8_bytes <= 4 * 1024 * 1024
                 && self.sha256.len() == 64
@@ -105,7 +105,7 @@ pub struct Request {
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl Request {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             crate::service_identity::valid_service_id(&self.service_id)
                 && !self.machine_id.is_empty()
@@ -128,8 +128,8 @@ impl Request {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VersionEntry {
-    pub(crate) replica_id: u16,
-    pub(crate) timestamp: u32,
+    pub replica_id: u16,
+    pub timestamp: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,11 +160,11 @@ pub enum State {
 
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 impl State {
-    pub(crate) fn terminal(&self) -> bool {
+    pub fn terminal(&self) -> bool {
         matches!(self, Self::Applied { .. } | Self::Refused { .. })
     }
 
-    pub(crate) fn validate(&self, expected: &Content) -> Result<()> {
+    pub fn validate(&self, expected: &Content) -> Result<()> {
         if let Self::Applied { content, version } = self {
             content.validate()?;
             ensure!(content == expected, "synchronization content changed");

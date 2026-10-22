@@ -431,7 +431,10 @@ fn partial(signal: Signal) -> Vec<u8> {
 #[test]
 fn receiver_returns_standard_partial_success_and_never_records_credentials_or_payload() {
     for signal in [Signal::Logs, Signal::Metrics, Signal::Traces] {
-        assert_eq!(signal.rejected(&partial(signal), 2).unwrap(), 1);
+        assert_eq!(
+            crate::otlp::signal_rejected(signal, &partial(signal), 2).unwrap(),
+            1
+        );
     }
     let (signal, bytes) = crate::otlp::client_fixtures()
         .into_iter()

@@ -6,6 +6,11 @@
 //! until all workers using the older version have drained.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::io;
 
@@ -519,6 +524,41 @@ pub struct TurnUsage {
     pub uncached_input_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+}
+
+impl TurnUsage {
+    /// ACP adapters report either disjoint fresh/read/write input counts or
+    /// inclusive input. Require the reported totals to reconcile before
+    /// projecting a common representation; never count reasoning twice.
+    #[must_use]
+    pub fn from_acp(usage: &agent_client_protocol::schema::v1::Usage) -> Option<Self> {
+        let total = usage.total_tokens;
+        let output = usage.output_tokens;
+        let input = total.checked_sub(output)?;
+        let read = usage.cached_read_tokens;
+        let write = usage.cached_write_tokens;
+        let disjoint = usage
+            .input_tokens
+            .checked_add(read.unwrap_or(0))?
+            .checked_add(write.unwrap_or(0))?;
+        if (usage.input_tokens != input && disjoint != input)
+            || read.is_some_and(|tokens| tokens > input)
+            || write.is_some_and(|tokens| tokens > input.saturating_sub(read.unwrap_or(0)))
+            || usage.thought_tokens.is_some_and(|tokens| tokens > output)
+            || total > 9_007_199_254_740_991
+        {
+            return None;
+        }
+        Some(Self {
+            total_tokens: total,
+            input_tokens: input,
+            output_tokens: output,
+            cached_input_tokens: read,
+            uncached_input_tokens: read.map(|tokens| input - tokens),
+            cache_write_tokens: write,
+            reasoning_tokens: usage.thought_tokens,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

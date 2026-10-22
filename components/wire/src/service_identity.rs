@@ -12,7 +12,7 @@ use std::io::Read as _;
 const SERVICE_ID_FILE: &str = "service-id";
 const SERVICE_ID_RANDOM_BYTES: usize = 16;
 
-pub(crate) fn valid_service_id(value: &str) -> bool {
+pub fn valid_service_id(value: &str) -> bool {
     value.len() == 4 + SERVICE_ID_RANDOM_BYTES * 2
         && value.starts_with("svc-")
         && value[4..]
@@ -21,18 +21,18 @@ pub(crate) fn valid_service_id(value: &str) -> bool {
 }
 
 #[cfg(feature = "full")]
-pub(crate) struct ServiceIdentity(String);
+pub struct ServiceIdentity(String);
 
 #[cfg(feature = "full")]
 impl ServiceIdentity {
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 
     // The historical wire fixtures use this non-production identity. There is
     // deliberately no production string/serde/default constructor.
-    #[cfg(test)]
-    pub(crate) fn fixture() -> Self {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn fixture() -> Self {
         Self("service-test".into())
     }
 }
@@ -40,7 +40,7 @@ impl ServiceIdentity {
 /// Established by core startup, not by a request, policy or journal claim.
 /// Identity is not Operator authority, a state lease or an enrollment proof.
 #[cfg(feature = "full")]
-pub(crate) fn load_or_create(data_dir: &Path) -> Result<ServiceIdentity> {
+pub fn load_or_create(data_dir: &Path) -> Result<ServiceIdentity> {
     establish(data_dir).map(ServiceIdentity)
 }
 
@@ -73,7 +73,7 @@ fn establish(data_dir: &Path) -> Result<String> {
     }
 }
 
-pub(crate) fn service_state_dir(home: &Path, service_id: &str) -> Result<PathBuf> {
+pub fn service_state_dir(home: &Path, service_id: &str) -> Result<PathBuf> {
     anyhow::ensure!(valid_service_id(service_id), "invalid Cowboy Service id");
     Ok(home
         .join(".local/state/cowboy-machine/services")
@@ -83,7 +83,7 @@ pub(crate) fn service_state_dir(home: &Path, service_id: &str) -> Result<PathBuf
 /// Read an already established identity for configuration-only checks. Never
 /// creates a directory/identity, follows a final symlink, or waits on a FIFO.
 #[cfg(feature = "full")]
-pub(crate) fn inspect(data_dir: &Path) -> Result<String> {
+pub fn inspect(data_dir: &Path) -> Result<String> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let file = std::fs::OpenOptions::new()
         .read(true)

@@ -5,7 +5,7 @@ use super::telemetry_binding::{BindingDigest, BindingSnapshot, binding_digest, v
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+pub const ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,7 +20,7 @@ pub struct ExportAttempt {
 }
 
 impl ExportAttempt {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let id = |value: &str, min| {
             (min..=128).contains(&value.len())
                 && value
@@ -48,7 +48,7 @@ impl ExportAttempt {
         Ok(())
     }
 
-    pub(crate) fn request_digest(&self) -> Result<BindingDigest> {
+    pub fn request_digest(&self) -> Result<BindingDigest> {
         self.validate()?;
         Ok(binding_digest(&serde_json::to_vec(self)?))
     }
@@ -78,7 +78,7 @@ pub enum ExportOutcome {
 
 impl ExportReceipt {
     #[cfg(any(feature = "full", test))]
-    pub(crate) fn matches(&self, request: &ExportAttempt) -> bool {
+    pub fn matches(&self, request: &ExportAttempt) -> bool {
         request
             .request_digest()
             .is_ok_and(|d| d == self.request_digest)
@@ -92,8 +92,8 @@ impl ExportReceipt {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> ExportAttempt {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> ExportAttempt {
     ExportAttempt {
         schema: 1,
         attempt_id: "managed-export-fixture".into(),

@@ -7,7 +7,7 @@ use super::telemetry_binding::{
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const MAX_RECOVERY_BYTES: usize = 64 * 1024;
+pub const MAX_RECOVERY_BYTES: usize = 64 * 1024;
 
 /// Audit identity, not a deserializable Operator credential.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct RecoveryRequest {
 }
 
 impl RecoveryRequest {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.step.validate_commit()?;
         let actor = match &self.actor {
             RecoveryActor::Product { user_id } => user_id,
@@ -67,12 +67,12 @@ impl RecoveryRequest {
         Ok(())
     }
 
-    pub(crate) fn digest(&self) -> Result<BindingDigest> {
+    pub fn digest(&self) -> Result<BindingDigest> {
         self.validate()?;
         Ok(binding_digest(&serde_json::to_vec(self)?))
     }
 
-    pub(crate) fn expects(&self, observation: &BindingObservation) -> bool {
+    pub fn expects(&self, observation: &BindingObservation) -> bool {
         self.validate().is_ok()
             && observation.matches(&self.step)
             && serde_json::to_vec(observation)
@@ -80,7 +80,7 @@ impl RecoveryRequest {
     }
 }
 
-pub(crate) fn prepared(step: &BindingStep) -> Result<BindingObservation> {
+pub fn prepared(step: &BindingStep) -> Result<BindingObservation> {
     Ok(BindingObservation::Observed {
         snapshot: Box::new(BindingObservationSnapshot {
             request_digest: step.request_digest()?,
@@ -104,7 +104,7 @@ pub struct RecoveryReceipt {
 }
 
 impl RecoveryReceipt {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.request.validate()?;
         ensure!(
             self.binding.matches(&self.request.step)
@@ -118,7 +118,7 @@ impl RecoveryReceipt {
         );
         Ok(())
     }
-    pub(crate) fn matches(&self, request: &RecoveryRequest) -> bool {
+    pub fn matches(&self, request: &RecoveryRequest) -> bool {
         self.request == *request && self.validate().is_ok()
     }
 }
@@ -140,7 +140,7 @@ pub enum RecoveryObservation {
 }
 
 impl RecoveryObservation {
-    pub(crate) fn matches(&self, request: &RecoveryRequest) -> bool {
+    pub fn matches(&self, request: &RecoveryRequest) -> bool {
         let Ok(digest) = request.digest() else {
             return false;
         };
@@ -168,8 +168,8 @@ pub enum RecoveryResult {
     Unavailable { failure: BindingCommitFailure },
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> RecoveryRequest {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> RecoveryRequest {
     let step = super::telemetry_binding::execution_fixture();
     RecoveryRequest {
         schema: 1,
@@ -187,8 +187,8 @@ pub(crate) fn fixture() -> RecoveryRequest {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn observed_fixture(request: &RecoveryRequest) -> RecoveryObservation {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn observed_fixture(request: &RecoveryRequest) -> RecoveryObservation {
     let binding = BindingReceipt {
         step: request.step.clone(),
         request_digest: request.step.request_digest().unwrap(),

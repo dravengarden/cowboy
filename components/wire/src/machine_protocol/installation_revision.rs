@@ -31,7 +31,7 @@ impl From<InstallationRevision> for String {
 
 impl InstallationRevision {
     #[cfg(feature = "machine-host")]
-    pub(crate) fn fresh() -> anyhow::Result<Self> {
+    pub fn fresh() -> anyhow::Result<Self> {
         use rand::RngCore as _;
         use std::fmt::Write as _;
         let mut bytes = [0u8; 32];

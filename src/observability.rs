@@ -5,6 +5,7 @@
 
 #![warn(clippy::pedantic)]
 
+use crate::otlp::RequestControllerExt as _;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;

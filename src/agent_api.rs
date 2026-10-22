@@ -14,12 +14,7 @@ pub mod mcp;
 
 /// Model-facing API identity; bumped on any incompatible SDK change.
 pub const API_VERSION: &str = "cowboy-ts-v1";
-/// Program source, as Matrix CodeAct.
-pub const MAX_SOURCE_BYTES: usize = 32 * 1024;
-/// A program's wall-clock budget when it names none; at most `MAX_WAIT_MS`.
-pub const DEFAULT_TIMEOUT_MS: u64 = 20_000;
-/// Runtime startup headroom added to the gateway exchange.
-pub const STARTUP_MARGIN_MS: u64 = 5_000;
+pub use cowboy_wire::agent_api::{DEFAULT_TIMEOUT_MS, MAX_SOURCE_BYTES, STARTUP_MARGIN_MS};
 /// The JSON a program returns to the model, and its console log.
 pub const MAX_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_LOG_BYTES: usize = 4 * 1024;

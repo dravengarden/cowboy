@@ -5,6 +5,11 @@
 //! in the Machine state root; Cowboy stores only the normalized public key.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -17,11 +22,11 @@ use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
 use sha2::Digest as _;
 
-pub(crate) const MACHINE_SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
-pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth-v1";
+pub const MACHINE_SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
+pub const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth-v1";
 /// Verification-only compatibility domain for Provider generations installed
 /// before generic Plugin releases replaced Provider release envelopes.
-pub(crate) const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
+pub const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
 const SSH_SIGNATURE_HEADER: &[u8] = b"-----BEGIN SSH SIGNATURE-----";
 const MAX_SSH_SIGNATURE_BYTES: usize = 16 * 1_024;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -105,7 +110,7 @@ impl MachineIdentity {
     /// Sign an application-owned proof in an explicit OpenSSH namespace.
     /// Namespaces keep a valid Machine challenge signature from being replayed
     /// as a Plugin release or credential-distribution authorization.
-    pub(crate) fn sign_namespaced(&self, namespace: &str, proof: &[u8]) -> Result<String> {
+    pub fn sign_namespaced(&self, namespace: &str, proof: &[u8]) -> Result<String> {
         validate_namespace(namespace)?;
         let mut child = Command::new(&self.ssh_keygen)
             .args(["-Y", "sign", "-f"])
@@ -156,7 +161,7 @@ pub fn verify(public_key: &str, challenge: &[u8], signature: &str) -> Result<boo
 /// # Errors
 /// Returns when the key, namespace, or verification process is invalid. A
 /// cryptographic mismatch returns `Ok(false)`.
-pub(crate) fn verify_namespaced(
+pub fn verify_namespaced(
     public_key: &str,
     namespace: &str,
     proof: &[u8],

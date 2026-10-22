@@ -208,7 +208,7 @@ workspace identity / target worktree identity / target cwd / access scope
 ```
 
 The metadata codec is now defined in
-[`src/execution_environment.rs`](../src/execution_environment.rs): schema 1
+[`components/wire/src/execution_environment.rs`](../components/wire/src/execution_environment.rs): schema 1
 records the binding ID/revision, runtime location, target environment identity,
 executor digest/protocol, workspace/worktree identity and access scope. The
 session retains its existing exact Provider and authentication generations. This

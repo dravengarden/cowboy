@@ -642,7 +642,7 @@ fmt-write:
     cd plugins/zed/adapter && cargo fmt
 
 lint:
-    cargo clippy --all-targets --all-features --locked -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
     cd web && bun run lint
 
@@ -679,6 +679,8 @@ test:
     # The invoking Codex Plugin exports its own signed package path. Cowboy's
     # unit tests exercise embedded fixtures and must not inherit that runtime.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --all-targets --all-features --locked
+    # The shared wire crate is a workspace member, so the root package does not run its tests.
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked -p cowboy-wire --features full,machine-host --all-targets
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host --lib

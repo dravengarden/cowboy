@@ -394,8 +394,8 @@ fn valid_digest(value: &str) -> bool {
     })
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> ExecutionBinding {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> ExecutionBinding {
     ExecutionBinding::from_record(serde_json::json!({
         "schema": 1, "id": "binding-one", "revision": 1,
         "runtime": {"machine_id": "ovh", "cwd": "/runtime/session"},

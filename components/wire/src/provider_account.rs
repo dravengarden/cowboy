@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub(crate) mod portable_contract;
+pub mod portable_contract;
 
 /// Whether a native login made under `signed_in` may be used, in place, by the
 /// `target` release. The authentication contract fingerprint alone is not
@@ -12,7 +12,7 @@ pub(crate) mod portable_contract;
 /// signed authentication section (methods, identity recipes, credential
 /// layout) to be identical as well, so no login, home or credential changes.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub(crate) fn native_release_compatible(
+pub fn native_release_compatible(
     signed_in: &cowboy_provider_sdk::ProviderManifest,
     target: &cowboy_provider_sdk::ProviderManifest,
 ) -> bool {
@@ -26,7 +26,7 @@ pub(crate) fn native_release_compatible(
 /// One bounded native authorization response. Validate at every ingress, not
 /// just the CLI: embedded newlines would become additional native commands.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub(crate) fn login_code(value: &str) -> Result<&str, &'static str> {
+pub fn login_code(value: &str) -> Result<&str, &'static str> {
     if value.len() > 4096 {
         return Err("native login code exceeds 4096 bytes");
     }
@@ -45,6 +45,44 @@ pub struct NativeIdentity {
     pub authority: String,
     pub subject: String,
     pub tenant: Option<String>,
+}
+
+impl NativeIdentity {
+    pub fn fingerprint(&self, provider: &str) -> std::result::Result<String, &'static str> {
+        let valid = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 512
+                && value.trim() == value
+                && !value.chars().any(char::is_control)
+        };
+        if !valid(&self.authority)
+            || !valid(&self.subject)
+            || self.tenant.as_deref().is_some_and(|tenant| !valid(tenant))
+        {
+            return Err("invalid_native_identity");
+        }
+        // JSON tuple encoding separates fields unambiguously; include a domain
+        // and Provider so equal native IDs from different systems cannot alias.
+        let bytes = serde_json::to_vec(&(
+            "cowboy-native-account-v1",
+            provider,
+            &self.authority,
+            &self.subject,
+            &self.tenant,
+        ))
+        .map_err(|_| "invalid_native_identity")?;
+        Ok({
+            use sha2::Digest as _;
+            sha2::Sha256::digest(&bytes).iter().fold(
+                String::with_capacity(64),
+                |mut output, byte| {
+                    use std::fmt::Write as _;
+                    let _ = write!(output, "{byte:02x}");
+                    output
+                },
+            )
+        })
+    }
 }
 
 /// Machine-local native login completion evidence. This is metadata only,
@@ -101,7 +139,7 @@ pub struct WorkerExitRequest {
 }
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub(crate) fn account_stop_command_id(
+pub fn account_stop_command_id(
     operation: &str,
     session: &str,
     account: &ProviderAccountId,
@@ -163,7 +201,7 @@ pub struct NativeLogoutObservation {
 /// The service-owned ancestors remain a trusted filesystem boundary; this is
 /// not a sandbox against a process with the same UID or root privileges.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub(crate) fn prepare_private_directory(path: &std::path::Path) -> anyhow::Result<()> {
+pub fn prepare_private_directory(path: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use rustix::fs::{Mode, OFlags, fchmod, mkdirat, open, openat};
 
@@ -194,7 +232,7 @@ pub struct ProviderAccountId(String);
 /// a new identity recipe or protocol version alone must never open export.
 /// Legacy default accounts retain their existing migration boundary.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub(crate) fn portable_credentials_allowed(
+pub fn portable_credentials_allowed(
     account: &ProviderAccountId,
     provider: &str,
 ) -> Result<(), &'static str> {
@@ -265,7 +303,8 @@ mod tests {
     #[test]
     fn a_login_follows_only_releases_with_identical_signed_authentication() {
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/claude-code/provider.json"))
+                .unwrap();
         let signed_in = source.compile().unwrap();
         let mut next = signed_in.clone();
         next.version = "999.0.0".into();

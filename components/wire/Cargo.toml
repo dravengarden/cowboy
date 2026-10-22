@@ -1,0 +1,49 @@
+[package]
+name = "cowboy-wire"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Shared Machine and runtime wire contracts for Cowboy"
+license = "MIT"
+rust-version = "1.98.1"
+
+[features]
+full = []
+machine-host = []
+test-fixtures = []
+
+[dependencies]
+agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_usage"] }
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"
+rand = "0.8"
+rustix = { version = "1", features = ["process", "fs"] }
+tokio = { version = "1", features = ["io-util"] }
+cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
+prost = "0.14"
+uuid = { version = "1", default-features = false, features = ["std", "serde", "v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "time", "test-util", "io-util"] }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+# The modules moved here were crate-private; widening them to `pub` must not
+# demand API prose for a workspace-internal contract crate.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"

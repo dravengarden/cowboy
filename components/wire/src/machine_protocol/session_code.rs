@@ -7,7 +7,7 @@ pub const PROTOCOL_VERSION: u16 = 25;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Request {
+pub enum Request {
     Observe {
         root: String,
     },

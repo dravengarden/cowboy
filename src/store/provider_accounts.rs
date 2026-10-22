@@ -97,34 +97,6 @@ pub(crate) enum Change {
     },
 }
 
-impl NativeIdentity {
-    pub(crate) fn fingerprint(&self, provider: &str) -> std::result::Result<String, &'static str> {
-        let valid = |value: &str| {
-            !value.is_empty()
-                && value.len() <= 512
-                && value.trim() == value
-                && !value.chars().any(char::is_control)
-        };
-        if !valid(&self.authority)
-            || !valid(&self.subject)
-            || self.tenant.as_deref().is_some_and(|tenant| !valid(tenant))
-        {
-            return Err("invalid_native_identity");
-        }
-        // JSON tuple encoding separates fields unambiguously; include a domain
-        // and Provider so equal native IDs from different systems cannot alias.
-        let bytes = serde_json::to_vec(&(
-            "cowboy-native-account-v1",
-            provider,
-            &self.authority,
-            &self.subject,
-            &self.tenant,
-        ))
-        .map_err(|_| "invalid_native_identity")?;
-        Ok(crate::admin::hex_sha256(&bytes))
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Receipt {
     /// Local lifecycle completion only; the account admission fence stays set.

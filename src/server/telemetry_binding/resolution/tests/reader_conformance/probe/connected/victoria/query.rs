@@ -1,6 +1,7 @@
 //! Query the actual database; HTTP admission is not delivery acceptance.
 use super::super::super::super::victoria::QueryRound;
 use super::*;
+use crate::otlp::RequestControllerExt as _;
 use opentelemetry_proto::tonic::{logs::v1::LogRecord, trace::v1::Span};
 use std::collections::{BTreeMap, BTreeSet};
 

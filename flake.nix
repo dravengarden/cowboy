@@ -44,6 +44,10 @@
         ./components/provider-sdk/Cargo.toml
         ./components/provider-sdk/src
       ];
+      wire-files = [
+        ./components/wire/Cargo.toml
+        ./components/wire/src
+      ];
       plugin-sdk-files = [
         ./components/plugin-sdk/Cargo.toml
         ./components/plugin-sdk/src
@@ -105,7 +109,7 @@
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
           ./tests/fixtures/plugin-lifecycle-history.json
-        ] ++ plugin-contract-files ++ plugin-host-files);
+        ] ++ plugin-contract-files ++ wire-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -129,8 +133,6 @@
           ./src/claude_shell.rs
           ./src/cgroup.rs
           ./src/cgroup
-          ./src/execution_environment.rs
-          ./src/execution_protocol.rs
           ./src/execution_host.rs
           ./src/execution_target_environment.rs
           ./src/durable_state.rs
@@ -154,7 +156,6 @@
           ./src/machine_code_plugins
           ./src/machine_cli.rs
           ./src/machine_cli
-          ./src/machine_auth.rs
           ./src/agent_api.rs
           ./src/agent_api
           ./src/managed_calls.rs
@@ -166,8 +167,6 @@
           ./src/machine_install
           ./src/session_deletion_admission.rs
           ./src/session_deletion_admission
-          ./src/machine_protocol.rs
-          ./src/machine_protocol
           ./src/machine_lanes.rs
           ./src/machine_transport.rs
           ./src/machine_transport
@@ -183,13 +182,9 @@
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
-          ./src/provider_account.rs
-          ./src/provider_account
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
-          ./src/runtime_wire.rs
           ./src/runtime_trace.rs
-          ./src/service_identity.rs
           ./src/session_workspace.rs
           ./src/session_workspace
           ./src/workspace_extensions.rs
@@ -197,7 +192,7 @@
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
-        ] ++ plugin-contract-files ++ [
+        ] ++ plugin-contract-files ++ wire-files ++ [
           (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
         ]);
       };
@@ -215,7 +210,12 @@
           ./src/files.rs
           ./src/workspace_roots.rs
           ./src/bin/cowboy-code-adapter.rs
-        ] ++ plugin-sdk-files ++ provider-sdk-files);
+        ] ++ plugin-sdk-files ++ provider-sdk-files ++ [
+          # Cargo loads every workspace member manifest, but this slice never
+          # compiles the wire modules.
+          ./components/wire/Cargo.toml
+          ./components/wire/src/lib.rs
+        ]);
       };
 
 
@@ -241,12 +241,17 @@
         ./src/provider/managed_config.rs
         ./src/provider/mod.rs
         ./src/provider_behavior.rs
-        ./src/provider_account.rs
-        ./src/provider_account
         ./src/provider_catalog.rs
-        ./src/runtime_wire.rs
-        ./src/execution_environment.rs
-        ./src/execution_protocol.rs
+        # Only the worker-relevant modules of the shared wire crate decide the
+        # pool generation; Machine protocol edits must not drain live sessions.
+        ./components/wire/Cargo.toml
+        ./components/wire/src/lib.rs
+        ./components/wire/src/provider_account.rs
+        ./components/wire/src/provider_account
+        ./components/wire/src/runtime_wire.rs
+        ./components/wire/src/execution_environment.rs
+        ./components/wire/src/execution_protocol.rs
+        ./components/wire/src/runtime_trace.rs
         ./src/runtime_trace.rs
         ./src/logs.rs
         ./src/logs
@@ -353,7 +358,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-QAMo6OEto3BFPpGu8l8Cgo3j/lq6A5l/eYkrFcRJz/c=";
+        hash = "sha256-KQnm/BITXoZb0GoB770RWbCxdbqgV8OMSKy66qCeGlg=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -628,11 +633,8 @@
       retained-worker-interface-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
-        ./src/runtime_wire.rs
-        ./src/execution_protocol.rs
-        ./src/execution_environment.rs
-        ./src/machine_protocol.rs
-        ./src/machine_protocol
+        ./components/wire/Cargo.toml
+        ./components/wire/src
       ] ++ plugin-sdk-files ++ provider-sdk-files));
       retained-worker-interface-compatible = pkgs.lib.all (path:
         let
@@ -753,11 +755,12 @@
         test ! -e ${cowboy-src}/components/provider-runtime/lock.json
         test -e ${machine-src}/components/provider-sdk/Cargo.toml
         test -e ${machine-src}/components/plugin-sdk/Cargo.toml
+        test -e ${machine-src}/components/wire/Cargo.toml
         test -e ${machine-src}/build.rs
         test -e ${machine-src}/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
-        test -e ${machine-src}/src/provider_account.rs
-        test -e ${machine-src}/src/provider_account/portable_contract.rs
+        test -e ${machine-src}/components/wire/src/provider_account.rs
+        test -e ${machine-src}/components/wire/src/provider_account/portable_contract.rs
         test -e ${machine-src}/src/cgroup/containment/linux.rs
         test -e ${machine-src}/src/code_buffer_read/content.rs
         test -e ${machine-src}/src/code_buffer_read/text.rs
@@ -772,7 +775,7 @@
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml
-        test ! -e ${code-adapter-src}/src/provider_account.rs
+        test ! -e ${code-adapter-src}/components/wire/src/provider_account.rs
         test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
         test -e ${machine-src}/src/plugin_runtime_args.rs
@@ -784,9 +787,9 @@
         test -e ${machine-src}/src/machine_plugins/operations/lease.rs
         test -e ${machine-src}/src/operation_budget.rs
         test -e ${machine-src}/src/owned_json.rs
-        test -e ${machine-src}/src/machine_protocol/plugin_step.rs
-        test -e ${machine-src}/src/machine_protocol/plugin_recovery.rs
-        test -e ${machine-src}/src/machine_protocol/installation_revision.rs
+        test -e ${machine-src}/components/wire/src/machine_protocol/plugin_step.rs
+        test -e ${machine-src}/components/wire/src/machine_protocol/plugin_recovery.rs
+        test -e ${machine-src}/components/wire/src/machine_protocol/installation_revision.rs
         test -e ${machine-src}/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs

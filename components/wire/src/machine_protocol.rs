@@ -5,6 +5,11 @@
 //! identity, inventory, component lifecycle, and multiplexing.
 
 #![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +21,7 @@ pub mod plugin_install;
 pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod projects;
-pub(crate) mod session_code;
+pub mod session_code;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
@@ -27,7 +32,7 @@ pub const MACHINE_PROTOCOL_VERSION: u16 = 37;
 pub const NATIVE_USAGE_PROTOCOL_VERSION: u16 = 37;
 /// Closed diagnostics for native observations; arbitrary subprocess output is
 /// never an account API error or a log field.
-pub(crate) fn native_usage_error_code(value: &str) -> &'static str {
+pub fn native_usage_error_code(value: &str) -> &'static str {
     match value {
         "native_usage_busy" => "native_usage_busy",
         "native_usage_admission_expired" => "native_usage_admission_expired",
@@ -925,7 +930,7 @@ pub struct SessionDeletionReader {
 
 impl DesiredComponent {
     #[cfg(any(feature = "full", feature = "machine-host"))]
-    pub(crate) fn validate_session_deletion_declaration(&self) -> Result<(), &'static str> {
+    pub fn validate_session_deletion_declaration(&self) -> Result<(), &'static str> {
         let Some(reader) = &self.session_deletion_journal else {
             return Ok(());
         };
@@ -1389,11 +1394,11 @@ pub struct ProviderUsageEvent {
 // These bounds are deliberately above every supported model/request limit.
 // They keep a compromised same-user producer from poisoning long-lived SQL
 // aggregates while preserving headroom for future DeepSeek models.
-pub(crate) const PROVIDER_USAGE_MAX_TOKENS: u64 = 10_000_000;
-pub(crate) const PROVIDER_USAGE_MAX_DURATION_MS: u64 = 86_400_000;
-pub(crate) const PROVIDER_USAGE_MAX_REQUEST_BYTES: u64 = 64 << 20;
-pub(crate) const PROVIDER_USAGE_MAX_SHAPE_COUNT: u64 = 1_000_000;
-pub(crate) const PROVIDER_USAGE_MAX_KEEPALIVE_MS: u64 = 604_800_000;
+pub const PROVIDER_USAGE_MAX_TOKENS: u64 = 10_000_000;
+pub const PROVIDER_USAGE_MAX_DURATION_MS: u64 = 86_400_000;
+pub const PROVIDER_USAGE_MAX_REQUEST_BYTES: u64 = 64 << 20;
+pub const PROVIDER_USAGE_MAX_SHAPE_COUNT: u64 = 1_000_000;
+pub const PROVIDER_USAGE_MAX_KEEPALIVE_MS: u64 = 604_800_000;
 
 const fn default_provider_usage_schema_version() -> u16 {
     1
@@ -2122,7 +2127,7 @@ mod tests {
         }))
         .unwrap();
         hello.plugin_contracts = Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
-            crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
+            cowboy_plugin_sdk::host::PLUGIN_HOST_SCHEMA_VERSION,
         ));
         let proof = challenge_proof_v3("id", "nonce", 42, &hello);
         let legacy_proof = challenge_proof_v2("id", "nonce", 42, &hello);
@@ -2242,19 +2247,5 @@ mod tests {
         let json = serde_json::to_value(inventory).expect("serialize inventory");
         assert_eq!(json[0]["id"]["slot"], "1.13.0");
         assert_eq!(json[1]["id"]["slot"], "1.14.0");
-    }
-
-    #[test]
-    #[cfg(feature = "full")]
-    fn old_session_metadata_defaults_to_the_local_machine() {
-        let meta: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
-            "id": "sess-old",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "title": "old",
-            "status": "running"
-        }))
-        .expect("old metadata remains readable");
-        assert_eq!(meta.machine_id, "local");
     }
 }

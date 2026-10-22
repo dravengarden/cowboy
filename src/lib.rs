@@ -64,11 +64,11 @@ mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod durable_state;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod execution_environment;
+pub use cowboy_wire::execution_environment;
 #[cfg(feature = "machine-host")]
 pub mod execution_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod execution_protocol;
+pub use cowboy_wire::execution_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_target_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
@@ -83,7 +83,7 @@ mod legacy_provider_release;
 mod local_operator;
 pub mod logs;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod machine_auth;
+pub use cowboy_wire::machine_auth;
 #[cfg(feature = "machine-host")]
 mod machine_broker;
 #[cfg(feature = "machine-host")]
@@ -103,7 +103,7 @@ mod machine_lanes;
 #[cfg(feature = "machine-host")]
 mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod machine_protocol;
+pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod machine_transport;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -162,7 +162,7 @@ mod prompt_origin;
 #[cfg(feature = "full")]
 mod provider;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod provider_account;
+pub use cowboy_wire::provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod provider_behavior;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -186,7 +186,7 @@ mod runtime_telemetry;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod runtime_trace;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub mod runtime_wire;
+pub use cowboy_wire::runtime_wire;
 #[cfg(feature = "full")]
 mod scheduler;
 #[cfg(feature = "full")]
@@ -194,7 +194,7 @@ pub mod send_delivery;
 #[cfg(feature = "full")]
 mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod service_identity;
+pub(crate) use cowboy_wire::service_identity;
 #[cfg(feature = "full")]
 pub mod session_context;
 #[cfg(any(feature = "full", feature = "machine-host"))]
