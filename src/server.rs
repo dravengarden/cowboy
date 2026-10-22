@@ -3218,6 +3218,19 @@ async fn catalog_retention_pass(state: &AppState) {
             return;
         }
     }
+    // Named logins are verified against their signed-in release when a
+    // compatible later release uses them; never retire that manifest.
+    match store.native_login_generation_digests().await {
+        Ok(digests) => {
+            for digest in digests {
+                keep.insert(&digest);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skipping Plugin Catalog retention");
+            return;
+        }
+    }
     let Ok(machines) = state.machine_snapshots.load().await else {
         return;
     };

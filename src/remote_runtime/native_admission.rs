@@ -102,7 +102,7 @@ pub(super) async fn snapshot(
         return false;
     }
     store
-        .with_native_session_binding(owner, &operation, &completion, &meta.id, || async {
+        .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
             anyhow::ensure!(
                 !shared.shutdown.load(Ordering::Acquire),
                 "runtime_disconnected"
@@ -232,7 +232,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     }
     let started = AtomicBool::new(false);
     let result = store
-        .with_native_session_binding(owner, &operation, &completion, &meta.id, || async {
+        .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
             anyhow::ensure!(
                 !shared.shutdown.load(Ordering::Acquire),
                 "runtime_disconnected"

@@ -5364,6 +5364,19 @@ impl SqliteStorage {
         .context("list soft-deleted SQLite session generations")
     }
 
+    /// Releases named accounts signed in under. A compatible later release uses
+    /// them for verification, so the Catalog must keep their signed manifests.
+    pub(super) async fn native_login_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT json_extract(value, '$.native_completion.profile.generation_digest') \
+             FROM provider_login_operations \
+             WHERE json_extract(value, '$.native_completion.profile.generation_digest') IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list SQLite native login generations")
+    }
+
     pub(super) async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
         sqlx::query_scalar(
             "SELECT DISTINCT json_extract(intent, '$.generation_digest') \

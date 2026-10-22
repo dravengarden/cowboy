@@ -1756,6 +1756,10 @@ impl Store {
         dispatch_storage!(self, plugin_install_generation_digests())
     }
 
+    pub async fn native_login_generation_digests(&self) -> Result<Vec<String>> {
+        dispatch_storage!(self, native_login_generation_digests())
+    }
+
     pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
         dispatch_storage!(self, upsert_runtime_incident(incident))
     }
@@ -6221,6 +6225,17 @@ impl PostgresStorage {
     ///
     /// # Errors
     /// If the DELETE fails.
+    pub async fn native_login_generation_digests(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT value::jsonb #>> '{native_completion,profile,generation_digest}' \
+             FROM provider_login_operations \
+             WHERE value::jsonb #>> '{native_completion,profile,generation_digest}' IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list PostgreSQL native login generations")
+    }
+
     pub async fn plugin_install_generation_digests(&self) -> Result<Vec<String>> {
         sqlx::query_scalar(
             "SELECT DISTINCT intent::jsonb ->> 'generation_digest' \

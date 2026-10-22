@@ -54,6 +54,14 @@ pub(super) async fn contract(store: &Store, completion: &NativeCompletion, repla
     let meta = session(completion);
     let (sink, mut writes) = crate::core::StoreSink::channel(16, std::sync::Arc::default());
     let hub = crate::core::Hub::with_store(Some(sink));
+    // Catalog retention keeps the release this login was made under.
+    assert!(
+        store
+            .native_login_generation_digests()
+            .await
+            .unwrap()
+            .contains(&completion.profile.generation_digest)
+    );
     for field in 0..8 {
         let mut bad = meta.clone();
         match field {
@@ -241,6 +249,37 @@ async fn durable_binding_changes(
             .await;
         assert_eq!(admitted.is_ok(), expected);
         assert_eq!(invoked.load(std::sync::atomic::Ordering::SeqCst), expected);
+        // Runtime admission compares the row with the session's own pinned
+        // release, which may be a compatible release other than the login's.
+        let mut pinned = meta.clone();
+        pinned.provider_version = version.into();
+        assert!(
+            store
+                .with_native_session_release_binding(
+                    "login-owner",
+                    "bind",
+                    completion,
+                    &pinned,
+                    || async { Ok(()) }
+                )
+                .await
+                .is_ok(),
+            "a session pinned to {version} with the original login is admitted"
+        );
+        assert_eq!(
+            store
+                .with_native_session_release_binding(
+                    "login-owner",
+                    "bind",
+                    completion,
+                    meta,
+                    || async { Ok(()) }
+                )
+                .await
+                .is_ok(),
+            expected,
+            "a stale expected release never passes a changed row"
+        );
         transport_contract(store, hub, meta, expected).await;
     }
     // Remove the durable identity while retaining the same live Hub fixture.

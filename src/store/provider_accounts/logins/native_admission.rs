@@ -4,7 +4,9 @@ use super::{NativeCompletion, Receipt, Registry, Result, StorageBackend, Store};
 enum BindingUse<'a> {
     Latest,
     Insert(&'a crate::core::SessionMeta),
-    Existing(&'a str),
+    /// Session id and the exact release persisted on its row. A compatible
+    /// later release may differ from the login's own (see native_generation).
+    Existing(&'a str, &'a str, &'a str),
     TransitionFinish(&'a str, &'a str),
     Transition(&'a str, &'a super::super::transitions::Intent),
     TransitionDispatch(&'a str, &'a super::super::transitions::Intent),
@@ -279,7 +281,38 @@ impl Store {
             owner,
             operation,
             completion,
-            BindingUse::Existing(session),
+            BindingUse::Existing(
+                session,
+                &completion.profile.provider_version,
+                &completion.profile.generation_digest,
+            ),
+            action,
+        )
+        .await
+    }
+
+    /// Admit runtime traffic for a session pinned to `version`/`digest`, which
+    /// registration accepted as the login's release or a compatible later one.
+    pub(crate) async fn with_native_session_release_binding<
+        T,
+        F: std::future::Future<Output = Result<T>>,
+    >(
+        &self,
+        owner: &str,
+        operation: &str,
+        completion: &NativeCompletion,
+        session: &crate::core::SessionMeta,
+        action: impl FnOnce() -> F,
+    ) -> Result<T> {
+        self.native_binding_action(
+            owner,
+            operation,
+            completion,
+            BindingUse::Existing(
+                &session.id,
+                &session.provider_version,
+                &session.provider_generation_digest,
+            ),
             action,
         )
         .await
@@ -373,7 +406,7 @@ impl Store {
             let generation: i64 = sqlx::query_scalar("SELECT generation FROM provider_native_generations WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
                 .bind(owner).bind(profile.account_id.as_str()).bind(&completion.machine_id).fetch_one(&mut *tx).await?;
             let latest = u64::try_from(generation)?;
-            anyhow::ensure!(profile.generation > 0 && if matches!(usage, BindingUse::Existing(_) | BindingUse::TransitionFinish(..)) {
+            anyhow::ensure!(profile.generation > 0 && if matches!(usage, BindingUse::Existing(..) | BindingUse::TransitionFinish(..)) {
                 profile.generation <= latest
             } else { profile.generation == latest }, "native_generation_superseded");
             let machine = sqlx::query(concat!("UPDATE machines SET encryption_public_key=encryption_public_key WHERE id=$1 AND ", $revoked, " IS NULL"))
@@ -389,12 +422,17 @@ impl Store {
                 account.admits_binding(revision, registry.revision) &&
                 account.id == profile.account_id && account.provider_id == profile.provider_id && account.available()
                 && account.identity_fingerprint.as_ref() == Some(&fingerprint)), "native_binding_changed");
-            if let BindingUse::Existing(id) | BindingUse::TransitionFinish(_, id) = usage {
+            let existing = match usage {
+                BindingUse::Existing(id, version, digest) => Some((id, version, digest)),
+                BindingUse::TransitionFinish(_, id) => Some((id, profile.provider_version.as_str(), profile.generation_digest.as_str())),
+                _ => None,
+            };
+            if let Some((id, version, digest)) = existing {
                 // Lock the exact persisted binding, including against concurrent
                 // deletion or edits. A Hub snapshot alone cannot authorize reuse.
                 let row = sqlx::query("UPDATE sessions SET id=id WHERE id=$1 AND owner_user_id=$2 AND provider_account_id=$3 AND machine_id=$4 AND provider=$5 AND provider_version=$6 AND provider_generation_digest=$7 AND provider_auth_generation=$8")
                     .bind(id).bind(owner).bind(profile.account_id.as_str()).bind(&completion.machine_id)
-                    .bind(&profile.provider_id).bind(&profile.provider_version).bind(&profile.generation_digest)
+                    .bind(&profile.provider_id).bind(version).bind(digest)
                     .bind(i64::try_from(profile.generation)?).execute(&mut *tx).await?;
                 anyhow::ensure!(row.rows_affected() == 1, "native_session_binding_changed");
             }
