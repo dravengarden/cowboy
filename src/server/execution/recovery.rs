@@ -57,6 +57,117 @@ impl Readiness {
     }
 }
 
+/// Lifetimes (`session/incarnation`) whose active turn was already ended.
+#[derive(Default)]
+pub(in crate::server) struct LostTurns {
+    ended: parking_lot::Mutex<std::collections::HashSet<String>>,
+}
+
+impl LostTurns {
+    fn key(session: &str, binding: &BindingV1) -> String {
+        format!("{session}/{}", binding.environment.incarnation)
+    }
+
+    /// True only for the first report of this lifetime.
+    fn claim(&self, session: &str, binding: &BindingV1) -> bool {
+        let mut ended = self.ended.lock();
+        // Forgetting only allows one more cancel of the same lost lifetime's
+        // turn, which is idempotent; a newer turn needs a new binding first.
+        if ended.len() >= 4096 {
+            ended.clear();
+        }
+        ended.insert(Self::key(session, binding))
+    }
+
+    fn release(&self, session: &str, binding: &BindingV1) {
+        self.ended.lock().remove(&Self::key(session, binding));
+    }
+}
+
+/// The session still runs a turn on exactly this binding.
+fn busy_on(state: &AppState, session: &str, runtime_machine: &str, binding: &BindingV1) -> bool {
+    state.hub.session_info(session).is_some_and(|info| {
+        info.meta.status == Status::Busy
+            && info.meta.machine_id == runtime_machine
+            && info
+                .meta
+                .execution_binding
+                .as_ref()
+                .and_then(|record| record.for_runtime(runtime_machine, &info.meta.cwd).ok())
+                .is_some_and(|current| &current == binding)
+    })
+}
+
+/// A lost lifetime fails every later call of the active turn the same way,
+/// so a native agent would retry against the dead keeper until the turn gave
+/// up. End that turn once. Recovery itself still waits for an idle session:
+/// the next dispatch's preflight recreates the lifetime and never replays an
+/// unknown command.
+pub(in crate::server) fn end_turn_for_lost_environment(
+    state: &Arc<AppState>,
+    runtime_machine: &str,
+    session: &str,
+    binding: &BindingV1,
+) {
+    if !busy_on(state, session, runtime_machine, binding)
+        || !state.lost_turns.claim(session, binding)
+    {
+        return;
+    }
+    let state = Arc::clone(state);
+    let runtime_machine = runtime_machine.to_owned();
+    let session = session.to_owned();
+    let binding = binding.clone();
+    tokio::spawn(async move {
+        if !confirm_lost(&state, &session, &binding).await {
+            state.lost_turns.release(&session, &binding);
+            return;
+        }
+        // The reply was awaited: a recovered binding or a finished turn means
+        // this report is stale and must not touch the session's current turn.
+        if !busy_on(&state, &session, &runtime_machine, &binding) {
+            state.lost_turns.release(&session, &binding);
+            return;
+        }
+        tracing::warn!(
+            event_name = "cowboy.execution.lost_environment_turn_ended",
+            session = %session,
+            environment_id = %binding.environment.id,
+            "target proved the execution lifetime lost; ending the active turn"
+        );
+        if let Err(error) = state.supervisor.send(&session, AgentCommand::Cancel) {
+            tracing::warn!(session = %session, %error, "could not end the turn of a lost execution lifetime");
+            state.lost_turns.release(&session, &binding);
+        }
+    });
+}
+
+/// A failed call alone is not enough: the target must prove the loss again
+/// through the read-only Describe used by dispatch preflight.
+async fn confirm_lost(state: &AppState, session: &str, binding: &BindingV1) -> bool {
+    use crate::execution_protocol::Command;
+    matches!(
+        state
+            .machine_control
+            .execution_request(
+                &binding.environment.machine_id,
+                Request {
+                    service_id: state.service_id.clone(),
+                    machine_id: binding.environment.machine_id.clone(),
+                    action: Action::Call {
+                        session_id: session.into(),
+                        binding: Box::new(binding.clone()),
+                        command: Command::Describe,
+                    },
+                },
+            )
+            .await,
+        Ok(Response::Refused {
+            reason: crate::machine_protocol::execution::Refusal::EnvironmentLost
+        })
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct RecoverRequest {
@@ -542,6 +653,21 @@ async fn prepare_auto_recovery(
 #[cfg(test)]
 mod dispatch_safety_tests {
     use super::*;
+
+    #[test]
+    fn a_lost_lifetime_ends_one_turn_per_incarnation() {
+        let binding = crate::execution_environment::fixture().decode().unwrap();
+        let turns = LostTurns::default();
+        assert!(turns.claim("sess-1", &binding));
+        assert!(!turns.claim("sess-1", &binding));
+        assert!(turns.claim("sess-2", &binding));
+        let mut recovered = binding.clone();
+        recovered.environment.incarnation = "44444444444444444444444444444444".into();
+        assert!(turns.claim("sess-1", &recovered));
+        // A report that did not end a turn leaves the lifetime claimable.
+        turns.release("sess-1", &binding);
+        assert!(turns.claim("sess-1", &binding));
+    }
 
     #[test]
     fn surviving_old_worker_reconstructs_the_original_committed_wake_identity() {

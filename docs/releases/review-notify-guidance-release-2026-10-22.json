@@ -30,8 +30,29 @@
     "observed": "plugins.installations reports review 1.0.6 active with the published artifact digest"
   },
   "not_changed": [
-    "machine-plugins.json declares review on no Machine; OVH keeps unlisted Plugins and was upgraded by exact install",
     "existing sessions keep their pinned guidance",
     "the `cowboy` CLI with --notify reaches Machines only at their next Machine maintenance release"
-  ]
+  ],
+  "membership": {
+    "path": "/var/lib/cowboy/machine-plugins.json",
+    "change": "review added to the declared lists of hawk, falcon and ovh",
+    "converged": [
+      {
+        "machine": "hawk",
+        "operation_id": "hawk-review-1-0-6-converge",
+        "http_status": 204
+      },
+      {
+        "machine": "falcon",
+        "operation_id": "falcon-review-1-0-6-converge",
+        "http_status": 204
+      },
+      {
+        "machine": "ovh",
+        "note": "already 1.0.6 from ovh-review-1-0-6-notify-guidance"
+      }
+    ],
+    "observed": "plugins.installations reports review 1.0.6 active on hawk, falcon and ovh",
+    "not_declared": "macbook-air: review declares only linux x86_64 and no session has ever run there"
+  }
 }
