@@ -1,15 +1,4 @@
 #![allow(unused_imports)]
-use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::os::unix::fs::MetadataExt as _;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use agent_client_protocol::schema::v1::ContentBlock;
-use anyhow::{Context as _, Result};
-use parking_lot::Mutex;
-use tokio::net::UnixStream;
-use tokio::sync::mpsc;
 use crate::acp::{self, AgentCommand};
 use crate::agent_model::{Event, Status};
 use crate::agent_sink::AgentSink;
@@ -18,13 +7,23 @@ use crate::runtime_wire::{
     Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
     WorkerCommand, WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
-use crate::worker::*;
 use crate::worker::shared;
+use crate::worker::*;
+use agent_client_protocol::schema::v1::ContentBlock;
+use anyhow::{Context as _, Result};
+use parking_lot::Mutex;
+use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::os::unix::fs::MetadataExt as _;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::net::UnixStream;
+use tokio::sync::mpsc;
 
 #[tokio::test]
 #[cfg(feature = "machine-host")]
-async fn runtime_trace_crosses_real_dispatch_and_framing_without_history_or_replay_duplication()
-{
+async fn runtime_trace_crosses_real_dispatch_and_framing_without_history_or_replay_duplication() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("telemetry");
     let file = crate::telemetry_file::TelemetryFile::open(

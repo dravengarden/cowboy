@@ -62,7 +62,9 @@ async fn text_support_and_malformed_pages_never_select_a_plugin() {
         json!({"type":"bufferLeaseTextSupport","api_version":1})
     );
     assert!(crate::machine_code_plugins::request_worktree(&probe).is_err());
-    let wire: Value = serde_json::from_str(include_str!("../../../../../plugins/zed/adapter/fixtures/text.json"))
+    let wire: Value = serde_json::from_str(include_str!(
+        "../../../../../plugins/zed/adapter/fixtures/text.json"
+    ))
     .unwrap();
     for page in [
         json!({"kind":"start","path":"other"}),
@@ -93,7 +95,9 @@ async fn content_support_is_pathless_core_only_and_content_is_validated_before_d
         json!({"type":"bufferLeaseContentSupport","api_version":1})
     );
     assert!(crate::machine_code_plugins::request_worktree(&probe).is_err());
-    let wire: Value = serde_json::from_str(include_str!("../../../../../plugins/zed/adapter/fixtures/content.json"))
+    let wire: Value = serde_json::from_str(include_str!(
+        "../../../../../plugins/zed/adapter/fixtures/content.json"
+    ))
     .unwrap();
     for content in [
         json!({"sha256":"F".repeat(64),"utf8Bytes":7}),

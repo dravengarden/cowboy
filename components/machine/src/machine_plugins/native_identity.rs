@@ -195,8 +195,10 @@ mod tests {
 
     #[test]
     fn claude_subscription_recipe_requires_native_account_and_organization() {
-        let source: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../plugins/claude-code/provider.json")).unwrap();
+        let source: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../plugins/claude-code/provider.json"
+        ))
+        .unwrap();
         let method = source["authentication"]["methods"]
             .as_array()
             .unwrap()

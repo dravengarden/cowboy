@@ -1884,7 +1884,6 @@ impl MachineControl {
     }
 }
 
-
 #[cfg(test)]
 #[path = "machine_control/site_tests.rs"]
 mod site_tests;

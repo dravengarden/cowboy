@@ -582,4 +582,3 @@ fn valid_id(value: &Value) -> bool {
             .as_str()
             .is_some_and(|value| !value.is_empty() && value.len() <= 128)
 }
-

@@ -5276,8 +5276,10 @@ pub fn telemetry_release(
     publisher: &crate::machine_auth::MachineIdentity,
     version: &str,
 ) -> DesiredPlugin {
-    let mut manifest: cowboy_plugin_sdk::PluginManifest =
-        serde_json::from_str(include_str!("../../../examples/telemetry/victoria/plugin.json")).unwrap();
+    let mut manifest: cowboy_plugin_sdk::PluginManifest = serde_json::from_str(include_str!(
+        "../../../examples/telemetry/victoria/plugin.json"
+    ))
+    .unwrap();
     let mut contract: cowboy_plugin_sdk::TelemetryBackendContract = serde_json::from_str(
         include_str!("../../../examples/telemetry/victoria/telemetry.json"),
     )
@@ -6122,7 +6124,8 @@ mod tests {
                 .unwrap();
         store.pin_service_key(signer.public_key()).unwrap();
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/claude-code/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/claude-code/provider.json"))
+                .unwrap();
         let next = cowboy_provider_sdk::build_package(source.clone().compile().unwrap()).unwrap();
         let mut previous = source.clone();
         previous
@@ -6220,8 +6223,10 @@ mod tests {
         .unwrap();
         let first = store.for_account(&first_id).unwrap();
         let second = store.for_account(&second_id).unwrap();
-        let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/claude-deepseek/provider.json")).unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
+            include_str!("../../../plugins/claude-deepseek/provider.json"),
+        )
+        .unwrap();
         let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
         let signer =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))

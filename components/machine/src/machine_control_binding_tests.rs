@@ -1,24 +1,24 @@
 #![allow(unused_imports)]
-use std::collections::HashMap;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
-use parking_lot::RwLock;
-use tokio::sync::{mpsc, oneshot};
+use crate::machine_control::*;
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
 use crate::machine_protocol::telemetry_binding::{
     BindingCommitResult, BindingObservation, BindingStep,
 };
+use crate::machine_protocol::telemetry_binding::{
+    BindingObservationSnapshot, BindingUnavailable, binding_digest, fixture,
+};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
     PluginInstallationState, PluginInventory,
 };
-use crate::machine_control::*;
-use crate::machine_protocol::telemetry_binding::{
-    BindingObservationSnapshot, BindingUnavailable, binding_digest, fixture,
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
+use tokio::sync::{mpsc, oneshot};
 
 fn connect(
     control: &MachineControl,

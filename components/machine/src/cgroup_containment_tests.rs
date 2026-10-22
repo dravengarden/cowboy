@@ -1,8 +1,8 @@
 #![allow(unused_imports)]
+use crate::cgroup::containment::linux;
+use crate::cgroup::containment::*;
 use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf};
-use crate::cgroup::containment::*;
-use crate::cgroup::containment::linux;
 use tokio::{io::AsyncReadExt as _, process::Command};
 
 async fn detached() -> (Containment, tokio::process::Child) {

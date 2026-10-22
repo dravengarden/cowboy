@@ -1,31 +1,31 @@
 #![allow(unused_imports)]
+use crate::execution_environment::BindingV1;
+use crate::execution_environment::{
+    EnvironmentLocation, ExecutionAccess, RuntimeLocation, WorkspaceLocation,
+};
+use crate::execution_protocol::{
+    self as wire, Command, Invocation, Outcome, Response, RuntimeReply, RuntimeRequest, Scope,
+};
+#[cfg(feature = "machine-host")]
+use crate::machine_protocol::execution::{Action, Request};
+use crate::machine_protocol::execution::{Refusal, Response as MachineResponse};
+use crate::runtime_wire::Frame;
+use crate::worker_execution::*;
+use anyhow::{Context as _, Result, bail, ensure};
+use futures::{SinkExt as _, StreamExt as _};
+use parking_lot::Mutex;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use anyhow::{Context as _, Result, bail, ensure};
-use futures::{SinkExt as _, StreamExt as _};
-use parking_lot::Mutex;
-use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{
     Message,
     protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
 };
-use crate::execution_environment::BindingV1;
-use crate::execution_protocol::{
-    self as wire, Command, Invocation, Outcome, Response, RuntimeReply, RuntimeRequest, Scope,
-};
-use crate::machine_protocol::execution::{Refusal, Response as MachineResponse};
-use crate::runtime_wire::Frame;
-use crate::worker_execution::*;
-use crate::execution_environment::{
-    EnvironmentLocation, ExecutionAccess, RuntimeLocation, WorkspaceLocation,
-};
-#[cfg(feature = "machine-host")]
-use crate::machine_protocol::execution::{Action, Request};
 
 #[cfg(feature = "machine-host")]
 mod native_backpressure;

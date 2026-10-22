@@ -19,10 +19,10 @@ pub mod machine_plugins;
 #[cfg(all(test, target_os = "linux", feature = "machine-host"))]
 mod cgroup_containment_tests;
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
-mod worker_execution_tests;
-#[cfg(all(test, feature = "full", feature = "machine-host"))]
 mod machine_control_binding_tests;
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
 mod machine_control_matrix_tests;
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
+mod worker_execution_tests;
 #[cfg(all(test, feature = "full", feature = "machine-host"))]
 mod worker_trace_tests;

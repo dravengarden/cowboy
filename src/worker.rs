@@ -1470,8 +1470,6 @@ mod tests {
         assert!(shared.trace_outbox.lock().is_empty());
     }
 
-
-
     use super::shared;
 
     #[tokio::test]
