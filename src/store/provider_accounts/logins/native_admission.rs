@@ -5,7 +5,7 @@ enum BindingUse<'a> {
     Latest,
     Insert(&'a crate::core::SessionMeta),
     /// Session id and the exact release persisted on its row. A compatible
-    /// later release may differ from the login's own (see native_generation).
+    /// later release may differ from the login's own (see `native_generation`).
     Existing(&'a str, &'a str, &'a str),
     TransitionFinish(&'a str, &'a str),
     Transition(&'a str, &'a super::super::transitions::Intent),
