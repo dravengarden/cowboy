@@ -693,7 +693,11 @@ the default account. Account usage then reports `native_login_outdated`
 ("sign in again") instead of `native_login_required`, and the login list marks
 that completed login `outdated` with its signed-in and installed Provider
 versions. Existing sessions keep their exact retained generation; a new login
-on the updated release is required for new sessions and usage.
+on the updated release is required for new sessions and usage. The New Session
+and next-agent subscription picker reads the same cached observations (no
+Provider request) and disables an account whose login is outdated or missing
+with that reason; creation still rechecks the exact Machine and reports either
+refusal as a readable "sign in (again) from Settings → Subscriptions" message.
 
 The internal native-session writer checks this binding and inserts the session
 in one transaction under the account admission lock. Concurrent revocation

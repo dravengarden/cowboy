@@ -2,12 +2,30 @@ import { Button, MenuItem, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { legacySubscriptionLabel, type SubscriptionDisplay, validSubscriptionDisplay } from "./subscriptionDisplay";
+import { useNativeAccountUsage } from "./nativeAccountUsage";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
 interface Accounts { registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay; session_admission: string; session_providers?: string[] }
 
 export function providerSubscriptionEnabled(data: { session_admission: string; session_providers?: string[] } | undefined, provider: string): boolean {
   return data?.session_admission === "enabled" && data.session_providers?.includes(provider) === true;
+}
+
+/** Login state from the shared cached account observations (no Provider
+ *  request). Only definite sign-in states disable a choice; transient Machine
+ *  or quota conditions do not, and creation still rechecks the exact Machine. */
+const LOGIN_REASONS: Record<string, string> = {
+  native_login_outdated: "Sign in again: the Provider was updated",
+  native_login_required: "Not signed in on a Machine",
+};
+export function subscriptionLoginReason(
+  observations: readonly { account_id: string; provider_id: string; reason?: string }[],
+  provider: string,
+  id: string,
+): string | undefined {
+  if (id === "default") return undefined;
+  const reason = observations.find((item) => item.account_id === id && item.provider_id === provider)?.reason;
+  return reason ? LOGIN_REASONS[reason] : undefined;
 }
 
 export function subscriptionAllowed(data: Accounts | undefined, provider: string, choice: string): boolean {
@@ -39,6 +57,11 @@ export function useSessionSubscription(active: boolean, provider: string) {
   // Resolve the default in this snapshot. Creation must submit the exact
   // account shown in the field, even if another client changes the default.
   const value = choice || (data ? data.registry.defaults[provider] || "default" : "");
+  const native = useNativeAccountUsage();
+  const loadNative = native.load;
+  // One shared cached read (deduplicated across surfaces) when choosing.
+  useEffect(() => { if (active) void loadNative(); }, [active, loadNative]);
+  const loginReason = (id: string) => subscriptionLoginReason(native.accounts, provider, id);
   useEffect(() => {
     if (!active) return;
     const changed = (event: Event) => {
@@ -71,7 +94,8 @@ export function useSessionSubscription(active: boolean, provider: string) {
   }, [active, revision]);
   return {
     value, data, error, provider,
-    allowed: subscriptionAllowed(data, provider, value) || (error && value === "default"),
+    allowed: (subscriptionAllowed(data, provider, value) && !loginReason(value)) || (error && value === "default"),
+    loginReason,
     select: (id: string) => select({ provider, id }),
     retry: () => refresh((current) => current + 1),
   };
@@ -88,7 +112,7 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
   const choices = [{ id: "default", label: legacyLabel }, ...accounts].map((account) => ({
     ...account,
     label: `${account.label}${state.data && account.id === defaultId ? " · Default" : ""}`,
-    reason: subscriptionUnavailableReason(state.data, state.provider, account.id),
+    reason: subscriptionUnavailableReason(state.data, state.provider, account.id) ?? state.loginReason(account.id),
   }));
   const selected = choices.find((account) => account.id === selectedId);
   const placeholder = selectedId ? "Account unavailable" : state.error ? "Choose a subscription" : "Loading subscriptions…";
