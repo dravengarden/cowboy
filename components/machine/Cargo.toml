@@ -37,40 +37,22 @@ agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_us
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["compat", "io"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 # SQLx already selects rustls' ring provider. Keep Reqwest provider-neutral so
 # the build does not compile AWS-LC alongside ring for the same TLS stack.
 reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
 # GHSA-2mjx-qc3c-rqvc: older 0.23 handshakes can cross encryption boundaries.
 rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
-sqlx = { version = "0.8", default-features = false, features = [
-  "runtime-tokio",
-  "postgres",
-  "sqlite",
-  "macros",
-  "chrono",
-  "json",
-  "migrate",
-  "tls-rustls",
-] }
 chrono = { version = "0.4", features = ["serde"] }
 axum = { version = "0.8", features = ["ws"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
-prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
 png = "0.18"
 sha2 = "0.10"
-argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
-password-hash = { version = "0.5", default-features = false, features = ["alloc"] }
 url = "2"
 uuid = { version = "1", default-features = false, features = ["std"] }
-webauthn-rs = { version = "0.5", default-features = false, features = [
-  "danger-allow-state-serialisation",
-] }
 flate2 = "1"
 tar = "0.4"
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
@@ -80,37 +62,25 @@ tar = "0.4"
 # converts "no cascade as long as no critical section ever panics" (a hand-held
 # invariant) into "no cascade, structurally".
 parking_lot = "0.12"
-rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
 shell-words = "1"
 notify = "8"
-web-push-native = { version = "0.5", default-features = false }
-p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
-ring = "0.17"
 rand = "0.8"
-rpassword = "=7.5.4"
 cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
-cowboy-wire = { version = "0.1.0", path = "../wire" }
 tempfile = { version = "3" }
 cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-ed25519-dalek = "2"
 fs2 = "0.4"
 libc = "0.2"
 rustix = { version = "1", features = ["process", "fs"] }
-regex = "1"
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.
-ignore = "0.4"
-nucleo-matcher = "0.3"
-toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
 
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", default-features = false, features = ["test-support"] }
-syn = { version = "2", features = ["full"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 
