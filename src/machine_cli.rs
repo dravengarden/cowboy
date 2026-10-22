@@ -3753,10 +3753,15 @@ fn validate_session_workspace_root(
     let canonical = PathBuf::from(value)
         .canonicalize()
         .with_context(|| format!("canonicalizing session workspace {value}"))?;
-    if !workspaces
-        .iter()
-        .any(|workspace| canonical == Path::new(&workspace.canonical_path))
-    {
+    // A Cowboy-owned registry keeps the identity a project was registered
+    // under; a later storage move can leave that path as an alias. Accept it
+    // exactly as execution preparation does, by its current physical root.
+    if !workspaces.iter().any(|workspace| {
+        canonical == Path::new(&workspace.canonical_path)
+            || Path::new(&workspace.canonical_path)
+                .canonicalize()
+                .is_ok_and(|root| root == canonical && root.is_dir())
+    }) {
         bail!("session workspace is not an advertised Machine root");
     }
     Ok(())
@@ -5653,6 +5658,28 @@ mod tests {
             Some(active.canonicalize().unwrap())
         );
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_session_workspace_registered_before_a_storage_move_remains_admitted() {
+        let root = tempfile::tempdir().unwrap();
+        let moved = root.path().join("moved");
+        let alias = root.path().join("alias");
+        let other = root.path().join("other");
+        std::fs::create_dir(&moved).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&moved, &alias).unwrap();
+        let workspaces = vec![crate::machine_protocol::MachineWorkspace {
+            id: "project".to_owned(),
+            display_name: "Project".to_owned(),
+            canonical_path: alias.display().to_string(),
+        }];
+        super::validate_session_workspace_root(&alias.display().to_string(), &workspaces).unwrap();
+        super::validate_session_workspace_root(&moved.display().to_string(), &workspaces).unwrap();
+        assert!(
+            super::validate_session_workspace_root(&other.display().to_string(), &workspaces)
+                .is_err()
+        );
     }
 
     #[test]
