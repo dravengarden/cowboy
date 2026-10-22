@@ -201,13 +201,55 @@ async fn replacement_login_preserves_pinned_session(
         .cancel_provider_login("login-owner", "replacement")
         .await
         .unwrap();
+    // A cancelled replacement that never completed falls back to the previous
+    // working login, for discovery and for locked new-session admission.
+    assert_eq!(
+        store
+            .native_login_for_session("login-owner", &input.account_id, &input.machine_id)
+            .await
+            .unwrap(),
+        Some(("bind".into(), completion.clone()))
+    );
+    transport_contract(store, hub, meta, true).await;
+    // A newer pending replacement on top of a cancelled one still blocks.
+    store
+        .claim_provider_login("login-owner", "replacement-2", &input)
+        .await
+        .unwrap();
     assert!(
         store
             .native_login_for_session("login-owner", &input.account_id, &input.machine_id)
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "a pending replacement never falls back"
     );
+    let mut blocked = meta.clone();
+    blocked.id = "pending-replacement-new-session".into();
+    assert!(
+        store
+            .insert_native_session("login-owner", "bind", completion, &blocked)
+            .await
+            .is_err()
+    );
+    store
+        .cancel_provider_login("login-owner", "replacement-2")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .native_login_for_session("login-owner", &input.account_id, &input.machine_id)
+            .await
+            .unwrap(),
+        Some(("bind".into(), completion.clone())),
+        "every abandoned newer generation is skipped"
+    );
+    let mut fallback = meta.clone();
+    fallback.id = "fallback-new-session".into();
+    store
+        .insert_native_session("login-owner", "bind", completion, &fallback)
+        .await
+        .unwrap();
     transport_contract(store, hub, meta, true).await;
 }
 

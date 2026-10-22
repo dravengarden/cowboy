@@ -679,8 +679,9 @@ Readiness is advisory; starting login rechecks all conditions. Login readiness
 does not imply named session runtime admission, reported separately.
 `native_profile` is either null or the generation, exact Provider version/digest
 and method of the selected Machine's current bound native login. Discovery is
-scoped by owner, account and Machine and selects only the latest reserved
-generation; a newer pending login never falls back to an earlier success.
+scoped by owner, account and Machine and selects the latest reserved
+generation, skipping newer replacements that were cancelled or refused before
+completing; a pending or unknown login never falls back to an earlier success.
 The response rechecks current binding, enrollment and cancellation, but is still
 an advisory snapshot: scheduling must repeat admission around its actual effect.
 It contains no identity fields, credentials or reusable authorization token.
@@ -741,9 +742,11 @@ Machine and generation; runtime admission locks and rechecks its exact stored
 Provider version/digest/auth generation before any side effect. A missing or
 changed row refuses admission. Cancellation, revocation, account authority
 changes and Machine enrollment changes still invalidate the original binding.
-New-session discovery and registration continue to require the latest reserved
-generation: a pending or cancelled replacement never falls back to an older
-login. This preserves existing sessions during fresh login; it does not switch
+New-session discovery and registration require that same effective
+generation: an abandoned replacement (cancelled or dispatch-refused, never
+completed, so it can never bind) leaves the previous working login usable
+without signing in again, while a pending or unknown replacement never falls
+back to an older login. This preserves existing sessions during fresh login; it does not switch
 them to the replacement or permit automatic Provider upgrades.
 
 The internal session-transition journal records an explicit same-account,

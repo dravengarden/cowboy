@@ -406,9 +406,16 @@ impl Store {
             let generation: i64 = sqlx::query_scalar("SELECT generation FROM provider_native_generations WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
                 .bind(owner).bind(profile.account_id.as_str()).bind(&completion.machine_id).fetch_one(&mut *tx).await?;
             let latest = u64::try_from(generation)?;
+            // New sessions use the effective generation: abandoned newer
+            // replacements (cancelled or refused, never completed) do not
+            // supersede the previous working login; pending ones still do.
+            let values: Vec<String> = sqlx::query_scalar("SELECT value FROM provider_login_operations WHERE owner_user_id=$1")
+                .bind(owner).fetch_all(&mut *tx).await?;
+            let receipts: Vec<Receipt> = values.iter().filter_map(|value| serde_json::from_str(value).ok()).collect();
+            let effective = super::native_selection::effective_generation(&receipts, &profile.account_id, &completion.machine_id, latest);
             anyhow::ensure!(profile.generation > 0 && if matches!(usage, BindingUse::Existing(..) | BindingUse::TransitionFinish(..)) {
                 profile.generation <= latest
-            } else { profile.generation == latest }, "native_generation_superseded");
+            } else { profile.generation == effective }, "native_generation_superseded");
             let machine = sqlx::query(concat!("UPDATE machines SET encryption_public_key=encryption_public_key WHERE id=$1 AND ", $revoked, " IS NULL"))
                 .bind(&completion.machine_id).execute(&mut *tx).await?;
             anyhow::ensure!(machine.rows_affected() == 1, "machine_unavailable");
