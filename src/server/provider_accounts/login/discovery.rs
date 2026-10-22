@@ -51,12 +51,33 @@ pub(in crate::server) async fn logins_value(
                 .map(|receipt| receipt.input.machine_id.clone())
         })
         .flatten();
+    let machines = store.list_machines().await.map_err(|_| "unavailable")?;
     let mut logins = Vec::with_capacity(receipts.len());
     for receipt in receipts {
         if receipt.provider_id != found.provider_id {
             return Err("authentication_receipt_mismatch");
         }
-        logins.push(operations::observation(state, owner, &receipt).await?);
+        let mut observation = operations::observation(state, owner, &receipt).await?;
+        if let Some(completion) = receipt.native_completion.as_ref()
+            && let Some(machine) = machines
+                .iter()
+                .find(|machine| machine.id == completion.machine_id && !machine.revoked)
+            && let Ok(installed) = active_machine_plugin(
+                std::slice::from_ref(machine),
+                &machine.id,
+                &found.provider_id,
+            )
+            && (installed.plugin_version != completion.profile.provider_version
+                || installed.generation_digest != completion.profile.generation_digest)
+        {
+            // Local metadata only: the Machine now runs another Provider
+            // release, so this login cannot admit new sessions there.
+            observation["outdated"] = json!({
+                "signed_in_version": completion.profile.provider_version,
+                "installed_version": installed.plugin_version,
+            });
+        }
+        logins.push(observation);
     }
     Ok(
         json!({"account_id":account,"provider_id":found.provider_id,"logins":logins,"next_after_machine":next}),

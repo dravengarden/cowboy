@@ -7,7 +7,12 @@ import { SubscriptionLogin } from "./SubscriptionLogin";
 import type { LoginScope } from "./subscriptionLoginController";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
 
-interface Login { request_id: string; account_id: string; provider_id: string; machine_id: string; status: string; cancel_requested: boolean }
+interface Login {
+  request_id: string; account_id: string; provider_id: string; machine_id: string; status: string; cancel_requested: boolean;
+  /** The Machine now runs another Provider release; this login no longer admits sessions there. */
+  outdated?: { signed_in_version: string; installed_version: string };
+}
+const outdated = (login: Login) => login.status === "completed" && Boolean(login.outdated);
 interface Page { logins: Login[]; next_after_machine: string | null }
 export function subscriptionLoginsPage(value: unknown, scope: LoginScope, after = ""): Page {
   const body = value as (Page & { account_id: string; provider_id: string }) | null;
@@ -55,13 +60,21 @@ export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope
     {!page && !error && <Typography variant="body2" color="text.secondary">Loading sign-ins…</Typography>}
     {page?.logins.length === 0 && <ProviderAccountStatus label="Not signed in" tone="warning" detail="No Machine" />}
     {page?.logins.map((login) => <Stack key={login.machine_id} direction="row" spacing={1} alignItems="center" justifyContent="space-between" flexWrap="wrap" useFlexGap>
-      <ProviderAccountStatus label={status[login.status] ?? "Sign-in needs attention"} tone={login.status === "completed" ? "success" : "warning"}
-        detail={machines.find((machine) => machine.id === login.machine_id)?.display_name || login.machine_id} />
+      <ProviderAccountStatus
+        label={outdated(login) ? "Sign in again" : status[login.status] ?? "Sign-in needs attention"}
+        tone={login.status === "completed" && !outdated(login) ? "success" : "warning"}
+        detail={[
+          machines.find((machine) => machine.id === login.machine_id)?.display_name || login.machine_id,
+          login.outdated && outdated(login)
+            ? `Provider updated ${login.outdated.signed_in_version} → ${login.outdated.installed_version}`
+            : undefined,
+        ].filter(Boolean).join(" · ")} />
       {expanded && <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} onChange={() => void load()} />}
     </Stack>)}
     {expanded && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy}
-        startLabel={page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />
+        startLabel={page?.logins.some(outdated) ? "Sign in again…"
+          : page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />
       <Button disabled={busy} onClick={() => void load()}>Refresh status</Button>
       {page?.next_after_machine && <Button disabled={busy} onClick={() => void load(page.next_after_machine!)}>More Machines</Button>}
     </Stack>}

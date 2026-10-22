@@ -82,6 +82,7 @@ async fn target(
             machine.id.clone(),
         )
     });
+    let mut outdated = false;
     for machine in machines {
         let Some((operation, completion)) = store
             .native_login_for_session(owner, id, &machine.id)
@@ -106,15 +107,19 @@ async fn target(
             registry.revision,
         )
         .await?
-            || resolve_provider_generation_with_auth(
-                &state.provider_catalog,
-                &state.plugin_catalog,
-                &[installed],
-                &account.provider_id,
-                SchedulingAuthentication::Native(&completion.profile),
-            )
-            .is_err()
         {
+            continue;
+        }
+        if let Err(error) = resolve_provider_generation_with_auth(
+            &state.provider_catalog,
+            &state.plugin_catalog,
+            &[installed],
+            &account.provider_id,
+            SchedulingAuthentication::Native(&completion.profile),
+        ) {
+            // A Provider upgrade invalidates native logins by design; say so
+            // instead of implying the account never signed in.
+            outdated |= error == "native_provider_generation_mismatch";
             continue;
         }
         let provider = state
@@ -138,7 +143,11 @@ async fn target(
             source: binding.product_label().into(),
         });
     }
-    Err("native_login_required")
+    Err(if outdated {
+        "native_login_outdated"
+    } else {
+        "native_login_required"
+    })
 }
 
 fn error_message(code: &str) -> &str {
@@ -146,6 +155,9 @@ fn error_message(code: &str) -> &str {
         "account_disabled" => "This account is disabled.",
         "account_usage_unsupported" => "This Provider does not support background account usage.",
         "native_login_required" => "Sign in on a Machine to query this account's usage.",
+        "native_login_outdated" => {
+            "The Provider was updated after this account signed in. Sign in again to use it and query its usage."
+        }
         "machine_usage_update_required" => {
             "The signed-in Machine needs an update to query this account's usage."
         }
@@ -507,6 +519,13 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_outdated_login_explains_the_provider_update() {
+        let outdated = error_message("native_login_outdated");
+        assert_ne!(outdated, error_message("native_login_required"));
+        assert!(outdated.contains("updated") && outdated.contains("Sign in again"));
+    }
 
     #[test]
     fn local_native_failures_leave_other_provider_accounts_available() {
