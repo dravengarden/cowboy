@@ -319,8 +319,30 @@ The optional Sessions directory starts visibly empty on ordinary creation.
 Global means no selection: it is not a synthetic row in the directory dropdown.
 A selected directory can be cleared through the field's clear button or the
 popup's Clear selection action.
-Creation from a folder preselects that folder. Choosing a directory applies its
-inherited creation defaults to fields the user has not explicitly selected.
+Creation from a folder preselects that folder. The Directory field comes
+first because it decides the defaults of every field below it. Choosing a
+directory applies its inherited creation defaults to fields the user has not
+explicitly selected.
+
+A field the directory chain leaves unset (absent, not `null`) follows the most
+recent session filed directly in the directory, else anywhere in its subtree,
+else in the nearest ancestor's subtree: its project and files Machine, its
+agent and runtime Machine, and its subscription. Precedence is manual choice,
+explicit directory default, that latest session, this device's default, then
+automatic selection. A hint that is unavailable (removed project, offline or
+full installation, disabled or signed-out account) falls back silently instead
+of blocking creation; explicit defaults keep their no-redirect rule. Hints are
+advisory Web presentation; the Controller still validates every submitted value.
+
+Below the Directory field one line states the real sources: explicit
+directory defaults, the latest session's title, or that the directory has no
+defaults or sessions and this device's defaults apply. When the directory does
+not already pin the chosen project and agent, **Save as <directory> defaults**
+writes the current project, files Machine, runtime Machine, agent and a
+manually picked preset as explicit defaults in one mutation (an incompatible
+inherited preset is reset to the agent default). A directory-supplied project
+hides the Project field's device-default line, which describes a different
+scope.
 Successful creation writes an explicit
 placement, including Global, so project bindings cannot override this choice.
 The picker reveals the selected directory on reopening and keeps its hierarchy

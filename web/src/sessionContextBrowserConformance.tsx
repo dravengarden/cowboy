@@ -18,6 +18,7 @@ import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { frontPrompt, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { managementEntryFixture } from "./providerManagement.fixture";
+import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { MachineSummary, SessionMeta } from "./protocol";
@@ -836,6 +837,7 @@ export async function runSessionContextBrowserConformance(
       flushSync(() => root.render(null));
       if (workspace !== undefined) sessions[0]!.workspace_id = workspace;
     }
+    await runCreateDefaultsBrowserChecks(sessions[1]!, "Claude · Mink");
   } finally {
     root.unmount();
     container.remove();

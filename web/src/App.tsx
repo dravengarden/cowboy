@@ -192,6 +192,7 @@ import {
     renameSessionFolder,
     reorderSessionFolders,
     reorderSessions,
+    setSessionFolderDefaults,
     useStoreSelector,
 } from "./store";
 import {
@@ -232,6 +233,8 @@ import { useSessionFoldControl } from "./SessionFoldControl";
 import { FolderDefaultsSheet } from "./FolderDefaultsSheet";
 import { DirectorySessionsSheet } from "./DirectorySessionsSheet";
 import { FOLDER_DEFAULT_FIELDS, resolveFolderDefaults, type FolderDefaultKey, type FolderDefaults } from "./folderDefaults";
+import { folderSessionHints } from "./folderSessionHints";
+import { createDefaultsChanges, createDefaultsSummary } from "./createDefaultsSummary";
 import { FolderCreationDefaults } from "./FolderCreationDefaults";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
@@ -3063,6 +3066,8 @@ function EmptyWorkspaceState({
     );
 }
 
+const NO_SESSIONS: readonly SessionMeta[] = [];
+
 export function CreateDialog({
     open,
     onClose,
@@ -3096,13 +3101,25 @@ export function CreateDialog({
     const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [directory, setDirectory] = useState(initialFolder ?? "");
     const directoryDefaults = resolveFolderDefaults(sessionDirectories, directory || null);
-    const placement = useProjectPlacement(open && !folderOnly, machines, directoryDefaults.values);
+    // The sheet stays mounted: a closed one must not re-render on session frames.
+    const allSessions = useStoreSelector((snapshot) => open ? snapshot.sessions : NO_SESSIONS);
+    // Fields the directory leaves unset follow its most recent session, so a
+    // directory used for one project needs no configuration to stay consistent.
+    const sessionHints = useMemo(
+        () => folderSessionHints(allSessions, sessionDirectories, directory || null),
+        [allSessions, sessionDirectories, directory],
+    );
+    const placement = useProjectPlacement(open && !folderOnly, machines, directoryDefaults.values, sessionHints);
     const [presetOverride, setPresetOverride] = useState<string | undefined>();
     const fullInstallation = placement.installations.find((installation) => installation.full);
     const machineId = placement.machineId;
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
-    const subscription = useSessionSubscription(open && variant === "session", provider);
+    const subscription = useSessionSubscription(
+        open && variant === "session",
+        provider,
+        sessionHints?.provider === provider ? sessionHints.account : undefined,
+    );
     const desktop = useSurfaceProfile().kind === "desktop";
     // Desktop keyboard layer (FOCUS.md "Modals"): a text field is Insert,
     // everything else is Normal, where the shared modal grammar runs (digits
@@ -3372,6 +3389,25 @@ export function CreateDialog({
             e.stopPropagation();
         }
     };
+    const directoryName = sessionFolderById(sessionDirectories, directory)?.name ?? "directory";
+    const projectFromDirectory = placement.hinted.project ||
+        Boolean(directoryDefaults.sources.project || directoryDefaults.sources.machine);
+    const defaultsSummary = createDefaultsSummary({
+        directoryName,
+        explicitSources: Object.values(directoryDefaults.sources).map((id) => sessionFolderById(sessionDirectories, id)?.name ?? "directory"),
+        hintSession: placement.hinted.project || placement.hinted.installation || subscription.hinted ? sessionHints?.session.title : undefined,
+    });
+    const saveableDefaults = variant === "session" && directory && placement.ready && placement.project && placement.installation
+        ? createDefaultsChanges(directoryDefaults.values, {
+            project: placement.project.projectId,
+            projectName: placement.project.name,
+            machine: placement.project.machineId,
+            runtime_machine: placement.installation.runtime_machine_id,
+            provider: placement.installation.provider,
+            // Only a picked preset is pinned; the agent default stays live.
+            preset: presetOverride || undefined,
+        })
+        : undefined;
     const form = (
             <Stack
                 spacing={2}
@@ -3505,19 +3541,7 @@ export function CreateDialog({
                             onChange={setDirectory}
                         />
                     </> : <>
-                        {directory && <Typography variant="caption" color="text.secondary">Defaults from {sessionFolderById(sessionDirectories, directory)?.name ?? "directory"} · Change any choice for this session.</Typography>}
-                        <WorkspacePicker
-                            label="Project"
-                            entries={placement.projects}
-                            value={placement.project?.value ?? ""}
-                            defaultValue={placement.defaultProjectValue}
-                            configuredDefault={placement.configuredDefaultProject}
-                            onDefaultChange={placement.setDefaultProject}
-                            onChange={(value): void => {
-                                placement.selectProject(value);
-                                setWorkItemId("");
-                            }}
-                        />
+                        {/* The directory decides every default below, so it is chosen first. */}
                         <WorkspacePicker
                             label="Directory (optional)"
                             clearable
@@ -3525,6 +3549,31 @@ export function CreateDialog({
                             entries={directoryChoices}
                             value={directory}
                             onChange={setDirectory}
+                        />
+                        {directory && (
+                            <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
+                                <Typography variant="caption" color="text.secondary" sx={{ mr: "auto" }}>
+                                    {defaultsSummary}
+                                </Typography>
+                                {saveableDefaults && (
+                                    <Button size="small" disabled={creating} onClick={(): void => setSessionFolderDefaults(directory, saveableDefaults)}>
+                                        Save as {directoryName} defaults
+                                    </Button>
+                                )}
+                            </Stack>
+                        )}
+                        <WorkspacePicker
+                            label="Project"
+                            entries={placement.projects}
+                            value={placement.project?.value ?? ""}
+                            defaultValue={placement.defaultProjectValue}
+                            configuredDefault={placement.configuredDefaultProject}
+                            // A directory-supplied project is not this device's default.
+                            onDefaultChange={projectFromDirectory ? undefined : placement.setDefaultProject}
+                            onChange={(value): void => {
+                                placement.selectProject(value);
+                                setWorkItemId("");
+                            }}
                         />
                         <AiInstallationPicker
                             installations={placement.installations}
@@ -3537,7 +3586,7 @@ export function CreateDialog({
                                 : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
                                 : "No ready AI installation can use this project. Check Machines in Settings."}
                         />
-                        <SessionSubscription state={subscription} disabled={creating} desktop={desktop} />
+                        <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
                         <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
                         <Typography variant="caption" color="text.secondary">
                             Git projects open in a session worktree. Other directories are shared in place.

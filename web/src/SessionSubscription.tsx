@@ -48,20 +48,23 @@ function subscriptionUnavailableReason(data: Accounts | undefined, provider: str
 }
 
 /** One shared creation field for desktop and mobile; never selects a Machine. */
-export function useSessionSubscription(active: boolean, provider: string) {
+export function useSessionSubscription(active: boolean, provider: string, preferred?: string) {
   const [data, setData] = useState<Accounts>();
   const [error, setError] = useState(false);
   const [revision, refresh] = useState(0);
   const [selection, select] = useState({ provider: "", id: "" });
   const choice = selection.provider === provider ? selection.id : "";
-  // Resolve the default in this snapshot. Creation must submit the exact
-  // account shown in the field, even if another client changes the default.
-  const value = choice || (data ? data.registry.defaults[provider] || "default" : "");
   const native = useNativeAccountUsage();
   const loadNative = native.load;
   // One shared cached read (deduplicated across surfaces) when choosing.
   useEffect(() => { if (active) void loadNative(); }, [active, loadNative]);
   const loginReason = (id: string) => subscriptionLoginReason(native.accounts, provider, id);
+  // A usable preferred account (the directory's latest session) precedes the
+  // registry default; an unavailable one falls back instead of blocking.
+  const hinted = preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
+  // Resolve the default in this snapshot. Creation must submit the exact
+  // account shown in the field, even if another client changes the default.
+  const value = choice || hinted || (data ? data.registry.defaults[provider] || "default" : "");
   useEffect(() => {
     if (!active) return;
     const changed = (event: Event) => {
@@ -94,6 +97,7 @@ export function useSessionSubscription(active: boolean, provider: string) {
   }, [active, revision]);
   return {
     value, data, error, provider,
+    hinted: !choice && Boolean(hinted),
     allowed: (subscriptionAllowed(data, provider, value) && !loginReason(value)) || (error && value === "default"),
     loginReason,
     select: (id: string) => select({ provider, id }),
@@ -103,7 +107,7 @@ export function useSessionSubscription(active: boolean, provider: string) {
 
 export function SessionSubscription({ state, disabled, desktop, helperText }: {
   state: ReturnType<typeof useSessionSubscription>; disabled: boolean; desktop: boolean;
-  helperText?: string;
+  helperText?: string | undefined;
 }): React.JSX.Element {
   const accounts = state.data?.registry.accounts.filter((account) => account.provider_id === state.provider) ?? [];
   const defaultId = state.data?.registry.defaults[state.provider] ?? "default";

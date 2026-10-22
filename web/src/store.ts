@@ -3749,6 +3749,11 @@ export function setSessionFolderDefault(id: string, key: import("./folderDefault
   foldersSync.mutate("defaults", { id, values: value === undefined ? {} : { [key]: value }, inherit: value === undefined ? [key] : [] });
 }
 
+/** Save several explicit defaults in one mutation (Create → "Save as defaults"). */
+export function setSessionFolderDefaults(id: string, values: import("./folderDefaults").FolderDefaults): void {
+  foldersSync.mutate("defaults", { id, values, inherit: [] });
+}
+
 /** File sessions into `folder` (`null` = back to the root). */
 export function placeSessions(sessionIds: readonly string[], folder: string | null): void {
   if (sessionIds.length === 0) return;

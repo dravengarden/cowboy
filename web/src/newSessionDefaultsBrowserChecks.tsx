@@ -44,6 +44,16 @@ export async function runNewSessionDefaultsBrowserChecks(): Promise<void> {
           provider_id: "claude-code",
           label: "Work",
           enabled: true,
+        }, {
+          id: "lynx",
+          provider_id: "claude-code",
+          label: "Lynx",
+          enabled: true,
+        }, {
+          id: "off",
+          provider_id: "claude-code",
+          label: "Off",
+          enabled: false,
         }],
         defaults: { "claude-code": "work" },
       },
@@ -172,6 +182,53 @@ export async function runNewSessionDefaultsBrowserChecks(): Promise<void> {
         check(
           field().textContent === "Agent default",
           "explicit Agent default is visible instead of blank",
+        );
+      } finally {
+        flushSync(() => root.unmount());
+        container.remove();
+      }
+    }
+    // A directory's latest session account precedes the registry default;
+    // an unusable one falls back instead of blocking creation.
+    for (
+      const [preferred, expected] of [["lynx", "Lynx"], [
+        "off",
+        "Work · Default",
+      ]]
+    ) {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      let state: ReturnType<typeof useSessionSubscription> | undefined;
+      function Hinted() {
+        const subscription = useSessionSubscription(
+          true,
+          "claude-code",
+          preferred,
+        );
+        state = subscription;
+        return (
+          <SessionSubscription state={subscription} disabled={false} desktop />
+        );
+      }
+      try {
+        flushSync(() =>
+          root.render(
+            <BrowserProductTheme>
+              <Hinted />
+            </BrowserProductTheme>,
+          )
+        );
+        for (let i = 0; i < 40 && !state?.data; i++) await tick();
+        await tick();
+        check(
+          container.querySelector("[data-session-subscription]")?.textContent
+            ?.includes(expected!),
+          "preferred " + preferred + " shows " + expected,
+        );
+        check(
+          state?.hinted === (preferred === "lynx"),
+          "preferred " + preferred + " reports its source",
         );
       } finally {
         flushSync(() => root.unmount());

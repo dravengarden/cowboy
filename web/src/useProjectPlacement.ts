@@ -6,6 +6,7 @@ import { projectAgentPluginInventory } from "@cowboy/provider-ui";
 import type { MachineSummary } from "./protocol";
 import { defaultNewSessionProvider } from "./newSessionProvider";
 import type { FolderDefaults } from "./folderDefaults";
+import type { FolderSessionHints } from "./folderSessionHints";
 import {
   joinProviderInstallations,
   useProviderCatalog,
@@ -31,6 +32,7 @@ export function useProjectPlacement(
   open: boolean,
   machines: readonly MachineSummary[],
   defaults: FolderDefaults = {},
+  hints?: FolderSessionHints,
 ) {
   const [policies, setPolicies] = useState<ProjectPolicies>();
   const [projectKey, setProjectKey] = useState("");
@@ -48,9 +50,18 @@ export function useProjectPlacement(
     (!defaults.project || project.projectId === defaults.project ||
       project.name === defaults.project)
   );
+  // A directory's latest session fills only fields it leaves unset; `null`
+  // still demands an explicit choice, and an unavailable hint falls back.
+  const hintedProject = hints?.project &&
+      !Object.hasOwn(defaults, "project") && !Object.hasOwn(defaults, "machine")
+    ? projects.find((p) =>
+      p.projectId === hints.project &&
+      (!hints.machine || p.machineId === hints.machine)
+    )
+    : undefined;
   const defaultProject = defaults.project === null
     ? undefined
-    : defaultNewSessionProject(
+    : hintedProject ?? defaultNewSessionProject(
       folderProjects,
       machines,
       defaults.project || defaults.machine ? "" : preferredProject,
@@ -146,13 +157,30 @@ export function useProjectPlacement(
   const defaultProvider = defaultNewSessionProvider(
     defaultCandidates.map((i) => i.provider),
   );
+  const explicitProvider = Object.hasOwn(defaults, "provider");
+  const explicitRuntime = Object.hasOwn(defaults, "runtime_machine");
+  const hintedInstallation = hints && !(explicitProvider && explicitRuntime)
+    ? eligibleInstallations.find((i) =>
+      !i.full &&
+      i.runtime_machine_id ===
+        (explicitRuntime ? preferredRuntime : hints.runtime_machine) &&
+      i.provider ===
+        (explicitProvider ? defaults.provider ?? defaultProvider : hints.provider)
+    )
+    : undefined;
   const installation = installationKey
     ? installations.find((i) => i.value === installationKey)
-    : defaultCandidates.find((i) => i.provider === defaultProvider);
+    : hintedInstallation ??
+      defaultCandidates.find((i) => i.provider === defaultProvider);
   return {
     projects,
     project,
     defaultProjectValue: defaultProject?.value ?? "",
+    /** Which current choices came from the directory's latest session. */
+    hinted: {
+      project: !projectKey && Boolean(hintedProject),
+      installation: !installationKey && Boolean(hintedInstallation),
+    },
     configuredDefaultProject: preferredProject,
     setDefaultProject: (value: string): void =>
       newSessionProjectPreference.set(value),
