@@ -444,6 +444,16 @@ maintenance remains separately fenced and keeps its queue paused for inspection.
 Turn preflights are bounded and concurrent across sessions so an unavailable
 target cannot block unrelated message delivery.
 
+Retry must enter that same dispatch preflight before recycling a split-runtime
+worker. Eager retry preparation used to restart the native agent with the old
+binding, so its startup could fail before target recovery ran. If startup failed
+before any user event reached history, Retry also found no previous prompt and
+left the first message stranded. Retry now defers split-runtime preparation to
+dispatch and drains the original queued message when history is still empty,
+preserving its message identity and attachments without adding a duplicate.
+Unit regressions cover both boundaries, including repeated Retry clicks and
+preservation of the native conversation ID.
+
 The disposable execution-session conformance fixture can enable
 `execution_boot_recovery`. It loses only its own keeper process, changes its
 private boot marker, then checks a fresh execution incarnation, the unchanged
