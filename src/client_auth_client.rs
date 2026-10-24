@@ -5,7 +5,7 @@
 //! Every access request is sender-constrained by a fresh signed proof.
 
 use std::fs::{File, OpenOptions};
-use std::io::{IsTerminal as _, Read as _, Write as _};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -570,11 +570,8 @@ impl DeviceCredentialManager {
         let fingerprint =
             crate::client_auth::device_fingerprint(signing_key.verifying_key().as_bytes());
         eprintln!("Verify this client fingerprint before approving: {fingerprint}");
-        if let Err(error) = open_browser(&verification_url) {
-            eprintln!("Could not open a browser automatically: {error}");
-        }
-        // A headless host starts its opener successfully and shows nothing,
-        // so the link is always printed, not only when the opener fails.
+        // CLI authorization never launches a browser, including on a local
+        // desktop. Let the person choose where to open the approval URL.
         eprintln!("Open this URL to continue: {verification_url}");
         *self.pending_approval.lock() = Some(PendingApproval {
             url: verification_url.to_string(),
@@ -950,51 +947,6 @@ fn assert_private_file(file: &File, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn open_browser(url: &Url) -> Result<()> {
-    // Agent/MCP calls and SSH sessions must not launch a browser on the
-    // execution host. An inherited DISPLAY does not make that host local to
-    // the person approving the request. The approval URL is still printed and
-    // exposed through PendingApproval in all cases.
-    let remote_session = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some());
-    let desktop_available = cfg!(any(target_os = "macos", target_os = "windows"))
-        || ["DISPLAY", "WAYLAND_DISPLAY"]
-            .iter()
-            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
-    if !should_open_local_browser(
-        std::io::stdin().is_terminal(),
-        std::io::stderr().is_terminal(),
-        remote_session,
-        desktop_available,
-    ) {
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let mut command = std::process::Command::new("xdg-open");
-    command.arg(url.as_str());
-    command.spawn().context("starting the system browser")?;
-    Ok(())
-}
-
-fn should_open_local_browser(
-    interactive_input: bool,
-    interactive_output: bool,
-    remote_session: bool,
-    desktop_available: bool,
-) -> bool {
-    interactive_input && interactive_output && !remote_session && desktop_available
-}
-
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -1002,53 +954,6 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn automatic_browser_open_requires_a_local_interactive_desktop() {
-        // SSH with X forwarding, agent pipes with inherited Wayland, and a
-        // terminal on a headless server must all leave approval to the URL.
-        assert!(!should_open_local_browser(true, true, true, true));
-        assert!(!should_open_local_browser(false, true, false, true));
-        assert!(!should_open_local_browser(true, false, false, true));
-        assert!(!should_open_local_browser(true, true, false, false));
-        assert!(should_open_local_browser(true, true, false, true));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn piped_auth_does_not_spawn_an_opener_with_inherited_display() {
-        const CHILD: &str = "COWBOY_TEST_BROWSER_CHILD";
-        if std::env::var_os(CHILD).is_some() {
-            open_browser(&Url::parse("https://example.test/auth/device").unwrap()).unwrap();
-            return;
-        }
-
-        // Run the real opening path with pipes, as an MCP/agent client does.
-        // No executable exists in PATH: the old unconditional spawn fails,
-        // while the fixed path returns without attempting to launch anything.
-        let directory = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "client_auth_client::tests::piped_auth_does_not_spawn_an_opener_with_inherited_display",
-            ])
-            .env(CHILD, "1")
-            .env("PATH", directory.path())
-            .env("DISPLAY", ":0")
-            .env("WAYLAND_DISPLAY", "wayland-0")
-            .env_remove("SSH_CONNECTION")
-            .env_remove("SSH_CLIENT")
-            .env_remove("SSH_TTY")
-            .stdin(std::process::Stdio::null())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "child failed: {} {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 
     #[test]
     fn logged_in_origins_lists_each_saved_login_once() {
