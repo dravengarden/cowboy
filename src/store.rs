@@ -441,6 +441,18 @@ pub struct LoadedSession {
 pub struct Store {
     backend: StorageBackend,
     passkey_storage: std::sync::Arc<crate::core_passkeys::PasskeyBinding>,
+    observed_storage_metrics: std::sync::Arc<tokio::sync::Mutex<Option<ObservedStorageMetrics>>>,
+}
+
+/// How long a storage gauge observation is reused. Counting every event row
+/// takes about a second on a large SQLite database; the 15-second metrics
+/// scrape must not repeat that full scan and contend for the pool each time.
+const STORAGE_METRICS_MAX_AGE: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+struct ObservedStorageMetrics {
+    at: std::time::Instant,
+    metrics: (i64, i64, i64),
 }
 
 pub struct PasskeySnapshot {
@@ -1280,6 +1292,7 @@ impl Store {
         Ok(Self {
             backend,
             passkey_storage: std::sync::Arc::default(),
+            observed_storage_metrics: std::sync::Arc::default(),
         })
     }
 
@@ -1798,6 +1811,23 @@ impl Store {
 
     pub async fn storage_metrics(&self) -> Result<(i64, i64, i64)> {
         dispatch_storage!(self, storage_metrics())
+    }
+
+    /// `storage_metrics` for monitoring gauges: concurrent callers share one
+    /// observation that is at most `STORAGE_METRICS_MAX_AGE` old.
+    pub async fn observed_storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        let mut observed = self.observed_storage_metrics.lock().await;
+        if let Some(cached) = *observed
+            && cached.at.elapsed() < STORAGE_METRICS_MAX_AGE
+        {
+            return Ok(cached.metrics);
+        }
+        let metrics = self.storage_metrics().await?;
+        *observed = Some(ObservedStorageMetrics {
+            at: std::time::Instant::now(),
+            metrics,
+        });
+        Ok(metrics)
     }
 
     pub async fn ingest_provider_usage(

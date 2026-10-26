@@ -4547,7 +4547,7 @@ async fn api_admin_overview(State(state): State<ProductAuthState>, headers: Head
     };
     let (events_rows, sessions_deleted) = match &state.store {
         Some(store) => store
-            .storage_metrics()
+            .observed_storage_metrics()
             .await
             .map(|(_, events, deleted)| (events, deleted))
             .unwrap_or((0, 0)),
@@ -11158,7 +11158,7 @@ mod daemon_memory_tests {
 async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
     let sessions_live = state.hub.session_list().len();
     let (db_bytes, events_rows, sessions_deleted) = match &state.store {
-        Some(s) => s.storage_metrics().await.unwrap_or((0, 0, 0)),
+        Some(s) => s.observed_storage_metrics().await.unwrap_or((0, 0, 0)),
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
     let runtime = state.runtime_router.stats();
@@ -12194,6 +12194,47 @@ async fn api_usage_logs(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+/// A trashed session is read-only until restored: it takes no work, no
+/// configuration and never wakes. Deletion, cancel, open and rename stay
+/// allowed, as does releasing a queue-edit hold: the Composer releases its hold
+/// when it unmounts right after the user trashes the session, and refusing it
+/// would raise an error toast and incident for the user's own action.
+fn allowed_on_trashed_session(cmd: &Inbound) -> bool {
+    matches!(
+        cmd,
+        Inbound::DeleteSession { .. }
+            | Inbound::Cancel { .. }
+            | Inbound::CancelSubmitted { .. }
+            | Inbound::OpenSession { .. }
+            | Inbound::RenameSession { .. }
+            | Inbound::SetQueueEditing { id: None, .. }
+    )
+}
+
+#[cfg(test)]
+mod trashed_session_command_tests {
+    use super::*;
+
+    #[test]
+    fn trashed_session_accepts_only_non_waking_commands() {
+        let session_id = "sess-1".to_owned();
+        assert!(allowed_on_trashed_session(&Inbound::SetQueueEditing {
+            session_id: session_id.clone(),
+            id: None,
+        }));
+        assert!(!allowed_on_trashed_session(&Inbound::SetQueueEditing {
+            session_id: session_id.clone(),
+            id: Some("m-1".to_owned()),
+        }));
+        assert!(allowed_on_trashed_session(&Inbound::OpenSession {
+            session_id: session_id.clone(),
+        }));
+        assert!(!allowed_on_trashed_session(&Inbound::ResumeTurn {
+            session_id
+        }));
+    }
+}
+
 async fn prometheus_metrics(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -12205,7 +12246,7 @@ async fn prometheus_metrics(
     }
     let sessions_live = state.hub.session_list().len();
     let (db_bytes, events_rows, sessions_deleted) = match &state.store {
-        Some(store) => store.storage_metrics().await.unwrap_or((0, 0, 0)),
+        Some(store) => store.observed_storage_metrics().await.unwrap_or((0, 0, 0)),
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
     let health = state.persistence_health.as_ref();
@@ -21628,17 +21669,8 @@ fn handle_command(
         }
         return false;
     }
-    // A trashed session is read-only until restored: it takes no work, no
-    // configuration and never wakes. Deletion, cancel and open stay allowed.
     if let Some(sid) = &session_id_for_err
-        && !matches!(
-            &cmd,
-            Inbound::DeleteSession { .. }
-                | Inbound::Cancel { .. }
-                | Inbound::CancelSubmitted { .. }
-                | Inbound::OpenSession { .. }
-                | Inbound::RenameSession { .. }
-        )
+        && !allowed_on_trashed_session(&cmd)
         && state.hub.session_is_trashed(sid)
     {
         if let Some(cmid) = &authored_cmid {
