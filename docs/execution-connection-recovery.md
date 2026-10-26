@@ -1,5 +1,42 @@
 # Execution connection recovery
 
+## October 26 Clear after target reboot
+
+`sess-1792637683704` recorded `context_cleared` at 01:46:16 UTC,
+then failed Claude execution initialization at 01:46:32. Its target contract
+still named revision one, its private host boot marker differed from Hawk's
+current boot, and the exact execution unit was absent/inactive. The runtime
+Machine was connected. `sess-1792501067332` retained the same combination of
+stale target and startup failure earlier that day.
+
+Clear started a replacement worker directly, bypassing dispatch's target
+preflight. The deployed Retry fix did not cover this entry point. Replacing a
+native worker cannot revive its bound target keeper, so Clear left the session
+unusable even though both Machines were online.
+
+For a bound session whose Clear would launch a worker, Clear now probes the
+target without reusing cached readiness and completes the existing same-identity
+recovery before clearing context. Target preflight failure leaves the conversation intact.
+A changed session status or in-flight turn during the asynchronous check refuses
+the stale Clear. A recovered target launches one fresh native context; queued
+messages and pause preferences remain intact. Dormant workerless Clear still
+does not start a worker. This shares Codex/Claude lifecycle handling and changes
+no Provider package, execution protocol or Machine generation.
+
+The isolated execution-session fixture's `execution_clear_recovery` scenario
+kills only its disposable target keeper, changes its boot marker, reconnects
+the target Machine, then submits the real browser Clear command. Acceptance
+requires a new target incarnation, a ready replacement, unchanged worktree,
+no replay during Clear, and exactly one command effect from the next prompt.
+The additional `execution_clear_unavailable` check submits Clear while the
+target is disconnected and verifies refusal without changing native identity,
+binding or command effects. The combined fixture passed all 25 checks; the
+Controller/core library suites passed 2006 tests and Clippy passed. The full
+`check-compact` gate remains blocked by the pre-existing active component
+package registry identity mismatch, also reproduced on the deployed baseline.
+The broader durability proposals in
+[disaster recovery](remote-session-disaster-recovery.md) remain separate work.
+
 ## October 9 pending delivery follow-up
 
 Controller and Web activation, regression evidence, and the one targeted
@@ -443,6 +480,16 @@ exact `execution-wake-*` identity for observation on retry. Explicit Operator
 maintenance remains separately fenced and keeps its queue paused for inspection.
 Turn preflights are bounded and concurrent across sessions so an unavailable
 target cannot block unrelated message delivery.
+
+Retry must enter that same dispatch preflight before recycling a split-runtime
+worker. Eager retry preparation used to restart the native agent with the old
+binding, so its startup could fail before target recovery ran. If startup failed
+before any user event reached history, Retry also found no previous prompt and
+left the first message stranded. Retry now defers split-runtime preparation to
+dispatch and drains the original queued message when history is still empty,
+preserving its message identity and attachments without adding a duplicate.
+Unit regressions cover both boundaries, including repeated Retry clicks and
+preservation of the native conversation ID.
 
 The disposable execution-session conformance fixture can enable
 `execution_boot_recovery`. It loses only its own keeper process, changes its

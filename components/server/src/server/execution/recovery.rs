@@ -557,6 +557,14 @@ pub(in crate::server) async fn before_dispatch(
     state: &Arc<AppState>,
     session: &str,
 ) -> Result<Option<RecoveryV1>, String> {
+    preflight(state, session, true).await
+}
+
+async fn preflight(
+    state: &Arc<AppState>,
+    session: &str,
+    allow_cached: bool,
+) -> Result<Option<RecoveryV1>, String> {
     use crate::execution_protocol::{Command, Response as KeeperResponse, Scope};
     let info = state
         .hub
@@ -601,10 +609,11 @@ pub(in crate::server) async fn before_dispatch(
         let previous = record
             .decode()
             .map_err(|_| "Execution preparation is not ready")?;
-        if state
-            .runtime_router
-            .runtime(&info.meta.machine_id)
-            .is_some_and(|runtime| runtime.has_worker(session))
+        if allow_cached
+            && state
+                .runtime_router
+                .runtime(&info.meta.machine_id)
+                .is_some_and(|runtime| runtime.has_worker(session))
             && state
                 .execution_readiness
                 .ready(&state.machine_control, session, &previous)
@@ -648,6 +657,15 @@ pub(in crate::server) async fn before_dispatch(
         }
     };
     prepare_auto_recovery(state, session, intent).await
+}
+
+/// Clear also starts a native agent. Verify its target before discarding
+/// the old conversation: resetting the worker cannot repair a dead keeper.
+pub(in crate::server) async fn before_reset(
+    state: &Arc<AppState>,
+    session: &str,
+) -> Result<Option<RecoveryV1>, String> {
+    preflight(state, session, false).await
 }
 
 fn wake_intent(previous: BindingV1) -> RecoveryV1 {

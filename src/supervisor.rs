@@ -1209,10 +1209,25 @@ impl Supervisor {
     /// unchanged. Recycling crashed workers is important when a checkout was
     /// replaced at the same pathname: the metadata still looks valid while the
     /// old app-server process holds the deleted directory inode.
+    /// Split-runtime retries defer worker preparation to dispatch preflight,
+    /// which must verify the target lifetime before launching any replacement.
     pub fn prepare_session(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
         if self.should_hold_native_restore_failure(session_id) {
             return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
+        }
+        refuse_trashed(&self.hub, session_id)?;
+        if self
+            .hub
+            .session_info(session_id)
+            .is_some_and(|info| info.meta.execution_binding.is_some())
+        {
+            // Retry must enqueue before launching a split-runtime worker. The
+            // dispatch preflight first asks the target whether its lifetime
+            // survived; only target-proven loss permits a new incarnation.
+            // Eagerly recycling here launches against the stale binding and
+            // can crash before dispatch gets a chance to recover it.
+            return Ok(false);
         }
         self.prepare_session_inner(session_id)
     }
@@ -1767,6 +1782,85 @@ mod tests {
         hub.set_agent_session_id("s", "native-original".into());
         hub.set_status("s", Status::Exited, None);
         (hub, intent)
+    }
+
+    #[tokio::test]
+    async fn clear_after_target_recovery_launches_fresh_context_on_the_recovered_binding() {
+        let root = TestDir::new();
+        let (hub, intent) = recovered_session_fixture(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        hub.set_paused("s", true);
+        hub.requeue_prompt("s", "retained".into(), vec![], Some("original".into()));
+
+        hub.prepare_context_reset("s");
+        hub.clear_transcript("s");
+        hub.mark_context_cleared("s");
+        supervisor
+            .recover_execution_session("s", intent.clone())
+            .unwrap();
+
+        let pending = runtime.pending_for_test();
+        let launches = pending
+            .iter()
+            .filter_map(|command| match command {
+                CoreCommand::RecoverExecutionSession { session, .. } => Some(session),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(launches.len(), 1);
+        assert!(launches[0].agent_session_id.is_none());
+        assert!(
+            intent.accepts(
+                &launches[0]
+                    .execution_binding
+                    .as_ref()
+                    .unwrap()
+                    .decode()
+                    .unwrap()
+            )
+        );
+        assert!(!pending.iter().any(|command| matches!(
+            command,
+            CoreCommand::Prompt { .. } | CoreCommand::StopSession { .. }
+        )));
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        assert!(hub.session_info("s").unwrap().meta.paused);
+    }
+
+    #[tokio::test]
+    async fn retry_of_crashed_execution_session_waits_for_dispatch_preflight() {
+        let root = TestDir::new();
+        let (hub, _) = recovered_session_fixture(&root);
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some("execution binding failed".into()),
+        );
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+
+        // Exercise the RetryTurn ordering: preparation must leave the session
+        // crashed and enqueue its retry without starting the stale worker.
+        assert!(!supervisor.prepare_session("s").unwrap());
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert!(runtime.pending_for_test().is_empty());
+        hub.retry_turn("s");
+        hub.retry_turn("s");
+        let request = rx.try_recv().expect("retry reaches dispatch preflight");
+        assert_eq!(request.text, "existing durable history");
+        assert!(rx.try_recv().is_err(), "retry must not duplicate delivery");
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(
+            hub.session_info("s")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("native-original")
+        );
     }
 
     #[tokio::test]

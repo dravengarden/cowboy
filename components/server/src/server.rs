@@ -21916,6 +21916,45 @@ fn handle_command(
             }
         }
         Inbound::ResetSession { session_id } => {
+            if state.hub.session_info(&session_id).is_some_and(|info| {
+                info.meta.execution_binding.is_some()
+                    && !(info.meta.status == Status::Exited
+                        && !state.runtime_router.runtime(&info.meta.machine_id)
+                            .is_some_and(|runtime| runtime.has_worker(&session_id)))
+            }) {
+                let state = Arc::clone(state);
+                let revision = state.hub.status_revision(&session_id);
+                let in_flight = state.hub.session_has_in_flight_prompt(&session_id);
+                let turn = state.hub.in_flight_prompt_epoch(&session_id);
+                let mut shutdown = state.shutdown.clone();
+                tokio::spawn(async move {
+                    let result = dispatch_preflight(
+                        &mut shutdown,
+                        execution::recovery::before_reset(&state, &session_id),
+                    ).await;
+                    match result {
+                        Ok(recovery) if state.hub.status_revision(&session_id) == revision
+                            && state.hub.session_has_in_flight_prompt(&session_id) == in_flight
+                            && state.hub.in_flight_prompt_epoch(&session_id) == turn
+                            && !state.hub.session_is_trashed(&session_id) => {
+                            state.hub.prepare_context_reset(&session_id);
+                            state.hub.clear_transcript(&session_id);
+                            state.hub.mark_context_cleared(&session_id);
+                            let result = match recovery {
+                                Some(intent) => state.supervisor.recover_execution_session(&session_id, intent),
+                                None => state.supervisor.reset_session(&session_id),
+                            };
+                            if let Err(error) = result {
+                                state.hub.broadcast_error(Some(session_id), error);
+                            }
+                        }
+                        Ok(_) => state.hub.broadcast_error(Some(session_id),
+                            "Session changed while preparing Clear; retry after its current operation finishes".into()),
+                        Err(error) => state.hub.broadcast_error(Some(session_id), error),
+                    }
+                });
+                return true;
+            }
             // "Clear conversation" (see Inbound::ResetSession). Order matters:
             // 1. Forget the resumable agent id so the respawn does a FRESH
             //    session/new (clean context) instead of session/load.

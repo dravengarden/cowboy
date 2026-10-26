@@ -6638,7 +6638,12 @@ impl Hub {
                     == Some("user_message_chunk"))
                 .then_some(envelope.seq)
             }) else {
-                tracing::warn!(session = %session_id, "retry_turn: no prior user event — no-op");
+                // Startup can fail before the first prompt reaches the native
+                // agent. That prompt is still queued, with its original cmid
+                // and attachments. Retry its delivery through preflight rather
+                // than requiring a user event that cannot yet exist.
+                drop(sessions);
+                self.drain_head(session_id, true, true);
                 return;
             };
             let retry_cmid = format!("cowboy-retry:{session_id}:{last_user_seq}");
@@ -9898,6 +9903,36 @@ mod core_tests {
             serde_json::to_value(&after[0].event).expect("serialize after"),
             serde_json::to_value(&before[0].event).expect("serialize before")
         );
+    }
+
+    #[tokio::test]
+    async fn retry_after_startup_failure_dispatches_the_original_queued_prompt_once() {
+        let hub = hub_with_session("startup-retry");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status(
+            "startup-retry",
+            Status::Crashed,
+            Some("execution binding failed".into()),
+        );
+        let content =
+            vec![serde_json::json!({"type":"image", "data":"fixture", "mimeType":"image/png"})];
+        hub.requeue_prompt(
+            "startup-retry",
+            "first prompt".into(),
+            content.clone(),
+            Some("original-cmid".into()),
+        );
+
+        hub.retry_turn("startup-retry");
+        hub.retry_turn("startup-retry");
+
+        let dispatched = rx.try_recv().expect("startup retry reaches dispatch");
+        assert_eq!(dispatched.text, "first prompt");
+        assert_eq!(dispatched.content, content);
+        assert_eq!(dispatched.cmid.as_deref(), Some("original-cmid"));
+        assert!(rx.try_recv().is_err(), "startup retry duplicated delivery");
+        assert_eq!(hub.session_info("startup-retry").unwrap().queue_count, 0);
     }
 
     #[tokio::test]

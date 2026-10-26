@@ -839,10 +839,58 @@ def main():
                 browser.send({"type": "set_paused", "session_id": session, "paused": True})
                 wait(lambda: info().get("paused") is True, "inspection pause restored")
                 checks.append("retained_shutdown_prompt_resumes_once_with_original_conversation")
+            before_clear_effects = effects.read_bytes()
+            if inputs.get("execution_clear_recovery"):
+                wait(lambda: info()["status"] == "running", "idle before Clear target loss")
+                previous = info()["execution_binding"]
+                contracts = list((root / "target/execution").glob(f"*/{session}/contract.json"))
+                require(len(contracts) == 1, "Clear fixture keeper contract ambiguous")
+                (contracts[0].parent / "host-boot-id").write_text("00000000-0000-0000-0000-000000000000")
+                owners = []
+                for process in Path("/proc").iterdir():
+                    if not process.name.isdigit():
+                        continue
+                    try:
+                        arguments = (process / "cmdline").read_bytes().split(b"\0")
+                    except OSError:
+                        continue
+                    if str(contracts[0]).encode() in arguments and b"--contract" in arguments:
+                        owners.append(int(process.name))
+                require(len(owners) == 1, "Clear fixture keeper owner ambiguous")
+                os.killpg(owners[0], signal.SIGKILL)
+                target_machine, target_command = machines["target"]
+                target_machine.terminate()
+                target_machine.wait(timeout=20)
+                wait(lambda: not connected("target"), "Clear target disconnect")
+                if inputs.get("execution_clear_unavailable"):
+                    native_before = info().get("agent_session_id")
+                    require(native_before, "Clear fixture must have native context to retain")
+                    browser.send({"type": "reset_session", "session_id": session})
+                    while True:
+                        message = browser.receive()
+                        if message.get("type") == "error" and message.get("session_id") == session:
+                            break
+                    require(info().get("agent_session_id") == native_before
+                            and info()["execution_binding"] == previous,
+                            "unavailable Clear discarded native context or changed target")
+                    require(effects.read_bytes() == before_clear_effects, "unavailable Clear replayed work")
+                    checks.append("unavailable_target_clear_preserves_native_context_without_worker_replacement")
+                machines["target"] = (start("target-before-clear", target_command), target_command)
+                wait(lambda: connected("target"), "Clear target reconnect")
+                browser.send({"type": "reset_session", "session_id": session})
+                wait(lambda: info()["execution_binding"].get("revision") == previous["revision"] + 1,
+                     "Clear recovers target before replacement")
+                wait(lambda: info()["status"] == "running", "Clear replacement ready")
+                require(info()["execution_binding"]["workspace"] == previous["workspace"], "Clear moved workspace")
+                require(effects.read_bytes() == before_clear_effects, "Clear replayed a command")
+                require(send("Run after Clear recovered the target") == 202, "post-Clear prompt refused")
+                wait(lambda: effects.read_bytes() == before_clear_effects + first_effect, "post-Clear tool executes once")
+                wait(lambda: info()["status"] == "running", "post-Clear turn ended")
+                checks.append("clear_recovers_rebooted_target_before_starting_fresh_native_context")
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
-            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 4 * int(bool(inputs.get("execution_boot_recovery")))), "deletion removed work or replayed tools")
+            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 4 * int(bool(inputs.get("execution_boot_recovery"))) + int(bool(inputs.get("execution_clear_recovery")))), "deletion removed work or replayed tools")
             checks.append("public_deletion_waits_for_target_stop_and_preserves_work")
         except Exception:
             for log in logs:
