@@ -184,6 +184,8 @@ def main():
     inputs = json.loads(args.input.read_text())
     require(not inputs.get("execution_boot_recovery") or inputs.get("execution_recovery"),
             "boot recovery conformance requires the explicit recovery fixture")
+    require(not inputs.get("execution_attempt_recovery") or inputs.get("execution_boot_recovery"),
+            "attempt recovery conformance requires the boot recovery fixture")
     identities = {name: {"path": str(Path(inputs[name]).resolve()),
         "sha256": hashlib.sha256(Path(inputs[name]).read_bytes()).hexdigest()}
         for name in ("controller", "machine", "worker", "keeper", "pack", "native_cli")}
@@ -658,9 +660,35 @@ def main():
                      "recovery runtime session handshake")
                 require(info()["execution_binding"] == pending, "restart lost recovery intent")
                 checks.append("lost_controller_reply_and_older_cold_readers_preserve_recovery_fence")
+                if inputs.get("execution_attempt_recovery"):
+                    # The Machine finished the attempted launch while its reply
+                    # was lost. Reboot it before the Controller commits that attempt.
+                    contracts = list((root / "target/execution").glob(f"*/{session}/contract.json"))
+                    require(len(contracts) == 1, "pending keeper contract ambiguous")
+                    directory = contracts[0].parent
+                    wait(lambda: json.loads(contracts[0].read_text())["binding"]["revision"] == binding["revision"] + 1
+                         and (directory / "started.json").exists(), "uncommitted attempted keeper")
+                    attempted = json.loads(contracts[0].read_text())["binding"]
+                    owners = []
+                    for process in Path("/proc").iterdir():
+                        if not process.name.isdigit():
+                            continue
+                        try:
+                            arguments = (process / "cmdline").read_bytes().split(b"\0")
+                        except OSError:
+                            continue
+                        if str(contracts[0]).encode() in arguments and b"--contract" in arguments:
+                            owners.append(int(process.name))
+                    require(len(owners) == 1, "uncommitted keeper owner ambiguous")
+                    os.killpg(owners[0], signal.SIGKILL)
+                    (directory / "host-boot-id").write_text("00000000-0000-0000-0000-000000000000")
                 first = json.loads(run(*operator, "recover-execution", "--session", session,
                                        "--request", saved_request))["data"]
                 recovered = first["execution_binding"]
+                if inputs.get("execution_attempt_recovery"):
+                    require(recovered["environment"]["incarnation"] != attempted["environment"]["incarnation"],
+                            "reboot reused the uncommitted attempted lifetime")
+                    checks.append("pending_recovery_survives_attempt_reboot_without_replaying_effects")
                 require(recovered["revision"] == binding["revision"] + 1 and
                         recovered["environment"]["incarnation"] != binding["environment"]["incarnation"] and
                         recovered["workspace"] == binding["workspace"] and recovered["runtime"] == binding["runtime"],
@@ -722,6 +750,17 @@ def main():
                             owners.append(int(process.name))
                     require(len(owners) == 1, "disposable keeper owner ambiguous")
                     os.killpg(owners[0], signal.SIGKILL)
+                    if cold and inputs.get("execution_attempt_recovery"):
+                        # This operation is committed now. Repeating it must be
+                        # read-only even though the keeper has subsequently died.
+                        repeated = subprocess.run([str(v) for v in [*operator, "recover-execution",
+                            "--session", session, "--request", saved_request]], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                        require(repeated.returncode != 0, "dead committed recovery reported ready")
+                        require(json.loads(contracts[0].read_text())["binding"] == old
+                                and info()["execution_binding"] == old,
+                                "committed recovery replay replaced the installed lifetime")
+                        checks.append("committed_recovery_replay_after_reboot_never_replaces_installed_binding")
                     # A host reboot also replaces its enrolled Machine connection.
                     # The agent on the separate runtime host remains untouched.
                     target_machine, target_command = machines["target"]

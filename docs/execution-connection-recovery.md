@@ -1,5 +1,39 @@
 # Execution connection recovery
 
+## October 26 interrupted recovery after reboot
+
+The `argus` session (`sess-1791711326382`) retained its queued message and
+an uncommitted recovery while its Hawk execution keeper belonged to an earlier
+host boot. Its Claude runtime was on OVH. Repeating the saved recovery refused
+`EnvironmentLost` because the target had launch markers but no live keeper.
+
+A pending operation now records append-only successor attempts after a verified
+host boot change. Each successor retains the original operation, workspace,
+executor and binding revision, but receives a fresh environment, incarnation
+and private capability. The predecessor is fenced and archived before the new
+contract is installed. Interrupted transitions resume from their saved record;
+uncertain launches on the same boot remain refused. Native prompts and command
+effects are never replayed by this mechanism. Codex and Claude share this
+Machine lifecycle path; neither Provider package changes.
+
+Committed operation repeats use only Describe of the installed binding. Loss
+invalidates cached readiness, and the next dispatch creates a new recovery
+operation from that binding. Replaying an older Recover after commit would let
+the Machine replace a binding the Controller still considers installed.
+
+Roll out the Controller observation change before the Machine successor writer.
+Retain the accepted worker generation and native executor through the Machine
+host release. After successor records exist, an older Machine cannot resume
+those pending operations: recovery requires rolling forward to a successor-aware
+reader. Do not delete records or roll back the Controller to a version that
+replays committed Recover requests while this Machine writer is active.
+
+The isolated `execution_attempt_recovery` fixture passed all 37 checks, including
+both reboot boundaries and subsequent native tool execution without duplicate
+effects. Machine tests passed 558 cases and Controller tests passed 701; both
+Clippy gates passed. The full gate retains the component registry baseline
+failure documented below.
+
 ## October 26 Clear after target reboot
 
 `sess-1792637683704` recorded `context_cleared` at 01:46:16 UTC,

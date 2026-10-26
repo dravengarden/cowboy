@@ -367,10 +367,7 @@ async fn checked(
             Request {
                 service_id: state.service_id.clone(),
                 machine_id: machine.clone(),
-                action: Action::Recover {
-                    session_id: session.into(),
-                    intent: Box::new(intent.clone()),
-                },
+                action: recovery_action(session, &intent, expected)?,
             },
         )
         .await
@@ -382,7 +379,30 @@ async fn checked(
             }
         })?;
     let binding = match response {
-        Response::Prepared { binding } => binding,
+        Response::Prepared { binding } if !already_committed => binding,
+        Response::Call {
+            response: crate::execution_protocol::Response::Ready { scope, .. },
+        } if already_committed => {
+            let binding = expected.decode()?;
+            if scope != crate::execution_protocol::Scope::from_binding(&binding) {
+                return Err("Recovered execution scope changed".into());
+            }
+            binding
+        }
+        Response::Refused {
+            reason: crate::machine_protocol::execution::Refusal::EnvironmentLost,
+        } if already_committed => {
+            state
+                .execution_readiness
+                .forget(session, &expected.decode()?);
+            // The next preflight starts a new operation from the installed
+            // binding. Never mutate the old operation after its commit.
+            return Err(if grant.is_none() {
+                target_not_ready()
+            } else {
+                "Committed execution environment was lost; wake the session to recover its current binding".into()
+            });
+        }
         Response::Refused { reason } if grant.is_none() && transient(reason) => {
             return Err(target_not_ready());
         }
@@ -456,6 +476,29 @@ async fn checked(
         "outcome":"recovered","runtime_readiness":"observe_session","queue":if grant.is_some() {"paused_for_inspection"} else {"pending_delivery"}}),
         reload,
     ))
+}
+
+/// Repeating a committed operation only observes the installed lifetime.
+/// Recover can now advance a pending operation after a reboot, so replaying it
+/// here would replace a binding that the Controller has already committed.
+fn recovery_action(
+    session: &str,
+    intent: &RecoveryV1,
+    expected: &ExecutionBinding,
+) -> Result<Action, String> {
+    if let Ok(binding) = expected.decode()
+        && intent.accepts(&binding)
+    {
+        return Ok(Action::Call {
+            session_id: session.into(),
+            binding: Box::new(binding),
+            command: crate::execution_protocol::Command::Describe,
+        });
+    }
+    Ok(Action::Recover {
+        session_id: session.into(),
+        intent: Box::new(intent.clone()),
+    })
 }
 
 /// Dispatch owns one not-yet-delivered prompt. An idle surviving worker may
@@ -811,6 +854,35 @@ mod dispatch_safety_tests {
         assert!(after_controller_restart.accepts(&committed));
         committed.revision += 1;
         assert!(!after_controller_restart.accepts(&committed));
+    }
+
+    #[test]
+    fn committed_recovery_replay_cannot_replace_its_lifetime_after_reboot() {
+        let previous = crate::execution_environment::fixture().decode().unwrap();
+        let intent = wake_intent(previous.clone());
+        let mut committed = previous;
+        committed.revision += 1;
+        committed.environment.id = "55555555555555555555555555555555".into();
+        committed.environment.incarnation = "44444444444444444444444444444444".into();
+        let installed = ExecutionBinding::from_record(serde_json::to_value(&committed).unwrap());
+        // Even if the target has rebooted since the preflight Ready response,
+        // this request can only observe loss, never create a same-revision successor.
+        assert!(
+            matches!(recovery_action("sess-1", &intent, &installed).unwrap(),
+            Action::Call { binding, command: crate::execution_protocol::Command::Describe, .. }
+                if *binding == committed)
+        );
+        let pending = ExecutionBinding::from_record(serde_json::to_value(&intent).unwrap());
+        assert!(matches!(
+            recovery_action("sess-1", &intent, &pending).unwrap(),
+            Action::Recover { .. }
+        ));
+        let fresh = wake_intent(committed.clone());
+        assert_ne!(fresh.operation_id, intent.operation_id);
+        assert_eq!(fresh.previous, committed);
+        assert!(
+            matches!(recovery_action("sess-1", &fresh, &installed).unwrap(), Action::Recover { intent: next, .. } if *next == fresh)
+        );
     }
 
     #[test]
