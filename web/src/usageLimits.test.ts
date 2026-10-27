@@ -15,6 +15,7 @@ import {
   providerUsageRefreshLabel,
   providerUsageSlotContext,
   scheduledResetCountdown,
+  subscriptionQuotaHint,
   topBarUsageLimits,
   usageCardProviders,
   usageLimits,
@@ -125,6 +126,29 @@ test("exhausted account quota expires at reset and ignores model-only windows", 
     ["5h"],
   );
   assertEquals(exhaustedAccountUsageLimits(usage, reset), []);
+});
+
+test("subscription choices show remaining quota without hiding exhaustion", () => {
+  const reset = Date.parse("2026-09-19T06:10:00Z");
+  const usage = (fiveHour: number) => ({
+    provider: "anthropic",
+    status: "available",
+    source: "Anthropic",
+    observed_at_ms: reset - 60_000,
+    ...quotaView({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: fiveHour, resets_at: new Date(reset).toISOString() },
+        seven_day: { utilization: 46, resets_at: null },
+      },
+    }),
+  });
+  assertEquals(subscriptionQuotaHint(usage(92), reset - 1), "5h 8% left · Weekly 54% left");
+  const exhausted = subscriptionQuotaHint(usage(100), reset - 1) ?? "";
+  assertEquals(exhausted.startsWith("5h limit reached · resets "), true);
+  // A passed reset is stale, not exhausted; unobserved accounts show nothing.
+  assertEquals(subscriptionQuotaHint(usage(100), reset), "Weekly 54% left");
+  assertEquals(subscriptionQuotaHint(undefined), undefined);
 });
 
 test("usage plugin ids map account providers onto agent plugins", () => {

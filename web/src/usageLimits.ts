@@ -412,6 +412,27 @@ export function exhaustedAccountUsageLimits(
   );
 }
 
+/** Compact quota line for choosing a subscription. Informational only: it
+ *  never disables a choice or selects another account. Windows whose reset
+ *  time has passed are omitted until the next observation. */
+export function subscriptionQuotaHint(
+  usage: ProviderUsage | null | undefined,
+  now = Date.now(),
+): string | undefined {
+  const limits = topBarUsageLimits(usage ?? undefined).filter((limit) =>
+    limit.resetsAt === undefined || limit.resetsAt * 1000 > now
+  );
+  const exhausted = limits.filter((limit) => limit.remaining <= 0);
+  if (exhausted.length > 0) {
+    return exhausted.map((limit) =>
+      `${limit.label} limit reached · resets ${shortResetTime(limit.resetsAt)}`
+    ).join(" · ");
+  }
+  return limits.length === 0 ? undefined : limits.map((limit) =>
+    `${limit.label} ${String(Math.round(limit.remaining))}% left`
+  ).join(" · ");
+}
+
 export interface ProviderUsageLimitView extends UsageLimit {
   resetsLabel?: string;
 }

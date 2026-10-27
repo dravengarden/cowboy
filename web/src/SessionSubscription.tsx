@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { legacySubscriptionLabel, type SubscriptionDisplay, validSubscriptionDisplay } from "./subscriptionDisplay";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
+import { loadUsageSnapshot, useStoreSelector } from "./store";
+import { providerUsage, subscriptionQuotaHint } from "./usageLimits";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
 interface Accounts { registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay; session_admission: string; session_providers?: string[] }
@@ -59,7 +61,15 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
   const loadNative = native.load;
   // One shared cached read (deduplicated across surfaces) when choosing.
   useEffect(() => { if (active) void loadNative(); }, [active, loadNative]);
+  const snapshotLoaded = useStoreSelector((state) => state.usage !== null);
+  useEffect(() => { if (active && !snapshotLoaded) void loadUsageSnapshot().catch(() => undefined); }, [active, snapshotLoaded]);
   const loginReason = (id: string) => subscriptionLoginReason(native.accounts, provider, id);
+  // Cached observations only (the Service snapshot and named-account reads);
+  // shown to help choose, never to pick or rotate an account automatically.
+  const snapshot = useStoreSelector((state) => state.usage);
+  const quota = (id: string) => subscriptionQuotaHint(id === "default"
+    ? providerUsage(snapshot, provider)
+    : native.accounts.find((item) => item.account_id === id && item.provider_id === provider)?.usage);
   // A usable preferred account (the directory's latest session) precedes the
   // registry default; an unavailable one falls back instead of blocking.
   const hinted = preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
@@ -101,6 +111,7 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
     hinted: !choice && Boolean(hinted),
     allowed: (subscriptionAllowed(data, provider, value) && !loginReason(value)) || (error && value === "default"),
     loginReason,
+    quota,
     select: (id: string) => select({ provider, id }),
     retry: () => refresh((current) => current + 1),
   };
@@ -118,6 +129,7 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
     ...account,
     label: `${account.label}${state.data && account.id === defaultId ? " · Default" : ""}`,
     reason: subscriptionUnavailableReason(state.data, state.provider, account.id) ?? state.loginReason(account.id),
+    quota: state.quota(account.id),
   }));
   const selected = choices.find((account) => account.id === selectedId);
   const placeholder = selectedId ? "Account unavailable" : state.error ? "Choose a subscription" : "Loading subscriptions…";
@@ -127,13 +139,13 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
         slotProps={{ select: { displayEmpty: true, renderValue: () => selected?.label ?? placeholder }, inputLabel: { shrink: true } }}
         value={selectedId} disabled={disabled || (!state.data && !state.error)}
         error={state.error || Boolean(state.data && !state.allowed)}
-        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? "Account unavailable" : helperText ?? "Independent of the selected Machine."}
+        helperText={state.error ? "Could not load subscriptions." : !state.data ? "Loading subscriptions…" : !state.allowed ? selected?.reason ?? "Account unavailable" : helperText ?? selected?.quota ?? "Independent of the selected Machine."}
         onChange={(event) => state.select(event.target.value)}>
         {!selected && <MenuItem value={selectedId} disabled>{placeholder}</MenuItem>}
         {choices.map((account) => <MenuItem key={account.id} value={account.id} disabled={Boolean(account.reason)}>
           <Stack sx={{ minWidth: 0, whiteSpace: "normal" }}>
             <span>{account.label}</span>
-            {account.reason && <Typography variant="caption">{account.reason}</Typography>}
+            {(account.reason ?? account.quota) && <Typography variant="caption" color={account.reason ? undefined : "text.secondary"}>{account.reason ?? account.quota}</Typography>}
           </Stack>
         </MenuItem>)}
       </TextField>
