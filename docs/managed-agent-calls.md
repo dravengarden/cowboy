@@ -356,7 +356,11 @@ original call. Concurrent duplicates wait for it; controller recovery observes
 the same reservation. A reused result identifies `reused_from` and starts no
 model request. Only a successful result explicitly reporting
 `review_complete:true` and `approve` or `needs-attention` can be reused by later
-requests. Completeness does not mean approval. Failed, cancelled, incomplete or
+requests. Completeness does not mean approval. It also does not require
+execution: the read-only snapshot may lack project toolchains, dependencies or
+browsers, so the contract asks the reviewer to name checks it could not run in
+the summary and reserve `incomplete` for missing inputs or unread changed code.
+Failed, cancelled, incomplete or
 truncated results are not reusable completion evidence; a later explicit retry
 submitted after that attempt finishes gets a new reservation. Requests submitted
 before it finishes share its outcome, even if they were still queued and first
