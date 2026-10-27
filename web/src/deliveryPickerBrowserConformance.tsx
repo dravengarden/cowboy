@@ -268,6 +268,13 @@ export async function checkDeliveryPicker(): Promise<string> {
     );
     key("Escape");
     check(calls.at(-1) === "close", "Escape closes only picker");
+    // Reopen only after the exit transition unmounted the list, as a person
+    // does: the previous opening's options must not consume initial focus.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    check(
+      !document.querySelector("[data-delivery-picker]"),
+      "The closed picker unmounts its list",
+    );
     flushSync(() => {
       setBusy(true);
       host.querySelector("button")!.click();
@@ -275,6 +282,7 @@ export async function checkDeliveryPicker(): Promise<string> {
     for (let attempt = 0; attempt < 50 && !ready(); attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    check(ready(), "A reopened picker focuses its default row");
     key("Enter", { altKey: true });
     check(
       !calls.some((call) => call.startsWith("interrupt")),

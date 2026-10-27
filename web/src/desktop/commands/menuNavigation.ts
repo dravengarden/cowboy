@@ -33,8 +33,14 @@ export function desktopMenuNavigationKey(
   event: KeyboardEvent,
   now = Date.now(),
 ): boolean {
-  const target = event.target instanceof HTMLElement ? event.target : null;
-  const menu = target?.closest<HTMLElement>(DESKTOP_MENU_SELECTOR);
+  const focused = event.target instanceof HTMLElement ? event.target : null;
+  // MUI's focus trap may park focus on the popup surface (Paper) around the
+  // list before any row is focused; the keys still belong to that one menu.
+  const menu = focused?.closest<HTMLElement>(DESKTOP_MENU_SELECTOR) ??
+    (focused?.matches(".MuiPopover-paper, .MuiPaper-root")
+      ? focused.querySelector<HTMLElement>(DESKTOP_MENU_SELECTOR)
+      : null);
+  const target = menu && focused && menu.contains(focused) ? focused : menu;
   if (!target || !menu || event.shiftKey && event.code !== "KeyG") return false;
   const intent = desktopKeyIntent(event);
   if (intent.owner !== "command" || intent.modified) return false;

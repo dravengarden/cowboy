@@ -51,6 +51,10 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
   const position = useRef<PopoverActions>(null);
   const interacted = useRef(false);
   const initializedFocus = useRef(false);
+  // Options are fetched for each opening. The picker stays mounted while
+  // closed, so the previous opening's options are still in state on reopen;
+  // only a reply for this opening may choose the initial row.
+  const optionsCurrent = useRef(false);
   const open = props.anchor !== null;
   const anchorRect = useRef<DOMRect | null>(null);
   // Keyboard dismissal and busy/idle transitions can replace the real button.
@@ -92,15 +96,20 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     let live = true;
     interacted.current = false;
     initializedFocus.current = false;
+    optionsCurrent.current = false;
     setOptions(null);
     setError(null);
     void readDeliveryOptions(props.sessionId).then((value) => {
-      if (live) setOptions(value);
+      if (!live) return;
+      optionsCurrent.current = true;
+      setOptions(value);
     }).catch((reason: unknown) => {
       if (live) setError(String(reason));
     });
     return () => {
       live = false;
+      optionsCurrent.current = false;
+      initializedFocus.current = false;
     };
   }, [open, props.sessionId]);
   const target = props.busy ? options?.target : null;
@@ -121,14 +130,29 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     : mode === "steer"
     ? "steer"
     : "next";
-  useEffect(() => {
-    if (!open || !options || initializedFocus.current || interacted.current) {
-      return;
+  const preferredRef = useRef(preferred);
+  preferredRef.current = preferred;
+  // The list mounts a frame after `open` (MUI portals on its own effect), and
+  // the options reply may land before or after it. Whichever comes second
+  // focuses the preferred row; until then the list itself holds focus so the
+  // Vim keys already move. Only an actually focused row completes this.
+  const focusInitial = (): void => {
+    const root = list.current;
+    if (!root || initializedFocus.current || interacted.current) return;
+    const row = optionsCurrent.current
+      ? root.querySelector<HTMLElement>(
+        `[data-delivery-command="${preferredRef.current}"]`,
+      )
+      : null;
+    if (row) {
+      initializedFocus.current = true;
+      row.focus();
+    } else if (!root.contains(document.activeElement)) {
+      root.focus();
     }
-    initializedFocus.current = true;
-    list.current?.querySelector<HTMLElement>(
-      `[data-delivery-command="${preferred}"]`,
-    )?.focus();
+  };
+  useEffect(() => {
+    if (open && options) focusInitial();
   }, [open, options, preferred]);
   // Keep a disabled row focusable after live invalidation. Activation must not
   // advance to a different action just because the original turn has ended.
@@ -217,9 +241,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
               element.dataset.deliveryPicker = "true";
               registerDeliveryPickerCommands(element, () => commands.current);
             }
-            if (element && !initializedFocus.current && !interacted.current) {
-              element.focus();
-            }
+            if (element) focusInitial();
           },
           tabIndex: -1,
           "aria-label": "Choose delivery",
