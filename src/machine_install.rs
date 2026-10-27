@@ -732,10 +732,7 @@ fn install_systemd_user(
 ) -> Result<()> {
     let unit_dir = home.join(".config/systemd/user");
     std::fs::create_dir_all(&unit_dir)?;
-    let unit = format!(
-        "[Unit]\nDescription=Cowboy Machine\nAfter=network-online.target\n\n[Service]\nExecStart={}\nRestart=on-failure\nRestartSec=2\nSuccessExitStatus=75\n\n[Install]\nWantedBy=default.target\n",
-        launcher.display()
-    );
+    let unit = systemd_user_unit(launcher);
     let unit_name = if service_id.is_empty() {
         "cowboy-machine.service".to_owned()
     } else {
@@ -748,6 +745,17 @@ fn install_systemd_user(
         checked("systemctl", &["--user", "restart", &unit_name])?;
     }
     Ok(())
+}
+
+/// Reboot convergence: the Machine must come back after any boot without a
+/// human step. Exit 75 is a requested host restart, so it is clean for
+/// logging yet forces a restart; a host that starts before the network, DNS or
+/// Controller must keep retrying instead of hitting the default start limit.
+fn systemd_user_unit(launcher: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=Cowboy Machine\nAfter=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nExecStart={}\nRestart=on-failure\nRestartSec=2\nSuccessExitStatus=75\nRestartForceExitStatus=75\n\n[Install]\nWantedBy=default.target\n",
+        launcher.display()
+    )
 }
 
 fn install_launch_agent(
@@ -1328,6 +1336,34 @@ mod tests {
         );
         assert_eq!(plist.matches("<string>/dev/null</string>").count(), 2);
         assert!(!plist.contains("Library/Logs"));
+    }
+
+    #[test]
+    fn service_managers_restart_the_machine_after_every_boot_and_host_restart() {
+        let unit = systemd_user_unit(Path::new("/home/test/.local/bin/cowboy-machine-launch"));
+        for line in [
+            "StartLimitIntervalSec=0",
+            "Restart=on-failure",
+            "RestartForceExitStatus=75",
+            "WantedBy=default.target",
+        ] {
+            assert!(unit.lines().any(|candidate| candidate == line), "{line}");
+        }
+        let packaged = include_str!("../packaging/cowboy-machine.service");
+        assert!(
+            packaged
+                .lines()
+                .any(|line| line == "StartLimitIntervalSec=0")
+        );
+        assert!(
+            packaged
+                .lines()
+                .any(|line| line == "RestartForceExitStatus=75")
+        );
+        // launchd restarts any nonzero exit, including the host restart status.
+        let plist = launch_agent_plist("xyz.stormbird.cowboy-machine", Path::new("/launcher"));
+        assert!(plist.contains("<key>RunAtLoad</key><true/>"));
+        assert!(plist.contains("<key>SuccessfulExit</key><false/>"));
     }
 
     #[test]

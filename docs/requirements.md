@@ -98,6 +98,42 @@ native Claude supports that same binding and projection contract. See
 [execution environments](execution-environments.md#ovh-remote-audit-2026-10-11)
 for the bounded evidence and outstanding acceptance scope.
 
+## Reboot convergence
+
+Any Machine may reboot at any time: Hawk (Controller, local runtime and
+execution target), OVH (remote runtime) and Falcon (runtime and execution
+target), together or independently. Once the host itself boots successfully,
+Cowboy MUST return to service without a human step. This is a core product
+requirement, not an operational preference.
+
+- Every Cowboy host process starts at boot without a login session (system
+  units, or user units with linger) and is restarted by its service manager
+  after any exit that is not a deliberate uninstall. A requested host restart
+  (exit status 75) is a restart, never a stop. Start-rate limits must not leave
+  a unit permanently failed: boot ordering, mounts, DNS, the overlay network
+  and the Controller can each become ready later than the process.
+- Readiness of another host is waited for and retried with bounded backoff,
+  never treated as a terminal startup failure. The Controller can start before
+  any Machine, and a Machine before its Controller or its execution target.
+- Durable state needed after boot lives on persistent storage. Runtime
+  directories, sockets and transient units are reconstructed, never trusted
+  across a boot. Loss of a transient worker or execution keeper is proven from
+  boot identity or exact unit evidence, then recovered without replaying an
+  uncertain effect: native history, queue, workspaces and unknown prompt
+  outcomes are preserved, and the next turn proceeds without operator
+  maintenance.
+- A turn that was running when its host rebooted ends as interrupted. Queued
+  prompts and new prompts resume delivery automatically once the runtime and
+  execution target are reachable again.
+
+Every change to service units, installers, startup ordering, persistence or
+recovery must state how it preserves this property. Verify without rebooting
+production hosts: inspect the installed unit and its restart/start-limit
+policy, exercise process loss and boot-identity change in isolated fixtures
+(`tools/execution_session_conformance.py`), and use a disposable VM for
+boot-ordering changes. Evidence from an actual unplanned reboot is recorded in
+[remote session disaster recovery](remote-session-disaster-recovery.md).
+
 ## State ownership
 
 | State | Owner and identity |
