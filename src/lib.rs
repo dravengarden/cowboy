@@ -8,6 +8,13 @@
 // Modules that used to be crate-private are now public so cowboy-server can use them.
 #![allow(clippy::len_without_is_empty, clippy::new_without_default)]
 
+/// The memory-first allocator the controller links (`src/main.rs`). Sibling
+/// binaries such as the Machine host select it through this export: a
+/// dependency of their own would change `Cargo.lock`, which retained workers
+/// pin byte for byte (`retained-worker-interface-files` in `flake.nix`).
+#[cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))]
+pub use tikv_jemallocator::Jemalloc;
+
 #[cfg(feature = "full")]
 pub mod acp;
 #[cfg(feature = "full")]

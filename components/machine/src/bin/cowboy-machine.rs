@@ -1,6 +1,6 @@
 #[cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))]
 #[global_allocator]
-static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static GLOBAL_ALLOCATOR: cowboy::Jemalloc = cowboy::Jemalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
