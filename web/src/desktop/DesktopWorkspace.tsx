@@ -284,6 +284,9 @@ export function DesktopWorkspace({
           shortcut={DESKTOP_SHORTCUTS.resize}
           detail="Drag past the edge to collapse"
           followCursor
+          // A pointer hint: selecting the splitter by keyboard shows
+          // its own Resize hint instead.
+          disableFocusListener
           placement="right"
           suppressed={resizing ||
             workspace.selectedSplitter === "prompt-conversation"}

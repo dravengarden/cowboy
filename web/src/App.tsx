@@ -147,6 +147,7 @@ import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
 import { requestNewAgent } from "./sessionSettingsOpen";
 import { isManagedChild } from "./managedCalls";
+import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
     SessionCacheGlyph,
     SessionObligationBadge,
@@ -2370,6 +2371,9 @@ function SessionList({
                                     >
                                         {s.title}
                                     </Typography>
+                                    {/* On the title line, which truncates, so a
+                                        running call never adds a row line. */}
+                                    <SessionCallsBadge sessionId={s.id} />
                                     <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
                                 </Stack>
                             }
@@ -5204,6 +5208,9 @@ export function App({
                         title="Resize layout"
                         shortcut={DESKTOP_SHORTCUTS.resize}
                         followCursor
+                        // A pointer hint: selecting the splitter by keyboard shows
+                        // its own Resize hint instead.
+                        disableFocusListener
                         placement="right"
                         suppressed={resizing ||
                             desktopWorkspace?.selectedSplitter === "sessions-prompt"}
