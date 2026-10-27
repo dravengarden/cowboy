@@ -1953,6 +1953,46 @@ function SessionList({
                             fontSize: "1.125rem",
                         },
                     },
+                    // Desktop reorders from the keyboard (`O`); the grip is only
+                    // the pointer's drag handle. Rows sit flush with the window
+                    // edge, so a grip shown at rest with its own hover halo lit
+                    // up row after row as the pointer swept past. It now fades
+                    // in after a short dwell on the row, at once on the
+                    // keyboard cursor row and in Order mode, without a halo.
+                    // Folder chevrons share the class and stay visible.
+                    ...(desktop && {
+                        "& .cowboy-session-grip:not(.cowboy-folder-chevron)": {
+                            opacity: pinned ? 1 : 0,
+                            transition: "opacity 120ms ease",
+                            "&:hover": { bgcolor: "transparent", color: "text.secondary" },
+                        },
+                        "& [data-desktop-item]:hover .cowboy-session-grip:not(.cowboy-folder-chevron)": {
+                            opacity: 1,
+                            transitionDelay: "250ms",
+                        },
+                        "& [data-desktop-item]:focus .cowboy-session-grip:not(.cowboy-folder-chevron), & .cowboy-session-grip:not(.cowboy-folder-chevron):focus-visible": {
+                            opacity: 1,
+                            transitionDelay: "0ms",
+                        },
+                        // The trailing actions button sits beside the pane
+                        // splitter: the same dwell keeps a pointer heading for
+                        // the divider from lighting it. `S` opens it from the
+                        // keyboard. A deleting row keeps its progress visible,
+                        // and an open menu keeps its anchor.
+                        "& .cowboy-session-actions:not(.Mui-disabled):not([data-menu-open='true'])": {
+                            opacity: 0,
+                            transition: "opacity 120ms ease",
+                            "&:hover": { bgcolor: "transparent", color: "text.primary" },
+                        },
+                        "& [data-desktop-item]:hover .cowboy-session-actions": {
+                            opacity: 1,
+                            transitionDelay: "250ms",
+                        },
+                        "& [data-desktop-item]:focus .cowboy-session-actions, & .cowboy-session-actions:focus-visible": {
+                            opacity: 1,
+                            transitionDelay: "0ms",
+                        },
+                    }),
                 }}
             >
                 {mobileDrawer && <SessionsSyncedCaption />}
@@ -2110,17 +2150,27 @@ function SessionList({
                             slotProps={{ primary: { component: "div" } }}
                         />
                         <FolderActivityBadges activity={row.activity} total={row.sessionCount} />
-                        <IconButton
-                            className="cowboy-session-actions"
-                            aria-label={`folder actions ${f.name}`}
-                            onClick={(e): void => {
-                                e.stopPropagation();
-                                setFolderMenu({ folder: f, el: e.currentTarget });
-                            }}
-                            sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
+                        <HintTooltip
+                            title={desktop ? "Actions" : ""}
+                            detail="M move to · I rename"
+                            shortcut="S"
+                            placement="left"
+                            enterDelay={600}
+                            enterNextDelay={600}
                         >
-                            <MoreVert sx={{ fontSize: "1.5rem" }} />
-                        </IconButton>
+                            <IconButton
+                                className="cowboy-session-actions"
+                                aria-label={`folder actions ${f.name}`}
+                                data-menu-open={folderMenu?.folder.id === f.id ? "true" : undefined}
+                                onClick={(e): void => {
+                                    e.stopPropagation();
+                                    setFolderMenu({ folder: f, el: e.currentTarget });
+                                }}
+                                sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
+                            >
+                                <MoreVert sx={{ fontSize: "1.5rem" }} />
+                            </IconButton>
+                        </HintTooltip>
                     </ReliableListItemButton>
                         );
                     }
@@ -2260,15 +2310,41 @@ function SessionList({
                                 placeItems: "center",
                             }}
                         >
-                            <IconButton
-                                className="cowboy-session-grip"
-                                {...(deleting ? {} : sortable.handleProps(s.id))}
-                                disabled={deleting}
-                                aria-label="Drag to reorder"
-                                sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
-                            >
-                                <DragIndicator sx={{ fontSize: "1.5rem" }} />
-                            </IconButton>
+                            {desktop
+                                ? (
+                                    // The pointer handle names the keyboard
+                                    // path; a long dwell keeps an edge sweep
+                                    // from opening it.
+                                    <HintTooltip
+                                        title="Drag to reorder"
+                                        shortcut="O"
+                                        detail="Order mode · J/K move · Esc done"
+                                        placement="right"
+                                        enterDelay={600}
+                                        enterNextDelay={600}
+                                    >
+                                        <IconButton
+                                            className="cowboy-session-grip"
+                                            {...(deleting ? {} : sortable.handleProps(s.id))}
+                                            disabled={deleting}
+                                            aria-label="Drag to reorder"
+                                            sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
+                                        >
+                                            <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                        </IconButton>
+                                    </HintTooltip>
+                                )
+                                : (
+                                    <IconButton
+                                        className="cowboy-session-grip"
+                                        {...(deleting ? {} : sortable.handleProps(s.id))}
+                                        disabled={deleting}
+                                        aria-label="Drag to reorder"
+                                        sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
+                                    >
+                                        <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                    </IconButton>
+                                )}
                         </Box>
                         <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 0.75 }} />
                         <ListItemText
@@ -2386,23 +2462,33 @@ function SessionList({
                                 <DesktopSessionShortcut label={jumpLabel} />
                             </Suspense>
                         )}
-                        <IconButton
-                            className="cowboy-session-actions"
-                            aria-label={deleting ? `Deleting ${s.title}` : `row actions ${s.id}`}
-                            disabled={deleting}
-                            onClick={(e): void => {
-                                e.stopPropagation();
-                                if (deleting) return;
-                                setMenuAnchor({ row: s, el: e.currentTarget });
-                            }}
-                            // A 44px Apple-HIG tap target on touch; on Desktop the
-                            // target and its 1.5rem glyph track the global font size.
-                            sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
+                        <HintTooltip
+                            title={desktop && !deleting ? "Actions" : ""}
+                            detail="M move to · I rename"
+                            shortcut="S"
+                            placement="left"
+                            enterDelay={600}
+                            enterNextDelay={600}
                         >
-                            {deleting
-                                ? <DelayedNetworkProgress size={desktopSize(18)} />
-                                : <MoreVert sx={{ fontSize: "1.5rem" }} />}
-                        </IconButton>
+                            <IconButton
+                                className="cowboy-session-actions"
+                                aria-label={deleting ? `Deleting ${s.title}` : `row actions ${s.id}`}
+                                disabled={deleting}
+                                data-menu-open={menuAnchor?.row.id === s.id ? "true" : undefined}
+                                onClick={(e): void => {
+                                    e.stopPropagation();
+                                    if (deleting) return;
+                                    setMenuAnchor({ row: s, el: e.currentTarget });
+                                }}
+                                // A 44px Apple-HIG tap target on touch; on Desktop the
+                                // target and its 1.5rem glyph track the global font size.
+                                sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
+                            >
+                                {deleting
+                                    ? <DelayedNetworkProgress size={desktopSize(18)} />
+                                    : <MoreVert sx={{ fontSize: "1.5rem" }} />}
+                            </IconButton>
+                        </HintTooltip>
                     </ReliableListItemButton>
                         )}
                     />
