@@ -912,6 +912,7 @@ dependencies = [
  "shell-words",
  "tar",
  "tempfile",
+ "tikv-jemallocator",
  "tokio",
  "tokio-tungstenite",
  "tracing",

@@ -79,6 +79,13 @@ rustix = { version = "1", features = ["process", "fs"] }
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher
 # Helix / Zed use). See src/files.rs.
 
+# The resident Machine relays bursty tool and transcript traffic from many
+# Tokio threads; glibc gave each thread its own arena and kept tens of MiB of
+# freed pages. The Machine release supplies the controller's memory-first
+# jemalloc configuration.
+[target.'cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))'.dependencies]
+tikv-jemallocator = "0.7"
+
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", default-features = false, features = ["test-support"] }
 tempfile = "3"

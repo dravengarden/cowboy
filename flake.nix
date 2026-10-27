@@ -467,6 +467,12 @@
           "--bin"
           "cowboy-execution-host"
         ];
+        # The same memory-first jemalloc policy as the controller package
+        # (see its note): the resident Machine and the CLI are low-throughput
+        # relays whose freed pages should return to the host promptly.
+        CFLAGS = "-O1";
+        JEMALLOC_SYS_WITH_MALLOC_CONF =
+          "abort_conf:true,background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,retain:false,metadata_thp:disabled,thp:never";
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
         postInstall = ''
