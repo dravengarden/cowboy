@@ -113,13 +113,13 @@ try {
     await writeFile(
       `${destination}/bin/claude-agent-acp`,
       prefix +
-        'exec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" "$@"\n',
+        'exec "$cowboy_root/runtime/node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" "$@"\n',
       { mode: 0o755 },
     );
     await writeFile(
       `${destination}/bin/cowboy-configured-cli`,
       prefix +
-        'exec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
+        'exec "$cowboy_root/runtime/node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
       { mode: 0o755 },
     );
     await writeFile(
