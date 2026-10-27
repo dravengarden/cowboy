@@ -67,6 +67,7 @@ import {
 } from "./hintTargets";
 import { handleDesktopModalKey } from "./modalNavigation";
 import { handleDeliveryPickerKey } from "../../deliveryPickerCommands";
+import { desktopMenuNavigationKey } from "./menuNavigation";
 import {
   lockEditableForLeader,
   unlockEditableForLeader,
@@ -548,6 +549,12 @@ export function DesktopCommandProvider(
       // stale Ctrl-W / gg chord move focus while marked text exists. The sole
       // exception is the non-editable Vim Normal sink when no real shared
       // composition exists; it deliberately receives physical Vim commands.
+      // Menus and listboxes (FOCUS.md "Menus"): Vim letters become the
+      // native keys MUI handles, then re-enter here as those keys.
+      if (!leaderArmed.current && desktopMenuNavigationKey(event)) {
+        clearPendingJumpChord();
+        return;
+      }
       if (
         desktopKeyIntent(event).owner !== "ime" &&
         handleDeliveryPickerKey(event)

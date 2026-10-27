@@ -21,6 +21,7 @@ import {
   closeCompletion,
   completionKeymap,
   completionStatus,
+  moveCompletionSelection,
   startCompletion,
 } from "@codemirror/autocomplete";
 import {
@@ -970,6 +971,15 @@ export const ComposerEditor = forwardRef<
           run: (view: EditorView): boolean =>
             completionStatus(view.state) === "pending" &&
             completionListVisible(view),
+        })),
+        // Vim Insert completion: Ctrl-n / Ctrl-p walk a visible list. Without
+        // a list the chord stays the editor's (macOS next/previous line).
+        ...([["Ctrl-n", true], ["Ctrl-p", false]] as const).map(([key, forward]) => ({
+          key,
+          run: (view: EditorView): boolean =>
+            completionListVisible(view) &&
+            (moveCompletionSelection(forward)(view) ||
+              completionStatus(view.state) === "pending"),
         })),
         {
           key: "Tab",

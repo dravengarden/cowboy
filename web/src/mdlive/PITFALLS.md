@@ -3311,3 +3311,20 @@ This is toolbar presentation only:
 the existing stationary-tap handling, picker focus and keyboard lifecycle stay
 with their current owners. It is not a change to Obsidian-derived editor or
 caret behavior and does not resolve physical iPhone issue #69.
+
+### 2026-10-27 Vim keys for Desktop menus and completion
+
+Desktop menus, listboxes and the delivery picker follow the Vim list grammar
+(`desktop/commands/menuNavigation.ts`): `j/k`, `gg/G`, `l`, `h`. The central
+dispatcher re-dispatches them as the native Arrow/Home/End/Enter/Escape keys
+MUI already handles, resolved from physical codes so a CJK input source on
+menu chrome still moves. A text field inside a popup keeps its own keys.
+Rows moved by a captured key show the cursor through native `:focus-visible`
+(fine pointers only); the Desktop delivery picker always paints its focused
+row.
+
+In the Composer, `Ctrl-n` / `Ctrl-p` walk a visible completion list, as in Vim
+Insert completion. Without a visible list the chord falls through to the
+editor (macOS next/previous line). This is a keymap entry above
+`completionKeymap` only: no extension, IME, caret, selection or paste behaviour
+changes, and it does not touch physical iPhone issue #69.

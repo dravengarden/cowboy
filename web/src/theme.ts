@@ -194,6 +194,21 @@ export function useThemeMode(): ThemeControls {
           // .Mui-selected:hover, so without the exclusion the current row lost
           // its highlight; transparent + contrastText paints contained buttons
           // as blank bars.
+          // Desktop menus move by keyboard (FOCUS.md "Menus"). MUI paints its
+          // own focus-visible class only for keys it observed; a row focused by
+          // a captured Vim key or a scoped picker command must still show the
+          // cursor. Fine pointers only: touch keeps no latched fill.
+          MuiMenuItem: {
+            styleOverrides: {
+              root: ({ theme }) => ({
+                "@media (hover: hover) and (pointer: fine)": {
+                  "&:focus-visible": {
+                    backgroundColor: theme.palette.action.focus,
+                  },
+                },
+              }),
+            },
+          },
           MuiButtonBase: {
             defaultProps: {
               disableRipple: prefersCoarsePointer(),

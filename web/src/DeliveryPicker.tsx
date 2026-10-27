@@ -5,11 +5,13 @@ import {
   useState,
 } from "react";
 import {
+  Box,
   ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
   type PopoverActions,
+  type Theme,
 } from "@mui/material";
 import {
   AltRoute,
@@ -24,6 +26,8 @@ import {
   handleDeliveryPickerKey,
   registerDeliveryPickerCommands,
 } from "./deliveryPickerCommands";
+import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 export interface DeliveryPickerProps {
   sessionId: string;
@@ -40,6 +44,7 @@ export interface DeliveryPickerProps {
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
+  const desktop = useSurfaceProfile().kind === "desktop";
   const [options, setOptions] = useState<DeliveryOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -182,6 +187,16 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
                 opacity: 1,
               },
             },
+            // Desktop is a keyboard list: the cursor row is always visible,
+            // including after a pointer opened the picker. It must outrank the
+            // global touch rule that clears latched focus fills, which also
+            // matches a touchscreen laptop (any-pointer: coarse).
+            ...(desktop && {
+              "& .MuiMenuItem-root:focus": {
+                backgroundColor: (theme: Theme) =>
+                  theme.palette.action.focus + " !important",
+              },
+            }),
             "& .MuiListItemText-root": { my: 0 },
             "& .MuiListItemIcon-root": { minWidth: "1.5rem", color: "inherit" },
             "& .MuiSvgIcon-root": { fontSize: "1.125rem" },
@@ -300,6 +315,30 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           secondary="Enqueue · current turn continues"
         />
       </MenuItem>
+      {desktop && (
+        <Box
+          component="li"
+          role="presentation"
+          data-delivery-picker-hints
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            mt: 0.5,
+            px: 1.25,
+            pt: 0.75,
+            pb: 0.25,
+            typography: "caption",
+            color: "text.secondary",
+            fontSize: "0.6875rem",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <DesktopShortcut shortcut="J/K" quiet />Move
+          <DesktopShortcut shortcut="L" quiet />Send
+          <DesktopShortcut shortcut="Esc" quiet />Close
+        </Box>
+      )}
     </Menu>
   );
 }

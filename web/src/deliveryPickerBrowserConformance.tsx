@@ -1,11 +1,74 @@
 import { useState } from "react";
+import { Menu, MenuItem } from "@mui/material";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { DeliveryPicker } from "./DeliveryPicker";
-import { SurfaceProvider } from "./surface/SurfaceProfile";
+import { SurfaceContext, type SurfaceProfile } from "./surface/SurfaceProfile";
+
+/** A Desktop profile regardless of the test browser's pointer devices. */
+const DESKTOP: SurfaceProfile = {
+  kind: "desktop",
+  input: "keyboard-pointer",
+  touchCapable: false,
+  finePointer: true,
+  hover: true,
+};
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+
+/** Any MUI menu on Desktop takes the same Vim keys, with no local handler. */
+async function checkMenuGrammar(
+  root: ReturnType<typeof createRoot>,
+  check: (value: unknown, message: string) => void,
+  key: (key: string, extra?: KeyboardEventInit) => void,
+): Promise<void> {
+  const picked: string[] = [];
+  let closed = 0;
+  flushSync(() =>
+    root.render(
+      <SurfaceContext.Provider value={DESKTOP}>
+        <DesktopWorkspaceProvider>
+          <DesktopCommandProvider>
+            <BrowserProductTheme>
+              <Menu
+                open
+                anchorReference="anchorPosition"
+                anchorPosition={{ top: 40, left: 40 }}
+                onClose={() => closed++}
+              >
+                {["One", "Two", "Three"].map((label) => (
+                  <MenuItem
+                    key={label}
+                    data-menu-row={label}
+                    onClick={() => picked.push(label)}
+                  >
+                    {label}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </BrowserProductTheme>
+          </DesktopCommandProvider>
+        </DesktopWorkspaceProvider>
+      </SurfaceContext.Provider>,
+    )
+  );
+  const row = () => document.activeElement?.getAttribute("data-menu-row");
+  for (let attempt = 0; attempt < 50 && row() !== "One"; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  check(row() === "One", "A menu opens on its first row");
+  key("j", { code: "KeyJ" });
+  check(row() === "Two", "j moves down any Desktop menu");
+  key("G", { code: "KeyG", shiftKey: true });
+  check(row() === "Three", "G reaches the last menu row");
+  key("k", { code: "KeyK" });
+  check(row() === "Two", "k moves up any Desktop menu");
+  key("l", { code: "KeyL" });
+  check(picked.at(-1) === "Two", "l activates the menu row");
+  key("h", { code: "KeyH" });
+  check(closed === 1, "h closes the menu");
+}
 
 export async function checkDeliveryPicker(): Promise<string> {
   const host = document.createElement("div");
@@ -94,13 +157,13 @@ export async function checkDeliveryPicker(): Promise<string> {
   try {
     flushSync(() =>
       root.render(
-        <SurfaceProvider>
+        <SurfaceContext.Provider value={DESKTOP}>
           <DesktopWorkspaceProvider>
             <DesktopCommandProvider>
               <Harness />
             </DesktopCommandProvider>
           </DesktopWorkspaceProvider>
-        </SurfaceProvider>,
+        </SurfaceContext.Provider>,
       )
     );
     flushSync(() => host.querySelector("button")!.click());
@@ -217,6 +280,35 @@ export async function checkDeliveryPicker(): Promise<string> {
       !calls.some((call) => call.startsWith("interrupt")),
       "Alt Enter cannot interrupt",
     );
+    // FOCUS.md "Menus": the Vim list grammar, by physical key.
+    const focusedCommand = () =>
+      document.activeElement?.getAttribute("data-delivery-command");
+    key("j", { code: "KeyJ" });
+    check(focusedCommand() === "next", "j moves to the next delivery");
+    key("Process", { code: "KeyJ", keyCode: 229 } as KeyboardEventInit);
+    check(
+      focusedCommand() === "front",
+      "A CJK input source still moves by physical j",
+    );
+    key("k", { code: "KeyK" });
+    check(focusedCommand() === "next", "k moves to the previous delivery");
+    key("G", { code: "KeyG", shiftKey: true });
+    check(focusedCommand() === "pause", "G jumps to the last delivery");
+    key("g", { code: "KeyG" });
+    key("g", { code: "KeyG" });
+    check(focusedCommand() === "steer", "gg jumps to the first delivery");
+    // MenuItem animates its fill.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    check(
+      getComputedStyle(document.activeElement!).backgroundColor !==
+        "rgba(0, 0, 0, 0)",
+      "The Desktop picker paints its cursor row",
+    );
+    check(
+      document.querySelector("[data-delivery-picker-hints]")?.textContent
+        ?.includes("Move"),
+      "The Desktop picker names its keys",
+    );
     const paper = document.querySelector<HTMLElement>("[data-delivery-picker]")!
       .closest<HTMLElement>(".MuiPaper-root")!;
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -235,9 +327,10 @@ export async function checkDeliveryPicker(): Promise<string> {
       '[data-delivery-command="pause"]',
     )!;
     pause.focus();
-    key("Enter");
-    check(calls.at(-1) === "pause", "Send & pause is keyboard reachable");
-    return "Delivery picker preserves exact target, IME/repeat exclusion, disabled focus and explicit next-turn selection";
+    key("l", { code: "KeyL" });
+    check(calls.at(-1) === "pause", "l activates the focused delivery");
+    await checkMenuGrammar(root, check, key);
+    return "Delivery picker preserves exact target, IME/repeat exclusion, disabled focus, explicit next-turn selection and the Desktop Vim menu grammar";
   } finally {
     flushSync(() => root.unmount());
     host.remove();

@@ -800,6 +800,18 @@ which-key panel. The next key activates it the way a pointer would: fields
 focus, Selects open, buttons and tabs click. Menus, listboxes and popovers
 keep their own keys and never get labels.
 
+## Menus
+
+Every Desktop menu, listbox and Select popup speaks the Vim list grammar:
+`j/k` move, `gg/G` jump to the first/last row, `l` (or `Enter`) activates and
+`h` (or `Esc`) closes. The central dispatcher re-dispatches these as the native
+Arrow/Home/End/Enter/Escape keys MUI handles (`menuNavigation.ts`), so disabled
+rows, wrap and focus-visible stay MUI's and no menu adds a local key handler.
+Letters resolve from physical codes; a text field inside a popup owns its keys.
+A keyboard-first picker (the delivery picker) always paints its cursor row and
+names its keys in a quiet hint line, without a divider. In the Composer,
+`Ctrl-n`/`Ctrl-p` walk a visible completion list, as in Vim Insert mode.
+
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the
 region owns focus. A badge must describe an actual binding; `L`/`Enter` belongs
