@@ -7,6 +7,7 @@ import {
   CircularProgress,
   Collapse,
   Divider,
+  IconButton,
   Stack,
   Tooltip,
   Typography,
@@ -17,6 +18,7 @@ import { desktopSize } from "./surface/desktopSize";
 import {
   AccountTree,
   ChevronRight,
+  Close,
   ExpandMore,
   InfoOutlined,
   OpenInNew,
@@ -28,9 +30,13 @@ import {
   type KeyboardEvent,
   memo,
   type ReactNode,
+  useEffect,
   useMemo,
   useState,
 } from "react";
+import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
+import { HintTooltip } from "./HintTooltip";
 import { CallTranscript } from "./CallTranscript";
 import { CallCleanup } from "./CallCleanup";
 import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
@@ -161,6 +167,34 @@ function placementLabel(
     : machineName(target);
 }
 
+/** The one badge a row needs: a review's verdict already says it finished,
+ * so a completed call with a verdict shows only the verdict. */
+function CallOutcomeBadge(
+  { call }: { call: ManagedCallSummary },
+): React.JSX.Element {
+  const hasOutcome = Boolean(call.verdict) || call.finding_count !== undefined;
+  if (call.state === "completed" && hasOutcome) {
+    const attention = call.verdict !== undefined && call.verdict !== null &&
+      call.verdict !== "approve";
+    const label = [
+      call.verdict ? call.verdict.replace(/-/g, " ") : null,
+      call.finding_count !== undefined
+        ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
+        : null,
+    ].filter(Boolean).join(" · ");
+    return <Badge label={label} color={attention ? "warning" : "success"} />;
+  }
+  return (
+    <Badge
+      label={callStateLabel(call)}
+      color={stateBadgeColor(call)}
+      icon={callActive(call.state)
+        ? <CircularProgress size={desktopSize(10)} thickness={5} color="inherit" />
+        : undefined}
+    />
+  );
+}
+
 function CallRow({
   call,
   selected,
@@ -189,79 +223,81 @@ function CallRow({
       sx={{
         width: "100%",
         textAlign: "left",
-        justifyContent: "flex-start",
+        display: "grid",
+        // Icon column, then title/outcome over one metadata line. The icon
+        // sits on the title's baseline row instead of floating mid-row.
+        gridTemplateColumns: "auto minmax(0, 1fr)",
+        columnGap: 1,
+        rowGap: 0.25,
+        alignItems: "center",
         borderRadius: 1,
         px: 1,
-        py: desktop ? 0.75 : 1.25,
-        minHeight: desktop ? 44 : 56,
+        py: desktop ? 0.625 : 1,
+        minHeight: desktop ? 40 : 56,
         bgcolor: selected ? "action.selected" : "transparent",
+        "&:hover": { bgcolor: selected ? "action.selected" : "action.hover" },
         "&:focus-visible": {
           outline: "2px solid",
           outlineColor: "primary.main",
         },
       }}
     >
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        sx={{ width: "100%", minWidth: 0 }}
-      >
-        <ProviderIcon
-          provider={call.provider}
-          sx={{ fontSize: "1.25rem", flexShrink: 0 }}
-        />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
-            <Typography
-              variant="body2"
-              noWrap
-              sx={{ flex: 1, minWidth: 0, fontWeight: 600, textTransform: "capitalize" }}
-            >
-              {callTitle(call)}
-            </Typography>
-            <CallAccountBadge call={call} />
-          </Stack>
-          <Typography variant="caption" color="text.secondary" component="div" noWrap title={callModelLabel(call)}>
-            {callModelLabel(call)}
-          </Typography>
-          {call.error && <Typography variant="caption" color="error" component="div" noWrap>
-            {call.error.detail ?? call.error.code}
-          </Typography>}
-          {
-            /* The icon names the agent; the start and duration place the
-              call in time. */
-          }
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            component="div"
-            title={callTimesTitle(call)}
-            aria-label={`${providerLabel(call.provider)} · ${
-              placementLabel(call)
-            } · started ${startedLabel(call.created_at_ms)} · ${
-              elapsedLabel(call.created_at_ms, end)
-            }`}
-          >
-            {placementLabel(call)} · Created {startedLabel(call.created_at_ms)} ·{" "}
-            {elapsedLabel(call.created_at_ms, end)}
-          </Typography>
-        </Box>
-        <Stack
-          direction={desktop ? "row" : "column"}
-          spacing={0.5}
-          alignItems="flex-end"
-          sx={{ flexShrink: 0 }}
+      {/* Explicit cells: an icon that renders nothing must not shift the
+          title into the icon column. */}
+      <Box sx={{ gridColumn: 1, gridRow: 1, display: "inline-flex", width: "1rem" }}>
+        <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem" }} />
+      </Box>
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ gridColumn: 2, gridRow: 1, minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          noWrap
+          sx={{ flex: 1, minWidth: 0, fontWeight: 600, textTransform: "capitalize" }}
         >
-          <StateChip call={call} desktop={desktop} />
-          <VerdictChip
-            verdict={call.verdict ?? null}
-            findings={call.finding_count}
-            desktop={desktop}
-          />
-        </Stack>
+          {callTitle(call)}
+        </Typography>
+        <CallOutcomeBadge call={call} />
       </Stack>
+      <Box
+        sx={{
+          gridColumn: 2,
+          display: "flex",
+          alignItems: "center",
+          gap: 0.75,
+          minWidth: 0,
+          typography: "caption",
+          color: "text.secondary",
+        }}
+      >
+        <CallAccountBadge call={call} />
+        <Box
+          component="span"
+          sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title={`${callModelLabel(call)} · ${placementLabel(call)}`}
+        >
+          {callModelLabel(call)} · {placementLabel(call)}
+        </Box>
+        <Box
+          component="span"
+          title={callTimesTitle(call)}
+          aria-label={`started ${startedLabel(call.created_at_ms)} · ${
+            elapsedLabel(call.created_at_ms, end)
+          }`}
+          sx={{ flexShrink: 0, ml: "auto", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+        >
+          {startedLabel(call.created_at_ms)} · {elapsedLabel(call.created_at_ms, end)}
+        </Box>
+      </Box>
+      {call.error && (
+        <Typography
+          variant="caption"
+          color="error"
+          component="div"
+          noWrap
+          sx={{ gridColumn: 2, minWidth: 0 }}
+        >
+          {call.error.detail ?? call.error.code}
+        </Typography>
+      )}
     </ButtonBase>
   );
 }
@@ -907,16 +943,28 @@ function CallList({
     return [...map.entries()];
   }, [calls]);
   return (
-    <Stack spacing={0.25}>
+    <Stack spacing={desktop ? 1 : 1.5}>
       {groups.map(([group, members]) => (
-        <Box key={group}>
+        <Box key={group} role="group" aria-label={group || undefined}>
           {group && (
             <Typography
-              variant="caption"
+              variant="overline"
               color="text.secondary"
-              sx={{ px: 1, fontWeight: 600 }}
+              component="div"
+              noWrap
+              sx={{
+                px: 1,
+                pb: 0.25,
+                fontSize: "0.6875rem",
+                fontWeight: 700,
+                lineHeight: 1.6,
+                letterSpacing: "0.04em",
+              }}
             >
               {group}
+              <Box component="span" sx={{ ml: 0.75, fontWeight: 500, color: "text.disabled" }}>
+                {members.length}
+              </Box>
             </Typography>
           )}
           {members.map((call) => (
@@ -1034,6 +1082,189 @@ function MobileCallRail({ calls, onOverview, onOpen, stale }: {
   );
 }
 
+/** A one-second clock for the few live elapsed labels on screen; the shared
+ * call clock ticks only every 30 seconds. */
+function useSecondClock(live: boolean): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!live) return undefined;
+    const timer = globalThis.setInterval(() => {
+      if (document.visibilityState !== "hidden") setNow(Date.now());
+    }, 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [live]);
+  return now;
+}
+
+function stateBadgeColor(
+  call: ManagedCallSummary,
+): "success" | "error" | "primary" | "default" {
+  const tone = callTone(call.state);
+  return tone === "success"
+    ? "success"
+    : tone === "error"
+    ? "error"
+    : tone === "active"
+    ? "primary"
+    : "default";
+}
+
+/** Desktop: the Calls modal's left rail. Switching calls keeps the modal, so
+ * a review round reads like tabs instead of close-and-reopen. */
+function DesktopCallRail({ calls, selected, onSelect }: {
+  calls: readonly ManagedCallSummary[];
+  selected: string;
+  onSelect: (call: string) => void;
+}): React.JSX.Element {
+  const now = useSecondClock(calls.some((call) => callActive(call.state)));
+  return (
+    <Box
+      component="nav"
+      aria-label="Calls"
+      data-call-rail
+      sx={{
+        width: "clamp(220px, 18vw, 300px)",
+        flexShrink: 0,
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+        ...desktopScrollbarSx,
+        borderRight: 1,
+        borderColor: "divider",
+        pr: 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.25,
+      }}
+    >
+      {calls.map((call) => {
+        const active = callActive(call.state);
+        const current = call.call_id === selected;
+        const end = active ? now : call.finished_at_ms ?? call.updated_at_ms;
+        return (
+          <ButtonBase
+            key={call.call_id}
+            data-call-rail-item={call.call_id}
+            aria-current={current ? "true" : undefined}
+            aria-label={`${callTitle(call)}: ${callStateLabel(call)}`}
+            onClick={(): void => onSelect(call.call_id)}
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: 0.375,
+              px: 1,
+              py: 0.75,
+              borderRadius: 1,
+              textAlign: "left",
+              bgcolor: current ? "action.selected" : "transparent",
+              "&:hover": { bgcolor: current ? "action.selected" : "action.hover" },
+              "&:focus-visible": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: -2,
+              },
+            }}
+          >
+            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+              <ProviderIcon provider={call.provider} sx={{ fontSize: "1rem", flexShrink: 0 }} />
+              <Typography
+                variant="caption"
+                noWrap
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: "0.8125rem",
+                  fontWeight: current ? 700 : 600,
+                  textTransform: "capitalize",
+                }}
+              >
+                {callTitle(call)}
+              </Typography>
+            </Stack>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0, pl: "1.375rem" }}>
+              <CallOutcomeBadge call={call} />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                sx={{ fontVariantNumeric: "tabular-nums", minWidth: 0 }}
+              >
+                {elapsedLabel(call.created_at_ms, end)}
+              </Typography>
+            </Stack>
+          </ButtonBase>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** Desktop: a running call in the collapsed Calls rail. One click (or `␣G`
+ * for the newest) opens its live transcript without expanding the list. */
+function ActiveCallChip({ call, onOpen }: {
+  call: ManagedCallSummary;
+  onOpen: () => void;
+}): React.JSX.Element {
+  const now = useSecondClock(true);
+  return (
+    <ButtonBase
+      data-call-chip={call.call_id}
+      aria-label={`Open ${callTitle(call)}: ${callStateLabel(call)}`}
+      title={`${callModelLabel(call)} · ${placementLabel(call)}`}
+      onClick={(event): void => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      sx={(theme) => ({
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: "18rem",
+        height: desktopSize(22),
+        px: 0.75,
+        gap: 0.5,
+        borderRadius: 999,
+        color: "primary.main",
+        bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.22 : 0.12),
+        "&:hover, &:focus-visible": {
+          bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.32 : 0.2),
+        },
+        "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
+      })}
+    >
+      <CircularProgress size={desktopSize(10)} thickness={5} color="inherit" sx={{ flexShrink: 0 }} />
+      <ProviderIcon provider={call.provider} sx={{ fontSize: "0.875rem", flexShrink: 0 }} />
+      <Box
+        component="span"
+        sx={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          textTransform: "capitalize",
+        }}
+      >
+        {callTitle(call)}
+      </Box>
+      <Box
+        component="span"
+        sx={{
+          flexShrink: 0,
+          fontSize: "0.6875rem",
+          fontVariantNumeric: "tabular-nums",
+          opacity: 0.8,
+        }}
+      >
+        {elapsedLabel(call.started_at_ms ?? call.created_at_ms, now)}
+      </Box>
+    </ButtonBase>
+  );
+}
+
+/** At most this many running calls get a chip; the rest are counted. */
+const ACTIVE_CHIP_LIMIT = 3;
+
 export const ManagedCallsDock = memo(function ManagedCallsDock({
   sessionId,
   desktop,
@@ -1059,7 +1290,9 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
-  if (calls.length === 0 && (observedAt === null || (!mobileOpen && !expanded))) return null;
+  // An open Mobile page keeps its sheet while its last call is cleaned up;
+  // Desktop never shows an empty "0/0" rail.
+  if (calls.length === 0 && (observedAt === null || !mobileOpen)) return null;
   const overview = callsOverview(calls);
   const routed = route
     ? calls.find((call) => call.call_id === route.call) ?? null
@@ -1076,10 +1309,20 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
         ? { call: route.call, level: "transcript" }
         : null,
     );
+  // `[` / `]` step through calls in the rail's order.
+  const stepCall = (delta: number): void => {
+    if (!routed) return;
+    const index = calls.findIndex((call) => call.call_id === routed.call_id);
+    const next = calls[index + delta];
+    if (next) setRoute({ call: next.call_id, level: "transcript" });
+  };
   const desktopKeys = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement;
     if (
       event.metaKey || event.ctrlKey || event.altKey ||
+      // React bubbles portal events: a Tool inspector opened from the child
+      // transcript owns its own keys.
+      !event.currentTarget.contains(target) ||
       target.closest("input, textarea, [contenteditable='true']")
     ) return;
     if (event.key === "i") {
@@ -1088,6 +1331,9 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     } else if (event.key === "o" && routed) {
       event.preventDefault();
       openChild(callConversationId(routed));
+    } else if (event.key === "[" || event.key === "]") {
+      event.preventDefault();
+      stepCall(event.key === "[" ? -1 : 1);
     }
   };
   const stale = error !== null && observedAt !== null;
@@ -1103,6 +1349,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
     : overview.failed > 0
     ? `${overview.failed} failed`
     : "All calls finished";
+  // Newest first: the chip the Calls shortcut opens is the call that started last.
+  const activeCalls = calls
+    .filter((call) => callActive(call.state))
+    .sort((a, b) => b.created_at_ms - a.created_at_ms);
   return (
     <Box
       data-desktop-calls-surface={desktop ? "true" : undefined}
@@ -1128,48 +1378,49 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
         overflow: "hidden",
       }}
     >
-      {!desktop ? <MobileCallRail calls={calls} onOverview={toggle} onOpen={openCall} stale={stale} /> : <ButtonBase
-        {...toggleTap}
-        aria-label={desktop
-          ? (expanded ? "Collapse calls" : "Expand calls")
-          : "Open calls"}
-        aria-expanded={desktop ? expanded : mobileOpen}
-        disableRipple={desktop}
-        sx={{
-          width: "100%",
-          justifyContent: "flex-start",
-          textAlign: "left",
-          touchAction: "manipulation",
-          // Desktop is a compact utility rail matching the Queue/Drafts
-          // header; Mobile keeps native touch height.
-          ...(desktop
-            ? {
-              pl: 0.5,
+      {!desktop
+        ? <MobileCallRail calls={calls} onOverview={toggle} onOpen={openCall} stale={stale} />
+        : (
+          // The rail is a toggle plus, while calls run, one chip per call. The
+          // chips are buttons of their own, so the toggle cannot wrap them;
+          // the rest of the row still toggles on click.
+          <Stack
+            direction="row"
+            alignItems="center"
+            onClick={(event): void => {
+              if (!(event.target as HTMLElement).closest("button")) toggle();
+            }}
+            sx={{
+              width: "100%",
+              minWidth: 0,
               pr: 1,
-              py: 0,
               minHeight: desktopSize(32),
-              "&:active, &:focus-visible": { bgcolor: "action.hover" },
-            }
-            : {
-              px: 1,
-              py: 0.5,
-              minHeight: mobileComposerPanelHeaderMinHeight,
-            }),
-          "@media (pointer: coarse)": {
-            minHeight: mobileComposerPanelHeaderMinHeight,
-          },
-        }}
-      >
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={desktop ? 0 : 1}
-          sx={{ width: "100%", minWidth: 0, ...(desktop && { gap: "0.375rem" }) }}
-        >
-          {desktop
-            ? (
-              // With the 0.375rem row gap this is the 28px (scaled) chevron
-              // column the Queue/Drafts header uses: one shared left edge.
+              gap: "0.375rem",
+              cursor: "pointer",
+              "@media (pointer: coarse)": {
+                minHeight: mobileComposerPanelHeaderMinHeight,
+              },
+            }}
+          >
+            <ButtonBase
+              {...toggleTap}
+              aria-label={expanded ? "Collapse calls" : "Expand calls"}
+              aria-expanded={expanded}
+              disableRipple
+              sx={{
+                flexShrink: 0,
+                alignSelf: "stretch",
+                justifyContent: "flex-start",
+                gap: "0.375rem",
+                pl: 0.5,
+                pr: 0.5,
+                borderRadius: 1,
+                touchAction: "manipulation",
+                "&:active, &:focus-visible": { bgcolor: "action.hover" },
+              }}
+            >
+              {/* With the 0.375rem gap this is the 28px (scaled) chevron
+                  column the Queue/Drafts header uses: one shared left edge. */}
               <Box
                 sx={{
                   width: desktopSize(22),
@@ -1182,61 +1433,85 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                   ? <ExpandMore fontSize="small" />
                   : <ChevronRight fontSize="small" />}
               </Box>
-            )
-            : <AccountTree fontSize="small" sx={{ color: "text.secondary" }} />}
-          <Typography
-            variant={desktop ? "caption" : "overline"}
-            sx={desktop ? { fontWeight: 600 } : { lineHeight: 1.4 }}
-          >
-            Calls
-          </Typography>
-          {overview.active > 0 && (
-            <CircularProgress size="0.875rem" thickness={5} />
-          )}
-          <Typography
-            variant={desktop ? "caption" : "body2"}
-            noWrap
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              color: overview.failed > 0 && overview.active === 0
-                ? "error.main"
-                : "text.secondary",
-              textTransform: "capitalize",
-            }}
-          >
-            {summary}
-          </Typography>
-          {stale && (
-            <Tooltip
-              title={`Last updated ${
-                new Date(observedAt).toLocaleTimeString()
-              }`}
-            >
-              <Typography variant="caption" color="warning.main">
-                offline
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                Calls
               </Typography>
-            </Tooltip>
-          )}
-          {overview.findings > 0 && (
+            </ButtonBase>
+            {activeCalls.length > 0
+              ? (
+                <Box
+                  data-calls-active-chips
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
+                    overflow: "hidden",
+                  }}
+                >
+                  {activeCalls.slice(0, ACTIVE_CHIP_LIMIT).map((call) => (
+                    <ActiveCallChip
+                      key={call.call_id}
+                      call={call}
+                      onOpen={(): void => openCall(call.call_id)}
+                    />
+                  ))}
+                  {activeCalls.length > ACTIVE_CHIP_LIMIT && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ flexShrink: 0, fontWeight: 600 }}
+                    >
+                      +{activeCalls.length - ACTIVE_CHIP_LIMIT}
+                    </Typography>
+                  )}
+                </Box>
+              )
+              : (
+                <Typography
+                  variant="caption"
+                  noWrap
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    color: overview.failed > 0 ? "error.main" : "text.secondary",
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {summary}
+                </Typography>
+              )}
+            {stale && (
+              <Tooltip
+                title={`Last updated ${
+                  new Date(observedAt).toLocaleTimeString()
+                }`}
+              >
+                <Typography variant="caption" color="warning.main">
+                  offline
+                </Typography>
+              </Tooltip>
+            )}
+            {overview.findings > 0 && (
+              <Typography
+                variant="caption"
+                color="warning.main"
+                sx={{ fontWeight: 600, flexShrink: 0 }}
+              >
+                {overview.findings} finding{overview.findings === 1 ? "" : "s"}
+              </Typography>
+            )}
+            {shortcut}
             <Typography
               variant="caption"
-              color="warning.main"
-              sx={{ fontWeight: 600 }}
+              color="text.secondary"
+              sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
             >
-              {overview.findings} finding{overview.findings === 1 ? "" : "s"}
+              {overview.total - overview.active}/{overview.total}
             </Typography>
-          )}
-          {shortcut}
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
-          >
-            {overview.total - overview.active}/{overview.total}
-          </Typography>
-        </Stack>
-      </ButtonBase>}
+          </Stack>
+        )}
       {desktop && (
         <Collapse in={expanded}>
           {
@@ -1271,6 +1546,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             setDesktopOpen(false)}
           title={routed ? displayTitle(routed) : "Call"}
           desktopMaxWidth={1240}
+          desktopFill
         >
           {routed && (
             <Box
@@ -1278,7 +1554,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
               data-desktop-keys="own"
               onKeyDown={desktopKeys}
               sx={{
-                height: "min(84vh, 980px)",
+                flex: 1,
                 display: "flex",
                 flexDirection: "column",
                 minHeight: 0,
@@ -1286,18 +1562,47 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                 typography: "body2",
               }}
             >
-              <Typography
-                variant="subtitle1"
-                noWrap
-                sx={{ fontWeight: 700, textTransform: "capitalize", pb: 1 }}
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ pb: 1, minWidth: 0 }}
               >
-                {callTitle(routed)}
-              </Typography>
+                <Typography
+                  variant="subtitle1"
+                  noWrap
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontWeight: 700,
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {callTitle(routed)}
+                </Typography>
+                <HintTooltip title="Close" shortcut="Escape">
+                  <IconButton
+                    aria-label="Close call"
+                    size="small"
+                    onClick={(): void => setDesktopOpen(false)}
+                  >
+                    <Close fontSize="small" />
+                  </IconButton>
+                </HintTooltip>
+              </Stack>
               <Stack
                 direction="row"
                 spacing={2}
                 sx={{ flex: 1, minHeight: 0 }}
               >
+                {calls.length > 1 && (
+                  <DesktopCallRail
+                    calls={calls}
+                    selected={routed.call_id}
+                    onSelect={(call): void =>
+                      setRoute({ call, level: "transcript" })}
+                  />
+                )}
                 <CallConversation
                   call={routed}
                   desktop
@@ -1308,10 +1613,11 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                   <Box
                     data-call-details-panel
                     sx={{
-                      width: 380,
+                      width: "clamp(320px, 24vw, 440px)",
                       flexShrink: 0,
                       overflowY: "auto",
                       overscrollBehavior: "contain",
+                      ...desktopScrollbarSx,
                       borderLeft: 1,
                       borderColor: "divider",
                       pl: 2,
@@ -1327,6 +1633,33 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                   </Box>
                 )}
               </Stack>
+              <Box sx={{ mx: -3, mt: 1, borderTop: 1, borderColor: "divider" }}>
+                <DesktopShortcutBar
+                  groups={[
+                    {
+                      label: "Call",
+                      slots: [{
+                        shortcut: "[/]",
+                        label: "Previous / next",
+                        availability: calls.length > 1
+                          ? "available"
+                          : "inactive",
+                      }],
+                    },
+                    {
+                      slots: [
+                        {
+                          shortcut: "I",
+                          label: "Details",
+                          availability: desktopDetails ? "active" : "available",
+                        },
+                        { shortcut: "O", label: "Open as session" },
+                        { shortcut: "Esc", label: "Close" },
+                      ],
+                    },
+                  ]}
+                />
+              </Box>
             </Box>
           )}
         </Sheet>

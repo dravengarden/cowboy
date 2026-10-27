@@ -64,6 +64,9 @@ export function CallTranscript({
         topInset="0px"
         bottomInset={bottomInset}
         shortContentAtTop={desktop}
+        // Desktop tool rows open the Desktop inspector, a modal stacked above
+        // the Calls modal; the touch sheet sits below the modal band.
+        desktopNavigation={desktop}
         statusBar={false}
         magneticHaptics={false}
       />

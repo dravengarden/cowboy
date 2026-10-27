@@ -431,7 +431,7 @@ export function DesktopCommandHost({
     {
       id: "prompt.focusCalls",
       title: "Open or Close Calls",
-      description: "Open and focus the Agents this session called, or close them when Calls already owns focus",
+      description: "Open the newest running call from collapsed Calls, otherwise open and focus the Agents this session called; close them when Calls already owns focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
       when: () => document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null,
@@ -444,6 +444,15 @@ export function DesktopCommandHost({
         if (workspace.focusedRegion === "prompt.calls") {
           if (toggle?.getAttribute("aria-label") === "Collapse calls") toggle.click();
           workspace.focusRegion("prompt.composer");
+          return;
+        }
+        // From collapsed Calls a running call is what the user came for: open
+        // its live transcript. An expanded list keeps ordinary focus.
+        const running = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.calls'] [data-call-chip]",
+        );
+        if (running && toggle?.getAttribute("aria-label") === "Expand calls") {
+          running.click();
           return;
         }
         if (toggle?.getAttribute("aria-label") === "Expand calls") toggle.click();

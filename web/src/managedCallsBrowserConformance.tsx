@@ -117,8 +117,21 @@ function childBootstrap(url: string): Response | null {
       reached_start: true,
       events: [
         update(1, "user_message_chunk", "Review the billing retry change."),
+        {
+          session_id: session,
+          seq: 2,
+          kind: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "child-tool-1",
+            title: "rg -n retry internal/billing",
+            kind: "execute",
+            status: "completed",
+            rawInput: { command: "rg -n retry internal/billing" },
+          },
+        },
         update(
-          2,
+          3,
           "agent_message_chunk",
           "The retry path in `charge.go` resubmits after the provider accepted " +
             "the request, so a charge can be **duplicated**.\n\n" +
@@ -518,6 +531,27 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     check(text().includes("2/3"), "settled/total count missing");
     tests.push("desktop-summary-separates-execution-from-findings");
 
+    const chip = await until(
+      () => document.querySelector<HTMLElement>("[data-call-chip='call-security']"),
+      "a running call must show as a chip while Calls is collapsed",
+    );
+    check(
+      !document.querySelector("[data-call-chip='call-correctness']"),
+      "only running calls get a chip",
+    );
+    chip.click();
+    await until(
+      () => document.querySelector("[data-desktop-call-modal='call-security']"),
+      "the running chip must open its call directly",
+    );
+    check(button("Expand calls"), "opening a chip must not expand the list");
+    button("Close call")!.click();
+    await until(
+      () => document.querySelector("[data-desktop-call-modal]") ? null : true,
+      "the call modal did not close",
+    );
+    tests.push("desktop-running-call-chip-opens-call");
+
     button("Expand calls")!.click();
     await until(() => button("Collapse calls"), "calls did not expand");
     const rows = document.querySelectorAll("[data-desktop-item^='call-']");
@@ -600,6 +634,61 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     check(text().includes("Input snapshot"), "snapshot identity missing");
     tests.push("desktop-modal-shows-transcript-and-details");
+
+    const paper = modal.closest<HTMLElement>(".MuiDialog-paper")!
+      .getBoundingClientRect();
+    check(
+      paper.width >= innerWidth - 40 && paper.height >= innerHeight - 40,
+      `the call modal must fill the viewport (${paper.width}x${paper.height})`,
+    );
+    check(
+      modal.querySelectorAll("[data-call-rail-item]").length === 3,
+      "the call modal must list every call",
+    );
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }));
+    await until(
+      () => document.querySelector("[data-desktop-call-modal='call-tests']"),
+      "] must step to the next call",
+    );
+    document.querySelector<HTMLElement>("[data-desktop-call-modal]")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "[", bubbles: true }));
+    const stepped = await until(
+      () => document.querySelector<HTMLElement>("[data-desktop-call-modal='call-correctness']"),
+      "[ must step to the previous call",
+    );
+    tests.push("desktop-modal-fills-viewport-and-steps-calls");
+
+    (await until(
+      () => stepped.querySelector<HTMLElement>("[data-call-transcript] [aria-haspopup='dialog']"),
+      "child tool row missing",
+    )).click();
+    await until(
+      () => text().includes("Tool history inspector") ? true : null,
+      "the tool inspector did not open",
+    );
+    check(
+      document.elementFromPoint(innerWidth / 2, innerHeight / 2)
+        ?.closest("[role='dialog']")?.textContent?.includes("Tool history inspector"),
+      "the tool inspector must open above the call modal",
+    );
+    // React bubbles the inspector's portal events through the call modal.
+    [...document.querySelectorAll<HTMLElement>("[role='dialog']")]
+      .find((node) => node.textContent?.includes("Tool history inspector"))!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    check(
+      stepped.querySelector("[data-call-details-panel]"),
+      "inspector keys must not reach the call modal",
+    );
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(
+      () => text().includes("Tool history inspector") ? null : true,
+      "Escape must close the tool inspector",
+    );
+    check(
+      document.querySelector("[data-desktop-call-modal='call-correctness']"),
+      "closing the inspector must keep the call modal",
+    );
+    tests.push("desktop-tool-inspector-opens-above-call-modal");
 
     (rows[2] as HTMLElement).click();
     const failed = await until(

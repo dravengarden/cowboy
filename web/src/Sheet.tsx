@@ -27,12 +27,20 @@ function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
 export function Sheet(
   props: Omit<BottomSheetProps, "frosted"> & {
     desktopMaxWidth?: number;
+    /** Desktop: claim the whole viewport less a 16px margin, the Tool
+     * inspector's geometry, instead of sizing to the content. */
+    desktopFill?: boolean;
     portal?: boolean;
   },
 ): ReactNode {
   const theme = useTheme();
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const { desktopMaxWidth, portal = false, ...bottomSheetProps } = props;
+  const {
+    desktopMaxWidth,
+    desktopFill = false,
+    portal = false,
+    ...bottomSheetProps
+  } = props;
   // Content-heavy Cowboy workbenches may claim the available Desktop canvas.
   // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
   // flush bottom card.
@@ -52,10 +60,20 @@ export function Sheet(
           paper: {
             sx: {
               ...desktopModalPaperSx(),
-              width: `min(${desktopMaxWidth}px, calc(100vw - 64px))`,
-              maxWidth: "none",
-              maxHeight: "calc(100vh - 48px)",
-              m: 3,
+              ...(desktopFill
+                ? {
+                  width: "calc(100vw - 32px)",
+                  height: "calc(100dvh - 32px)",
+                  maxWidth: "none",
+                  maxHeight: "none",
+                  m: 2,
+                }
+                : {
+                  width: `min(${desktopMaxWidth}px, calc(100vw - 64px))`,
+                  maxWidth: "none",
+                  maxHeight: "calc(100vh - 48px)",
+                  m: 3,
+                }),
             },
           },
           backdrop: { sx: desktopModalBackdropSx() },
