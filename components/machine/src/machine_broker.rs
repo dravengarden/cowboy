@@ -2485,16 +2485,30 @@ impl Broker {
             {
                 return;
             }
+            let unit = worker_unit_name(&broker.args.socket, &session_id);
+            // A Controller re-declares every known session after each
+            // reconnect, including one whose worker already crashed during
+            // startup. With no unit left nothing can reconnect, so report the
+            // terminal state without an extreme recovery or a futile stop.
+            let active = Command::new("systemctl")
+                .args(["--user", "is-active", &unit])
+                .output();
+            if let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(10), active).await
+                && worker_unit_gone(&String::from_utf8_lossy(&output.stdout))
+            {
+                tracing::info!(
+                    session = %session_id,
+                    "declared worker has no running unit; reporting it stopped"
+                );
+                broker.publish_session_state(&session_id, WorkerState::Crashed);
+                return;
+            }
             tracing::error!(
                 session = %session_id,
                 "declared worker never reconnected; applying session-level extreme recovery"
             );
             let stop = Command::new("systemctl")
-                .args([
-                    "--user",
-                    "stop",
-                    &worker_unit_name(&broker.args.socket, &session_id),
-                ])
+                .args(["--user", "stop", &unit])
                 .status();
             match tokio::time::timeout(Duration::from_secs(10), stop).await {
                 Ok(Ok(status)) if status.success() => {}
@@ -3925,6 +3939,12 @@ fn systemd_show_value(output: &str, key: &str) -> Option<String> {
         .lines()
         .find_map(|line| line.split_once('=').filter(|(name, _)| *name == key))
         .map(|(_, value)| value.trim().to_owned())
+}
+
+/// `systemctl is-active` reports a unit that has no process: unloaded units
+/// read as `inactive`. Transitional or unknown states keep extreme recovery.
+fn worker_unit_gone(is_active: &str) -> bool {
+    matches!(is_active.trim(), "inactive" | "failed")
 }
 
 fn worker_unit_name(socket: &Path, session_id: &str) -> String {
@@ -5746,6 +5766,21 @@ mod tests {
         .await;
         assert!(!broker.cancelled_sessions.lock().contains(session_id));
         assert!(broker.sessions.lock().contains_key(session_id));
+    }
+
+    #[test]
+    fn only_settled_unit_states_skip_extreme_recovery() {
+        assert!(worker_unit_gone("inactive\n"));
+        assert!(worker_unit_gone("failed\n"));
+        for state in [
+            "active\n",
+            "activating\n",
+            "deactivating\n",
+            "reloading\n",
+            "",
+        ] {
+            assert!(!worker_unit_gone(state), "{state:?}");
+        }
     }
 
     #[test]
