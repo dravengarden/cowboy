@@ -171,7 +171,8 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
   assert.match(prompt, /review.start/);
   assert.match(prompt, /inspect calls.result/);
   assert.match(prompt, /review_selection/);
-  assert.ok(prompt.length < 800);
+  // Review 1.0.6 guidance (notify-based CLI reviews) is 854 characters.
+  assert.ok(prompt.length < 900);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
   const added = agentCallsConfiguration([], "", prompt);
   assert.equal(

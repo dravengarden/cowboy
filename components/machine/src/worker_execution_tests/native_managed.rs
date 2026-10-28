@@ -276,10 +276,19 @@ async fn native_managed_execution(images: bool) {
     assert_eq!(marker.call_id, "call-1");
     assert_eq!(marker.output_schema, schema);
     let mut command = tokio::process::Command::new("python3");
+    // Cargo runs this crate's tests from components/machine; the harnesses
+    // read repository paths such as plugins/codex/provider.json.
+    command.current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     command.arg(if images {
-        "tools/execution_managed_image_conformance.py"
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/execution_managed_image_conformance.py"
+        )
     } else {
-        "tools/execution_claude_managed_conformance.py"
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/execution_claude_managed_conformance.py"
+        )
     });
     if images {
         command

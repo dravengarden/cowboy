@@ -202,7 +202,10 @@ test("linked Victoria guide uses the real generic installation route", async () 
     `${ROOT}/examples/telemetry/victoria/README.md`,
     "utf8",
   );
-  const server = await readFile(`${ROOT}/components/server/src/server.rs`, "utf8");
+  const server = await readFile(
+    `${ROOT}/components/server/src/server.rs`,
+    "utf8",
+  );
   assert(
     guide.includes("POST /api/machines/{machine_id}/plugins/victoria`"),
     "document the implemented installation route",
