@@ -82,6 +82,13 @@ require the exact successful build receipt and published SideStore version.
   credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
+- **Reboot convergence is a core requirement**: after any Machine (Hawk, OVH,
+  Falcon) reboots successfully, Cowboy must return to service with no human
+  step. Units start at boot, always restart (exit 75 included) and never stay
+  start-limited; cross-host readiness is retried, not fatal; transient state is
+  rebuilt and lost lifetimes are recovered without replaying uncertain effects.
+  See [reboot convergence](docs/requirements.md#reboot-convergence) and verify
+  without rebooting production hosts.
 - Storage moves must preserve `/tmp/codex-daemon-<uid>` as a real user-owned
   `0700` directory. Codex's native sandbox rejects a symlink there, even with
   a correctly permissioned target. See the

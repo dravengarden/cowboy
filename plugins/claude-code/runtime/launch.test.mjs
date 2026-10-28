@@ -255,9 +255,12 @@ test("the shell prefix sends only registered hook commands to the proxy", async 
   });
   const hook = "printf 'it'\"'\"'s a hook' # *";
   const script = join(directory, "prefix.sh");
-  await writeFile(script, hookPrefixScript("/bin/sh", proxy, [hook, hook]), {
-    mode: 0o700,
-  });
+  // The runtime may carry its own flags, as node does (NODE_FLAGS).
+  await writeFile(
+    script,
+    hookPrefixScript(["/bin/sh", "-e"], proxy, [hook, hook]),
+    { mode: 0o700 },
+  );
   const run = (...argv) => execFileSync(script, argv, { encoding: "utf8" });
   assert.equal(run(hook), "proxied:" + hook);
   // An MCP server or any other command runs directly, without the proxy.

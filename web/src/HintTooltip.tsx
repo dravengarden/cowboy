@@ -1,5 +1,13 @@
 import { alpha, Box, Tooltip, type TooltipProps } from "@mui/material";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  cloneElement,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
 
 /**
@@ -16,6 +24,11 @@ import { desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
  * pointer happens to hover that control again. MUI only reports onOpen and
  * onClose across a change of the `open` it was given, so a suppressed hint
  * forgets its hover and shows again on the next one.
+ *
+ * A controlled hint also closes itself when the pointer is seen outside its
+ * control or the window loses focus. MUI closes only on that control's own
+ * mouseleave, which a pointer capture, a fast exit or an app switch can skip,
+ * leaving the hint standing over unrelated content.
  */
 export function HintTooltip({
   title,
@@ -31,9 +44,26 @@ export function HintTooltip({
   suppressed?: boolean | undefined;
 }): React.JSX.Element {
   const [hovered, setHovered] = useState(false);
+  const anchor = useRef<Element | null>(null);
   useEffect(() => {
     if (suppressed) setHovered(false);
   }, [suppressed]);
+  useEffect(() => {
+    if (!hovered) return undefined;
+    const leave = (event: Event): void => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (!target || !anchor.current?.contains(target)) setHovered(false);
+    };
+    const blur = (): void => setHovered(false);
+    document.addEventListener("pointerover", leave, true);
+    document.addEventListener("pointerdown", leave, true);
+    globalThis.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerover", leave, true);
+      document.removeEventListener("pointerdown", leave, true);
+      globalThis.removeEventListener("blur", blur);
+    };
+  }, [hovered]);
   const controlled = suppressed === undefined ? {} : {
     open: hovered && !suppressed,
     onOpen: (event: React.SyntheticEvent): void => {
@@ -54,7 +84,21 @@ export function HintTooltip({
         ? ""
         : <HintContent title={title} shortcut={shortcut} detail={detail} />}
     >
-      {children}
+      {suppressed === undefined ? children : cloneElement(
+        children as ReactElement<{
+          onPointerEnter?: (event: ReactPointerEvent<Element>) => void;
+        }>,
+        {
+          // Recorded synchronously: MUI opens after its enter delay, when the
+          // event no longer carries its currentTarget.
+          onPointerEnter: (event: ReactPointerEvent<Element>): void => {
+            anchor.current = event.currentTarget;
+            (children as ReactElement<{
+              onPointerEnter?: (event: ReactPointerEvent<Element>) => void;
+            }>).props.onPointerEnter?.(event);
+          },
+        },
+      )}
     </Tooltip>
   );
 }

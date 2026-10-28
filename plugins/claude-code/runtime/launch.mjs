@@ -59,6 +59,13 @@ import {
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 
+// Every session keeps an adapter, a private CLI and one relay per target MCP
+// server resident, all idle-dominated. V8's size-optimized heap policy holds
+// about half their anonymous memory at no measurable relay throughput cost
+// (OVH, Node 24, 2026-10-27). The bin/ wrappers (build.ts) pass the same flag.
+export const NODE_FLAGS = ["--optimize-for-size"];
+const nodeArgv = [process.execPath, ...NODE_FLAGS];
+
 // Startup milestones, logged by the worker beside the adapter's own
 // `[session/create]` phases: where a slow start spent its time. The SDK
 // discards this process's stderr, so the adapter relays them (startupTrace).
@@ -372,13 +379,12 @@ export function shellQuote(value) {
 // proxy kept a resident Node parent (about 16 MiB) beside every MCP server
 // of every session.
 export function hookPrefixScript(node, proxy, commands) {
+  const runtime = [node].flat().map(shellQuote).join(" ");
   const registered = [...new Set(commands)];
   const route = registered.length
     ? `  case "$1" in\n    ${
       registered.map(shellQuote).join("|")
-    })\n      exec ${shellQuote(node)} ${
-      shellQuote(proxy)
-    } "$1"\n      ;;\n  esac\n`
+    })\n      exec ${runtime} ${shellQuote(proxy)} "$1"\n      ;;\n  esac\n`
     : "";
   return `#!/bin/sh\nif [ "$#" -eq 1 ]; then\n${route}  exec /bin/sh -c "$1"\nfi\nexec "$@"\n`;
 }
@@ -1261,7 +1267,7 @@ async function native(args) {
       await writeFile(
         hookPrefix,
         hookPrefixScript(
-          process.execPath,
+          nodeArgv,
           proxy,
           hooks.commands.map((entry) => entry.command),
         ),
@@ -1280,7 +1286,7 @@ async function native(args) {
     // run this waiter, so native delivers their completion notifications.
     const taskWait = join(stage, "task-wait.mjs");
     await copyFile(new URL("./task-wait.mjs", import.meta.url), taskWait);
-    context.taskWait = `${shellQuote(process.execPath)} ${
+    context.taskWait = `${nodeArgv.map(shellQuote).join(" ")} ${
       shellQuote(taskWait)
     }`;
     const contextPath = join(stage, "context.json");
@@ -1297,7 +1303,7 @@ async function native(args) {
           mcpServers: {
             ...nativeMcpServers(mcpEntries, {
               command: process.execPath,
-              args: [proxy, contextPath],
+              args: [...NODE_FLAGS, proxy, contextPath],
             }),
             ...(memory?.tools
               ? { [memoryConfigured.server]: memory.mcp() }
