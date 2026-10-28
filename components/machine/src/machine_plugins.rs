@@ -1049,8 +1049,9 @@ impl MachinePluginStore {
     /// `runtime/generations/<n>` whose home also holds the Provider's native
     /// state; a session launches and resumes on the generation it recorded.
     /// Besides `referenced` (the Controller's pinned set joined with resident
-    /// launches), the current links, the newest replica, every generation
-    /// changed within [`AUTH_GENERATION_GRACE`] and every generation a live
+    /// launches), the current links, the newest replica, the two newest
+    /// generations, every generation changed within [`AUTH_GENERATION_GRACE`]
+    /// and every generation a live
     /// process uses as its home are kept. Retirement holds the lifecycle lock
     /// that credential application takes, and renames each directory to a
     /// tombstone before removing it.
@@ -1137,6 +1138,10 @@ impl MachinePluginStore {
                 candidates.insert(generation);
             }
         }
+        // The two newest generations cover a launch admitted on the previous
+        // current generation while a refresh advanced the Machine after the
+        // Controller's snapshot.
+        keep.extend(candidates.iter().rev().take(2).copied());
         keep.extend(live_auth_homes(&runtime));
         for generation in candidates {
             if keep.contains(&generation) {
@@ -7926,15 +7931,13 @@ mod tests {
             .unwrap();
         holder.kill().unwrap();
         holder.wait().unwrap();
-        // Runtime current is 1 (the credential source); materialized current
-        // is 6; 3 is pinned; 4 is a live HOME.
-        assert_eq!(outcome.retired, vec![2, 5]);
-        assert_eq!(outcome.retained, vec![1, 3, 4, 6]);
+        // Runtime current is 1 (the credential source); 5 and 6 are the two
+        // newest; 3 is pinned; 4 is a live HOME.
+        assert_eq!(outcome.retired, vec![2]);
+        assert_eq!(outcome.retained, vec![1, 3, 4, 5, 6]);
         assert!(outcome.freed_bytes > 0);
-        for generation in [2, 5] {
-            assert!(!runtime.join(generation.to_string()).exists());
-            assert!(!materialized.join(generation.to_string()).exists());
-        }
+        assert!(!runtime.join("2").exists());
+        assert!(!materialized.join("2").exists());
         assert!(runtime.join("notes").is_dir());
         // The pinned historical projection still reads the shared credential.
         let pinned = projected_credential_bundle(
@@ -7959,8 +7962,8 @@ mod tests {
             .retire_auth_generations_after("grok", &BTreeSet::new(), Duration::ZERO)
             .await
             .unwrap();
-        assert_eq!(outcome.retired, vec![3, 4, 6]);
-        assert_eq!(outcome.retained, vec![1, 7]);
+        assert_eq!(outcome.retired, vec![3, 4, 5]);
+        assert_eq!(outcome.retained, vec![1, 6, 7]);
         fs::remove_dir_all(root).unwrap();
     }
 

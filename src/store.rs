@@ -1761,10 +1761,12 @@ impl Store {
         dispatch_storage!(self, deleted_session_generations())
     }
 
-    /// `(machine_id, provider, auth_generation)` that soft-deleted sessions
-    /// still pin; they stay recoverable until purged.
-    pub async fn deleted_session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
-        dispatch_storage!(self, deleted_session_auth_generations())
+    /// `(machine_id, provider, auth_generation)` that every unpurged session
+    /// row pins, live or soft-deleted. Reading all rows rather than only
+    /// deleted ones covers a session the Hub already removed while its
+    /// asynchronous deletion write is still pending.
+    pub async fn session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
+        dispatch_storage!(self, session_auth_generations())
     }
 
     /// `(machine_id, plugin_id)` whose uninstall saga has not finished; its
@@ -6313,14 +6315,14 @@ impl PostgresStorage {
         .context("list soft-deleted session generations")
     }
 
-    pub async fn deleted_session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
+    pub async fn session_auth_generations(&self) -> Result<Vec<(String, String, i64)>> {
         sqlx::query_as(
             "SELECT DISTINCT machine_id, provider, provider_auth_generation FROM sessions \
-             WHERE deleted_at IS NOT NULL AND provider_auth_generation IS NOT NULL",
+             WHERE provider_auth_generation IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await
-        .context("list soft-deleted session auth generations")
+        .context("list session auth generations")
     }
 
     // PostgreSQL reclaims through its own autovacuum; this backend owns no file.

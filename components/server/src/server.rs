@@ -3104,12 +3104,17 @@ async fn retire_auth_generations(
             && plugin.auth_generation.is_some()
     });
     for plugin in providers {
+        let mut pinned = referenced
+            .get(&(machine.id.clone(), plugin.plugin_id.clone()))
+            .cloned()
+            .unwrap_or_default();
+        // A session registered after the reference snapshot is admitted on
+        // the generation current in this Machine snapshot; keep it even if a
+        // refresh advances the Machine before that session launches.
+        pinned.extend(plugin.auth_generation);
         let request = crate::generation_retention::AuthRequest {
             provider_id: plugin.plugin_id.clone(),
-            referenced: referenced
-                .get(&(machine.id.clone(), plugin.plugin_id.clone()))
-                .cloned()
-                .unwrap_or_default(),
+            referenced: pinned,
         };
         if !request.is_valid() {
             tracing::warn!(machine = %machine.id, provider = %request.provider_id, "skipping invalid credential retention request");
@@ -3391,12 +3396,14 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             }
         }
     }
-    // Credential generations pinned by sessions, including soft-deleted ones;
-    // an unreadable list skips credential retention for this pass.
-    let auth_referenced = match store.deleted_session_auth_generations().await {
-        Ok(deleted) => {
-            let mut referenced = referenced_auth_generations(&state.hub.session_list());
-            for (machine_id, provider, generation) in deleted {
+    // Credential generations pinned by every unpurged session row joined with
+    // the Hub (a session not yet persisted); an unreadable store skips
+    // credential retention for this pass.
+    let hub_auth = referenced_auth_generations(&state.hub.session_list());
+    let auth_referenced = match store.session_auth_generations().await {
+        Ok(stored) => {
+            let mut referenced = hub_auth;
+            for (machine_id, provider, generation) in stored {
                 if let Ok(generation) = u64::try_from(generation) {
                     referenced
                         .entry((machine_id, provider))
