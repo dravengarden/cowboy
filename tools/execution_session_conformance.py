@@ -926,10 +926,53 @@ def main():
                 wait(lambda: effects.read_bytes() == before_clear_effects + first_effect, "post-Clear tool executes once")
                 wait(lambda: info()["status"] == "running", "post-Clear turn ended")
                 checks.append("clear_recovers_rebooted_target_before_starting_fresh_native_context")
+            if inputs.get("runtime_reboot"):
+                # Reboot convergence: a runtime host reboot loses its resident
+                # Machine and every worker together. The next prompt must resume
+                # the same conversation on the same target with no operator step.
+                wait(lambda: info()["status"] == "running", "idle before runtime reboot")
+                reboot_binding = info()["execution_binding"]
+                reboot_native = info().get("agent_session_id")
+                reboot_effects = effects.read_bytes()
+
+                def worker_pids():
+                    found = []
+                    for entry in Path("/proc").iterdir():
+                        if not entry.name.isdigit():
+                            continue
+                        try:
+                            argv = (entry / "cmdline").read_bytes().split(b"\0")
+                        except OSError:
+                            continue
+                        if session.encode() in argv and any(Path(inputs["worker"]).name.encode() in arg for arg in argv[:1]):
+                            found.append(int(entry.name))
+                    return found
+
+                lost_workers = worker_pids()
+                require(lost_workers, "runtime reboot fixture found no live worker")
+                runtime_machine, runtime_command = machines["runtime"]
+                runtime_machine.kill()
+                runtime_machine.wait(timeout=20)
+                for pid in lost_workers:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                wait(lambda: not worker_pids(), "runtime reboot worker loss")
+                wait(lambda: not connected("runtime"), "runtime reboot disconnect")
+                machines["runtime"] = (start("runtime-after-reboot", runtime_command), runtime_command)
+                wait(lambda: connected("runtime"), "runtime reconnect after reboot")
+                require(send("Run after runtime reboot") == 202, "post-reboot prompt refused")
+                wait(lambda: effects.read_bytes() == reboot_effects + first_effect, "post-reboot remote command")
+                wait(lambda: info()["status"] == "running", "post-reboot turn completion")
+                require(info()["execution_binding"] == reboot_binding
+                        and info().get("agent_session_id") == reboot_native,
+                        "runtime reboot changed the target or native conversation")
+                checks.append("runtime_host_reboot_resumes_conversation_on_original_target_without_operator")
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
-            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 4 * int(bool(inputs.get("execution_boot_recovery"))) + int(bool(inputs.get("execution_clear_recovery")))), "deletion removed work or replayed tools")
+            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * ((4 if inputs.get("execution_recovery") else 3) + 4 * int(bool(inputs.get("execution_boot_recovery"))) + int(bool(inputs.get("execution_clear_recovery"))) + int(bool(inputs.get("runtime_reboot")))), "deletion removed work or replayed tools")
             checks.append("public_deletion_waits_for_target_stop_and_preserves_work")
         except Exception:
             for log in logs:

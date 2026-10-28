@@ -8,6 +8,7 @@ use crate::core::settings_keys::{MACHINE_MAINTENANCE_PREFIX, SESSION_RESOURCE_WA
 use crate::machine_protocol::MachineCapacity;
 
 pub(super) const WAIT_PREFIX: &str = "Waiting for resources: ";
+pub(super) const MACHINE_CONNECTION_WAIT: &str = "waiting for Machine connection";
 /// The wait of an admitted prompt whose execution Machine is offline or booting.
 pub(super) const TARGET_WAIT_REASON: &str = "the execution Machine is not ready";
 const WAKE_HEADROOM: u64 = 1 << 30;
@@ -59,11 +60,18 @@ pub(super) fn policy(hub: &Hub, config: &crate::config::Handle, machine: &str) -
 pub(super) fn wait(hub: &Hub, session: &str, reason: &str) {
     hub.set_resource_wait(session, Some(reason.to_owned()));
     let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");
-    let since = hub
-        .setting(&key)
+    let current = hub.setting(&key);
+    let since = current
+        .as_ref()
         .and_then(|v| v.get("since_ms").and_then(serde_json::Value::as_i64))
         .unwrap_or_else(now_ms);
-    let value = serde_json::json!({"reason": reason, "since_ms": since});
+    let mut value = serde_json::json!({"reason": reason, "since_ms": since});
+    if let Some(explicit) = current
+        .as_ref()
+        .and_then(|v| v.get("explicit").and_then(serde_json::Value::as_bool))
+    {
+        value["explicit"] = serde_json::Value::Bool(explicit);
+    }
     if hub.setting(&key).as_ref() != Some(&value) {
         hub.set_setting(key, value);
     }
@@ -86,7 +94,7 @@ fn resource_block(state: &AppState, machine: &str) -> Option<&'static str> {
         .runtime(machine)
         .is_some_and(|runtime| runtime.connected())
     {
-        return Some("waiting for Machine connection");
+        return Some(MACHINE_CONNECTION_WAIT);
     }
     let capacities = state.session_maintenance.capacities.read();
     let Some(capacity) = capacities.get(machine) else {
@@ -124,6 +132,7 @@ fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta)
 
 pub(super) fn clear_wait(hub: &Hub, session: &str) {
     hub.set_resource_wait(session, None);
+    hub.set_explicit_wait(session, false);
     let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");
     if hub.setting(&key).is_some() {
         hub.set_setting(key, serde_json::Value::Null);
@@ -135,10 +144,9 @@ pub(super) fn has_waiters(state: &AppState, machine: &str) -> bool {
         s.machine_id == machine
             // Waiting for an execution Machine needs no runtime worker slot.
             && waiting(&state.hub, &s.id).is_some_and(|(_, reason)| reason != TARGET_WAIT_REASON)
-            && state
-                .hub
-                .session_info(&s.id)
-                .is_some_and(|i| i.queue_count > 0 && !i.meta.paused)
+            && state.hub.session_info(&s.id).is_some_and(|i| {
+                i.queue_count > 0 && (!i.meta.paused || state.hub.explicit_wait(&s.id))
+            })
     })
 }
 
@@ -274,15 +282,24 @@ pub(super) fn start(state: &Arc<AppState>) {
                     clear_wait(&state.hub, &meta.id);
                     continue;
                 }
-                // An admitted send to a crashed or interrupted session that only
-                // waits for its execution Machine still revives once; any other
-                // wait in those states stops automatic delivery.
-                if matches!(meta.status, Status::Crashed | Status::Interrupted) && !target_wait {
+                // An explicit send keeps its intent across a transient wait:
+                // it bypasses Pause and revives a crashed session once, as the
+                // original send would have. An admitted send to a crashed or
+                // interrupted session that only waits for its execution Machine
+                // still revives once; any other wait in those states stops
+                // automatic delivery.
+                let explicit = state.hub.explicit_wait(&meta.id);
+                if matches!(meta.status, Status::Crashed | Status::Interrupted)
+                    && !target_wait
+                    && !explicit
+                {
                     clear_wait(&state.hub, &meta.id);
                     continue;
                 }
-                if !meta.paused
-                    && (target_wait || matches!(meta.status, Status::Exited | Status::Running))
+                if (!meta.paused || explicit)
+                    && (target_wait
+                        || explicit
+                        || matches!(meta.status, Status::Exited | Status::Running))
                 {
                     // Avoid popping/re-persisting the entire message on every
                     // blocked tick. The dispatcher still atomically rechecks.
@@ -302,7 +319,11 @@ pub(super) fn start(state: &Arc<AppState>) {
                             continue;
                         }
                     }
-                    state.hub.retry_resource_wait(&meta.id);
+                    if explicit {
+                        state.hub.drain_now(&meta.id);
+                    } else {
+                        state.hub.retry_resource_wait(&meta.id);
+                    }
                 }
             }
             let capacities = state.session_maintenance.capacities.read().clone();

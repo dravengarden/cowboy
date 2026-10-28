@@ -3495,7 +3495,15 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         text,
         content,
         cmid,
+        explicit,
     } = req;
+    let retain = |session_id: String, text, content, cmid, error: &str| {
+        let session = session_id.clone();
+        retain_failed_dispatch(hub, session_id, text, content, cmid, error);
+        if explicit {
+            retain_explicit_intent(hub, &session, error);
+        }
+    };
     let mut shutdown = state.shutdown.clone();
     let recovery = match dispatch_preflight(
         &mut shutdown,
@@ -3505,12 +3513,12 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     {
         Ok(recovery) => recovery,
         Err(error) => {
-            retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
+            retain(session_id, text, content, cmid, &error);
             return;
         }
     };
     if let Err(error) = session_context::claim_carrier(&state, &session_id, cmid.as_deref()).await {
-        retain_failed_dispatch(hub, session_id, text, content, cmid, &error);
+        retain(session_id, text, content, cmid, &error);
         return;
     }
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
@@ -3551,7 +3559,7 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 observability.finish_delivery_trace(trace, false);
             }
             tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
-            retain_failed_dispatch(hub, session_id, text, content, cmid, &e);
+            retain(session_id, text, content, cmid, &e);
         }
     }
 }
@@ -3597,6 +3605,22 @@ fn retain_failed_dispatch(
         format!("send failed: {error}")
     };
     hub.broadcast_error(Some(session_id), message);
+}
+
+/// Reboot convergence: an explicit send returned only because a Machine or
+/// resource was not ready yet must be delivered once it is, even when the
+/// queue is paused or the session crashed while its host rebooted.
+fn retain_explicit_intent(hub: &Hub, session_id: &str, error: &str) {
+    if error.starts_with(session_maintenance::WAIT_PREFIX) {
+        hub.set_explicit_wait(session_id, true);
+    } else if is_transient_machine_disconnect(error) {
+        session_maintenance::wait(
+            hub,
+            session_id,
+            session_maintenance::MACHINE_CONNECTION_WAIT,
+        );
+        hub.set_explicit_wait(session_id, true);
+    }
 }
 
 fn is_transient_machine_disconnect(error: &str) -> bool {
@@ -3656,6 +3680,67 @@ mod dispatcher_failure_tests {
             "Machine is not connected",
         );
         assert!(hub.setting(&key).is_none());
+    }
+
+    #[test]
+    fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let key = format!(
+            "{}s",
+            crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        );
+        // A rebooting runtime is a transient wait for an explicit send...
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            "Machine is not connected",
+        );
+        retain_explicit_intent(&hub, "s", "Machine is not connected");
+        assert!(hub.setting(&key).is_some());
+        assert!(hub.explicit_wait("s"));
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        // ...a resource wait keeps it too...
+        let busy = format!(
+            "{}{}",
+            session_maintenance::WAIT_PREFIX,
+            session_maintenance::MACHINE_CONNECTION_WAIT
+        );
+        hub.set_explicit_wait("s", false);
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            &busy,
+        );
+        retain_explicit_intent(&hub, "s", &busy);
+        assert!(hub.explicit_wait("s"));
+        // ...and a permanent refusal ends both the wait and the intent.
+        let refused =
+            "Execution target unavailable or identity changed; retained prompt was not delivered";
+        retain_failed_dispatch(
+            &hub,
+            "s".into(),
+            "p".into(),
+            vec![],
+            Some("c1".into()),
+            refused,
+        );
+        retain_explicit_intent(&hub, "s", refused);
+        assert!(hub.setting(&key).is_none());
+        assert!(!hub.explicit_wait("s"));
     }
 
     #[tokio::test]

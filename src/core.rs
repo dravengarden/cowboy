@@ -826,6 +826,10 @@ pub struct DispatchReq {
     /// user-message echo can be tagged for optimistic reconcile. None for a
     /// drained queue item (its optimistic row already reconciled via `queues`).
     pub cmid: Option<String>,
+    /// A user-requested send (chat submit, send now, force push). If it is
+    /// returned for a transient resource wait, maintenance retries it once the
+    /// resource returns even if the queue is paused or the session crashed.
+    pub explicit: bool,
 }
 
 pub struct DispatchOwnership {
@@ -1009,6 +1013,10 @@ struct Session {
     /// A durable interrupt/send admission owns automatic queue dispatch until
     /// its outcome is known. Unknown effects survive restart without replay.
     delivery_hold: Option<String>,
+    /// The queue head is an explicit send returned for a transient resource
+    /// wait. Maintenance redelivers it as that explicit send; any dispatch of
+    /// the head consumes the intent.
+    explicit_wait: bool,
     /// A channel/preflight-owned prompt has not reached its runtime yet.
     dispatch_pending: Option<u64>,
     /// Client message ids of prompts this Hub recently handed to a worker. A
@@ -2669,6 +2677,15 @@ impl Hub {
                                 settings_keys::SESSION_DELIVERY_HOLD_PREFIX
                             ))
                             .and_then(|value| value.as_str().map(str::to_owned)),
+                        explicit_wait: self
+                            .setting(&format!(
+                                "{}{id}",
+                                settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+                            ))
+                            .and_then(|value| {
+                                value.get("explicit").and_then(serde_json::Value::as_bool)
+                            })
+                            .unwrap_or(false),
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
@@ -3520,6 +3537,7 @@ impl Hub {
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,
+                    explicit_wait: false,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
                     turn_completion_latched: false,
@@ -5972,6 +5990,7 @@ impl Hub {
                 text,
                 content,
                 cmid: Some(operation.to_owned()),
+                explicit: true,
             }
         };
         self.send_dispatch(req);
@@ -6030,6 +6049,7 @@ impl Hub {
                 return;
             }
             let head = s.queue.remove(0);
+            s.explicit_wait = false;
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -6040,6 +6060,7 @@ impl Hub {
                 text: head.text,
                 content: head.content,
                 cmid: head.cmid,
+                explicit: manual,
             }
         };
         self.emit_pending(session_id);
@@ -6063,6 +6084,37 @@ impl Hub {
     /// Retry a never-dispatched resource wait, respecting pause and editing.
     pub fn retry_resource_wait(&self, session_id: &str) {
         self.drain_head(session_id, true, false);
+    }
+
+    /// Remember that the requeued head is an explicit send waiting for a
+    /// transient resource, or forget that intent.
+    pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
+        if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
+            s.explicit_wait = explicit;
+        }
+        // The persisted wait carries the intent across a Controller restart.
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        );
+        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key)
+            && wait
+                .get("explicit")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                != explicit
+        {
+            wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
+            self.set_setting(key, serde_json::Value::Object(wait));
+        }
+    }
+
+    pub fn explicit_wait(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.explicit_wait)
     }
 
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
@@ -6293,6 +6345,7 @@ impl Hub {
                     text,
                     content,
                     cmid,
+                    explicit: true,
                 });
             } else {
                 let id = self.next_qid();
@@ -6386,6 +6439,7 @@ impl Hub {
                     text,
                     content,
                     cmid,
+                    explicit: true,
                 });
             } else {
                 // Busy / draining / queued ahead → jump to the FRONT so it runs
@@ -6940,6 +6994,8 @@ impl Hub {
                     text: m.text,
                     content: m.content,
                     cmid,
+                    // A scheduled fire never bypasses the user's Pause.
+                    explicit: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -9216,6 +9272,28 @@ mod core_tests {
         assert!(hub.session_info("paused").unwrap().meta.paused);
         assert_eq!(queue_texts(&hub, "paused"), vec!["second"]);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_marks_explicit_sends_and_consumes_a_waiting_intent() {
+        let hub = hub_with_session("explicit");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("explicit", Status::Running, None);
+        hub.set_paused("explicit", true);
+        hub.submit("explicit", "held".into(), vec![], Some("one".into()));
+        // Maintenance's ordinary retry respects Pause and is not explicit.
+        hub.retry_resource_wait("explicit");
+        assert!(rx.try_recv().is_err());
+        hub.set_explicit_wait("explicit", true);
+        hub.drain_now("explicit");
+        let request = rx.try_recv().unwrap();
+        assert!(request.explicit);
+        assert_eq!(request.cmid.as_deref(), Some("one"));
+        assert!(
+            !hub.explicit_wait("explicit"),
+            "dispatch consumes the intent"
+        );
     }
 
     #[test]

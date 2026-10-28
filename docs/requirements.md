@@ -130,8 +130,11 @@ Every change to service units, installers, startup ordering, persistence or
 recovery must state how it preserves this property. Verify without rebooting
 production hosts: inspect the installed unit and its restart/start-limit
 policy, exercise process loss and boot-identity change in isolated fixtures
-(`tools/execution_session_conformance.py`), and use a disposable VM for
-boot-ordering changes. Evidence from an actual unplanned reboot is recorded in
+(`tools/execution_session_conformance.py`: `runtime_reboot` for a runtime host,
+`execution_boot_recovery` for an execution target), and use a disposable VM for
+boot-ordering changes. An explicit send that meets a transient wait while a
+Machine reconnects keeps its intent: it is delivered once the Machine is ready
+even if the queue is paused or the session crashed during the reboot. Evidence from an actual unplanned reboot is recorded in
 [remote session disaster recovery](remote-session-disaster-recovery.md).
 
 ## State ownership
