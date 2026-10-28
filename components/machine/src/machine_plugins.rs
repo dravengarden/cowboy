@@ -5301,7 +5301,7 @@ type AuthRetention = crate::generation_retention::AuthOutcome;
 
 /// A credential generation changed this recently is never retired, covering
 /// a launch admitted against a Controller snapshot taken before it existed.
-const AUTH_GENERATION_GRACE: Duration = Duration::from_secs(24 * 3600);
+const AUTH_GENERATION_GRACE: Duration = Duration::from_hours(24);
 
 /// Runtime credential generations a live same-user process uses as `HOME` or
 /// works inside. Unreadable processes are skipped: Workers this Machine
