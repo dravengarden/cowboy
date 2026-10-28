@@ -170,7 +170,9 @@ def run(binary, mode, tool):
             late = (effect / "late").exists()
             # This is the observed contract of the supplied pin, not a desired
             # cancellation policy. An upstream change requires reviewing it.
-            require(retained == (tool == "codeact") and late == retained, "native cancellation behavior changed")
+            # Through 0.160.1 a CodeAct child's tree outlived the interrupt;
+            # 0.164.0 stops it like a direct command (measured).
+            require(not retained and not late, "native cancellation behavior changed")
             require(retained or not (alive("child-pid") or alive("descendant-pid")), "partial process cleanup")
             require(alive("peer-pid"), "interrupt killed independent peer")
             result = {"mode": mode, "tool": tool, "child_status": "interrupted",

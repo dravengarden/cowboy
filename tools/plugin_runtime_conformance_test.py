@@ -219,7 +219,9 @@ class ConformanceHarnessTests(unittest.TestCase):
             self.assertEqual(environment["HOME"], temporary + "/home")
             self.assertEqual(environment["CODEX_HOME"], temporary + "/home/codex")
             self.assertEqual(set(environment) - {"PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE"},
-                             {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR"})
+                             {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                              "ENABLE_TOOL_SEARCH"})
+            self.assertEqual(environment["ENABLE_TOOL_SEARCH"], "false")
             self.assertEqual(dict(os.environ), before)
 
     def test_framed_protocol_is_bounded_and_round_trips(self):

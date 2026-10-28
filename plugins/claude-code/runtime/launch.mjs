@@ -253,6 +253,9 @@ export const FORBIDDEN_TOOLS = [
   "ToolSearch",
   "EnterPlanMode",
   "ExitPlanMode",
+  // Streams a command's output from the runtime's own processes (2.1.312);
+  // target commands notify through background Bash instead.
+  "Monitor",
 ];
 
 // Native tools that run where the session runs, as in a local session:

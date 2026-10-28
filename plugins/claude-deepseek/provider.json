@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.38",
+  "version": "3.1.39",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.15",
   "display": {
@@ -228,7 +228,8 @@
       "DISABLE_LOGIN_COMMAND": "1",
       "DISABLE_LOGOUT_COMMAND": "1",
       "DISABLE_UPGRADE_COMMAND": "1",
-      "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+      "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+      "ENABLE_TOOL_SEARCH": "false"
     },
     "sidecars": [
       {
@@ -277,9 +278,9 @@
       },
       {
         "id": "anthropic-claude-code",
-        "version": "2.1.302",
-        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.302.tgz",
-        "integrity": "sha512-+5GARMH0vX8a+o8xGrmx67KH+aDI5aYVO2qFustRhUJrSMdxzb4LtUmF2rL+PyaxCpHfXYZz38vfIuT2irg/Cg==",
+        "version": "2.1.312",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.312.tgz",
+        "integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==",
         "private": true
       },
       {

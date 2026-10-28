@@ -30,11 +30,19 @@
   },
   "timeout_moves": {
    "is_error": false,
-   "content": "Command did not complete within its 2s timeout and was moved to the background (ID: <task>). Output is being written to: <file>. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. To check interim output, use Read on that file path."
+   "content": "Command did not complete within its 2s timeout and was moved to the background (ID: <task>). Output is being written to: <file>. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. It is running now: do not start a second copy while it runs. If it is no longer needed, stop it with TaskStop. No output had been read from it when it was moved. A program that buffers its output, or a pipe into one such as tail, can keep the output file empty until the command finishes. To check interim output, use Read on that file path."
   },
   "stop_moved": {
    "is_error": false,
    "content": "{\"message\":\"Successfully stopped task: <task> ((i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done)\",\"task_id\":\"<task>\",\"task_type\":\"local_bash\",\"command\":\"(i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done\"}"
+  },
+  "timeout_moves_output": {
+   "is_error": false,
+   "content": "early\nCommand did not complete within its 2s timeout and was moved to the background (ID: <task>). Output is being written to: <file>. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. It is running now: do not start a second copy while it runs. If it is no longer needed, stop it with TaskStop. To check interim output, use Read on that file path."
+  },
+  "stop_moved_output": {
+   "is_error": false,
+   "content": "{\"message\":\"Successfully stopped task: <task> (echo early; (i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved-output.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done)\",\"task_id\":\"<task>\",\"task_type\":\"local_bash\",\"command\":\"echo early; (i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved-output.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done\"}"
   },
   "background_tree": {
    "is_error": false,
@@ -62,6 +70,7 @@
   "lc-exit.beat": true,
   "lc-held.beat": true,
   "lc-left.beat": true,
+  "lc-moved-output.beat": false,
   "lc-moved.beat": false,
   "lc-quiet.beat": true,
   "lc-session.beat": true,

@@ -43,7 +43,36 @@ delivers it as an artifact. Managed calls skip the extra model-generated title.
 See [native capabilities](../../../docs/managed-native-capabilities.md) for
 ownership, limits, fallback and acceptance evidence.
 
-The pin moves to ACP `2.2.2` at
+The pin moves to ACP `2.3.0` at
+`344a520632e4c8c02f781a7a20490dfac52d4d0a` with native Codex `0.164.0`. ACP
+2.3 declares `@openai/codex ^0.164.0`, so native `0.165.0` stays unadopted
+until an ACP release declares it.
+
+ACP 2.3 moves to ACP SDK 2.0 and adds a second protocol chain: each connection
+keeps the version of its first `initialize`, and the v1 chain Cowboy speaks is
+unchanged except for upstream bug fixes. The owned patch is rebased onto it:
+
+- Imports follow the SDK's `unstable` entrypoint; Cowboy's own modules are
+  unchanged.
+- The steering `idleBehavior: "promptRequired"` capability now lives in the
+  shared `initializeExtensionsMeta`, so v1 and v2 initialization advertise it
+  alike. The late-steer refusal and ambiguous-error rule keep their meaning
+  around upstream's new `clientUserMessageId` and running-turn check.
+- Session configuration keeps upstream's new unsupported-skill filter beneath
+  the managed profile's project-trust omission; a managed turn keeps its
+  output schema beside the new client message identity.
+- Upstream's new `/review` turn tests used `serverOverloaded` as an ordinary
+  error. Cowboy fails the prompt on it, so those agent-text and fatal-wait
+  cases use `internalServerError` instead.
+
+Type checks and all 1,937 enabled upstream tests pass with the patch (36
+remain skipped upstream). Authoritative sources:
+[ACP 2.3.0](https://github.com/agentclientprotocol/codex-acp/releases/tag/v2.3.0),
+[Codex 0.164.0](https://github.com/openai/codex/releases/tag/rust-v0.164.0).
+
+### ACP 2.2.2 (2026-10-18)
+
+The pin moved to ACP `2.2.2` at
 `202e66e63343ec4f5a5e35ab590251d813d129ca` with native Codex `0.160.1`. ACP
 2.2 declares `@openai/codex ^0.160.1`; native `0.161.0` to `0.162.1` are
 outside that range and stay unadopted until an ACP release declares them.

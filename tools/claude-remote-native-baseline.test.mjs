@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   DEADLINE,
+  MOVED_RUNNING,
   NOTIFIED,
   WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
@@ -38,7 +39,7 @@ test("background command results read as native's", () => {
   );
   assert.equal(
     shape(moved),
-    `Command did not complete within its 2s timeout and was moved to the background <ID>. Output is being written to: <FILE>. ${NOTIFIED}${DEADLINE}To check interim output, use Read on that file path.`,
+    `moved\nCommand did not complete within its 2s timeout and was moved to the background <ID>. Output is being written to: <FILE>. ${NOTIFIED}${DEADLINE}${MOVED_RUNNING}To check interim output, use Read on that file path.`,
   );
 });
 

@@ -30,6 +30,10 @@ CASES = [
     ("timeout_kills_tree", ("Bash", {"command": f"sleep 0.1; {beat('timeout')} & sleep 46", "timeout": 1500})),
     ("timeout_moves", ("Bash", {"command": f"{beat('moved')} & wait; echo done", "timeout": 1500})),
     ("stop_moved", (STOP, {})),
+    # 2.1.311+ reports whether any output was read before the move.
+    ("timeout_moves_output", ("Bash", {"command": f"echo early; {beat('moved-output')} & wait; echo done",
+                                       "timeout": 1500})),
+    ("stop_moved_output", (STOP, {})),
     ("background_tree", ("Bash", {"command": f"{beat('background')} & wait", "run_in_background": True})),
     ("stop_background", (STOP, {})),
     ("background_shell_exits", ("Bash", {"command": f"{beat('left')} & echo left", "run_in_background": True})),

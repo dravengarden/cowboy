@@ -383,7 +383,7 @@ test("a timed-out command starting with sleep is killed, as natively", async (t)
   });
   assert.match(
     moved.result.stdout,
-    /^Command did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. If it is still running after 30m in the background, it will be stopped and you will be notified\. To check interim output, use Read on that file path\.$/,
+    /^Command did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. If it is still running after 30m in the background, it will be stopped and you will be notified\. It is running now: do not start a second copy while it runs\. If it is no longer needed, stop it with TaskStop\. No output had been read from it when it was moved\. A program that buffers its output, or a pipe into one such as tail, can keep the output file empty until the command finishes\. To check interim output, use Read on that file path\.$/,
   );
   assert.deepEqual(moved.task.command, "(sleep 2); echo x");
   const id = moved.task.id;
@@ -396,6 +396,21 @@ test("a timed-out command starting with sleep is killed, as natively", async (t)
     file_path: "cowboy-task://" + id,
   });
   assert.match(read.result.file.content, /^x\n/);
+});
+
+test("a moved command leads with the output read before its timeout", async (t) => {
+  const { tools } = await shellFixture(t);
+  const moved = await tools.dispatch("Bash", {
+    command: "printf '\\n\\nearly  \\n'; sleep 2; echo x",
+    timeout: 1500,
+  });
+  // As native 2.1.312: leading blank lines and trailing space trimmed, and
+  // no claim that nothing was read.
+  assert.match(
+    moved.result.stdout,
+    /^early\nCommand did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. If it is still running after 30m in the background, it will be stopped and you will be notified\. It is running now: do not start a second copy while it runs\. If it is no longer needed, stop it with TaskStop\. To check interim output, use Read on that file path\.$/,
+  );
+  await tools.dispatch("TaskStop", { task_id: moved.task.id });
 });
 
 test("a stopped command reads as stopped to its waiter", async (t) => {

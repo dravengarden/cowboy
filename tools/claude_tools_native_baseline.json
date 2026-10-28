@@ -6,15 +6,15 @@
   },
   "AskUserQuestion": {
    "input_schema": "ca4359704f78256e",
-   "description": "b8df6b553f936025"
+   "description": "0eea43055c9fc99e"
   },
   "Bash": {
    "input_schema": "bdaf40923f7e3ec4",
-   "description": "3837a2cd6baf0a50"
+   "description": "2a77e3952da8a6b3"
   },
   "CronCreate": {
    "input_schema": "dcb40209c5b18a9f",
-   "description": "c374fd6f9bf25b52"
+   "description": "c9346bfe44b0ea03"
   },
   "CronDelete": {
    "input_schema": "4c168429a8e44b9b",
@@ -51,6 +51,10 @@
   "ListAgents": {
    "input_schema": "914feef060a70cb1",
    "description": "fcef208b39bd163b"
+  },
+  "Monitor": {
+   "input_schema": "cb6281ac54ea04ec",
+   "description": "f045360ef39b0827"
   },
   "NotebookEdit": {
    "input_schema": "9c1cd406f135978f",

@@ -81,6 +81,10 @@ def closed_environment(private_home):
         "XDG_DATA_HOME": str(private_home / "data"), "TMPDIR": str(private_home),
         "CODEX_HOME": str(private_home / "codex"),
         "CLAUDE_CONFIG_DIR": str(private_home / "claude"),
+        # Claude 2.1.304+ defers tools behind a custom ANTHROPIC_BASE_URL such
+        # as the scripted loopback API. Keep the full inventory the baselines
+        # measure; first-party sessions already defaulted to tool search.
+        "ENABLE_TOOL_SEARCH": "false",
     })
     return environment
 

@@ -573,6 +573,11 @@ export const NOTIFIED = "You will be notified when it completes. ";
 // moved one after 30 minutes, said in its result.
 export const DEADLINE =
   "If it is still running after 30m in the background, it will be stopped and you will be notified. ";
+// Native's further guidance for a command its timeout moved (2.1.312).
+export const MOVED_RUNNING =
+  "It is running now: do not start a second copy while it runs. If it is no longer needed, stop it with TaskStop. ";
+export const MOVED_UNREAD =
+  "No output had been read from it when it was moved. A program that buffers its output, or a pipe into one such as tail, can keep the output file empty until the command finishes. ";
 
 // Native's duration in a timeout message: "1s", "1m 1s".
 export function shellDuration(ms) {
@@ -3350,11 +3355,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             };
             return () => this.state.jobs[id] = job;
           });
+          // Native 2.1.312 leads with the output read so far, or says none
+          // was read (measured).
+          const shown = output.replace(/^(\s*\n)+/, "").trimEnd();
           return {
             ...text(JSON.stringify(complete), {
-              stdout: `Command did not complete within its ${
-                Math.ceil(timeout / 1000)
-              }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}${DEADLINE}To check interim output, use Read on that file path.`,
+              stdout: [
+                shown,
+                `Command did not complete within its ${
+                  Math.ceil(timeout / 1000)
+                }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}${DEADLINE}${MOVED_RUNNING}${
+                  shown ? "" : MOVED_UNREAD
+                }To check interim output, use Read on that file path.`,
+              ].filter(Boolean).join("\n"),
               stderr: "",
               interrupted: false,
             }),
