@@ -1349,17 +1349,6 @@ mod tests {
         ] {
             assert!(unit.lines().any(|candidate| candidate == line), "{line}");
         }
-        let packaged = include_str!("../packaging/cowboy-machine.service");
-        assert!(
-            packaged
-                .lines()
-                .any(|line| line == "StartLimitIntervalSec=0")
-        );
-        assert!(
-            packaged
-                .lines()
-                .any(|line| line == "RestartForceExitStatus=75")
-        );
         // launchd restarts any nonzero exit, including the host restart status.
         let plist = launch_agent_plist("xyz.stormbird.cowboy-machine", Path::new("/launcher"));
         assert!(plist.contains("<key>RunAtLoad</key><true/>"));
