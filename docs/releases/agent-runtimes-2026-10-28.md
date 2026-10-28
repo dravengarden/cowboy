@@ -1,7 +1,6 @@
 # Agent runtime upgrades — 2026-10-28
 
-Status: source updated and accepted; publication and installation are recorded
-below as they complete.
+Status: published from `46ee8d9a` and installed on all four Machines.
 
 ## Dependency audit
 
@@ -80,3 +79,46 @@ Receipts and logs are under
 The Codex launch test's prompt-length bound now admits the published Review
 1.0.6 guidance (854 characters), which had already exceeded the old bound on
 `main`.
+
+## Publication
+
+All six releases were built, signed and verified from clean source
+`46ee8d9ae88c8ec6bc796437efe7cdec79c9c89c`. The final Claude and Codex
+adapter archives are byte-identical to the accepted candidates above.
+
+| Gate | Result |
+| --- | --- |
+| Linux old/new generation coexistence with the resident worker | Passed for all six |
+| Real macOS arm64 CLI/adapter/gateway probes on macbook-air | Passed for all six |
+| Catalog readers before and after publication | Active, rollback (`previousRelease`) and accepted-recovery read all six twice; the bootstrap-only reader skips them safely |
+| Public package and runtime URLs | 26 URLs resolve to their bound digests |
+| `provider-release-coverage` | Covered for all six |
+
+The Controller receipt has no explicit `recoveryRelease`, so the rollback
+reader is its `previousRelease`; the accepted-recovery root was read as well.
+Gemini is disabled for this Service and is not advertised, but its 3.1.38
+release keeps component-release coverage complete for later Controller builds.
+
+## Installation
+
+Convergence ran Falcon (canary, no active sessions), macbook-air, Hawk, then
+OVH. All fifteen upgrades returned HTTP 204 with nothing remaining:
+
+| Machine | Installed |
+| --- | --- |
+| Falcon, macbook-air, Hawk | claude-deepseek 3.1.39, codex 3.5.5, codex-deepseek 3.1.38, grok 3.1.40 |
+| OVH | claude-code 3.20.6, codex 3.5.5, grok 3.1.40 |
+
+No live session was recycled. Idle sessions move through the existing idle
+update policy or `session-update --when-idle`. Claude 3.20.0 sessions keep their
+runtime because their native session contract changed; named-account sessions
+pinned to 3.20.1 need a verified login transition before they can move.
+
+## Remaining dependency findings
+
+`cargo deny` still reports two advisories outside this change:
+
+- RUSTSEC-2026-0387 (crypto-bigint 0.5 timing) through p256 0.13 and
+  web-push-native 0.5. No 0.5 fix exists; it needs a p256 migration.
+- RUSTSEC-2026-0386 (tokio `AsyncFd`) in the Zed adapter's own lock. Updating
+  it changes the Zed Plugin source and needs its own Zed release.
