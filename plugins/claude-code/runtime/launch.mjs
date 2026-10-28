@@ -126,6 +126,16 @@ export function toolStreamingEnvironment(environment) {
   return { [TOOL_STREAMING]: environment[TOOL_STREAMING] ?? "1" };
 }
 
+// Native Claude is a Bun executable; Bun checks whether to collect on a
+// timer. Every 100 ms instead of the default: on OVH, 40 scripted turns peaked
+// at 147 instead of 182 MiB anonymous memory and settled at 109 instead of
+// 122 MiB, with no more CPU busy or idle. An explicit setting wins.
+export const BUN_GC_TIMER = "BUN_GC_TIMER_INTERVAL";
+
+export function nativeRuntimeEnvironment(environment) {
+  return { [BUN_GC_TIMER]: environment[BUN_GC_TIMER] ?? "100" };
+}
+
 // ACP 0.93 implements promptRequired but only advertises generic steering.
 // Advertise the pinned adapter's explicit no-new-turn contract to Cowboy.
 export function advertiseCurrentTurn(Agent) {
@@ -1361,6 +1371,7 @@ async function native(args) {
       ...(hookPrefix ? { CLAUDE_CODE_SHELL_PREFIX: hookPrefix } : {}),
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
       ...toolStreamingEnvironment(process.env),
+      ...nativeRuntimeEnvironment(process.env),
       // Native tool bodies never run for project operations. Keep local
       // checkpoints disabled; context-mod.js drops the attachments that
       // describe this machine's files and projects target context instead.

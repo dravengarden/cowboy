@@ -14,6 +14,7 @@ import {
   mcpRelay,
   NATIVE_PASSTHROUGH,
   nativeArguments,
+  nativeRuntimeEnvironment,
   STARTUP_TRACE,
   startupPhase,
   startupTrace,
@@ -258,6 +259,16 @@ test("only the wrapper's own allocator preload is dropped before children start"
     LD_PRELOAD: "/opt/lib/custom.so",
     MALLOC_CONF: "x:1",
   });
+});
+
+test("native Claude checks for garbage often unless the user chose otherwise", () => {
+  assert.deepEqual(nativeRuntimeEnvironment({}), {
+    BUN_GC_TIMER_INTERVAL: "100",
+  });
+  assert.deepEqual(
+    nativeRuntimeEnvironment({ BUN_GC_TIMER_INTERVAL: "1000" }),
+    { BUN_GC_TIMER_INTERVAL: "1000" },
+  );
 });
 
 test("tool inputs stream eagerly unless the user chose otherwise", () => {

@@ -189,6 +189,13 @@ hooks and MCP servers keep their usual environment; hosts without the library
 run as before. Native pins and component release 3.61.0 are unchanged. It is a
 runtime change requiring packaged acceptance.
 
+Claude Code 3.20.8 starts native Claude with `BUN_GC_TIMER_INTERVAL=100` unless
+the environment already sets it. Bun then checks whether to collect every
+100 ms: against a scripted API on OVH, 40 turns peaked at 147 instead of
+182 MiB of anonymous memory and settled at 109 instead of 122 MiB, with no
+measurable CPU cost while busy or idle. Native pins and component release
+3.61.0 are unchanged. It is a runtime change requiring packaged acceptance.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source
