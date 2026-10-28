@@ -45,8 +45,10 @@ analysis retain their existing snapshot and read-only contracts.
   tree (tracked plus non-ignored untracked files and explicitly named context
   files) as two synthetic commits in a child-owned repository that borrows the
   source objects through `alternates`. It captures twice and refuses a mixed
-  state (`input_changed`); filters/LFS, submodules, escaping symlinks and
-  subdirectory roots are refused. `context.root` may name another work tree of a
+  state (`input_changed`); filters/LFS, escaping symlinks and subdirectory
+  roots are refused. A submodule with a clean or uninitialized working tree is
+  captured as its gitlink pointer (an empty directory for the reviewer); one
+  with uncommitted or untracked changes is refused. `context.root` may name another work tree of a
   repository registered on that Machine. The child workspace path is stable; a
   continued conversation is hibernated and refreshed in place, so its binding
   never changes. Repeating a call id returns the original receipt.
@@ -607,7 +609,7 @@ stayed fixed. Reviewers need a coherent read-only snapshot of their allowed
 repository context and pinned referenced artifacts, not a live checkout paired
 with an old diff. Snapshot preparation belongs to the target Machine and existing
 workspace machinery, not the Controller's filesystem or a second Git clone tool.
-Reject unsupported symlinks/submodules/LFS conditions explicitly rather than
+Reject unsupported symlinks, dirty submodules and LFS conditions explicitly rather than
 claiming a complete snapshot. Do not mutate or lock the parent's worktree for an
 unbounded review. A write-enabled implementation child needs an isolated worktree
 and an explicit reconciliation contract; it is outside the first release.

@@ -344,7 +344,33 @@ async fn refuse_unsupported(
         let mode = fields.next().unwrap_or_default();
         let object = fields.nth(1).unwrap_or_default();
         match mode {
-            "160000" => return Err("submodule_unsupported"),
+            // A gitlink records only the submodule commit; the reviewer sees
+            // it as a pointer and an empty directory. That is faithful only
+            // when the submodule has no uncommitted or untracked changes.
+            "160000" => {
+                if path.starts_with('"') {
+                    return Err("submodule_unsupported");
+                }
+                let submodule = source.join(path);
+                if submodule.join(".git").exists() {
+                    let status = git
+                        .run(
+                            &[],
+                            &[
+                                os("-C"),
+                                submodule.as_os_str(),
+                                os("status"),
+                                os("--porcelain"),
+                                os("--ignore-submodules=none"),
+                            ],
+                            "submodule_unsupported",
+                        )
+                        .await?;
+                    if !status.is_empty() {
+                        return Err("submodule_unsupported");
+                    }
+                }
+            }
             "120000" => {
                 let target = git
                     .run(
@@ -882,6 +908,57 @@ mod tests {
         );
         close(&managed, "child-1").unwrap();
         assert!(!managed.join("child-1").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn clean_submodule_is_a_pointer_and_dirty_submodule_is_refused() {
+        let base = root();
+        let source = base.join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("a"), "superproject\n").unwrap();
+        let sub = source.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        git(&sub, &["init", "-q", "-b", "main"]);
+        std::fs::write(sub.join("inner"), "committed\n").unwrap();
+        git(&sub, &["add", "."]);
+        git(&sub, &["commit", "-qm", "inner"]);
+        git(&source, &["add", "a", "sub"]);
+        git(&source, &["commit", "-qm", "with submodule"]);
+        let managed = base.join("managed");
+        let roots = crate::session_workspace::WorktreeRoots::single(base.clone());
+        let prepared = prepare(
+            &managed,
+            "hawk",
+            &round(&source, "clean", vec![]),
+            &roots,
+            &[],
+        )
+        .await
+        .unwrap();
+        let workspace = PathBuf::from(&prepared.cwd);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a")).unwrap(),
+            "superproject\n"
+        );
+        assert!(!workspace.join("sub/inner").exists());
+
+        // Uncommitted submodule edits are invisible to a gitlink.
+        std::fs::write(sub.join("inner"), "uncommitted\n").unwrap();
+        assert_eq!(
+            prepare(
+                &managed,
+                "hawk",
+                &round(&source, "dirty", vec![]),
+                &roots,
+                &[]
+            )
+            .await
+            .unwrap_err(),
+            "submodule_unsupported"
+        );
+        close(&managed, "child-1").unwrap();
         let _ = std::fs::remove_dir_all(base);
     }
 
