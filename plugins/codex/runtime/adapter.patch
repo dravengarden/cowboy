@@ -233,6 +233,21 @@ diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
          const command = this.parseCommand(prompt);
          if (command === null) return { handled: false };
          const commandName = command.name;
+diff --git a/src/CodexEventHandler.ts b/src/CodexEventHandler.ts
+--- a/src/CodexEventHandler.ts
++++ b/src/CodexEventHandler.ts
+@@ -983,7 +983,10 @@
+             this.recordTypedSessionFailure(params);
+             return null;
+         }
+-        if (error === "usageLimitExceeded") {
++        // Cowboy: an overloaded model is a Provider failure like a usage limit,
++        // not model output. Fail the prompt with the native error data so a
++        // client can retry or switch models instead of parsing chat text.
++        if (error === "usageLimitExceeded" || error === "serverOverloaded") {
+             this.failure = RequestError.internalError(
+                 this.createTurnErrorData(params.error),
+             );
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
@@ -512,6 +527,45 @@ diff --git a/src/StdUtils.ts b/src/StdUtils.ts
   * The value of `promise`, or `"pending"` when it does not settle within `ms`.
   * A rejection before the timeout rejects. A later rejection is ignored.
   */
+diff --git a/src/__tests__/CodexACPAgent/auth-error-events.test.ts b/src/__tests__/CodexACPAgent/auth-error-events.test.ts
+--- a/src/__tests__/CodexACPAgent/auth-error-events.test.ts
++++ b/src/__tests__/CodexACPAgent/auth-error-events.test.ts
+@@ -409,7 +409,7 @@
+             account: {type: "apiKey"},
+         }), {
+             message: "legacy fallback",
+-            codexErrorInfo: "serverOverloaded",
++            codexErrorInfo: "internalServerError",
+             additionalDetails: null,
+             misalignment: null,
+         }, false, {_meta: {jetbrains: {air: {version, capabilities: ["sessionFailure"]}}}} as acp.ClientCapabilities);
+@@ -1069,3 +1069,26 @@
+         durationMs: null,
+     };
+ }
++
++describe("CodexEventHandler - overloaded model", () => {
++    it("keeps the message as agent text and fails the prompt with the native error", async () => {
++        const {result, updates} = await runPromptWithError(createTestSessionState({
++            sessionId: "overloaded-session",
++            account: {type: "apiKey"},
++        }), {
++            message: "Selected model is at capacity. Please try a different model.",
++            codexErrorInfo: "serverOverloaded",
++            additionalDetails: null,
++            misalignment: null,
++        });
++
++        expect(result).toMatchObject({
++            code: -32603,
++            data: {
++                message: "Selected model is at capacity. Please try a different model.",
++                codexErrorInfo: "serverOverloaded",
++            },
++        });
++        expect(JSON.stringify(updates)).toContain("Selected model is at capacity");
++    });
++});
 diff --git a/src/__tests__/CodexACPAgent/initialize.test.ts b/src/__tests__/CodexACPAgent/initialize.test.ts
 --- a/src/__tests__/CodexACPAgent/initialize.test.ts
 +++ b/src/__tests__/CodexACPAgent/initialize.test.ts

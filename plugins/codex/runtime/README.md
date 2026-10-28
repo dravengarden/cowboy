@@ -27,6 +27,11 @@ The shared runtime component remains unchanged. This Provider owns the changes:
 - The Provider launcher passes its validated leading `-c` options to the native
   client, which launches the exact bound `CODEX_PATH` directly. No intermediary
   executable owns or rewrites the native protocol.
+- A terminal `serverOverloaded` error ("Selected model is at capacity") fails
+  the prompt with its native error data, as upstream already does for
+  `usageLimitExceeded`, and keeps the readable message in the transcript. A
+  managed call then reports `provider_error` instead of treating the message as
+  model output such as an invalid structured review.
 
 ## Dependency audit (2026-10-11)
 
