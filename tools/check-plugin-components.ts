@@ -1,5 +1,5 @@
 import { Command } from "./lib/command.ts";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import {
   assert,
@@ -104,12 +104,14 @@ export async function checkRepository(): Promise<void> {
   const activeComponents = new Map(
     active.components.map((component) => [component.id, component]),
   );
-  const distributableManifests = [...readdirSync("components", { withFileTypes: true })]
+  const distributableManifests = [
+    ...readdirSync("components", { withFileTypes: true }),
+  ]
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) =>
       ["package.json", "Cargo.toml"]
         .map((manifest) => `components/${entry.name}/${manifest}`)
-        .filter(exists)
+        .filter((manifest) => exists(manifest) && !internalCrate(manifest))
     )
     .sort();
   assertSameSet(
@@ -684,6 +686,13 @@ function assertUnique(values: string[], label: string): void {
     new Set(values).size === values.length,
     `${label}: duplicate identity`,
   );
+}
+
+// Workspace crates split out of the Cowboy binaries (wire, server, machine)
+// are never published, so they are not distributable components.
+function internalCrate(manifest: string): boolean {
+  return manifest.endsWith("/Cargo.toml") &&
+    /^publish\s*=\s*false\s*$/m.test(readFileSync(manifest, "utf8"));
 }
 
 function exists(path: string): boolean {

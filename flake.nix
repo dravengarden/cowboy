@@ -128,6 +128,8 @@
           ./plugins/zed/adapter/fixtures/content.json
           ./plugins/zed/adapter/fixtures/text.json
           ./tests/fixtures/otel-client.json
+          # machine_install.rs tests the packaged unit's restart policy.
+          ./packaging/cowboy-machine.service
           ./tests/fixtures/composition-v1.json
           ./tests/fixtures/telemetry-resolution-surface.json
           ./tests/fixtures/telemetry-recovery-surface.json
@@ -180,6 +182,7 @@
           ./src/machine_components
           ./src/machine_install.rs
           ./src/machine_install
+          ./packaging/cowboy-machine.service
           ./src/session_deletion_admission.rs
           ./src/session_deletion_admission
           ./src/machine_lanes.rs

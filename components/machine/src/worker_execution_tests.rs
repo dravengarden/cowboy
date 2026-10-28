@@ -516,10 +516,17 @@ async fn native_worker_execution() {
         slow_events.store(false, std::sync::atomic::Ordering::Relaxed);
     }
     let status = tokio::process::Command::new("python3")
+        // Cargo runs this crate's tests from components/machine.
         .arg(if input["provider"] == "claude-code" {
-            "tools/execution_claude_worker_conformance.py"
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tools/execution_claude_worker_conformance.py"
+            )
         } else {
-            "tools/execution_worker_conformance.py"
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tools/execution_worker_conformance.py"
+            )
         })
         .arg("--native-cli")
         .arg(&executor)
