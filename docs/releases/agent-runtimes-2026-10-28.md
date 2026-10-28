@@ -121,6 +121,10 @@ pinned to 3.20.1 need a verified login transition before they can move.
 - RUSTSEC-2026-0387 (crypto-bigint 0.5 timing) through p256 0.13 and
   web-push-native 0.5. No 0.5 fix exists, and the newest web-push-native
   (0.5.0) still requires p256 0.13, so the fix is blocked upstream.
+- RUSTSEC-2026-0386 (tokio `AsyncFd`) in the Zed adapter's own lock. The
+  follow-up below takes tokio 1.54.1 there and versions the Zed source as
+  1.20.10; the adapter does not construct `AsyncFd` itself. Zed publication
+  remains its own release with its native gates.
 
 ## Follow-up: Claude Agent ACP 0.98.0
 
@@ -144,7 +148,19 @@ claude-code 3.20.9 and claude-deepseek 3.1.40; codex 3.5.6, codex-deepseek 3.1.3
 | Claude worker conformance (all twelve phases) | Accepted, 95 checks |
 | Claude managed / TaskStop conformance | Accepted (7 checks / accepted) |
 | Codex worker / session conformance | Accepted (34 / 10 checks) |
-- RUSTSEC-2026-0386 (tokio `AsyncFd`) in the Zed adapter's own lock. The
-  follow-up below takes tokio 1.54.1 there and versions the Zed source as
-  1.20.10; the adapter does not construct `AsyncFd` itself. Zed publication
-  remains its own release with its native gates.
+
+All six releases were built and signed from `e546b16e`. The final Codex
+adapter archive is byte-identical to the accepted 2.3.0 candidate; the final
+Claude adapter, which also carries the 3.20.8 native GC setting, passed the
+worker (95 checks, twelve phases) and managed conformance again. Linux
+old/new coexistence and real macOS probes passed for all six; active,
+rollback and accepted-recovery readers read all six before and after
+publication; 23 public URLs resolve to their digests and provider coverage
+passes. Convergence (Falcon canary, macbook-air, Hawk, OVH) applied all
+fifteen upgrades with nothing remaining.
+
+During the release build, seventeen upstream Codex ACP tests that start a real
+`codex app-server` exited with code 1 in four consecutive attempts, then passed
+in the fifth with no source change. Re-running the identical retained stage,
+environment and Bun spawn options reproduced no failure, so the cause remains
+unidentified; the shipped adapter is the accepted candidate.
