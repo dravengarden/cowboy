@@ -14,9 +14,14 @@ import { fileURLToPath } from "node:url";
 const proxy = fileURLToPath(
   new URL("../plugins/claude-code/runtime/mcp-proxy.mjs", import.meta.url),
 );
+const waiter = fileURLToPath(
+  new URL("../plugins/claude-code/runtime/task-wait.mjs", import.meta.url),
+);
 const relays = [["node", [process.execPath, proxy]]];
+const waiters = [["node", [process.execPath, waiter]]];
 if (process.env.COWBOY_MCP_RELAY) {
   relays.push(["native", [process.env.COWBOY_MCP_RELAY]]);
+  waiters.push(["native", [process.env.COWBOY_MCP_RELAY, "task-wait"]]);
 }
 
 async function bridge(t, route) {
@@ -176,5 +181,39 @@ for (const [name, argv] of relays) {
       relay.output.stderr,
       /^Target MCP server unavailable: .*Invalid execution call\n$/,
     );
+  });
+}
+
+function wait(argv, context, job) {
+  const child = spawn(argv[0], [...argv.slice(1), job], {
+    env: { PATH: process.env.PATH, COWBOY_CLAUDE_CONTEXT: context },
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return { child, exit: new Promise((resolve) => child.once("exit", resolve)) };
+}
+
+for (const [name, argv] of waiters) {
+  test(`${name} task waiter ends with the target command's status`, async (t) => {
+    const { context, posts } = await bridge(t, async (_path, call) => {
+      if (call.afterSeq === null) return [200, { afterSeq: 4 }];
+      return [200, { closed: true, exitCode: 3 }];
+    });
+    const waiter = wait(argv, context, "job-1");
+    assert.equal(await waiter.exit, 3);
+    assert.deepEqual(posts.map(([, call]) => call), [
+      { id: "job-1", afterSeq: null },
+      { id: "job-1", afterSeq: 4 },
+    ]);
+  });
+
+  test(`${name} task waiter outlives a stopped command`, async (t) => {
+    const { context } = await bridge(t, async () => [200, { stopped: true }]);
+    const waiter = wait(argv, context, "job-2");
+    t.after(() => waiter.child.kill("SIGKILL"));
+    const ended = await Promise.race([
+      waiter.exit.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
+    assert.equal(ended, false);
   });
 }

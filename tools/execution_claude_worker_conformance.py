@@ -813,7 +813,8 @@ def subagent_background_phases(args, api, client, checks):
             pass
     note = next(item for item in seen[2:] if "<task-notification>" in item)
     require("cowboy-task://" in note and "sleep 2; echo sub-bg-out" in note and
-            str(args.runtime) not in note and "task-wait.mjs" not in note,
+            str(args.runtime) not in note and "task-wait.mjs" not in note and
+            "cowboy-mcp-relay" not in note,
             "the agent's notification differs from native's: " + note[:1500])
     checks.append("agent_background_command_notifies_the_agent_as_natively")
 
@@ -1026,7 +1027,7 @@ def notification_phases(args, api, client, checks):
     def original_id(marker):
         return next(identity for identity, (name, index) in issued.items() if name == marker and index == 0)
 
-    runtime_markers = [str(args.runtime), "task-wait.mjs"]
+    runtime_markers = [str(args.runtime), "task-wait.mjs", "cowboy-mcp-relay"]
 
     # Idle: the command ends after the turn; native starts a turn for it.
     client.prompt(text="NOTIFY_IDLE", timeout=60)

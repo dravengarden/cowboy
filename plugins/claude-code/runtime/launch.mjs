@@ -67,17 +67,30 @@ const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 export const NODE_FLAGS = ["--optimize-for-size"];
 const nodeArgv = [process.execPath, ...NODE_FLAGS];
 
-// The packaged native MCP relay (relay/, Linux only): it speaks the Node
-// relay's bridge protocol in a few pages instead of a V8 heap.
+// The packaged native MCP relay and task waiter (relay/, Linux only): it
+// speaks the Node helpers' bridge protocol in a few pages instead of a V8 heap.
 const NATIVE_RELAY = fileURLToPath(
   new URL("../bin/cowboy-mcp-relay", import.meta.url),
 );
 
+async function executable(path) {
+  return await access(path, fsConstants.X_OK).then(() => true, () => false);
+}
+
+// The command native runs, with a job identity appended, for a background
+// task that stands for a target command left running.
+export async function taskWaitCommand(stage, nativeRelay = NATIVE_RELAY) {
+  if (await executable(nativeRelay)) {
+    return `${shellQuote(nativeRelay)} task-wait`;
+  }
+  const taskWait = join(stage, "task-wait.mjs");
+  await copyFile(new URL("./task-wait.mjs", import.meta.url), taskWait);
+  return `${nodeArgv.map(shellQuote).join(" ")} ${shellQuote(taskWait)}`;
+}
+
 // How native starts the relay of a target stdio MCP server.
 export async function mcpRelay(stage, contextPath, nativeRelay = NATIVE_RELAY) {
-  if (
-    await access(nativeRelay, fsConstants.X_OK).then(() => true, () => false)
-  ) {
+  if (await executable(nativeRelay)) {
     return { command: nativeRelay, args: [contextPath] };
   }
   const proxy = join(stage, "mcp-proxy.mjs");
@@ -1306,11 +1319,7 @@ async function native(args) {
     }
     // Native background tasks that stand for target commands left running
     // run this waiter, so native delivers their completion notifications.
-    const taskWait = join(stage, "task-wait.mjs");
-    await copyFile(new URL("./task-wait.mjs", import.meta.url), taskWait);
-    context.taskWait = `${nodeArgv.map(shellQuote).join(" ")} ${
-      shellQuote(taskWait)
-    }`;
+    context.taskWait = await taskWaitCommand(stage);
     const contextPath = join(stage, "context.json");
     await writeFile(contextPath, JSON.stringify(context), {
       mode: 0o600,

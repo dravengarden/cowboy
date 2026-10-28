@@ -7,6 +7,10 @@
 //!
 //! A session keeps one relay per target server resident for its whole life.
 //! A Node relay holds a V8 heap; this one holds a few pages.
+//!
+//! `cowboy-mcp-relay task-wait <job>` is the native counterpart of
+//! `runtime/task-wait.mjs`, the equally long-lived command behind a native
+//! background task that stands for a target command left running.
 
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -33,8 +37,11 @@ fn main() {
         println!("cowboy-mcp-relay {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    if args.len() == 3 && args[1] == "task-wait" {
+        exit(task_wait(&args[2]));
+    }
     if args.len() != 3 {
-        eprintln!("usage: cowboy-mcp-relay <context.json> <server>");
+        eprintln!("usage: cowboy-mcp-relay <context.json> <server> | task-wait <job>");
         exit(2);
     }
     // Before any thread starts, so every thread inherits the mask and only
@@ -72,7 +79,8 @@ impl Session {
     }
 }
 
-fn run(context: &str, server: &str, signals: libc::sigset_t) -> Result<i32, String> {
+/// The launcher bridge named by a session context file.
+fn bridge(context: &str) -> Result<Bridge, String> {
     let context: Value = serde_json::from_slice(
         &std::fs::read(context).map_err(|error| format!("context: {error}"))?,
     )
@@ -83,11 +91,70 @@ fn run(context: &str, server: &str, signals: libc::sigset_t) -> Result<i32, Stri
             .map(str::to_owned)
             .ok_or_else(|| format!("context: missing {name}"))
     };
+    Ok(Bridge {
+        socket: field("socketPath")?,
+        authorization: format!("Bearer {}", field("bridgeToken")?),
+    })
+}
+
+/// Waits for a target command and returns its exit status. Native owns the
+/// task: its registry, its completion notification and TaskStop. A stopped
+/// command never returns, as natively a stopped task reports nothing; TaskStop
+/// or the session's end terminates this process instead.
+fn task_wait(job: &str) -> i32 {
+    let Some(bridge) = std::env::var("COWBOY_CLAUDE_CONTEXT")
+        .ok()
+        .and_then(|context| bridge(&context).ok())
+    else {
+        return 1;
+    };
+    let mut after_seq = Value::Null;
+    let mut failures = 0;
+    loop {
+        let reply = match bridge.post(
+            "/task-wait",
+            &json!({ "id": job, "afterSeq": after_seq }),
+            None,
+        ) {
+            Ok(reply) => {
+                failures = 0;
+                reply
+            }
+            Err(_) => {
+                // The launcher restarts with its bridge; the task ends with it
+                // anyway.
+                failures += 1;
+                if failures > 5 {
+                    return 1;
+                }
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        if reply["closed"] == true {
+            return reply["exitCode"]
+                .as_i64()
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or(1);
+        }
+        // Stay alive (an ended process would read as a completion).
+        if reply["stopped"] == true || reply["gone"] == true {
+            loop {
+                thread::park();
+            }
+        }
+        if reply["unavailable"] == true {
+            thread::sleep(Duration::from_secs(1));
+        }
+        if reply["afterSeq"].is_i64() {
+            after_seq = reply["afterSeq"].clone();
+        }
+    }
+}
+
+fn run(context: &str, server: &str, signals: libc::sigset_t) -> Result<i32, String> {
     let session = Arc::new(Session {
-        bridge: Bridge {
-            socket: field("socketPath")?,
-            authorization: format!("Bearer {}", field("bridgeToken")?),
-        },
+        bridge: bridge(context)?,
         id: OnceLock::new(),
         stopped: AtomicBool::new(false),
     });

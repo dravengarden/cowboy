@@ -170,6 +170,13 @@ process per server. A target without it (macOS) keeps `mcp-proxy.mjs`. Native
 pins and component release 3.60.0 are unchanged. It is a runtime change
 requiring packaged acceptance.
 
+Claude Code 3.20.5 also runs the waiter behind a native background task that
+stands for a target command (`cowboy-mcp-relay task-wait <job>`) natively,
+keeping `task-wait.mjs` where the binary is absent. Unlike the Node waiter, it
+counts a refused bridge reply as a failure instead of asking again at once.
+Native pins and component release 3.60.0 are unchanged. It is a runtime change
+requiring packaged acceptance.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source

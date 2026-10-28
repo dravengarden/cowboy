@@ -17,6 +17,7 @@ import {
   startupPhase,
   startupTrace,
   sweepStaleRuntimeDirectories,
+  taskWaitCommand,
   TOOL_STREAMING,
   toolStreamingEnvironment,
 } from "./launch.mjs";
@@ -266,6 +267,21 @@ test("target MCP servers use the packaged native relay when there is one", async
     command: relay,
     args: ["/stage/context.json"],
   });
+});
+
+test("background target commands wait through the packaged native waiter when there is one", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-task-wait-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const relay = join(directory, "cowboy-mcp-relay");
+  assert.equal(
+    await taskWaitCommand(directory, relay),
+    `'${process.execPath}' '--optimize-for-size' '${
+      join(directory, "task-wait.mjs")
+    }'`,
+  );
+  await stat(join(directory, "task-wait.mjs"));
+  await writeFile(relay, "", { mode: 0o755 });
+  assert.equal(await taskWaitCommand(directory, relay), `'${relay}' task-wait`);
 });
 
 test("the shell prefix sends only registered hook commands to the proxy", async (t) => {
