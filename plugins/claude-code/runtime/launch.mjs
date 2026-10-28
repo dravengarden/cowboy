@@ -1,11 +1,12 @@
 import { agentCallsPrompt } from "./agent-calls.mjs";
 import { installSteeringPriority } from "./steering.mjs";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
+  access,
   copyFile,
   lstat,
   mkdir,
@@ -65,6 +66,27 @@ const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 // (OVH, Node 24, 2026-10-27). The bin/ wrappers (build.ts) pass the same flag.
 export const NODE_FLAGS = ["--optimize-for-size"];
 const nodeArgv = [process.execPath, ...NODE_FLAGS];
+
+// The packaged native MCP relay (relay/, Linux only): it speaks the Node
+// relay's bridge protocol in a few pages instead of a V8 heap.
+const NATIVE_RELAY = fileURLToPath(
+  new URL("../bin/cowboy-mcp-relay", import.meta.url),
+);
+
+// How native starts the relay of a target stdio MCP server.
+export async function mcpRelay(stage, contextPath, nativeRelay = NATIVE_RELAY) {
+  if (
+    await access(nativeRelay, fsConstants.X_OK).then(() => true, () => false)
+  ) {
+    return { command: nativeRelay, args: [contextPath] };
+  }
+  const proxy = join(stage, "mcp-proxy.mjs");
+  await copyFile(new URL("./mcp-proxy.mjs", import.meta.url), proxy);
+  return {
+    command: process.execPath,
+    args: [...NODE_FLAGS, proxy, contextPath],
+  };
+}
 
 // Startup milestones, logged by the worker beside the adapter's own
 // `[session/create]` phases: where a slow start spent its time. The SDK
@@ -1295,16 +1317,14 @@ async function native(args) {
       flag: "wx",
     });
     if (memoryConfig) {
-      const proxy = join(stage, "mcp-proxy.mjs");
-      await copyFile(new URL("./mcp-proxy.mjs", import.meta.url), proxy);
       await writeFile(
         memoryConfig,
         JSON.stringify({
           mcpServers: {
-            ...nativeMcpServers(mcpEntries, {
-              command: process.execPath,
-              args: [...NODE_FLAGS, proxy, contextPath],
-            }),
+            ...nativeMcpServers(
+              mcpEntries,
+              await mcpRelay(stage, contextPath),
+            ),
             ...(memory?.tools
               ? { [memoryConfigured.server]: memory.mcp() }
               : {}),

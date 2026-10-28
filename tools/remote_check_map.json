@@ -163,6 +163,8 @@
       "command": "just claude-remote-check",
       "paths": [
         "plugins/claude-code/runtime/",
+        "plugins/claude-code/relay/",
+        "tools/claude-mcp-relay.test.mjs",
         "components/memory-client/",
         "tools/claude-remote-",
         "tools/claude_native_behavior_baseline.json",
@@ -251,6 +253,7 @@
         "plugins/claude-code/runtime/connection.mjs",
         "plugins/claude-code/runtime/mod-bridge.mjs",
         "plugins/claude-code/runtime/build.ts",
+        "plugins/claude-code/relay/",
         "tools/execution_claude_worker_conformance.py",
         "tools/execution_environment_claude_probe.py",
         "plugins/claude-code/runtime/memory.mjs",

@@ -163,6 +163,13 @@ CLI, MCP relays, hook proxy, task waiter) with `--optimize-for-size`, which
 about halves their resident V8 heap. Native pins and component release
 3.60.0 are unchanged. It is a runtime change requiring packaged acceptance.
 
+Claude Code 3.20.4 relays each target stdio MCP server through
+`bin/cowboy-mcp-relay` (`plugins/claude-code/relay/`), a static Linux
+executable speaking the Node relay's bridge protocol, instead of one Node
+process per server. A target without it (macOS) keeps `mcp-proxy.mjs`. Native
+pins and component release 3.60.0 are unchanged. It is a runtime change
+requiring packaged acceptance.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source

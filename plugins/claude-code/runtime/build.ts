@@ -2,6 +2,7 @@
 // and npm dependencies still pass the shared immutable runtime builder.
 import { readdirSync } from "node:fs";
 import {
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -62,6 +63,17 @@ try {
     "plugins/claude-code",
     base,
   ], repository);
+  // The native MCP relay (relay/): a static Linux executable. Other targets
+  // keep the Node relay, which launch.mjs selects when it is absent.
+  const relayBuild = JSON.parse(
+    await output_of("nix", [
+      "build",
+      "--no-link",
+      "--json",
+      ".#cowboy-mcp-relay-portable",
+    ]),
+  );
+  const relay = `${relayBuild[0].outputs.out}/bin/cowboy-mcp-relay`;
   const matrix = JSON.parse(await readFile(matrixPath, "utf8"));
   await rm(matrixPath);
   for (const target of matrix) {
@@ -122,6 +134,12 @@ try {
         'exec "$cowboy_root/runtime/node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
       { mode: 0o755 },
     );
+    if (name === "linux-x86_64") {
+      await copyFile(relay, `${destination}/bin/cowboy-mcp-relay`);
+      await chmod(`${destination}/bin/cowboy-mcp-relay`, 0o755);
+      digests["cowboy-mcp-relay"] = await sha256(relay);
+      await run(`${destination}/bin/cowboy-mcp-relay`, ["--version"]);
+    }
     await writeFile(
       `${destination}/claude-execution.json`,
       JSON.stringify(
@@ -185,6 +203,19 @@ async function run(command: string, args: string[], cwd = repository) {
     stderr: "inherit",
   }).exited;
   if (code !== 0) throw new Error(`${command} failed (${code})`);
+}
+async function output_of(command: string, args: string[]) {
+  const child = Bun.spawn({
+    cmd: [command, ...args],
+    cwd: repository,
+    env: environment,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const text = await new Response(child.stdout).text();
+  if (await child.exited !== 0) throw new Error(`${command} failed`);
+  return text;
 }
 async function sha256(path: string) {
   const digest = new Uint8Array(

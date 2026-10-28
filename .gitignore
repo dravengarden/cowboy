@@ -1,6 +1,7 @@
 # Rust
 /target
 /plugins/zed/adapter/target
+/plugins/claude-code/relay/target
 
 # Frontend
 node_modules/

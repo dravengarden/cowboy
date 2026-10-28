@@ -10,6 +10,7 @@ import {
   allowedControl,
   hookPrefixScript,
   initializeRequest,
+  mcpRelay,
   NATIVE_PASSTHROUGH,
   nativeArguments,
   STARTUP_TRACE,
@@ -243,6 +244,27 @@ test("tool inputs stream eagerly unless the user chose otherwise", () => {
   assert.deepEqual(toolStreamingEnvironment({}), { [TOOL_STREAMING]: "1" });
   assert.deepEqual(toolStreamingEnvironment({ [TOOL_STREAMING]: "0" }), {
     [TOOL_STREAMING]: "0",
+  });
+});
+
+test("target MCP servers use the packaged native relay when there is one", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-relay-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const relay = join(directory, "cowboy-mcp-relay");
+  // A target without the native relay (macOS) runs the Node one.
+  assert.deepEqual(await mcpRelay(directory, "/stage/context.json", relay), {
+    command: process.execPath,
+    args: [
+      "--optimize-for-size",
+      join(directory, "mcp-proxy.mjs"),
+      "/stage/context.json",
+    ],
+  });
+  await stat(join(directory, "mcp-proxy.mjs"));
+  await writeFile(relay, "", { mode: 0o755 });
+  assert.deepEqual(await mcpRelay(directory, "/stage/context.json", relay), {
+    command: relay,
+    args: ["/stage/context.json"],
   });
 });
 

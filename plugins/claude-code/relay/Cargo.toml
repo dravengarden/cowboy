@@ -1,0 +1,30 @@
+[package]
+name = "cowboy-mcp-relay"
+version = "1.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+rust-version = "1.97.1"
+description = "The stdio MCP server native Claude starts for a target MCP server"
+
+# Standalone: the Cowboy workspace lock is pinned byte for byte by retained
+# workers, and this Plugin-private binary must not change it.
+[workspace]
+
+[dependencies]
+base64 = "0.22"
+libc = "0.2"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -581,6 +581,12 @@ claude-remote-check:
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
+    cargo fmt --manifest-path plugins/claude-code/relay/Cargo.toml -- --check
+    cargo clippy --locked --manifest-path plugins/claude-code/relay/Cargo.toml --all-targets
+    cargo test --locked --manifest-path plugins/claude-code/relay/Cargo.toml
+    cargo build --locked --release --manifest-path plugins/claude-code/relay/Cargo.toml
+    COWBOY_MCP_RELAY="$PWD/plugins/claude-code/relay/target/release/cowboy-mcp-relay" node --test tools/claude-mcp-relay.test.mjs
+    dprint check tools/claude-mcp-relay.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     dprint check "plugins/claude-code/runtime/**/*.{ts,js,mjs}"
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
@@ -636,15 +642,18 @@ composition-check:
 fmt:
     cargo fmt --check
     cd plugins/zed/adapter && cargo fmt --check
+    cd plugins/claude-code/relay && cargo fmt --check
     rustfmt --edition 2024 --check plugins/zed/runtime/server/cowboy_sync.rs plugins/zed/runtime/server/cowboy_bounded.rs plugins/zed/runtime/server/cowboy_lsp_input.rs plugins/zed/runtime/server/cowboy_navigation.rs plugins/zed/runtime/server/navigation_tests.rs plugins/zed/runtime/server/tests.rs plugins/zed/runtime/server/cowboy_close.rs plugins/zed/runtime/server/close_tests.rs plugins/zed/runtime/server/reload_tests.rs plugins/zed/runtime/server/cowboy_buffer_budget.rs plugins/zed/runtime/server/cowboy_acquisition.rs plugins/zed/runtime/server/acquisition_tests.rs plugins/zed/runtime/server/cowboy_replacement.rs plugins/zed/runtime/server/replacement_tests.rs plugins/zed/runtime/server/cowboy_full_offsets.rs plugins/zed/runtime/server/cowboy_remote_edits.rs plugins/zed/runtime/server/remote_edits_tests.rs
 
 fmt-write:
     cargo fmt
     cd plugins/zed/adapter && cargo fmt
+    cd plugins/claude-code/relay && cargo fmt
 
 lint:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
+    cd plugins/claude-code/relay && cargo clippy --all-targets --locked -- -D warnings
     cd web && bun run lint
 
 dependencies:
@@ -666,6 +675,7 @@ dependencies:
     subprocess.run(["cargo", "machete", "--with-metadata", *paths], check=True)
     PY
     (cd plugins/zed/adapter && cargo deny check && cargo machete --with-metadata)
+    (cd plugins/claude-code/relay && cargo deny check && cargo machete --with-metadata)
 
 typecheck:
     cd web && bun run typecheck
