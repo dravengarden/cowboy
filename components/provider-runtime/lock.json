@@ -95,7 +95,7 @@
     },
     "claude-agent-acp": {
       "kind": "node_npm",
-      "version": "0.93.0",
+      "version": "0.98.0",
       "package_dir": "packages/claude-agent-acp",
       "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
       "probe": [

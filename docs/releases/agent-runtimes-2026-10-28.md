@@ -10,7 +10,7 @@ integrity values; Codex platform archives use their version-suffixed packages.
 | Dependency | Previous | Accepted | Decision |
 | --- | --- | --- | --- |
 | Claude Code | 2.1.302 | 2.1.312 | Native probes re-measured; three behavior changes adopted |
-| Claude Agent ACP | 0.93.0 | 0.93.0 | Retained: 0.94+ moves to ACP SDK 2 under Cowboy's prototype hooks; separate change |
+| Claude Agent ACP | 0.93.0 | 0.93.0, then 0.98.0 | Follow-up release below (ACP SDK 2 under Cowboy's prototype hooks) |
 | Codex | 0.160.1 | 0.164.0 | ACP 2.3.0 declares `^0.164.0`; 0.165.0 is outside that range |
 | Codex ACP | 2.2.2 | 2.3.0 | Owned patch rebased (see `plugins/codex/runtime/README.md`) |
 | Grok | 1.0.62 | 1.0.70 | Packaged lifecycle |
@@ -119,6 +119,32 @@ pinned to 3.20.1 need a verified login transition before they can move.
 `cargo deny` still reports two advisories outside this change:
 
 - RUSTSEC-2026-0387 (crypto-bigint 0.5 timing) through p256 0.13 and
-  web-push-native 0.5. No 0.5 fix exists; it needs a p256 migration.
-- RUSTSEC-2026-0386 (tokio `AsyncFd`) in the Zed adapter's own lock. Updating
-  it changes the Zed Plugin source and needs its own Zed release.
+  web-push-native 0.5. No 0.5 fix exists, and the newest web-push-native
+  (0.5.0) still requires p256 0.13, so the fix is blocked upstream.
+
+## Follow-up: Claude Agent ACP 0.98.0
+
+ACP 0.94 to 0.98 move to ACP SDK 2.0.2 and Agent SDK 0.3.310 and add an
+experimental v2 protocol chain beside the unchanged v1 chain Cowboy speaks.
+The steering entry points Cowboy extends keep their shape: `steer` still owns
+turn admission through the session's turn queue and input stream, implements
+the opt-in no-new-turn outcome, and `initialize` still advertises only generic
+steering, so the launcher keeps adding `idleBehavior` and priorities. The new
+autonomous-turn async tasks apply only to clients that advertise async tasks,
+which Cowboy does not.
+
+Component release 3.62.0 records provider-runtime 1.1.17. Claude Code 3.20.7
+and 3.20.8 (memory tuning) were released in parallel, so the releases are
+claude-code 3.20.9 and claude-deepseek 3.1.40; codex 3.5.6, codex-deepseek 3.1.39, grok
+3.1.41 and gemini 3.1.39 carry only the component pin.
+
+| Gate | Result |
+| --- | --- |
+| `just claude-remote-check` | 365 passed |
+| Claude worker conformance (all twelve phases) | Accepted, 95 checks |
+| Claude managed / TaskStop conformance | Accepted (7 checks / accepted) |
+| Codex worker / session conformance | Accepted (34 / 10 checks) |
+- RUSTSEC-2026-0386 (tokio `AsyncFd`) in the Zed adapter's own lock. The
+  follow-up below takes tokio 1.54.1 there and versions the Zed source as
+  1.20.10; the adapter does not construct `AsyncFd` itself. Zed publication
+  remains its own release with its native gates.
