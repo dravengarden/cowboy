@@ -5364,6 +5364,18 @@ impl SqliteStorage {
         .context("list soft-deleted SQLite session generations")
     }
 
+    pub(super) async fn deleted_session_auth_generations(
+        &self,
+    ) -> Result<Vec<(String, String, i64)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, provider, provider_auth_generation FROM sessions \
+             WHERE deleted_at_ms IS NOT NULL AND provider_auth_generation IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list soft-deleted SQLite session auth generations")
+    }
+
     /// Releases named accounts signed in under. A compatible later release uses
     /// them for verification, so the Catalog must keep their signed manifests.
     pub(super) async fn native_login_generation_digests(&self) -> Result<Vec<String>> {

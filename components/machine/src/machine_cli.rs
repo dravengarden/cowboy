@@ -3590,6 +3590,32 @@ async fn run_adapter_request(
             }
             return serde_json::to_value(outcomes).context("encoding generation retention");
         }
+        if adapter == crate::generation_retention::AUTH_ADAPTER {
+            let request: crate::generation_retention::AuthRequest =
+                serde_json::from_value(payload)
+                    .context("decoding credential generation retention request")?;
+            anyhow::ensure!(request.is_valid(), "invalid credential generation retention request");
+            let mut referenced = request.referenced;
+            let resident = durable_state
+                .resident_provider_auth_generations()
+                .context("credential retention needs the Machine broker's Session registry")?;
+            if let Some(generations) = resident.get(&request.provider_id) {
+                referenced.extend(generations);
+            }
+            let outcome = providers
+                .retire_auth_generations(&request.provider_id, &referenced)
+                .await?;
+            if !outcome.retired.is_empty() {
+                tracing::info!(
+                    provider = %outcome.provider_id,
+                    retired = outcome.retired.len(),
+                    retained = outcome.retained.len(),
+                    freed_bytes = outcome.freed_bytes,
+                    "retired unreferenced Provider credential generations"
+                );
+            }
+            return serde_json::to_value(outcome).context("encoding credential retention");
+        }
         if adapter == crate::generation_retention::ADAPTER {
             let request: crate::generation_retention::Request = serde_json::from_value(payload)
                 .context("decoding generation retention request")?;

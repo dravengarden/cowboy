@@ -3072,6 +3072,83 @@ fn referenced_generations(
     referenced
 }
 
+/// `(machine, provider)` credential generations live sessions were launched
+/// with. Named-account sessions are included: an over-approximation only keeps
+/// more on the default account's store.
+fn referenced_auth_generations(
+    sessions: &[crate::core::SessionMeta],
+) -> HashMap<(String, String), BTreeSet<u64>> {
+    let mut referenced: HashMap<(String, String), BTreeSet<u64>> = HashMap::new();
+    for session in sessions {
+        if let Some(generation) = session.provider_auth_generation {
+            referenced
+                .entry((session.machine_id.clone(), session.provider.clone()))
+                .or_default()
+                .insert(generation);
+        }
+    }
+    referenced
+}
+
+/// Ask one Machine to retire each active Provider's credential generations
+/// that no session pins. A Machine without the adapter refuses the request;
+/// that is expected until it is upgraded and only logged at debug level.
+async fn retire_auth_generations(
+    state: &AppState,
+    machine: &crate::machine_protocol::MachineSummary,
+    referenced: &HashMap<(String, String), BTreeSet<u64>>,
+) {
+    let providers = machine.plugins.iter().filter(|plugin| {
+        plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+            && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+            && plugin.auth_generation.is_some()
+    });
+    for plugin in providers {
+        let request = crate::generation_retention::AuthRequest {
+            provider_id: plugin.plugin_id.clone(),
+            referenced: referenced
+                .get(&(machine.id.clone(), plugin.plugin_id.clone()))
+                .cloned()
+                .unwrap_or_default(),
+        };
+        if !request.is_valid() {
+            tracing::warn!(machine = %machine.id, provider = %request.provider_id, "skipping invalid credential retention request");
+            continue;
+        }
+        let Ok(payload) = serde_json::to_value(&request) else {
+            continue;
+        };
+        match state
+            .machine_control
+            .adapter_request(
+                &machine.id,
+                crate::generation_retention::AUTH_ADAPTER,
+                payload,
+            )
+            .await
+            .and_then(|value| {
+                serde_json::from_value::<crate::generation_retention::AuthOutcome>(value)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
+                machine = %machine.id,
+                provider = %plugin.plugin_id,
+                retired = outcome.retired.len(),
+                retained = outcome.retained.len(),
+                freed_bytes = outcome.freed_bytes,
+                "retired unreferenced Provider credential generations"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::debug!(
+                machine = %machine.id,
+                provider = %plugin.plugin_id,
+                %error,
+                "Provider credential generation retention unavailable"
+            ),
+        }
+    }
+}
+
 /// How often the retention task compares each Device's reported disk with its
 /// declared `disk.low_watermark` between scheduled passes.
 const URGENT_RETENTION_POLL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -3314,6 +3391,26 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             }
         }
     }
+    // Credential generations pinned by sessions, including soft-deleted ones;
+    // an unreadable list skips credential retention for this pass.
+    let auth_referenced = match store.deleted_session_auth_generations().await {
+        Ok(deleted) => {
+            let mut referenced = referenced_auth_generations(&state.hub.session_list());
+            for (machine_id, provider, generation) in deleted {
+                if let Ok(generation) = u64::try_from(generation) {
+                    referenced
+                        .entry((machine_id, provider))
+                        .or_default()
+                        .insert(generation);
+                }
+            }
+            Some(referenced)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skipping Provider credential generation retention");
+            None
+        }
+    };
     // An unreadable uninstall ledger only skips uninstalled-Plugin cleanup.
     let unfinished_uninstalls = match store.unfinished_plugin_uninstalls().await {
         Ok(pairs) => Some(pairs),
@@ -3379,6 +3476,9 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
                     "Plugin generation retention failed"
                 ),
             }
+        }
+        if let Some(auth_referenced) = &auth_referenced {
+            retire_auth_generations(state, &machine, auth_referenced).await;
         }
         if let Some(unfinished) = &unfinished_uninstalls {
             retire_uninstalled_generations(state, &machine.id, &referenced, unfinished).await;

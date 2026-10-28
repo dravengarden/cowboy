@@ -1043,6 +1043,131 @@ impl MachinePluginStore {
         Ok(())
     }
 
+    /// Retire the default account's credential generations of one Provider
+    /// that nothing can launch any more. Every Service refresh creates an
+    /// immutable `materialized/generations/<n>` and a writable
+    /// `runtime/generations/<n>` whose home also holds the Provider's native
+    /// state; a session launches and resumes on the generation it recorded.
+    /// Besides `referenced` (the Controller's pinned set joined with resident
+    /// launches), the current links, the newest replica, every generation
+    /// changed within [`AUTH_GENERATION_GRACE`] and every generation a live
+    /// process uses as its home are kept. Retirement holds the lifecycle lock
+    /// that credential application takes, and renames each directory to a
+    /// tombstone before removing it.
+    pub async fn retire_auth_generations(
+        &self,
+        provider_id: &str,
+        referenced: &BTreeSet<u64>,
+    ) -> Result<AuthRetention> {
+        self.retire_auth_generations_after(provider_id, referenced, AUTH_GENERATION_GRACE)
+            .await
+    }
+
+    async fn retire_auth_generations_after(
+        &self,
+        provider_id: &str,
+        referenced: &BTreeSet<u64>,
+        grace: Duration,
+    ) -> Result<AuthRetention> {
+        ensure!(
+            self.account_id.is_default(),
+            "credential generation retention is limited to the default account"
+        );
+        let _lifecycle = self.lifecycle.lock().await;
+        validate_plugin_id(provider_id)?;
+        self.operations.ensure_unfenced(provider_id)?;
+        let root = self.auth_provider_root(provider_id);
+        let mut outcome = AuthRetention {
+            provider_id: provider_id.to_owned(),
+            ..AuthRetention::default()
+        };
+        let runtime = root.join("runtime/generations");
+        let materialized = root.join("materialized/generations");
+        // Without a valid current link the canonical credential source falls
+        // back to the oldest runtime generation; never guess which one.
+        let Some(runtime_current) = read_link_name(&root.join("runtime/current"))
+            .and_then(|name| name.parse::<u64>().ok())
+            .filter(|generation| runtime.join(generation.to_string()).is_dir())
+        else {
+            return Ok(outcome);
+        };
+        let mut keep = referenced.clone();
+        keep.insert(runtime_current);
+        keep.extend(
+            read_link_name(&root.join("materialized/current"))
+                .and_then(|name| name.parse::<u64>().ok()),
+        );
+        if let Some(envelope) = self.latest_auth_envelope(provider_id)? {
+            keep.insert(envelope.auth_generation);
+        }
+        let now = SystemTime::now();
+        let mut candidates = BTreeSet::new();
+        for directory in [&runtime, &materialized] {
+            if !directory.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(directory)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(interrupted) = name.strip_prefix(RETIRED_GENERATION_PREFIX) {
+                    ensure!(
+                        interrupted.parse::<u64>().is_ok(),
+                        "invalid retired credential generation"
+                    );
+                    remove_projection::remove(&entry.path())?;
+                    continue;
+                }
+                let Ok(generation) = name.parse::<u64>() else {
+                    continue;
+                };
+                if generation == 0 || generation.to_string() != name || !entry.file_type()?.is_dir()
+                {
+                    continue;
+                }
+                let metadata = entry.metadata()?;
+                let changed_at = SystemTime::UNIX_EPOCH
+                    + Duration::from_secs(
+                        u64::try_from(std::os::unix::fs::MetadataExt::ctime(&metadata))
+                            .unwrap_or_default(),
+                    );
+                let changed = metadata.modified().unwrap_or(now).max(changed_at);
+                if now.duration_since(changed).unwrap_or_default() < grace {
+                    keep.insert(generation);
+                }
+                candidates.insert(generation);
+            }
+        }
+        keep.extend(live_auth_homes(&runtime));
+        for generation in candidates {
+            if keep.contains(&generation) {
+                outcome.retained.push(generation);
+                continue;
+            }
+            // Runtime first: a materialization without its runtime copy is
+            // still a valid immutable source, never the reverse.
+            for directory in [&runtime, &materialized] {
+                let path = directory.join(generation.to_string());
+                if !path.exists() {
+                    continue;
+                }
+                let tombstone = directory.join(format!("{RETIRED_GENERATION_PREFIX}{generation}"));
+                fs::rename(&path, &tombstone).with_context(|| {
+                    format!("retiring credential generation {}", path.display())
+                })?;
+                outcome.freed_bytes = outcome.freed_bytes.saturating_add(tree_bytes(&tombstone));
+                remove_projection::remove(&tombstone)
+                    .with_context(|| format!("removing {}", tombstone.display()))?;
+            }
+            outcome.retired.push(generation);
+        }
+        for directory in [&runtime, &materialized] {
+            if !outcome.retired.is_empty() && directory.is_dir() {
+                fs::File::open(directory)?.sync_all()?;
+            }
+        }
+        Ok(outcome)
+    }
+
     /// Retire generations of Agent Provider Plugins that are no longer
     /// installed: their active link is gone, so only sessions still pinning a
     /// generation (`referenced`, including soft-deleted sessions until purge)
@@ -5172,6 +5297,54 @@ fn read_link_name(path: &Path) -> Option<String> {
 
 const RETIRED_GENERATION_PREFIX: &str = ".retired-";
 
+type AuthRetention = crate::generation_retention::AuthOutcome;
+
+/// A credential generation changed this recently is never retired, covering
+/// a launch admitted against a Controller snapshot taken before it existed.
+const AUTH_GENERATION_GRACE: Duration = Duration::from_secs(24 * 3600);
+
+/// Runtime credential generations a live same-user process uses as `HOME` or
+/// works inside. Unreadable processes are skipped: Workers this Machine
+/// launched are kept through the resident set the caller supplies.
+fn live_auth_homes(runtime_generations: &Path) -> BTreeSet<u64> {
+    let mut live = BTreeSet::new();
+    let Ok(processes) = fs::read_dir("/proc") else {
+        return live;
+    };
+    let generation_of = |path: &Path| {
+        path.strip_prefix(runtime_generations)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .and_then(|first| first.as_os_str().to_str())
+            .and_then(|name| name.parse::<u64>().ok())
+    };
+    for process in processes.flatten() {
+        let path = process.path();
+        if !process
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        if let Ok(cwd) = fs::read_link(path.join("cwd")) {
+            live.extend(generation_of(&cwd));
+        }
+        if let Ok(environment) = fs::read(path.join("environ")) {
+            for entry in environment.split(|byte| *byte == 0) {
+                if let Some(home) = entry.strip_prefix(b"HOME=") {
+                    let home = Path::new(
+                        <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(home),
+                    );
+                    live.extend(generation_of(home));
+                }
+            }
+        }
+    }
+    live
+}
+
 /// Whether an uninstalled Plugin's generations are recorded Agent Provider
 /// installations. Unknown or other kinds are never retired by inference.
 fn uninstalled_agent_generations(generations: &Path) -> bool {
@@ -7692,6 +7865,140 @@ mod tests {
             Some("1")
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn credential_retention_keeps_pinned_current_and_live_generations() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-grok-auth-retention-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+        let bundle = |token: &str| PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD
+                    .encode(format!(r#"{{"account":{{"key":"{token}"}}}}"#)),
+            )]),
+        };
+        for generation in 1..=6 {
+            store
+                .materialize_bundle(
+                    &package,
+                    generation,
+                    &bundle(&format!("token-{generation}")),
+                )
+                .unwrap();
+        }
+        let provider = root.join("provider-auth/providers/grok");
+        let runtime = provider.join("runtime/generations");
+        let materialized = provider.join("materialized/generations");
+        fs::create_dir(runtime.join(".retired-9")).unwrap();
+        fs::write(runtime.join(".retired-9/state"), b"interrupted").unwrap();
+        fs::create_dir(runtime.join("notes")).unwrap();
+        // A live process using generation 4 as HOME keeps it.
+        let mut holder = std::process::Command::new("sleep")
+            .arg("30")
+            .env("HOME", runtime.join("4/home"))
+            .spawn()
+            .unwrap();
+        // Within the grace period nothing is retired.
+        let outcome = store
+            .retire_auth_generations("grok", &BTreeSet::from([3]))
+            .await
+            .unwrap();
+        assert!(outcome.retired.is_empty());
+        assert!(!runtime.join(".retired-9").exists());
+
+        let outcome = store
+            .retire_auth_generations_after("grok", &BTreeSet::from([3]), Duration::ZERO)
+            .await
+            .unwrap();
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        // Runtime current is 1 (the credential source); materialized current
+        // is 6; 3 is pinned; 4 is a live HOME.
+        assert_eq!(outcome.retired, vec![2, 5]);
+        assert_eq!(outcome.retained, vec![1, 3, 4, 6]);
+        assert!(outcome.freed_bytes > 0);
+        for generation in [2, 5] {
+            assert!(!runtime.join(generation.to_string()).exists());
+            assert!(!materialized.join(generation.to_string()).exists());
+        }
+        assert!(runtime.join("notes").is_dir());
+        // The pinned historical projection still reads the shared credential.
+        let pinned = projected_credential_bundle(
+            &package.manifest.authentication,
+            &runtime.join("3"),
+            "xai-account",
+        )
+        .unwrap();
+        assert_eq!(
+            pinned.values["auth_json"],
+            bundle("token-6").values["auth_json"]
+        );
+        // A later refresh reconciles only the remaining projections.
+        store
+            .materialize_bundle(&package, 7, &bundle("token-7"))
+            .unwrap();
+        assert_eq!(
+            read_link_name(&provider.join("runtime/current")).as_deref(),
+            Some("1")
+        );
+        let outcome = store
+            .retire_auth_generations_after("grok", &BTreeSet::new(), Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(outcome.retired, vec![3, 4, 6]);
+        assert_eq!(outcome.retained, vec![1, 7]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn credential_retention_needs_a_valid_current_link() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-grok-auth-retention-link-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+        let bundle = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(br#"{"account":{"key":"k"}}"#),
+            )]),
+        };
+        for generation in 1..=3 {
+            store
+                .materialize_bundle(&package, generation, &bundle)
+                .unwrap();
+        }
+        let provider = root.join("provider-auth/providers/grok");
+        fs::remove_file(provider.join("runtime/current")).unwrap();
+        let outcome = store
+            .retire_auth_generations_after("grok", &BTreeSet::new(), Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(outcome.retired.is_empty());
+        assert!(provider.join("runtime/generations/2").is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 

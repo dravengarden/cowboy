@@ -410,6 +410,14 @@ impl DurableStateView {
         let broker = self.0.lock().as_ref()?.upgrade()?;
         Some(broker.resident_provider_generations())
     }
+
+    /// Default-account credential generations resident Sessions launched
+    /// with; credential retention keeps them whatever the Controller pins.
+    /// `None` until a broker is attached (or after it ended).
+    pub fn resident_provider_auth_generations(&self) -> Option<BTreeMap<String, BTreeSet<u64>>> {
+        let broker = self.0.lock().as_ref()?.upgrade()?;
+        Some(broker.resident_provider_auth_generations())
+    }
 }
 
 /// How often a queued rollout replacement checks whether someone is waiting.
@@ -1633,6 +1641,31 @@ impl Broker {
                     .entry(launch.provider.clone())
                     .or_default()
                     .insert(launch.provider_generation_digest.clone());
+            }
+        };
+        for launch in self.sessions.lock().values() {
+            keep(launch);
+        }
+        for worker in self.workers.lock().values() {
+            if let Some(launch) = worker.snapshot.launch.as_ref() {
+                keep(launch);
+            }
+        }
+        resident
+    }
+
+    /// Default-account credential generations, per Provider, that resident
+    /// Sessions were launched with (declarations and live workers alike).
+    fn resident_provider_auth_generations(&self) -> BTreeMap<String, BTreeSet<u64>> {
+        let mut resident: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+        let mut keep = |launch: &StartSession| {
+            if let Some(generation) = launch.provider_auth_generation
+                && launch.provider_account_id.is_default()
+            {
+                resident
+                    .entry(launch.provider.clone())
+                    .or_default()
+                    .insert(generation);
             }
         };
         for launch in self.sessions.lock().values() {

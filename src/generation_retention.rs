@@ -105,9 +105,53 @@ pub fn is_not_installed_detail(detail: &str) -> bool {
         })
 }
 
+/// Machine adapter that retires the default account's Provider credential
+/// generations (`materialized/` and `runtime/`) that no session pins. Each
+/// Service credential refresh creates one of each, and a session keeps the
+/// generation it launched with for its whole life, including resumes.
+pub const AUTH_ADAPTER: &str = "provider-auth-generation-retention";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRequest {
+    pub provider_id: String,
+    /// Auth generations still pinned by a session that can launch on this
+    /// Machine, including soft-deleted sessions until they are purged.
+    pub referenced: BTreeSet<u64>,
+}
+
+impl AuthRequest {
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.referenced.len() <= MAX_REFERENCED && !self.referenced.contains(&0)
+    }
+}
+
+/// What one credential retention pass kept and removed for a Provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthOutcome {
+    pub provider_id: String,
+    pub retired: Vec<u64>,
+    pub retained: Vec<u64>,
+    pub freed_bytes: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_requests_bound_and_reject_generation_zero() {
+        let request = |referenced: Vec<u64>| AuthRequest {
+            provider_id: "grok".to_owned(),
+            referenced: referenced.into_iter().collect(),
+        };
+        assert!(request(vec![1, 7]).is_valid());
+        assert!(request(Vec::new()).is_valid());
+        assert!(!request(vec![0, 3]).is_valid());
+        let too_many: Vec<u64> = (1..=u64::try_from(MAX_REFERENCED).unwrap() + 1).collect();
+        assert!(!request(too_many).is_valid());
+    }
 
     #[test]
     fn only_bounded_sha256_digests_are_accepted() {
