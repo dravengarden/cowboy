@@ -195,6 +195,8 @@ the environment already sets it. Bun then checks whether to collect every
 182 MiB of anonymous memory and settled at 109 instead of 122 MiB, with no
 measurable CPU cost while busy or idle. Native pins and component release
 3.61.0 are unchanged. It is a runtime change requiring packaged acceptance.
+Version 3.20.8 was never published: the change first shipped in 3.20.9 with
+claude-agent-acp 0.98.0 (see the 2026-10-28 runtime release record).
 
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
