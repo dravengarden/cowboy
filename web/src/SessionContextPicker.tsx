@@ -1,9 +1,7 @@
-import { useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  Autocomplete,
   Box,
   Button,
-  Checkbox,
   Chip,
   IconButton,
   InputAdornment,
@@ -13,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  AccountTreeOutlined,
   CheckBoxOutlineBlank,
   CheckBoxOutlined,
   ChevronRight,
@@ -28,6 +27,16 @@ import { Sheet } from "./Sheet";
 import { ReliableListItemButton } from "./ReliableListItemButton";
 import { useDialogFocus } from "./useDialogInputFocus";
 import { isImeKeyEvent } from "./imeKey";
+import type { SessionMeta } from "./protocol";
+import {
+  SessionDestinationTree,
+  type SessionDestinationTreeState,
+} from "./SessionDestinationTree";
+import { DesktopModal } from "./desktop/DesktopModal";
+import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
+
+/** The Service accepts at most this many context sources. */
+const CONTEXT_LIMIT = 32;
 
 /** One selectable row per real session. Names are presentation, ids are the
  * references; the Service rechecks ownership on save, send and history reads. */
@@ -161,55 +170,186 @@ export function SessionContextPicker(
     );
   }
   return (
-    <Autocomplete
-      data-context-picker
-      multiple
-      disableCloseOnSelect
-      options={ids}
+    <DesktopContextPicker
       value={value}
+      onChange={onChange}
       disabled={disabled}
-      getOptionLabel={identityLabel}
-      getOptionDisabled={unavailable}
-      onChange={(_, ids) => onChange(ids)}
-      renderValue={(ids, getItemProps) =>
-        ids.map((id, index) => (
-          <Chip
-            {...getItemProps({ index })}
-            key={id}
-            size="small"
-            label={identityLabel(id)}
-            sx={{ maxWidth: "100%" }}
-          />
-        ))}
-      renderOption={(props, id, state) => {
-        return (
-          <li {...props} key={id}>
-            <Checkbox checked={state.selected} tabIndex={-1} size="small" />
-            <Stack sx={{ minWidth: 0 }}>
-              <Typography sx={{ overflowWrap: "anywhere" }}>
-                {label(id)}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {detail(id)}
-              </Typography>
-            </Stack>
-          </li>
-        );
-      }}
-      renderInput={(params) => (
-        <TextField
-          {...params}
-          label="Context from sessions"
-          placeholder={value.length
-            ? "Add another session"
-            : "Search sessions · optional"}
-          helperText={value.length >= 32
-            ? "32 sessions selected · limit reached"
-            : undefined}
-        />
-      )}
-      sx={{ minWidth: 0, "& .MuiAutocomplete-inputRoot": { flexWrap: "wrap" } }}
+      choices={choices}
+      identityLabel={identityLabel}
     />
+  );
+}
+
+/** Desktop: the same folder tree as the Sessions sidebar, as a keyboard-first
+ * multi-select modal. The form shows the choices as removable chips; closing
+ * keeps them in the form, which alone saves them. */
+function DesktopContextPicker(
+  { value, onChange, disabled, choices, identityLabel }: {
+    value: string[];
+    onChange: (value: string[]) => void;
+    disabled: boolean;
+    choices: readonly SessionMeta[];
+    identityLabel: (id: string) => string;
+  },
+): React.JSX.Element {
+  const sessions = useStoreSelector((state) => state.sessions);
+  const folders = useStoreSelector((state) => state.sessionFolders);
+  const order = useStoreSelector((state) => state.workspaceOrder);
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<SessionDestinationTreeState>({
+    searchFocused: false,
+    prefixArmed: false,
+  });
+  const onStateChange = useCallback(
+    (next: SessionDestinationTreeState) => setState(next),
+    [],
+  );
+  const offered = useMemo(
+    () => new Set(choices.map((session) => session.id)),
+    [choices],
+  );
+  const include = useCallback(
+    (session: SessionMeta) => offered.has(session.id),
+    [offered],
+  );
+  const selected = useMemo(() => new Set(value), [value]);
+  const full = value.length >= CONTEXT_LIMIT;
+  const tree = state.searchFocused || state.prefixArmed
+    ? "inactive"
+    : "available";
+  return (
+    <Stack spacing={1} data-context-picker>
+      <Button
+        variant="outlined"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        endIcon={<ChevronRight />}
+        onClick={() => setOpen(true)}
+        sx={{
+          justifyContent: "space-between",
+          textTransform: "none",
+          color: "text.primary",
+          borderColor: "divider",
+        }}
+      >
+        Context from sessions{value.length ? ` · ${value.length}` : " · optional"}
+      </Button>
+      {value.length > 0 && (
+        <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
+          {value.map((id) => (
+            <Chip
+              key={id}
+              size="small"
+              label={identityLabel(id)}
+              disabled={disabled}
+              onDelete={() => onChange(value.filter((other) => other !== id))}
+              sx={{ maxWidth: "100%" }}
+            />
+          ))}
+        </Stack>
+      )}
+      {open && (
+        <DesktopModal
+          open
+          onClose={() => setOpen(false)}
+          title="Context from sessions"
+          description="The agent reads these sessions when it needs them."
+          icon={<AccountTreeOutlined color="primary" />}
+          width={720}
+          shortcutGroups={[
+            {
+              label: "Navigate",
+              slots: [
+                { shortcut: "J/K", label: "Move", availability: tree },
+                { shortcut: "H/L", label: "Fold", availability: tree },
+              ],
+            },
+            {
+              slots: [
+                {
+                  shortcut: "Enter",
+                  label: state.searchFocused ? "To list" : "Toggle",
+                },
+                {
+                  shortcut: "/",
+                  label: "Search",
+                  availability: state.searchFocused ? "active" : tree,
+                },
+                {
+                  shortcut: "Esc",
+                  label: state.searchFocused ? "Leave search" : "Done",
+                },
+              ],
+            },
+          ]}
+          footer={
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1}
+              sx={{ px: 2.25, py: 1 }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                role="status"
+                sx={{ flex: 1 }}
+              >
+                {value.length
+                  ? `${value.length} of ${CONTEXT_LIMIT} selected`
+                  : "Optional · choose sessions to read when needed"}
+              </Typography>
+              {value.length > 0 && (
+                <Button size="small" onClick={() => onChange([])}>
+                  Clear
+                </Button>
+              )}
+              <Button
+                size="small"
+                variant="contained"
+                disableElevation
+                onClick={() => setOpen(false)}
+              >
+                Done
+              </Button>
+            </Stack>
+          }
+        >
+          <Box
+            data-context-choices
+            sx={{
+              px: 2.25,
+              pt: 1.5,
+              display: "flex",
+              flexDirection: "column",
+              height: "min(520px, calc(100vh - 260px))",
+              minHeight: 240,
+            }}
+          >
+            <SessionDestinationTree
+              sessions={sessions}
+              folders={folders}
+              order={order}
+              initialFolder={null}
+              selected={selected}
+              include={include}
+              isDisabled={() => full}
+              searchLabel="Search context sessions"
+              treeLabel="Context sessions"
+              onPick={(session) =>
+                onChange(
+                  selected.has(session.id)
+                    ? value.filter((id) => id !== session.id)
+                    : [...value, session.id],
+                )}
+              onStateChange={onStateChange}
+              listSx={{ overflowY: "auto", pb: 1, ...desktopScrollbarSx }}
+            />
+          </Box>
+        </DesktopModal>
+      )}
+    </Stack>
   );
 }
 

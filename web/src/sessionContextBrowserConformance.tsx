@@ -237,43 +237,26 @@ export async function runSessionContextBrowserConformance(
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((
       button,
     ) => button.textContent?.includes(text))!;
-  const openChoices = async (desktop: boolean) => {
-    if (!desktop) {
-      button("Context from sessions").click();
-      await until(() =>
-        document.querySelector("[data-context-choices]") !== null
-      );
-      return;
-    }
-    const input = container.querySelector<HTMLInputElement>(
-      '[data-context-picker] input[role="combobox"]',
-    )!;
-    input.focus();
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  // Both surfaces open a picker: touch a sheet list, Desktop the Sessions
+  // folder tree in a modal.
+  const openChoices = async (_desktop: boolean) => {
+    button("Context from sessions").click();
+    await until(() =>
+      document.querySelector("[data-context-choices]") !== null
     );
-    await until(() => document.querySelector('[role="listbox"]') !== null);
   };
   const option = (text: string) =>
-    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((
-      option,
-    ) => option.textContent?.includes(text))!;
-  const closeChoices = async (desktop: boolean) => {
-    if (desktop) {
-      const input = container.querySelector<HTMLInputElement>(
-        "[data-context-picker] input",
-      )!;
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-      input.blur();
-    } else {
-      [...document.querySelectorAll<HTMLButtonElement>(
-        '[role="dialog"] button',
-      )]
-        .find((button) => button.textContent === "Done")!.click();
-    }
-    await until(() => document.querySelector('[role="listbox"]') === null);
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="option"], [role="treeitem"][data-session-destination-session]',
+      ),
+    ].find((option) => option.textContent?.includes(text))!;
+  const closeChoices = async (_desktop: boolean) => {
+    [...document.querySelectorAll<HTMLButtonElement>(
+      '[role="dialog"] button',
+    )]
+      .find((button) => button.textContent === "Done")!.click();
+    await until(() => document.querySelector("[data-context-choices]") === null);
   };
   const searchChoices = async (query: string) => {
     const input = document.querySelector<HTMLInputElement>(
@@ -371,6 +354,16 @@ export async function runSessionContextBrowserConformance(
         `${mode}: unchanged empty settings have no save or reset action`,
       );
       await openChoices(desktop);
+      if (desktop) {
+        check(
+          document.querySelector(
+            "[data-context-choices] [role=\"tree\"][aria-multiselectable=\"true\"]",
+          ) !== null &&
+            document.activeElement?.getAttribute("aria-label") ===
+              "Search context sessions",
+          "desktop: sources are chosen from the Sessions folder tree, search first",
+        );
+      }
       if (!desktop) {
         const panel = document.querySelector<HTMLElement>(
           "[data-context-choices]",

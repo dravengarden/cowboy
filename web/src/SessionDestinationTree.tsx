@@ -10,6 +10,8 @@ import {
 } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
 import {
+  CheckBoxOutlineBlank,
+  CheckBoxOutlined,
   ChevronRight,
   ExpandMore,
   FolderOpenOutlined,
@@ -42,6 +44,9 @@ import { desktopKeyIntent } from "./desktop/commands/keyIntent";
 import { useDialogFocus } from "./useDialogInputFocus";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { HintTooltip } from "./HintTooltip";
+import { AccountBadge } from "./AccountBadge";
+import { sessionAccountIdentity } from "./accountIdentity";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
 
 // Geometry follows the Sessions sidebar (App.tsx SessionList) so a picker
 // reads as the same tree: rows indent by MARGIN, one step clears the parent
@@ -93,6 +98,9 @@ export interface SessionDestinationTreeState {
  * user keeps their bearings. Keyboard: J/K or arrows move, H/L fold or walk
  * the tree, gg/G jump, `/` searches, L/Enter chooses; `Esc` in search
  * returns to the list.
+ *
+ * With `selected` the tree is a multi-select: rows carry a checkbox and
+ * L/Enter toggles the row through `onPick` without leaving the tree.
  */
 export function SessionDestinationTree(
   {
@@ -105,6 +113,11 @@ export function SessionDestinationTree(
     onPick,
     onStateChange,
     listSx,
+    selected,
+    include,
+    isDisabled,
+    searchLabel = "Search destination Sessions",
+    treeLabel = "Destination Sessions",
   }: {
     sessions: readonly SessionMeta[];
     folders: SessionFoldersValue;
@@ -117,8 +130,17 @@ export function SessionDestinationTree(
     onPick: (session: SessionMeta) => void;
     onStateChange?: (state: SessionDestinationTreeState) => void;
     listSx?: SxProps<Theme>;
+    /** Multi-select: the chosen Session ids; rows toggle through `onPick`. */
+    selected?: ReadonlySet<string>;
+    /** Sessions this picker offers at all (default: every non-system one). */
+    include?: (session: SessionMeta) => boolean;
+    /** Shown but not choosable now, e.g. a selection limit was reached. */
+    isDisabled?: (session: SessionMeta) => boolean;
+    searchLabel?: string;
+    treeLabel?: string;
   },
 ): React.JSX.Element {
+  const multi = selected !== undefined;
   const desktop = useSurfaceProfile().kind === "desktop";
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -131,8 +153,13 @@ export function SessionDestinationTree(
   const [searchFocused, setSearchFocused] = useState(false);
   const [prefixArmed, setPrefixArmed] = useState(false);
   const eligible = useMemo(
-    () => displayedSessionOrder(sessions.filter((session) => !session.system)),
-    [sessions],
+    () =>
+      displayedSessionOrder(
+        sessions.filter((session) =>
+          !session.system && (include ? include(session) : true)
+        ),
+      ),
+    [sessions, include],
   );
   const full = useMemo(
     () => buildSessionTree(eligible, folders, new Set(), [], order),
@@ -145,6 +172,12 @@ export function SessionDestinationTree(
       ? full.folderOf.get(currentId) ?? null
       : null;
     const open = new Set([context, ...folderAncestors(folders, context)]);
+    // A multi-select opens where its current choices live.
+    for (const id of selected ?? []) {
+      const folder = full.folderOf.get(id) ?? null;
+      open.add(folder);
+      for (const ancestor of folderAncestors(folders, folder)) open.add(ancestor);
+    }
     return new Set(
       folders.folders.filter((folder) => !open.has(folder.id)).map((folder) =>
         folder.id
@@ -176,6 +209,9 @@ export function SessionDestinationTree(
       row.kind === "session" || row.kind === "folder" && row.sessionCount > 0
     );
   const choosable = matches.some((session) => session.id !== currentId);
+  const unavailable = (session: SessionMeta): boolean =>
+    session.id === currentId ||
+    (!selected?.has(session.id) && (isDisabled?.(session) ?? false));
   const rowId = (index: number): string | null => {
     const row = rows[index];
     return row?.kind === "folder"
@@ -309,7 +345,7 @@ export function SessionDestinationTree(
       case "l":
         handled();
         if (row?.kind === "session") {
-          if (key === "l") onPick(row.session);
+          if (key === "l" && !unavailable(row.session)) onPick(row.session);
         } else if (row?.kind === "folder") {
           if (!row.expanded && !needle) toggle(row.folder.id);
           else if (
@@ -349,7 +385,7 @@ export function SessionDestinationTree(
         sx={{ mb: 1, flexShrink: 0 }}
         slotProps={{
           htmlInput: {
-            "aria-label": "Search destination Sessions",
+            "aria-label": searchLabel,
             enterKeyHint: "search",
           },
           input: {
@@ -387,7 +423,8 @@ export function SessionDestinationTree(
         <List
           ref={listRef}
           role="tree"
-          aria-label="Destination Sessions"
+          aria-label={treeLabel}
+          aria-multiselectable={multi || undefined}
           disablePadding
           onKeyDownCapture={(event) => {
             if (isImeKeyEvent(event.nativeEvent)) event.stopPropagation();
@@ -399,6 +436,8 @@ export function SessionDestinationTree(
             const folder = row.kind === "folder";
             const id = rowId(index)!;
             const current = !folder && row.session.id === currentId;
+            const blocked = !folder && unavailable(row.session);
+            const checked = !folder && multi && selected.has(row.session.id);
             const firstTarget = !visibleFocus &&
               index === rows.findIndex((r) =>
                   r.kind === "folder" ||
@@ -427,11 +466,12 @@ export function SessionDestinationTree(
                   aria-level={row.depth + 1}
                   aria-expanded={folder ? row.expanded : undefined}
                   aria-current={current ? "true" : undefined}
-                  aria-disabled={busy || current || undefined}
+                  aria-selected={!folder && multi ? checked : undefined}
+                  aria-disabled={busy || blocked || undefined}
                   tabIndex={visibleFocus === id || firstTarget ? 0 : -1}
                   onFocus={() => setFocusId(id)}
                   onActivate={() => {
-                    if (busy || current) return;
+                    if (busy || blocked) return;
                     if (folder) { if (!needle) toggle(row.folder.id); }
                     else onPick(row.session);
                   }}
@@ -446,10 +486,11 @@ export function SessionDestinationTree(
                     minHeight: folder ? 44 : 52,
                     py: 0.5,
                     borderRadius: "10px",
-                    ...(current && {
+                    ...(blocked && {
                       cursor: "default",
                       "&:hover": { bgcolor: "transparent" },
                     }),
+                    ...(blocked && !current && { opacity: 0.55 }),
                     ...(busy && { opacity: 0.6, pointerEvents: "none" }),
                     [FINE]: {
                       pl: `${String(ROW_PL.fine)}px`,
@@ -483,6 +524,11 @@ export function SessionDestinationTree(
                         />
                       )}
                   </Box>
+                  {!folder && multi && (
+                    checked
+                      ? <CheckBoxOutlined color="primary" sx={{ flexShrink: 0 }} />
+                      : <CheckBoxOutlineBlank color="action" sx={{ flexShrink: 0 }} />
+                  )}
                   {folder ? <FolderRowContent row={row} /> : (
                     <SessionRowContent
                       session={row.session}
@@ -553,6 +599,7 @@ function FolderRowContent(
 function SessionRowContent(
   { session, current }: { session: SessionMeta; current: boolean },
 ): React.JSX.Element {
+  const { data: accounts } = useSubscriptionAccounts();
   return (
     <Stack
       sx={{
@@ -599,6 +646,7 @@ function SessionRowContent(
           {sessionListProjectLabel(session)}
         </Typography>
         <SessionMachineBadge session={session} compact />
+        <AccountBadge account={sessionAccountIdentity(accounts, session)} />
       </Stack>
     </Stack>
   );
