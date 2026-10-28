@@ -15,6 +15,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
+// One arena and a one-second dirty decay: on OVH (Node 24, a transcript-like
+// stream through the real adapter modules) 45 -> 34 MiB anonymous memory at
+// +6% CPU; a zero decay saved 2 MiB more for +31% CPU. No abort_conf: an
+// older host library warns about an option instead of failing the launch.
+const JEMALLOC_CONF =
+  "background_thread:true,narenas:1,dirty_decay_ms:1000,muzzy_decay_ms:0,thp:never";
 const repository = resolve(root, "../../..");
 const base = (process.argv.slice(2)[0] ?? "").replace(/\/+$/, "");
 if (!base.startsWith("https://") || base.includes("latest")) {
@@ -120,8 +126,21 @@ try {
     digests["matrix-client.mjs"] = await sha256(
       `${destination}/app/matrix-client.mjs`,
     );
+    // Where the host ships jemalloc (Ubuntu's libjemalloc2 on OVH), the two
+    // resident Node processes return freed native memory within a second
+    // instead of keeping glibc's fragmented peak. launch.mjs removes the
+    // preload again, so nothing either process starts inherits it.
     const prefix =
-      '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n';
+      '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n' +
+      'if [ -z "${LD_PRELOAD-}" ] && [ -z "${MALLOC_CONF-}" ]; then\n' +
+      "  for cowboy_jemalloc in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 /usr/lib/aarch64-linux-gnu/libjemalloc.so.2; do\n" +
+      '    if [ -r "$cowboy_jemalloc" ]; then\n' +
+      `      LD_PRELOAD=$cowboy_jemalloc MALLOC_CONF=${JEMALLOC_CONF} COWBOY_NODE_ALLOCATOR=jemalloc\n` +
+      "      export LD_PRELOAD MALLOC_CONF COWBOY_NODE_ALLOCATOR\n" +
+      "      break\n" +
+      "    fi\n" +
+      "  done\n" +
+      "fi\n";
     await writeFile(
       `${destination}/bin/claude-agent-acp`,
       prefix +

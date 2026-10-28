@@ -65,6 +65,16 @@ const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 // about half their anonymous memory at no measurable relay throughput cost
 // (OVH, Node 24, 2026-10-27). The bin/ wrappers (build.ts) pass the same flag.
 export const NODE_FLAGS = ["--optimize-for-size"];
+
+// The bin/ wrappers preload the host's jemalloc for this Node process only
+// (build.ts). Native Claude, hooks, MCP servers and every other child keep
+// the environment they would have had without it.
+export function dropPreloadedAllocator(environment) {
+  if (environment.COWBOY_NODE_ALLOCATOR !== "jemalloc") return;
+  delete environment.LD_PRELOAD;
+  delete environment.MALLOC_CONF;
+  delete environment.COWBOY_NODE_ALLOCATOR;
+}
 const nodeArgv = [process.execPath, ...NODE_FLAGS];
 
 // The packaged native MCP relay and task waiter (relay/, Linux only): it
@@ -1427,6 +1437,7 @@ async function native(args) {
 }
 
 export async function main(args) {
+  dropPreloadedAllocator(process.env);
   const inspect = args.slice(1);
   if (
     args[0] === "--cowboy-private-cli" &&

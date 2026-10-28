@@ -177,6 +177,18 @@ counts a refused bridge reply as a failure instead of asking again at once.
 Native pins and component release 3.60.0 are unchanged. It is a runtime change
 requiring packaged acceptance.
 
+Claude Code 3.20.7 preloads the host's jemalloc into the ACP adapter and the
+private CLI, the two Node processes every session keeps resident, where the
+host ships it (`libjemalloc.so.2` under `/usr/lib/<arch>-linux-gnu`, as on
+Ubuntu) and neither `LD_PRELOAD` nor `MALLOC_CONF` is already set. One arena
+and a one-second dirty decay return freed native memory instead of keeping
+glibc's fragmented peak: with the real adapter modules under a transcript-like
+stream on OVH, 45 MiB became 34 MiB of anonymous memory for 6% more CPU. The
+launcher removes the preload before it starts anything, so native Claude,
+hooks and MCP servers keep their usual environment; hosts without the library
+run as before. Native pins and component release 3.61.0 are unchanged. It is a
+runtime change requiring packaged acceptance.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source

@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   advertiseCurrentTurn,
   allowedControl,
+  dropPreloadedAllocator,
   hookPrefixScript,
   initializeRequest,
   mcpRelay,
@@ -239,6 +240,24 @@ test("stale runtime socket directories are removed and live ones kept", async (t
   assert.equal(await exists(live), true);
   assert.equal(await exists(recent), true);
   assert.equal(await exists(other), true);
+});
+
+test("only the wrapper's own allocator preload is dropped before children start", () => {
+  const preloaded = {
+    LD_PRELOAD: "/usr/lib/x86_64-linux-gnu/libjemalloc.so.2",
+    MALLOC_CONF: "narenas:1",
+    COWBOY_NODE_ALLOCATOR: "jemalloc",
+    PATH: "/usr/bin",
+  };
+  dropPreloadedAllocator(preloaded);
+  assert.deepEqual(preloaded, { PATH: "/usr/bin" });
+  // A preload the user chose, without the wrapper's marker, is kept.
+  const chosen = { LD_PRELOAD: "/opt/lib/custom.so", MALLOC_CONF: "x:1" };
+  dropPreloadedAllocator(chosen);
+  assert.deepEqual(chosen, {
+    LD_PRELOAD: "/opt/lib/custom.so",
+    MALLOC_CONF: "x:1",
+  });
 });
 
 test("tool inputs stream eagerly unless the user chose otherwise", () => {
