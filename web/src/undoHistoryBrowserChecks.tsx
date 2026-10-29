@@ -3,7 +3,7 @@
  *  failed undo explains itself instead of staying offered. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { CssBaseline } from "@mui/material";
+import { CssBaseline, Menu, MenuItem } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
@@ -73,6 +73,33 @@ export async function runUndoHistoryBrowserChecks(): Promise<void> {
 
     recordUndo("1 call cleared", [{ kind: "restore_calls", parent: "parent", ids: ["c"] }]);
     await until(() => Boolean(alert() && button("Undo history", alert()!)), "the second notice");
+    // A menu opened while the notice is up must cover it, not the reverse.
+    const menuHost = document.createElement("div");
+    document.body.append(menuHost);
+    const menuRoot = createRoot(menuHost);
+    try {
+      flushSync(() =>
+        menuRoot.render(
+          <BrowserProductTheme>
+            <Menu
+              open
+              anchorReference="anchorPosition"
+              anchorPosition={{ top: globalThis.innerHeight, left: 0 }}
+              slotProps={{ paper: { "data-overlap-menu": "" } as object }}
+            >
+              {Array.from({ length: 12 }, (_, i) => <MenuItem key={i}>Item {i}</MenuItem>)}
+            </Menu>
+          </BrowserProductTheme>,
+        )
+      );
+      await until(() => document.querySelector("[data-overlap-menu]") !== null, "the overlapping menu");
+      const box = alert()!.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + 12, box.top + box.height / 2);
+      check(top?.closest("[data-overlap-menu]"), "an open menu stacks above the notice");
+    } finally {
+      flushSync(() => menuRoot.unmount());
+      menuHost.remove();
+    }
     flushSync(() => button("Undo history", alert()!)!.click());
     await until(() => document.querySelector("[data-undo-history]") !== null, "the history sheet");
     const rows = () => [...document.querySelectorAll<HTMLElement>("[data-undo-entry]")];

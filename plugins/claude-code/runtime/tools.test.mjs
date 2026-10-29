@@ -734,6 +734,53 @@ test("native Read task handles retain output cursors across cold resume", async 
   assert.equal(cursors.length, 3);
 });
 
+test("a finished background command's output outlives the executor forgetting it", async (t) => {
+  const { tools, connection, binding, state } = await fixture(t);
+  const id = "00000000-0000-0000-0000-000000000002";
+  tools.state.jobs[id] = { afterSeq: null, exited: false };
+  await tools.save();
+  let forgotten = false;
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    if (forgotten) {
+      throw Object.assign(new Error("refused"), {
+        remote: {
+          code: -32600,
+          message: `unknown process id ${params.processId}`,
+        },
+      });
+    }
+    return {
+      chunks: params.afterSeq === null
+        ? [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("built\n").toString("base64"),
+        }]
+        : [],
+      closed: true,
+      exited: true,
+      exitCode: 0,
+    };
+  };
+  // The completion waiter sees the command end and keeps its output.
+  assert.deepEqual(await tools.waitTask(id, null, 1000), {
+    closed: true,
+    exitCode: 0,
+  });
+  // More than 15 minutes later the executor no longer knows the process,
+  // and the runtime may have restarted in between.
+  forgotten = true;
+  const resumed = new WorkspaceTools(connection, binding, state);
+  await resumed.load();
+  const path = TASK_OUTPUT_PREFIX + id;
+  const first = await resumed.nativeCall("Read", { file_path: path });
+  assert.equal(first.result.file.content, "built\nExit code: 0");
+  assert.equal(resumed.state.jobs[id].retained, undefined);
+  const second = await resumed.nativeCall("Read", { file_path: path });
+  assert.equal(second.result.file.content, "Exit code: 0");
+});
+
 test("task output keeps split UTF-8 separate per stream across cold resume", async (t) => {
   const { tools, connection, binding, state } = await fixture(t);
   const id = "utf8-job";
