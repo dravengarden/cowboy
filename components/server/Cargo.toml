@@ -24,7 +24,7 @@ machine-host = ["cowboy/machine-host"]
 cowboy = { version = "0.1.0", path = "../.." }
 cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
 cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
-agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
