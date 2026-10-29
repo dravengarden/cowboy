@@ -15413,27 +15413,71 @@ fn random_machine_token() -> anyhow::Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
+/// `(gateway slot, agent)` pairs for Providers active on one Machine that run
+/// a shared provider gateway as a session sidecar. Such a gateway reports its
+/// own component slot as producer while labelling events with the consuming
+/// Provider's agent, e.g. DeepSeek Harness over the claude-deepseek gateway.
+fn provider_usage_shared_gateways(
+    current_plugins: &[crate::machine_protocol::PluginInventory],
+    runtime: &crate::plugin_runtime::PluginRuntime,
+    catalog: &crate::provider_catalog::ProviderCatalog,
+) -> BTreeSet<(String, String)> {
+    let mut pairs = BTreeSet::new();
+    for plugin in current_plugins
+        .iter()
+        .filter(|plugin| plugin.state == crate::machine_protocol::PluginInstallationState::Active)
+    {
+        let Some(agent) = runtime
+            .exact_host(
+                &plugin.plugin_id,
+                &plugin.plugin_version,
+                &plugin.generation_digest,
+            )
+            .and_then(|host| host.adapter_slot.clone())
+        else {
+            continue;
+        };
+        let Some(package) = catalog.package(
+            &plugin.plugin_id,
+            &plugin.plugin_version,
+            &plugin.generation_digest,
+        ) else {
+            continue;
+        };
+        for sidecar in &package.manifest.runtime.sidecars {
+            if sidecar.component.kind == cowboy_provider_sdk::PrivateComponentKind::ProviderGateway
+            {
+                pairs.insert((sidecar.component.slot.clone(), agent.clone()));
+            }
+        }
+    }
+    pairs
+}
+
 fn provider_usage_source_is_authorized(
     current_plugins: &[crate::machine_protocol::PluginInventory],
     runtime: &crate::plugin_runtime::PluginRuntime,
+    shared_gateways: &BTreeSet<(String, String)>,
     producer_id: &str,
     provider: &str,
     agent: &str,
 ) -> bool {
-    let Some(producer) = current_plugins.iter().find(|plugin| {
-        plugin.plugin_id == producer_id
-            && plugin.state == crate::machine_protocol::PluginInstallationState::Active
-    }) else {
-        return false;
-    };
-    let producer_agent = runtime
-        .exact_host(
-            producer_id,
-            &producer.plugin_version,
-            &producer.generation_digest,
-        )
-        .and_then(|host| host.adapter_slot.as_deref());
-    producer_agent == Some(agent)
+    let producer_agent = current_plugins
+        .iter()
+        .find(|plugin| {
+            plugin.plugin_id == producer_id
+                && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+        })
+        .and_then(|producer| {
+            runtime.exact_host(
+                producer_id,
+                &producer.plugin_version,
+                &producer.generation_digest,
+            )
+        })
+        .and_then(|host| host.adapter_slot.clone());
+    (producer_agent.as_deref() == Some(agent)
+        || shared_gateways.contains(&(producer_id.to_owned(), agent.to_owned())))
         && runtime.default_hosts().into_iter().any(|host| {
             host.usage.as_ref().is_some_and(|usage| {
                 usage.activity
@@ -15453,6 +15497,7 @@ mod provider_usage_source_tests {
     };
     use crate::plugin_host::{PluginHostSpec, PluginSlotId};
     use crate::plugin_runtime::ActivatedHostPlugin;
+    use std::collections::BTreeSet;
 
     fn activated(id: &str, source: &str) -> ActivatedHostPlugin {
         let spec = PluginHostSpec::from_json(source.as_bytes()).expect("host spec");
@@ -15511,6 +15556,7 @@ mod provider_usage_source_tests {
         assert!(provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "future-agent",
@@ -15518,6 +15564,7 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "other-account",
             "future-agent",
@@ -15525,9 +15572,48 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "other-agent",
+        ));
+    }
+
+    #[test]
+    fn shared_gateway_reports_usage_for_its_consuming_agent() {
+        let plugins = [installed(
+            "claude-deepseek",
+            PluginInstallationState::Active,
+        )];
+        let runtime = crate::plugin_runtime::PluginRuntime::from_default_hosts(vec![activated(
+            "claude-deepseek",
+            r#"{"schema_version":1,"adapter_slot":"claude","usage":{"account":"deepseek","activity":true,"activity_agents":[{"id":"claude","label":"Claude Code"},{"id":"deepseek-harness","label":"DeepSeek Harness"}]}}"#,
+        )]);
+        let shared =
+            BTreeSet::from([("claude-deepseek".to_owned(), "deepseek-harness".to_owned())]);
+        assert!(provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &shared,
+            "claude-deepseek",
+            "deepseek",
+            "deepseek-harness",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &BTreeSet::new(),
+            "claude-deepseek",
+            "deepseek",
+            "deepseek-harness",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &shared,
+            "codex-deepseek",
+            "deepseek",
+            "deepseek-harness",
         ));
     }
 
@@ -15550,6 +15636,7 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "future-agent",
@@ -16242,6 +16329,16 @@ async fn handle_machine_ws(
                     },
             } => {
                 let plugin_runtime = state.plugin_catalog.runtime();
+                let shared_gateways =
+                    plugin_runtime
+                        .as_ref()
+                        .map_or_else(BTreeSet::new, |runtime| {
+                            provider_usage_shared_gateways(
+                                &current_providers,
+                                runtime,
+                                &state.provider_catalog,
+                            )
+                        });
                 let bounded = plugin_runtime.as_ref().is_some_and(|runtime| {
                     events.len() <= 200
                         && events
@@ -16257,6 +16354,7 @@ async fn handle_machine_ws(
                             provider_usage_source_is_authorized(
                                 &current_providers,
                                 runtime,
+                                &shared_gateways,
                                 &producer_id,
                                 &event.provider,
                                 &event.agent,
