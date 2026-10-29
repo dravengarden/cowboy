@@ -2,6 +2,9 @@ import { parseShortcut } from "./shortcut";
 import { isMac } from "../../platform";
 
 const SEMANTIC_CHROME_SHORTCUTS = new Map<string, ReadonlySet<string>>([
+  // Reload into the ready new version is the browser's Reload, done safely:
+  // offered only while the update bar shows Reload, otherwise Chrome reloads.
+  ["mod+r", new Set(["update.reload"])],
   [
     "mod+s",
     new Set([

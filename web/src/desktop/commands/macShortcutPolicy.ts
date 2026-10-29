@@ -16,6 +16,8 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+b", new Set(["composer.format.bold"])],
   ["mod+i", new Set(["composer.format.italic"])],
   ["mod+k", new Set(["workspace.prefix"])],
+  // Reloading into the ready new version is the app's Reload itself.
+  ["mod+r", new Set(["update.reload"])],
 ]);
 
 const RESERVED_MAC_SHORTCUTS = new Map<string, string>([

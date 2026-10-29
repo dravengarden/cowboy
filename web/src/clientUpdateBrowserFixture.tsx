@@ -88,14 +88,14 @@ async function bannerKeyboardAction(host: HTMLElement): Promise<string> {
       store,
       automatic: false,
       kinds: ["update"],
-      shortcut: "␣.",
+      shortcut: "⌘R",
     }));
     await wait(200);
     const bar = document.querySelector<HTMLElement>("[data-update-action]");
     if (bar?.getAttribute("data-update-action") !== "Reload") {
       throw new Error(`ready bar must expose its Reload action: ${bar?.outerHTML.slice(0, 200)}`);
     }
-    if (!bar.querySelector("kbd")?.textContent?.includes("␣.")) {
+    if (!bar.querySelector("kbd")?.textContent?.includes("⌘R")) {
       throw new Error("the pill must name the keyboard shortcut");
     }
     if (bar.querySelectorAll("button").length !== 0) {

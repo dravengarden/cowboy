@@ -112,7 +112,8 @@ and in a queued-message editor), and the focused one runs.
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣X` | Extensions: the installed Plugins' resources for the open session (VS Code's Ctrl+Shift+X) |
-| `␣.` | The pending refresh: reconnect now while a Retry control is shown, otherwise press the update bar's action (Reload into a ready version, Retry, Cancel); `.` repeats |
+| `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
+| `⌘R` / `Ctrl+R` | Reload into a ready new version while the update bar offers it (also its Retry/Cancel); otherwise the browser reloads |
 | `␣1`…`␣9` | While an approval waits: answer it with that choice (see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |

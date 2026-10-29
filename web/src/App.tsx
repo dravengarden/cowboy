@@ -5184,7 +5184,7 @@ export function App({
                         kinds={["update"]}
                         canApplyUpdate={canApplyUpdateNow}
                         beforeReload={markDesktopUpdateSwapping}
-                        shortcut={desktopShortcutCaps(DESKTOP_SHORTCUTS.reconnect).join(" ")}
+                        shortcut={desktopShortcutCaps("Mod+R").join(" ")}
                     />
                     <NativeReleaseUpdatePrompt
                         appId="top.thundersparrow.cowboy"

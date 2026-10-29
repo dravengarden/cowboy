@@ -58,11 +58,14 @@ test("workspace prefix follows Chrome's platform-specific K behavior", () => {
   );
 });
 
-test("native save is the only registered semantic Chrome override", () => {
+test("native save and reload are the only semantic Chrome overrides", () => {
   assertEquals(
     chromeShortcutConflict("composer.saveDraft", "Mod+S", true),
     null,
   );
+  // Reload into a ready version is Chrome's Reload, claimed only by it.
+  assertEquals(chromeShortcutConflict("update.reload", "Mod+R", true), null);
+  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+R", true));
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+S", true));
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+F", true));
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J", true));

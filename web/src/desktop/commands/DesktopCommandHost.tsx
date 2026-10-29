@@ -293,21 +293,25 @@ export function DesktopCommandHost({
     },
     {
       id: "sync.retry",
-      title: "Reconnect or Reload Now",
-      description: "Retry the Cowboy server connection, or reload into a ready new version",
+      title: "Reconnect Now",
+      description: "Retry the Cowboy server connection without waiting",
       group: "Connection",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
-      // `.` is the pending refresh: offered exactly while a Retry control or
-      // the update bar's action (Reload, Retry, Cancel) is on screen. The
-      // connection comes first: a new version cannot load without it.
-      when: () =>
-        document.querySelector("[data-desktop-sync-retry]") !== null ||
-        document.querySelector("[data-update-action]") !== null,
+      // Offered exactly while a Retry control is on screen.
+      when: () => document.querySelector("[data-desktop-sync-retry]") !== null,
+      run: retrySyncNow,
+    },
+    {
+      id: "update.reload",
+      title: "Reload into the New Version",
+      description: "Press the update bar's action: Reload a ready version, Retry or Cancel its download",
+      group: "Connection",
+      // The browser's own Reload key, claimed only while the update bar offers
+      // an action; otherwise the chord stays Chrome's (chromeShortcutPolicy).
+      shortcut: "Mod+R",
+      allowInEditor: true,
+      when: () => document.querySelector("[data-update-action]") !== null,
       run: () => {
-        if (document.querySelector("[data-desktop-sync-retry]")) {
-          retrySyncNow();
-          return;
-        }
         document.querySelector<HTMLElement>("[data-update-action]")?.click();
       },
     },
