@@ -29,6 +29,12 @@ use crate::managed_calls::{Conversation, Request};
 
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(2);
 const INSTALL_RETRY: Duration = Duration::from_secs(30);
+/// A finished child conversation stays continuable this long; afterwards its
+/// session and snapshot are removed. The parent's call ledger remains.
+const CHILD_RETENTION: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+const CHILD_REAP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const CHILD_REAP_BATCH: usize = 32;
+const CLOSE_ATTEMPTS: u32 = 5;
 
 struct GrantEntry {
     grant: Grant,
@@ -88,6 +94,17 @@ impl Coordinator {
                     return;
                 }
                 reconcile(&state);
+            }
+        });
+        let weak = Arc::downgrade(state);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CHILD_REAP_INTERVAL).await;
+                let Some(state) = weak.upgrade() else { return };
+                if *state.shutdown.borrow() {
+                    return;
+                }
+                reap_expired_children(&state).await;
             }
         });
         super::runner::recover(state);
@@ -1186,16 +1203,76 @@ pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Res
         }
         state.supervisor.delete_session(&child);
         state.hub.delete_session(&child);
-        let _ = execution_action(
-            &state,
-            &execution_machine,
-            execution::Action::CloseManagedChild {
-                child_session_id: child,
-            },
-        )
-        .await;
+        // The session is gone once deleted here, so a snapshot left behind by
+        // a transient refusal (another holder of its child lock, a briefly
+        // disconnected Machine) would never be revisited. Retry boundedly.
+        for attempt in 0..CLOSE_ATTEMPTS {
+            if matches!(
+                execution_action(
+                    &state,
+                    &execution_machine,
+                    execution::Action::CloseManagedChild {
+                        child_session_id: child.clone(),
+                    },
+                )
+                .await,
+                Ok(execution::Response::Closed)
+            ) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+        }
+        tracing::warn!(child = %child, "managed child snapshot was not closed");
     });
     Ok(())
+}
+
+/// Whether a child's newest call ended long enough ago to retire it.
+fn child_expired(record: &Record, now_ms: i64) -> bool {
+    record.state.terminal()
+        && now_ms.saturating_sub(record.finished_at_ms.unwrap_or(record.updated_at_ms))
+            >= i64::try_from(CHILD_RETENTION.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// Retire child conversations whose newest call finished before the
+/// retention window. Busy or starting children and children with an active
+/// call are left alone; `delete_child` rechecks the durable call state.
+async fn reap_expired_children(state: &Arc<AppState>) {
+    let Some(store) = state.store.clone() else {
+        return;
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut retired = 0;
+    for meta in state.hub.session_list() {
+        if retired >= CHILD_REAP_BATCH {
+            break;
+        }
+        if matches!(
+            meta.status,
+            crate::core::Status::Busy | crate::core::Status::Starting
+        ) {
+            continue;
+        }
+        let Some(identity) = meta
+            .execution_binding
+            .as_ref()
+            .and_then(crate::execution_environment::ExecutionBinding::managed)
+        else {
+            continue;
+        };
+        let Ok(Some(record)) = store
+            .managed_child(&identity.parent_session_id, &meta.id)
+            .await
+        else {
+            continue;
+        };
+        if child_expired(&record, now) && delete_child(state, &meta.id).is_ok() {
+            retired += 1;
+        }
+    }
+    if retired > 0 {
+        tracing::info!(retired, "retired expired managed child conversations");
+    }
 }
 
 /// After a parent is deleted its calls are cancelled by their runners; once
@@ -1231,4 +1308,45 @@ pub(in crate::server) fn parent_deleted(state: &Arc<AppState>, parent: &str) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(state: &str, finished_at_ms: Option<i64>, updated_at_ms: i64) -> Record {
+        serde_json::from_value(json!({
+            "schema": 1, "call_id": "call-1", "request_id": "request-1",
+            "request_digest": "sha256:00", "provider": "codex", "purpose": "analysis",
+            "access": "read-only", "labels": {},
+            "placement": {"service_id": "svc-1", "parent_session_id": "parent-1",
+                "parent_revision": "sha256:00", "machine_id": "hawk",
+                "workspace_id": "columbus", "cwd": "/tmp"},
+            "child_session_id": "child-1", "state": state, "revision": 2,
+            "created_at_ms": 0, "updated_at_ms": updated_at_ms, "started_at_ms": null,
+            "finished_at_ms": finished_at_ms
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_children_finished_before_the_retention_window_expire() {
+        let window = i64::try_from(CHILD_RETENTION.as_millis()).unwrap();
+        let now = window * 2;
+        assert!(child_expired(
+            &record("completed", Some(now - window), now),
+            now
+        ));
+        assert!(child_expired(
+            &record("failed", None, now - window - 1),
+            now
+        ));
+        // Still continuable inside the window.
+        assert!(!child_expired(
+            &record("completed", Some(now - window + 1), now),
+            now
+        ));
+        // An active call keeps its child however old it is.
+        assert!(!child_expired(&record("running", Some(0), 0), now));
+    }
 }

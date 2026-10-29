@@ -108,6 +108,12 @@ analysis retain their existing snapshot and read-only contracts.
   worker after a bounded grace. Controller start recovers every non-terminal
   call. A deleted or closing parent cancels its calls; its children are deleted
   once those are terminal. Deleting a child with an active call is refused.
+  A child whose newest call finished more than three days ago is retired
+  hourly (at most 32 per pass): its session and target snapshot, including
+  delivered image files under it, are removed while the parent's call ledger
+  and results remain, and continuing it then fails `conversation_unavailable`.
+  Snapshot removal is retried a bounded number of times so a transient lock or
+  disconnection does not leave an orphaned directory.
 - **UI.** The Prompt stack shows a Calls dock (Desktop `␣G`, J/K/Enter; Mobile
   full-height page with drill-in). Each call shows Provider, runtime and
   execution Machines, state, labels, snapshot, result, verdict and findings,
