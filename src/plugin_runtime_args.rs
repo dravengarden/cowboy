@@ -1665,7 +1665,10 @@ mod tests {
             && row.args.is_none()));
         assert!(!detect.iter().any(|row| row.plugin_id == "claude-deepseek"));
         assert!(!detect.iter().any(|row| row.plugin_id == "codex-deepseek"));
-        assert_eq!(occupancy_slots(), ["claude", "codex", "gemini", "grok"]);
+        assert_eq!(
+            occupancy_slots(),
+            ["claude", "codex", "deepseek-harness", "gemini", "grok"]
+        );
         assert_eq!(cli_command_for_slot("claude"), Some("claude"));
         assert_eq!(cli_command_for_slot("codex"), Some("codex"));
         assert_eq!(
@@ -1717,7 +1720,10 @@ mod tests {
             Some("http://127.0.0.1:61138")
         );
         assert_eq!(loopback_origin_for("grok"), None);
-        assert_eq!(usage_activity_agent_ids("deepseek"), ["codex", "claude"]);
+        assert_eq!(
+            usage_activity_agent_ids("deepseek"),
+            ["codex", "claude", "deepseek-harness"]
+        );
         assert_eq!(usage_activity_agent_ids("openai"), &[] as &[&str]);
         assert_eq!(
             usage_accounts(),
