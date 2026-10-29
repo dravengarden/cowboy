@@ -1,6 +1,8 @@
 # Agent runtime upgrades — 2026-10-28
 
-Status: published from `46ee8d9a` and installed on all four Machines.
+Status: published from `46ee8d9a` and installed on all four Machines. The
+Claude Agent ACP 0.99.0 follow-up was published from `c4fc1255` and installed
+on all four Machines.
 
 ## Dependency audit
 
@@ -193,3 +195,68 @@ DeepSeek bills Search and Fetch per request from 2026-11-01 00:00 Beijing time
 (5 CNY per 1,000). Neither gateway records server-side search or fetch counts
 yet, so Cowboy cost estimates omit them; adding that needs the exact usage
 fields DeepSeek returns, observed on a real request.
+
+## Follow-up: Claude Agent ACP 0.99.0 (2026-10-29)
+
+[ACP 0.99.0](https://github.com/agentclientprotocol/claude-agent-acp/releases/tag/v0.99.0)
+(registry and release notes read on 2026-10-29) moves to ACP SDK 2.1.0 and
+Agent SDK 0.3.312, whose bundled `claudeCodeVersion` is the pinned 2.1.312
+(0.98.0 carried 0.3.310). The native CLI bytes are unchanged.
+
+Compared from the exact 0.98.0 and 0.99.0 registry archives:
+
+| Surface | Change | Disposition |
+| --- | --- | --- |
+| `initialize` | Unchanged | Launcher keeps adding `idleBehavior` and priorities |
+| `steer` | An unknown session raises `RequestError.sessionNotFound` ("Resource not found") instead of "Session not found" | Cowboy matches neither text on the steering path; the fields the priority adapter reads (`input.push`, `turnQueue`, `needsSignOutRespawn`, `queryClosed`) are unchanged |
+| Mode and config errors | Standard ACP `invalidParams` codes | No Cowboy string match |
+| Model config option | Lists the current model when the picker omits it | Presets keep the generic live-option filter |
+| MCP startup failures | Reported only to clients that advertise notices | Cowboy does not advertise them; unchanged |
+| Thinking display | Read from `CLAUDE_CODE_THINKING_DISPLAY` | Removed by the Plugin's `CLAUDE_` environment prefix; unchanged |
+| AskUserQuestion, EnterPlanMode, Read locations | `unanswered` annotations when the CLI advertises them, `switch_mode` kind, offset 0 maps to line 1 | Presentation only |
+| SDK native arguments | Identical 61-flag set; one new SDK-internal environment name | `nativeArguments` allowlist unchanged |
+
+Component release 3.66.0 records provider-runtime 1.1.20. The seven dependent
+Agent Plugins advance one patch each; only the two Claude Plugins change
+runtime bytes, and Codex 3.5.9 carries a runtime matrix byte-identical to
+3.5.8.
+
+| Plugin | Previous | Released | Artifact |
+| --- | --- | --- | --- |
+| claude-code | 3.20.12 | 3.20.13 | `sha256:c9bfaba2bc30…` |
+| claude-deepseek | 3.1.42 | 3.1.43 | `sha256:e73c84dde1a0…` |
+| codex | 3.5.8 | 3.5.9 | `sha256:f935515fa8c8…` |
+| codex-deepseek | 3.1.43 | 3.1.44 | `sha256:eb774ba115cd…` |
+| grok | 3.1.43 | 3.1.44 | `sha256:7ebd42994d6b…` |
+| gemini | 3.1.41 | 3.1.42 | `sha256:5bff312b6065…` (not advertised; Gemini is disabled) |
+| deepseek-harness | 1.0.0 | 1.0.1 | `sha256:ba7afadb5d3f…` |
+
+`tools/remote_impact.py` selected the suites below. The native probes and the
+TaskStop suite measure the native CLI alone, whose bytes are the accepted
+2.1.312, so their receipts are reused.
+
+| Gate | Result |
+| --- | --- |
+| `just claude-remote-check` | 351 + 4 passed (2m33s) |
+| `provider-check` (Codex adapter, launch, SDK, package and UI gates) | Passed, except `gateway_runtime_links_are_closed_and_platform_complete`, which already fails on `main` since `fdab728b` put a `/nix/` model-catalog path into codex-deepseek |
+| Claude worker conformance (all twelve phases, packaged 0.99.0 adapter) | Accepted, 95 checks, the same check set as 0.98.0 (5m47s) |
+| Claude managed conformance | Accepted, 7 checks |
+| Codex worker / session conformance | Accepted (34 / 10 checks); the session suite needs a short `TMPDIR` for its socket paths |
+| Linux old/new generation coexistence | Passed for all seven |
+| Real macOS arm64 runtime probes on macbook-air | Passed for all seven |
+| Catalog readers before and after publication | Active, rollback and accepted-recovery read all seven twice; the bootstrap-only reader skips them safely |
+| Public package and runtime URLs | 29 URLs resolve to their bound digests |
+| `provider-release-coverage` | Covered |
+
+Convergence ran Falcon (canary), macbook-air, Hawk, then OVH; every upgrade
+returned HTTP 204 with nothing remaining. A Controller restart from an
+unrelated deployment interrupted the OVH run after it had submitted
+claude-code: its Machine receipt is `applied` and its replica is current, but
+the operation record stays `authentication_pending`, which `reconcile-install`
+does not cover. The OVH codex and grok upgrades were submitted by a fresh run.
+Idle sessions moved through the existing idle update policy; none was
+recycled.
+
+Before this release, OVH (claude-code 3.20.9, codex 3.5.7) and macbook-air
+(codex 3.5.7 and its siblings) were behind the published Catalog and were
+converged to it first.
