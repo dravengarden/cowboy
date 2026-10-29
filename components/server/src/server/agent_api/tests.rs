@@ -645,7 +645,7 @@ async fn failed_calls_name_the_operation_and_what_was_received() {
     assert_eq!(out["argument"][0], "invalid_argument", "{value}");
     let message = out["argument"][1].as_str().unwrap();
     assert!(
-        message.starts_with("api.help: invalid_argument; received {")
+        message.starts_with("api.help: invalid_argument: topic must be an id string; received {")
             && message.contains(r#"{"topic":{"topic":"calls"}}"#)
             && message.contains(r#"cowboy_read({help:"index"})"#),
         "{message}"
@@ -710,4 +710,15 @@ async fn paged_lists_iterate_like_arrays_without_changing_their_json() {
             "json":{"machines":[{"id":"a"},{"id":"b"}],"next":null}}),
         "{value}"
     );
+}
+
+#[test]
+fn oversized_results_name_their_largest_fields() {
+    let result = json!({"small":1,"providers":"x".repeat(900),"quota":"y".repeat(300),"x":[1]});
+    let largest = largest_fields(&result);
+    assert_eq!(largest[0]["field"], "providers");
+    assert_eq!(largest[1]["field"], "quota");
+    assert_eq!(largest.as_array().unwrap().len(), 3);
+    assert_eq!(largest_fields(&json!([1, "zz"]))[0]["field"], "[1]");
+    assert_eq!(largest_fields(&json!("text")), json!([]));
 }

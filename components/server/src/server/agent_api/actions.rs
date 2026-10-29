@@ -51,25 +51,90 @@ fn auto() -> String {
     "auto".into()
 }
 
-fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'static str> {
-    let input: CallInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+/// A refused call names the violated rule. Messages are fixed text: they
+/// never echo instructions, paths or other caller input.
+#[derive(Debug)]
+pub(super) struct CallRefusal {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+const fn refuse(message: &'static str) -> CallRefusal {
+    CallRefusal {
+        code: "invalid_argument",
+        message,
+    }
+}
+
+impl CallRefusal {
+    fn value(&self) -> Value {
+        json!({"schema":1,"state":"error","error":{"code":self.code,"message":self.message}})
+    }
+}
+
+fn input_refusal(error: &crate::managed_calls::InputError) -> CallRefusal {
+    use crate::managed_calls::InputError;
+    refuse(match error {
+        InputError::RequestTooLarge => "request exceeds the size limit",
+        InputError::InvalidInstruction => "instruction must be non-empty text up to 128 KiB",
+        InputError::InvalidContext => {
+            "root must be an absolute directory other than /; files must be up to 32 distinct relative paths (images: up to 4, and image.edit needs files or child_session_id)"
+        }
+        InputError::InvalidConversation => "child_session_id is not a valid session id",
+        InputError::InvalidLabels => "title and reason must be short single-line text",
+        InputError::InvalidOutput => "the requested output format is not supported",
+        InputError::InvalidJson
+        | InputError::InvalidContract
+        | InputError::UnsupportedSchema
+        | InputError::InvalidRequestId => "operation must be a valid id; check argument types",
+    })
+}
+
+fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, CallRefusal> {
+    let input: CallInput = serde_json::from_value(args)
+        .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
     let review = action == "review.start";
-    if (review
+    if review
         && (input.instruction.is_some()
             || input.purpose.is_some()
             || input.capability.is_some()
-            || input.child_session_id.is_some()))
-        || (!review
-            && (input.focus.is_some()
-                || input.design
-                || input.task.is_some()
-                || input.base.is_some()
-                || input.fresh))
-        || (input.task.is_some() != input.base.is_some())
-        || (input.fresh && input.task.is_none())
-        || (input.capability.is_some() && input.purpose.is_some())
+            || input.child_session_id.is_some())
     {
-        return Err("invalid_argument");
+        return Err(refuse(
+            "review.start takes focus, not instruction, purpose, capability or child_session_id",
+        ));
+    }
+    if !review
+        && (input.focus.is_some()
+            || input.design
+            || input.task.is_some()
+            || input.base.is_some()
+            || input.fresh)
+    {
+        return Err(refuse(
+            "focus, design, task, base and fresh belong to review.start",
+        ));
+    }
+    if input.task.is_some() != input.base.is_some() {
+        return Err(refuse("task and base must be given together"));
+    }
+    if input.fresh && input.task.is_none() {
+        return Err(refuse("fresh requires task and base"));
+    }
+    if input.capability.is_some() && input.purpose.is_some() {
+        return Err(refuse("pass capability or purpose, not both"));
+    }
+    if input
+        .base
+        .as_deref()
+        .is_some_and(|base| !crate::managed_calls::review::valid_base(base))
+    {
+        return Err(refuse(
+            "base must be a full 40- or 64-hex commit id, not a short or symbolic ref",
+        ));
+    }
+    if review && input.task.is_some() && input.root.is_none() {
+        return Err(refuse("a base-bound review needs root"));
     }
     let purpose = if review {
         if input.design {
@@ -82,7 +147,12 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
         match capability.as_str() {
             "image.generate" => "image_generate",
             "image.edit" => "image_edit",
-            _ => return Err("unsupported_capability"),
+            _ => {
+                return Err(CallRefusal {
+                    code: "unsupported_capability",
+                    message: "capability must be image.generate or image.edit",
+                });
+            }
         }
         .to_owned()
     } else {
@@ -95,7 +165,9 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
             input.base.as_deref(),
         )
     } else {
-        input.instruction.ok_or("invalid_argument")?
+        input
+            .instruction
+            .ok_or(refuse("calls.start needs instruction"))?
     };
     let mut labels = std::collections::BTreeMap::new();
     if let Some(title) = input.title {
@@ -128,17 +200,19 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, &'s
             "context":{"scope":"current-worktree","files":input.files,"root":input.root},
             "access":"read-only","conversation":conversation,"labels":labels,"output":output
         }))
-        .map_err(|_| "invalid_argument")?
+        .map_err(|_| refuse("arguments could not be encoded"))?
         .as_bytes(),
     )
-    .map_err(|_| "invalid_argument")?;
+    .map_err(|error| input_refusal(&error))?;
     let action = Action::Start {
         provider: input.provider,
         request: Box::new(request),
         wait_ms: 0,
         preset: input.preset,
     };
-    action.validate().map_err(|_| "invalid_argument")?;
+    action
+        .validate()
+        .map_err(|_| refuse("provider or preset is not a valid id"))?;
     Ok(action)
 }
 
@@ -600,7 +674,10 @@ async fn execute(
             }
         }
         "calls.start" | "review.start" => {
-            let action = call_action(action, args, operation)?;
+            let action = match call_action(action, args, operation) {
+                Ok(action) => action,
+                Err(refusal) => return Ok(refusal.value()),
+            };
             Ok(call_result(
                 super::super::managed_calls::dispatch_calls(state, meta, ledger, action).await,
             ))
@@ -842,6 +919,43 @@ mod tests {
             crate::managed_calls::Access::ReadOnly
         ));
     }
+    #[test]
+    fn call_refusals_name_the_rule_without_echoing_input() {
+        let message =
+            |action: &str, args: Value| call_action(action, args, "op").unwrap_err().message;
+        let root = "/srv/private/source";
+        let short = message(
+            "review.start",
+            json!({"root":root,"base":"1ef0ea6f","task":"t"}),
+        );
+        assert!(short.contains("full 40- or 64-hex"), "{short}");
+        assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
+        assert!(message("calls.start", json!({"title":"x"})).contains("needs instruction"));
+        assert!(
+            message("calls.start", json!({"instruction":"x","base":"a"})).contains("review.start")
+        );
+        let unknown = message("calls.start", json!({"instruction":"secret","nope":1}));
+        assert!(unknown.contains("help"), "{unknown}");
+        let refusal = call_action(
+            "calls.start",
+            json!({"instruction":"x","capability":"video"}),
+            "op",
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, "unsupported_capability");
+        let context = call_action(
+            "calls.start",
+            json!({"instruction":"x","root":"/","files":[]}),
+            "op",
+        )
+        .unwrap_err();
+        assert_eq!(context.code, "invalid_argument");
+        assert!(context.message.contains("absolute directory"));
+        for value in [short, unknown, context.message] {
+            assert!(!value.contains(root) && !value.contains("secret"));
+        }
+    }
+
     #[test]
     fn document_operation_identity_is_parent_scoped_and_stable() {
         assert_eq!(

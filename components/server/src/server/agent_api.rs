@@ -139,23 +139,24 @@ fn arg_str<'v>(args: &'v Value, key: &str) -> Result<&'v str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .filter(|value| crate::managed_calls::valid_id(value))
-        .ok_or_else(|| "invalid_argument".to_owned())
+        .ok_or_else(|| format!("invalid_argument: {key} must be an id string"))
 }
 
+// Name the violated bound: a bare code made callers guess and retry.
 fn arg_u64(args: &Value, key: &str, default: u64, max: u64) -> Result<u64, String> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(default),
         Some(value) => value
             .as_u64()
             .filter(|value| *value <= max)
-            .ok_or_else(|| "invalid_argument".to_owned()),
+            .ok_or_else(|| format!("invalid_argument: {key} must be an integer 0..={max}")),
     }
 }
 
 fn page_limit(args: &Value, default: u64, max: u64) -> Result<usize, String> {
     let limit = arg_u64(args, "limit", default, max)?;
     if limit == 0 {
-        return Err("invalid_argument".into());
+        return Err(format!("invalid_argument: limit must be 1..={max}"));
     }
     usize::try_from(limit).map_err(|_| "invalid_argument".into())
 }
@@ -1238,6 +1239,32 @@ fn call_error(op: &str, echo: &str, error: String) -> Value {
     json!({"code": code, "message": format!("{op}: {code}{detail}{hint}")})
 }
 
+/// The three largest top-level fields (or array items) of an oversized
+/// result, so the caller can project it in one retry instead of guessing.
+fn largest_fields(result: &Value) -> Value {
+    let size = |value: &Value| serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
+    let mut fields: Vec<(String, usize)> = match result {
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| (bounded(key, 40), size(value)))
+            .collect(),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("[{index}]"), size(value)))
+            .collect(),
+        _ => Vec::new(),
+    };
+    fields.sort_by_key(|field| std::cmp::Reverse(field.1));
+    fields.truncate(3);
+    Value::Array(
+        fields
+            .into_iter()
+            .map(|(field, bytes)| json!({"field":field,"bytes":bytes}))
+            .collect(),
+    )
+}
+
 fn bounded(text: &str, chars: usize) -> String {
     match text.char_indices().nth(chars) {
         Some((end, _)) => format!("{}…", &text[..end]),
@@ -1256,7 +1283,7 @@ fn finish(done: bool, mut frame: Value) -> Value {
         let size = serde_json::to_vec(&result).map_or(usize::MAX, |bytes| bytes.len());
         if size > MAX_RESULT_BYTES {
             json!({"schema":1,"state":"error","error":{"code":"result_too_large","bytes":size,
-                "limit":MAX_RESULT_BYTES,
+                "limit":MAX_RESULT_BYTES,"largest":largest_fields(&result),
                 "message":"return a projection: map to the needed fields or pass a smaller limit"}})
         } else {
             json!({"schema":1,"state":"ok","value":result})
