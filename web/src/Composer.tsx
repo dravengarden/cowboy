@@ -6012,7 +6012,19 @@ function PendingRow({
         direction="row"
         alignItems="center"
         data-pending-content-action="row-actions"
-        sx={{ flexShrink: 0 }}
+        sx={{
+          flexShrink: 0,
+          // Desktop: the row's actions follow the global font size. The
+          // shared IconButton floor (32px) held them still below ~73% (the
+          // default is 65%), so only the glyph shrank inside a fixed box. A
+          // 24px floor is the pointer-target minimum (WCAG 2.2 AA).
+          ...(desktop && {
+            "& .MuiIconButton-root": {
+              width: `max(24px, ${desktopSize(36)})`,
+              height: `max(24px, ${desktopSize(36)})`,
+            },
+          }),
+        }}
       >
         {primary}
         {/* Secondary actions — inline on a roomy (iPad/desktop) panel … */}
