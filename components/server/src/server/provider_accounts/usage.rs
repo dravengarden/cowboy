@@ -352,7 +352,11 @@ async fn refresh_owned(
     state.hub.broadcast_account_usage_changed(owner);
     let result = collect(state, owner, &target).await;
     let outcome = collection_outcome(result.as_ref().err().copied());
+    let succeeded = result.is_ok();
     cache.data.lock().finish(&target.completion, result);
+    if succeeded {
+        state.usage.native.persist();
+    }
     if let Some(permit) = permit {
         permit.finish(outcome, now_ms());
     }

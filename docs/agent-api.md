@@ -302,7 +302,10 @@ older Machines report an update requirement instead of querying the Service
 account. Cached observations are separate from authentication authority and are
 discarded when their native binding changes. Refresh attempts coalesce and share
 a five-minute budget; failed refreshes retain the last valid quota as stale.
-Controller restart rebuilds this in-memory cache. Collection is serial and
+Successful observations persist (`usage-named.json`, owner-only, bound to their
+exact login) so a Controller restart does not blank a card while the persisted
+budget still defers the next collection; a different login never sees them.
+Collection is serial and
 independent of session workers, including while all sessions are asleep.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as

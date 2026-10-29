@@ -3177,6 +3177,7 @@ async fn run_generation_retention(state: Arc<AppState>) {
             dormant_pins::repin(&state).await;
             generation_retention_pass(&state, None).await;
             catalog_retention_pass(&state).await;
+            adopt_shared_provider_authentication(&state).await;
         } else {
             let cooldown = state
                 .service_config
@@ -11093,6 +11094,10 @@ async fn serve_axum(
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
+    let adoption_state = Arc::clone(&state);
+    let shared_authentication_task = tokio::spawn(async move {
+        adopt_shared_provider_authentication(&adoption_state).await;
+    });
     let trash_retention_task = tokio::spawn(session_trash::run_retention(Arc::clone(&state)));
     let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
@@ -11110,6 +11115,7 @@ async fn serve_axum(
     convergence_task.abort();
     provider_update_task.abort();
     generation_retention_task.abort();
+    shared_authentication_task.abort();
     trash_retention_task.abort();
     account_recovery_task.abort();
     usage_broadcast_task.abort();
@@ -13352,6 +13358,7 @@ async fn api_plugin_catalog_refresh(State(state): State<Arc<AppState>>) -> Respo
             if let Err(error) = state.provider_catalog.refresh_external() {
                 return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
             }
+            adopt_shared_provider_authentication(&state).await;
             Json(serde_json::json!({ "external_releases": count })).into_response()
         }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -13365,7 +13372,10 @@ async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Res
         .await
     {
         Ok(_) => match state.provider_catalog.refresh_external() {
-            Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+            Ok(count) => {
+                adopt_shared_provider_authentication(&state).await;
+                Json(serde_json::json!({ "external_releases": count })).into_response()
+            }
             Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         },
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -13887,28 +13897,13 @@ async fn api_provider_auth_logout(
                 .into_response();
         }
     };
-    let provider_ids: Vec<_> = state
+    let mut provider_ids = state
         .provider_catalog
         .provider_ids_for_authentication_scope(&scope);
-    let provider_ids: Vec<_> = provider_ids
-        .into_iter()
-        .filter(|candidate| state.provider_auth.status(candidate).is_some())
-        .collect();
-    if provider_ids.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "authentication scope has no durable Provider state",
-        )
-            .into_response();
+    if !provider_ids.contains(&provider_id) {
+        provider_ids.push(provider_id.clone());
     }
-    let statuses = match if provider_ids.len() == 1 {
-        state
-            .provider_auth
-            .logout(&provider_ids[0])
-            .map(|status| vec![status])
-    } else {
-        state.provider_auth.logout_shared(&provider_ids)
-    } {
+    let statuses = match state.provider_auth.logout_scope(&provider_ids) {
         Ok(statuses) => statuses,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
@@ -14333,6 +14328,30 @@ struct ProviderDistributionOutcome {
     pending: usize,
     #[serde(skip)]
     synchronized_generations: BTreeMap<String, u64>,
+}
+
+/// Give Providers that joined a shared credential scope after its secret was
+/// entered the scope's current Service credential, then distribute it. Runs
+/// after every Provider Catalog refresh and periodically; it never overwrites
+/// a Provider that already has durable authentication state.
+async fn adopt_shared_provider_authentication(state: &Arc<AppState>) {
+    let mut adopted = Vec::new();
+    for scope in state.provider_catalog.authentication_scopes() {
+        let packages = state
+            .provider_catalog
+            .packages_for_authentication_scope(&scope);
+        match state.provider_auth.adopt_shared_scope(&packages) {
+            Ok(statuses) => adopted.extend(statuses),
+            Err(error) => {
+                tracing::warn!(%error, %scope, "cannot extend shared Provider authentication");
+            }
+        }
+    }
+    if adopted.is_empty() {
+        return;
+    }
+    let (statuses, replicas) = distribute_and_mark_provider_auth(state, adopted).await;
+    recover_failed_provider_sessions(state, &statuses, &replicas);
 }
 
 async fn distribute_and_mark_provider_auth(
@@ -15394,27 +15413,71 @@ fn random_machine_token() -> anyhow::Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
+/// `(gateway slot, agent)` pairs for Providers active on one Machine that run
+/// a shared provider gateway as a session sidecar. Such a gateway reports its
+/// own component slot as producer while labelling events with the consuming
+/// Provider's agent, e.g. DeepSeek Harness over the claude-deepseek gateway.
+fn provider_usage_shared_gateways(
+    current_plugins: &[crate::machine_protocol::PluginInventory],
+    runtime: &crate::plugin_runtime::PluginRuntime,
+    catalog: &crate::provider_catalog::ProviderCatalog,
+) -> BTreeSet<(String, String)> {
+    let mut pairs = BTreeSet::new();
+    for plugin in current_plugins
+        .iter()
+        .filter(|plugin| plugin.state == crate::machine_protocol::PluginInstallationState::Active)
+    {
+        let Some(agent) = runtime
+            .exact_host(
+                &plugin.plugin_id,
+                &plugin.plugin_version,
+                &plugin.generation_digest,
+            )
+            .and_then(|host| host.adapter_slot.clone())
+        else {
+            continue;
+        };
+        let Some(package) = catalog.package(
+            &plugin.plugin_id,
+            &plugin.plugin_version,
+            &plugin.generation_digest,
+        ) else {
+            continue;
+        };
+        for sidecar in &package.manifest.runtime.sidecars {
+            if sidecar.component.kind == cowboy_provider_sdk::PrivateComponentKind::ProviderGateway
+            {
+                pairs.insert((sidecar.component.slot.clone(), agent.clone()));
+            }
+        }
+    }
+    pairs
+}
+
 fn provider_usage_source_is_authorized(
     current_plugins: &[crate::machine_protocol::PluginInventory],
     runtime: &crate::plugin_runtime::PluginRuntime,
+    shared_gateways: &BTreeSet<(String, String)>,
     producer_id: &str,
     provider: &str,
     agent: &str,
 ) -> bool {
-    let Some(producer) = current_plugins.iter().find(|plugin| {
-        plugin.plugin_id == producer_id
-            && plugin.state == crate::machine_protocol::PluginInstallationState::Active
-    }) else {
-        return false;
-    };
-    let producer_agent = runtime
-        .exact_host(
-            producer_id,
-            &producer.plugin_version,
-            &producer.generation_digest,
-        )
-        .and_then(|host| host.adapter_slot.as_deref());
-    producer_agent == Some(agent)
+    let producer_agent = current_plugins
+        .iter()
+        .find(|plugin| {
+            plugin.plugin_id == producer_id
+                && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+        })
+        .and_then(|producer| {
+            runtime.exact_host(
+                producer_id,
+                &producer.plugin_version,
+                &producer.generation_digest,
+            )
+        })
+        .and_then(|host| host.adapter_slot.clone());
+    (producer_agent.as_deref() == Some(agent)
+        || shared_gateways.contains(&(producer_id.to_owned(), agent.to_owned())))
         && runtime.default_hosts().into_iter().any(|host| {
             host.usage.as_ref().is_some_and(|usage| {
                 usage.activity
@@ -15434,6 +15497,7 @@ mod provider_usage_source_tests {
     };
     use crate::plugin_host::{PluginHostSpec, PluginSlotId};
     use crate::plugin_runtime::ActivatedHostPlugin;
+    use std::collections::BTreeSet;
 
     fn activated(id: &str, source: &str) -> ActivatedHostPlugin {
         let spec = PluginHostSpec::from_json(source.as_bytes()).expect("host spec");
@@ -15492,6 +15556,7 @@ mod provider_usage_source_tests {
         assert!(provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "future-agent",
@@ -15499,6 +15564,7 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "other-account",
             "future-agent",
@@ -15506,9 +15572,48 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "other-agent",
+        ));
+    }
+
+    #[test]
+    fn shared_gateway_reports_usage_for_its_consuming_agent() {
+        let plugins = [installed(
+            "claude-deepseek",
+            PluginInstallationState::Active,
+        )];
+        let runtime = crate::plugin_runtime::PluginRuntime::from_default_hosts(vec![activated(
+            "claude-deepseek",
+            r#"{"schema_version":1,"adapter_slot":"claude","usage":{"account":"deepseek","activity":true,"activity_agents":[{"id":"claude","label":"Claude Code"},{"id":"deepseek-harness","label":"DeepSeek Harness"}]}}"#,
+        )]);
+        let shared =
+            BTreeSet::from([("claude-deepseek".to_owned(), "deepseek-harness".to_owned())]);
+        assert!(provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &shared,
+            "claude-deepseek",
+            "deepseek",
+            "deepseek-harness",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &BTreeSet::new(),
+            "claude-deepseek",
+            "deepseek",
+            "deepseek-harness",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            &shared,
+            "codex-deepseek",
+            "deepseek",
+            "deepseek-harness",
         ));
     }
 
@@ -15531,6 +15636,7 @@ mod provider_usage_source_tests {
         assert!(!provider_usage_source_is_authorized(
             &plugins,
             &runtime,
+            &BTreeSet::new(),
             "future-runtime",
             "future-account",
             "future-agent",
@@ -16223,6 +16329,16 @@ async fn handle_machine_ws(
                     },
             } => {
                 let plugin_runtime = state.plugin_catalog.runtime();
+                let shared_gateways =
+                    plugin_runtime
+                        .as_ref()
+                        .map_or_else(BTreeSet::new, |runtime| {
+                            provider_usage_shared_gateways(
+                                &current_providers,
+                                runtime,
+                                &state.provider_catalog,
+                            )
+                        });
                 let bounded = plugin_runtime.as_ref().is_some_and(|runtime| {
                     events.len() <= 200
                         && events
@@ -16238,6 +16354,7 @@ async fn handle_machine_ws(
                             provider_usage_source_is_authorized(
                                 &current_providers,
                                 runtime,
+                                &shared_gateways,
                                 &producer_id,
                                 &event.provider,
                                 &event.agent,
