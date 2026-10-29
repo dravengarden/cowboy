@@ -79,7 +79,7 @@
       "permission": "portable_v1",
       "session": "portable_v1",
       "turn_end": "portable_v1",
-      "configuration": "acp_config_options_v1",
+      "configuration": "anthropic_gateway_v1",
       "default_preferences": {},
       "error_rules": [
         {
