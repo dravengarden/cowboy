@@ -1249,6 +1249,19 @@ export function ProviderUsageActivityDetails(
                                   pricingCurrency,
                                 )}
                               />
+                              {cost.searchRequests + cost.fetchRequests > 0 && (
+                                <InfoRow
+                                  k="Search / fetch"
+                                  v={`${formatTokens(cost.searchRequests)} / ${
+                                    formatTokens(cost.fetchRequests)
+                                  } · ${
+                                    formatCurrency(
+                                      cost.serverToolCost,
+                                      pricingCurrency,
+                                    )
+                                  }`}
+                                />
+                              )}
                               <InfoRow
                                 k="Price coverage"
                                 v={percentLabel(cost.priceCoverageRate)}

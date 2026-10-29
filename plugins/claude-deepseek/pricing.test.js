@@ -66,3 +66,38 @@ test("DeepSeek pricing values observed cache tokens and output once", () => {
   equal(activity.pricing.offPeakMultiplier, 0.5, "off-peak multiplier");
   equal(activity.last24Hours.cost.summary.requests, 0, "rolling requests");
 });
+
+test("DeepSeek pricing adds per-request Search and Fetch to every cost view", () => {
+  const activity = decorateActivity({
+    byBillingModel: {
+      "deepseek-v4-pro": {
+        requests: 2,
+        usageObservations: 2,
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 1_000_000,
+        searchRequests: 3,
+        fetchRequests: 1,
+      },
+      "future-model": { requests: 1, searchRequests: 1 },
+    },
+  });
+  const pro = activity.cost.byBillingModel["deepseek-v4-pro"];
+  equal(pro.searchRequests, 3, "pro searches");
+  equal(pro.fetchRequests, 1, "pro fetches");
+  close(pro.serverToolCost, 0.02, "pro server tool cost");
+  close(pro.estimatedCost, 9.02, "pro estimate includes tools");
+  close(pro.allHitFloorCost, 0.32, "tools are not cache dependent");
+  const unknown = activity.cost.byBillingModel["future-model"];
+  close(unknown.estimatedCost, 0.005, "unknown model still values its search");
+  const summary = activity.cost.summary;
+  equal(summary.searchRequests, 4, "summary searches");
+  close(summary.serverToolCost, 0.025, "summary server tool cost");
+  equal(activity.pricing.serverTools.searchCnyPerThousand, 5, "search price");
+  equal(
+    activity.cost.cacheProtection.summary.serverToolCost,
+    0,
+    "keepalives never search",
+  );
+});

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.40",
+  "version": "3.1.41",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.15",
   "display": {
@@ -230,9 +230,9 @@
       },
       {
         "id": "codex-deepseek-gateway",
-        "version": "0.3.0",
-        "source": "git+ssh://git@github.com/dravengarden/columbus.git#27352e3400e5b55c6c88d6e7ac80f788e12dfb53:projects/codex-deepseek",
-        "integrity": "sha256:6019b0bf8679f876e80efcef03219c0caa84af6ee8b3fb13ea73561ea245bfc5",
+        "version": "0.3.1",
+        "source": "git+ssh://git@github.com/dravengarden/columbus.git#0a5e25d5d4aadae833991afdea54e816ecbce5a1:projects/codex-deepseek",
+        "integrity": "sha256:d993d4e362d572f14c732dec1a8b9c57d43bb38584ff6191f57f571cf98d2acf",
         "private": true
       }
     ],

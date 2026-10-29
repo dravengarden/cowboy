@@ -201,6 +201,20 @@ interval, tokens, and price are reported separately. They never contribute to
 interactive request counts, blocking-error rates, cache-miss rates, or agent
 spend.
 
+### DeepSeek Search and Fetch spend
+
+DeepSeek executes Claude Code's Web Search and Codex's live web search as
+server-side tools and bills each successful Search or Fetch request (5 CNY per
+1,000 from 2026-11-01 00:00 Asia/Shanghai). Both gateways copy
+`usage.server_tool_use.tool_search`/`tool_fetch` (Anthropic's
+`web_search_requests`/`web_fetch_requests` are fallbacks) into the usage
+event's optional `search_requests`/`fetch_requests`. Machine forwards them, the
+Controller stores and sums them for interactive requests, and the
+`claude-deepseek` collector adds their valuation to every model cost view. They
+are model- and cache-independent. Aggregates carry no time of day, so calls
+before the billing start are valued too. Events from older gateways leave the
+counts empty rather than zero-valued.
+
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
 or Code Assist Standard/Enterprise credentials. The Gemini Provider declares

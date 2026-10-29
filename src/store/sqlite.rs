@@ -390,7 +390,8 @@ const PROVIDER_USAGE_COLUMNS: &str = "machine_id, producer_id, sequence, occurre
     duration_ms, request_bytes, input_item_count, tool_count, system_block_count, \
     has_previous_response_id, compatibility_fixes, request_purpose, cache_keepalive_outcome, \
     cache_keepalive_algorithm, cache_keepalive_attempt, cache_keepalive_interval_ms, \
-    cache_keepalive_source_age_ms, source_request_prefix_fingerprint";
+    cache_keepalive_source_age_ms, source_request_prefix_fingerprint, search_requests, \
+    fetch_requests";
 
 #[derive(Clone, serde::Serialize, sqlx::FromRow)]
 struct ProviderUsageRecord {
@@ -446,6 +447,8 @@ struct ProviderUsageRecord {
     cache_keepalive_interval_ms: Option<i64>,
     cache_keepalive_source_age_ms: Option<i64>,
     source_request_prefix_fingerprint: Option<String>,
+    search_requests: Option<i64>,
+    fetch_requests: Option<i64>,
 }
 
 impl ProviderUsageRecord {
@@ -525,6 +528,8 @@ fn usage_aggregate_for(record: &ProviderUsageRecord) -> UsageAggregate {
             record.compatibility_fixes,
         );
         aggregate.streaming_requests = i64::from(record.streaming == Some(true));
+        add_optional_metric(&mut aggregate.search_requests, record.search_requests);
+        add_optional_metric(&mut aggregate.fetch_requests, record.fetch_requests);
     } else if record.request_purpose == "cache_keepalive" {
         aggregate.cache_keepalive_requests = 1;
         aggregate.cache_keepalive_hits = i64::from(record.cache_keepalive_outcome == "hit");
@@ -696,9 +701,9 @@ async fn insert_provider_usage_event(
          tool_count, system_block_count, has_previous_response_id, compatibility_fixes, \
          request_purpose, cache_keepalive_outcome, cache_keepalive_algorithm, \
          cache_keepalive_attempt, cache_keepalive_interval_ms, cache_keepalive_source_age_ms, \
-         source_request_prefix_fingerprint) VALUES ( \
+         source_request_prefix_fingerprint, search_requests, fetch_requests) VALUES ( \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT DO NOTHING",
     )
     .bind(machine_id)
@@ -752,6 +757,8 @@ async fn insert_provider_usage_event(
     .bind(provider_usage_metric(event.cache_keepalive_interval_ms)?)
     .bind(provider_usage_metric(event.cache_keepalive_source_age_ms)?)
     .bind(&event.source_request_prefix_fingerprint)
+    .bind(provider_usage_metric(event.search_requests)?)
+    .bind(provider_usage_metric(event.fetch_requests)?)
     .execute(&mut **transaction)
     .await
     .context("insert SQLite provider usage event")?;

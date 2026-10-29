@@ -126,8 +126,14 @@ test("activityCostStats parses backend valuation without double-counting reasoni
     allHitFloorCost: 0.12,
     cacheSavings: 0.882,
     cacheMissPremium: 0.098,
+    searchRequests: 3,
+    fetchRequests: 1,
+    serverToolCost: 0.02,
   });
   assertEquals(stats?.estimatedCost, 0.218);
+  assertEquals(stats?.searchRequests, 3);
+  assertEquals(stats?.fetchRequests, 1);
+  assertEquals(stats?.serverToolCost, 0.02);
   assertEquals(stats?.costPerRequest, 0.218 / 10);
   assertEquals(stats?.totalTokens, 1_050_000);
   assertEquals(stats?.avgTokensPerRequest, 1_050_000 / 10);
@@ -140,5 +146,6 @@ test("activityCostStats degrades to zero without tokens and stays unknown withou
   assertEquals(empty?.estimatedCost, 0);
   assertEquals(empty?.costPerRequest, 0);
   assertEquals(empty?.priceCoverageRate, undefined);
+  assertEquals(empty?.searchRequests, 0);
   assertEquals(activityCostStats(undefined), undefined);
 });

@@ -16,6 +16,15 @@ const PRICES = {
   },
 };
 
+// Server-side Search and Fetch are billed per successful request from
+// 2026-11-01 00:00 Asia/Shanghai, independently of the model and of caching.
+// Aggregates carry no time of day, so earlier free calls are also valued.
+const SERVER_TOOL_PRICES = {
+  searchCnyPerThousand: 5,
+  fetchCnyPerThousand: 5,
+  billedFrom: "2026-11-01T00:00:00+08:00",
+};
+
 const INTERACTIVE_KEYS = {
   requests: "requests",
   usageObservations: "usageObservations",
@@ -24,6 +33,8 @@ const INTERACTIVE_KEYS = {
   reasoningTokens: "reasoningTokens",
   cacheHitTokens: "cacheHitTokens",
   cacheMissTokens: "cacheMissTokens",
+  searchRequests: "searchRequests",
+  fetchRequests: "fetchRequests",
 };
 
 const CACHE_KEEPALIVE_KEYS = {
@@ -77,7 +88,25 @@ function emptyEstimate() {
     outputTokens: 0,
     unpricedOutputTokens: 0,
     reasoningTokens: 0,
+    searchRequests: 0,
+    fetchRequests: 0,
+    serverToolCost: 0,
     modelFamilies: [],
+  };
+}
+
+function serverTools(aggregate, keys) {
+  const searchRequests = keys.searchRequests
+    ? metric(aggregate, keys.searchRequests)
+    : 0;
+  const fetchRequests = keys.fetchRequests
+    ? metric(aggregate, keys.fetchRequests)
+    : 0;
+  return {
+    searchRequests,
+    fetchRequests,
+    serverToolCost: (searchRequests * SERVER_TOOL_PRICES.searchCnyPerThousand +
+      fetchRequests * SERVER_TOOL_PRICES.fetchCnyPerThousand) / 1000,
   };
 }
 
@@ -88,9 +117,14 @@ function estimate(model, aggregate, keys) {
   const outputTokens = metric(aggregate, keys.outputTokens);
   const reasoningTokens = metric(aggregate, keys.reasoningTokens);
   const family = modelFamily(model);
+  const tools = serverTools(aggregate, keys);
   if (!family) {
     return {
       ...emptyEstimate(),
+      ...tools,
+      estimatedCost: tools.serverToolCost,
+      noCacheCost: tools.serverToolCost,
+      allHitFloorCost: tools.serverToolCost,
       requests,
       usageObservedRequests,
       unknownModelRequests: requests,
@@ -111,11 +145,11 @@ function estimate(model, aggregate, keys) {
   return {
     estimatedCost: hit * price.inputCacheHitCnyPerMillion +
       miss * price.inputCacheMissCnyPerMillion +
-      output * price.outputCnyPerMillion,
+      output * price.outputCnyPerMillion + tools.serverToolCost,
     noCacheCost: (hit + miss) * price.inputCacheMissCnyPerMillion +
-      output * price.outputCnyPerMillion,
+      output * price.outputCnyPerMillion + tools.serverToolCost,
     allHitFloorCost: (hit + miss) * price.inputCacheHitCnyPerMillion +
-      output * price.outputCnyPerMillion,
+      output * price.outputCnyPerMillion + tools.serverToolCost,
     cacheSavings: hit *
       (price.inputCacheMissCnyPerMillion - price.inputCacheHitCnyPerMillion),
     cacheMissPremium: miss *
@@ -129,6 +163,7 @@ function estimate(model, aggregate, keys) {
     outputTokens,
     unpricedOutputTokens: 0,
     reasoningTokens,
+    ...tools,
     modelFamilies: [family],
   };
 }
@@ -150,6 +185,9 @@ function add(target, value) {
       "outputTokens",
       "unpricedOutputTokens",
       "reasoningTokens",
+      "searchRequests",
+      "fetchRequests",
+      "serverToolCost",
     ]
   ) target[key] += value[key];
   target.modelFamilies = [
@@ -221,13 +259,14 @@ export function decorateActivity(value) {
     currency: "CNY",
     unit: "per_million_tokens",
     valuationBasis: "pinned_peak_list_price_snapshot",
-    asOf: "2026-09-26",
-    version: "deepseek-v41-cny-peak-2026-09-10",
+    asOf: "2026-10-29",
+    version: "deepseek-v41-cny-peak-2026-10-29",
     sourceUrl: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
     offPeakMultiplier: 0.5,
     peakHours:
       "Mon-Fri 09:00-12:00 and 14:00-18:00 Asia/Shanghai, excluding Chinese public holidays",
     models: PRICES,
+    serverTools: SERVER_TOOL_PRICES,
   };
   activity.cost = costView(activity);
   const rolling = record(activity.last24Hours);

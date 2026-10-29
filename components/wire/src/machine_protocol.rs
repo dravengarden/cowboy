@@ -1447,6 +1447,12 @@ pub struct ProviderUsageEvent {
     pub cache_keepalive_source_age_ms: Option<u64>,
     #[serde(default)]
     pub source_request_prefix_fingerprint: Option<String>,
+    /// Billable server-side Search and Fetch calls of a `DeepSeek` request.
+    /// Absent from producers that predate them, and then omitted on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_requests: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_requests: Option<u64>,
 }
 
 // These bounds are deliberately above every supported model/request limit.
@@ -1457,6 +1463,7 @@ pub const PROVIDER_USAGE_MAX_DURATION_MS: u64 = 86_400_000;
 pub const PROVIDER_USAGE_MAX_REQUEST_BYTES: u64 = 64 << 20;
 pub const PROVIDER_USAGE_MAX_SHAPE_COUNT: u64 = 1_000_000;
 pub const PROVIDER_USAGE_MAX_KEEPALIVE_MS: u64 = 604_800_000;
+pub const PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS: u64 = 100_000;
 
 const fn default_provider_usage_schema_version() -> u16 {
     1

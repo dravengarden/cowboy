@@ -123,11 +123,11 @@
     },
     "claude-deepseek-gateway": {
       "kind": "git_go_static",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "repository": "git@github.com:dravengarden/columbus.git",
-      "revision": "27352e3400e5b55c6c88d6e7ac80f788e12dfb53",
+      "revision": "0a5e25d5d4aadae833991afdea54e816ecbce5a1",
       "subdir": "projects/claude-deepseek",
-      "source_archive_sha256": "0bc0b0b854d86846e8d45b0c91c48139c17beac9186545fea41f542f0a495658",
+      "source_archive_sha256": "707dca9e9403d2627b0a7c9ea54d521d57ed57136bd04394db830ea751dc0082",
       "binary": "claude-deepseek",
       "probe": [
         "--help"
@@ -135,11 +135,11 @@
     },
     "codex-deepseek-gateway": {
       "kind": "git_go_static",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "repository": "git@github.com:dravengarden/columbus.git",
-      "revision": "27352e3400e5b55c6c88d6e7ac80f788e12dfb53",
+      "revision": "0a5e25d5d4aadae833991afdea54e816ecbce5a1",
       "subdir": "projects/codex-deepseek",
-      "source_archive_sha256": "6019b0bf8679f876e80efcef03219c0caa84af6ee8b3fb13ea73561ea245bfc5",
+      "source_archive_sha256": "d993d4e362d572f14c732dec1a8b9c57d43bb38584ff6191f57f571cf98d2acf",
       "binary": "codex-deepseek",
       "probe": [
         "--help"

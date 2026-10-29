@@ -21,8 +21,8 @@ use tokio::net::UnixListener;
 
 use crate::machine_protocol::{
     MachineEvent, PROVIDER_USAGE_MAX_DURATION_MS, PROVIDER_USAGE_MAX_KEEPALIVE_MS,
-    PROVIDER_USAGE_MAX_REQUEST_BYTES, PROVIDER_USAGE_MAX_SHAPE_COUNT, PROVIDER_USAGE_MAX_TOKENS,
-    ProviderUsageEvent,
+    PROVIDER_USAGE_MAX_REQUEST_BYTES, PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS,
+    PROVIDER_USAGE_MAX_SHAPE_COUNT, PROVIDER_USAGE_MAX_TOKENS, ProviderUsageEvent,
 };
 
 const MAX_EVENT_BYTES: usize = 16 * 1024;
@@ -117,6 +117,10 @@ struct GatewayUsage {
     cache_keepalive_source_age_ms: Option<u64>,
     #[serde(default)]
     source_request_prefix_fingerprint: Option<String>,
+    #[serde(default)]
+    search_requests: Option<u64>,
+    #[serde(default)]
+    fetch_requests: Option<u64>,
 }
 
 const fn default_schema_version() -> u16 {
@@ -285,6 +289,8 @@ impl ProviderUsageSpool {
             cache_keepalive_interval_ms: event.cache_keepalive_interval_ms,
             cache_keepalive_source_age_ms: event.cache_keepalive_source_age_ms,
             source_request_prefix_fingerprint: event.source_request_prefix_fingerprint.take(),
+            search_requests: event.search_requests,
+            fetch_requests: event.fetch_requests,
         };
         transaction.execute(
             "INSERT INTO events (producer_id, sequence, event_id, payload) VALUES (?1, ?2, ?3, ?4)",
@@ -572,6 +578,10 @@ fn metrics_within_bounds(event: &GatewayUsage) -> bool {
         .into_iter()
         .flatten()
         .any(|value| value > PROVIDER_USAGE_MAX_KEEPALIVE_MS)
+        && ![event.search_requests, event.fetch_requests]
+            .into_iter()
+            .flatten()
+            .any(|value| value > PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS)
 }
 
 fn valid_hex(value: &str, length: usize) -> bool {
@@ -1084,6 +1094,38 @@ mod tests {
         value["cache_hit_tokens"] = (PROVIDER_USAGE_MAX_TOKENS + 1).into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(spool.pending_batch().expect("empty batch").is_none());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn forwards_bounded_server_tool_requests() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("server-tools")).expect("parse event");
+        value["search_requests"] = 2.into();
+        value["fetch_requests"] = 1.into();
+        spool
+            .ingest(&serde_json::to_vec(&value).expect("server tool JSON"))
+            .expect("server tool counts accepted");
+        let MachineEvent::ProviderUsageBatch { events, .. } = spool
+            .pending_batch()
+            .expect("read batch")
+            .expect("batch exists")
+        else {
+            panic!("unexpected event")
+        };
+        assert_eq!(events[0].search_requests, Some(2));
+        assert_eq!(events[0].fetch_requests, Some(1));
+
+        let mut oversized = value;
+        oversized["event_id"] = "server-tools-oversized".into();
+        oversized["search_requests"] = (PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS + 1).into();
+        assert!(
+            spool
+                .ingest(&serde_json::to_vec(&oversized).expect("oversized JSON"))
+                .is_err()
+        );
         drop(spool);
         let _ = std::fs::remove_file(path);
     }

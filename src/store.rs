@@ -7341,6 +7341,10 @@ fn provider_usage_metrics_within_bounds(
         .into_iter()
         .flatten()
         .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_KEEPALIVE_MS)
+        && ![event.search_requests, event.fetch_requests]
+            .into_iter()
+            .flatten()
+            .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SERVER_TOOL_REQUESTS)
 }
 
 fn valid_provider_usage_hex(value: &str, length: usize) -> bool {
@@ -7640,6 +7644,8 @@ mod provider_usage_validation_tests {
             cache_keepalive_interval_ms: Some(0),
             cache_keepalive_source_age_ms: Some(0),
             source_request_prefix_fingerprint: None,
+            search_requests: None,
+            fetch_requests: None,
         }
     }
 
@@ -7880,12 +7886,12 @@ async fn insert_provider_usage_event(
          has_previous_response_id, compatibility_fixes, request_purpose, \
          cache_keepalive_outcome, cache_keepalive_algorithm, cache_keepalive_attempt, \
          cache_keepalive_interval_ms, cache_keepalive_source_age_ms, \
-         source_request_prefix_fingerprint) VALUES ( \
+         source_request_prefix_fingerprint, search_requests, fetch_requests) VALUES ( \
          $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
          $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, \
          $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, \
          $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, \
-         $51) ON CONFLICT DO NOTHING",
+         $51, $52, $53) ON CONFLICT DO NOTHING",
     )
     .bind(machine_id)
     .bind(producer_id)
@@ -7938,6 +7944,8 @@ async fn insert_provider_usage_event(
     .bind(provider_usage_metric(event.cache_keepalive_interval_ms)?)
     .bind(provider_usage_metric(event.cache_keepalive_source_age_ms)?)
     .bind(&event.source_request_prefix_fingerprint)
+    .bind(provider_usage_metric(event.search_requests)?)
+    .bind(provider_usage_metric(event.fetch_requests)?)
     .execute(&mut **transaction)
     .await
     .context("insert provider usage event")?;
@@ -7972,6 +7980,8 @@ const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*) FILTER (WHERE request_p
      count(*) FILTER (WHERE request_purpose = 'interactive' AND has_previous_response_id IS TRUE)::bigint AS previous_response_requests, \
      least(coalesce(sum(compatibility_fixes::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
      count(*) FILTER (WHERE request_purpose = 'interactive' AND streaming IS TRUE)::bigint AS streaming_requests, \
+     least(coalesce(sum(search_requests::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS search_requests, \
+     least(coalesce(sum(fetch_requests::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS fetch_requests, \
      count(*) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_requests, \
      count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'hit')::bigint AS cache_keepalive_hits, \
      count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'miss')::bigint AS cache_keepalive_misses, \
@@ -8745,6 +8755,9 @@ struct UsageAggregate {
     cache_keepalive_interval_observations: i64,
     cache_keepalive_source_age_ms: i64,
     cache_keepalive_source_age_observations: i64,
+    /// Billable server-side Search and Fetch calls of interactive requests.
+    search_requests: i64,
+    fetch_requests: i64,
 }
 
 impl UsageAggregate {
@@ -8798,6 +8811,8 @@ impl UsageAggregate {
             cache_keepalive_source_age_ms: row.get("cache_keepalive_source_age_ms"),
             cache_keepalive_source_age_observations: row
                 .get("cache_keepalive_source_age_observations"),
+            search_requests: row.get("search_requests"),
+            fetch_requests: row.get("fetch_requests"),
         }
     }
 
@@ -8923,6 +8938,8 @@ impl UsageAggregate {
         self.cache_keepalive_source_age_observations = self
             .cache_keepalive_source_age_observations
             .saturating_add(other.cache_keepalive_source_age_observations);
+        self.search_requests = self.search_requests.saturating_add(other.search_requests);
+        self.fetch_requests = self.fetch_requests.saturating_add(other.fetch_requests);
     }
 }
 
@@ -10929,6 +10946,8 @@ mod storage_contract_tests {
         let mut usage = super::provider_usage_validation_tests::event();
         usage.sequence = 1;
         usage.occurred_at_ms = chrono::Utc::now().timestamp_millis();
+        usage.search_requests = Some(2);
+        usage.fetch_requests = Some(1);
         store
             .ingest_provider_usage("hawk", "codex-deepseek", &[usage.clone()])
             .await?;
@@ -10955,6 +10974,8 @@ mod storage_contract_tests {
         assert_eq!(usage_summary["summary"]["requests"], 2);
         assert_eq!(usage_summary["summary"]["errors"], 1);
         assert_eq!(usage_summary["summary"]["inputTokens"], 20);
+        assert_eq!(usage_summary["summary"]["searchRequests"], 2);
+        assert_eq!(usage_summary["summary"]["fetchRequests"], 1);
         let to_ms = chrono::Utc::now().timestamp_millis().saturating_add(1_000);
         let usage_activity = store
             .provider_usage_activity(

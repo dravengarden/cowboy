@@ -136,6 +136,10 @@ export interface ActivityCostStats {
   outputTokens: number;
   unpricedOutputTokens: number;
   reasoningTokens: number;
+  /** Billable server-side Search and Fetch calls and their valued cost. */
+  searchRequests: number;
+  fetchRequests: number;
+  serverToolCost: number;
   modelFamilies: string[];
   costPerRequest: number;
   costPerMTokens: number;
@@ -179,6 +183,9 @@ export function activityCostStats(
     outputTokens,
     unpricedOutputTokens,
     reasoningTokens: finite(value.reasoningTokens),
+    searchRequests: finite(value.searchRequests),
+    fetchRequests: finite(value.fetchRequests),
+    serverToolCost: finite(value.serverToolCost),
     modelFamilies: Array.isArray(value.modelFamilies)
       ? value.modelFamilies.filter((family): family is string =>
         typeof family === "string"

@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "active_release": "3.63.0",
+  "active_release": "3.64.0",
   "releases": [
     {
       "version": "1.0.0",
@@ -31641,6 +31641,481 @@
               }
             ],
             "source_digest": "sha256:b6dad62432edc961dc3f92fe84ff2cf65cc06996971f52a0ed11a101bb319f45"
+          },
+          "matrix": {
+            "component_release": "3.60.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              }
+            ],
+            "source_digest": "sha256:483c6e4f9b3950fba14e653c43389ac56d504e22555f68f25e694a0a3e7ac31d"
+          },
+          "review": {
+            "component_release": "3.60.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              }
+            ],
+            "source_digest": "sha256:9399075a83411c421feb6a5040435e4b8dcbb272ae5547cd7f1cf33b6dd55a1d"
+          },
+          "zed": {
+            "component_release": "3.60.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.code-intelligence",
+                "version": "1.2.0"
+              }
+            ],
+            "source_digest": "sha256:b2b224898bc2463cf5d9afacc36b94249b2fa987f7844b511eb8d13c0a528e43"
+          }
+        }
+      }
+    },
+    {
+      "version": "3.64.0",
+      "components": [
+        {
+          "id": "cowboy.plugin-contract",
+          "version": "1.11.0",
+          "publisher": "cowboy",
+          "sources": [
+            "components/plugin-contract"
+          ],
+          "digest": "sha256:f0540116bfb081cec28d433b1861ee132a5b5ac4f4d04b1626a3844c4f71922d",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/plugin-contract",
+            "manifest": "components/plugin-contract/package.json"
+          }
+        },
+        {
+          "id": "cowboy.plugin-sdk",
+          "version": "1.12.2",
+          "publisher": "cowboy",
+          "sources": [
+            "components/plugin-sdk"
+          ],
+          "digest": "sha256:a1b23e7f2f2d323596099735456e608d609bc926cfa11268db32f878aa58e70f",
+          "package": {
+            "kind": "cargo",
+            "name": "cowboy-plugin-sdk",
+            "manifest": "components/plugin-sdk/Cargo.toml"
+          }
+        },
+        {
+          "id": "cowboy.plugin-api",
+          "version": "1.1.2",
+          "publisher": "cowboy",
+          "sources": [
+            "components/plugin-api"
+          ],
+          "digest": "sha256:65095d3d4da3ea421c83d33bbe1c8b8990629bc4cf6c1710f2838ec5ac5bd911",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/plugin-api",
+            "manifest": "components/plugin-api/package.json"
+          }
+        },
+        {
+          "id": "cowboy.app-shell",
+          "version": "1.1.33",
+          "publisher": "cowboy",
+          "sources": [
+            "components/app-shell"
+          ],
+          "digest": "sha256:ae656580664aa7c367d6a6ffe97876b9f40879b6f143e9329e2af115aa9ed521",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/app-shell",
+            "manifest": "components/app-shell/package.json"
+          }
+        },
+        {
+          "id": "cowboy.state-store",
+          "version": "2.1.1",
+          "publisher": "cowboy",
+          "sources": [
+            "components/state-store"
+          ],
+          "digest": "sha256:477efd71088213ee54fbaaf238b422c074aad21699bc24f21491caf74634c75c",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/state-store",
+            "manifest": "components/state-store/package.json"
+          }
+        },
+        {
+          "id": "cowboy.state-sync",
+          "version": "1.5.1",
+          "publisher": "cowboy",
+          "sources": [
+            "components/state-sync"
+          ],
+          "digest": "sha256:76db6a5c60cdb12b7e9daf04f7c22f5c5bd47a24d58b7e4ce5eee5ebd0df9d30",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/state-sync",
+            "manifest": "components/state-sync/package.json"
+          }
+        },
+        {
+          "id": "cowboy.state-sync-idb",
+          "version": "1.8.2",
+          "publisher": "cowboy",
+          "sources": [
+            "components/state-sync-idb"
+          ],
+          "digest": "sha256:442ae5413e6aa4ea662f9308ef2a8beab19cf8bb4588759ae303bac0d60bddcc",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/state-sync-idb",
+            "manifest": "components/state-sync-idb/package.json"
+          }
+        },
+        {
+          "id": "cowboy.provider-sdk",
+          "version": "3.1.15",
+          "publisher": "cowboy",
+          "sources": [
+            "components/provider-sdk"
+          ],
+          "digest": "sha256:4b658ed8656275c71a13d07fab243a2e5d5f21d94b0f018eb3620434e3a72546",
+          "package": {
+            "kind": "cargo",
+            "name": "cowboy-provider-sdk",
+            "manifest": "components/provider-sdk/Cargo.toml"
+          }
+        },
+        {
+          "id": "cowboy.provider-ui",
+          "version": "3.1.21",
+          "publisher": "cowboy",
+          "sources": [
+            "components/provider-ui"
+          ],
+          "digest": "sha256:30d0928e52859091c96125f214d88f9a8494ad905668103af54b4906d9ffb955",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/provider-ui",
+            "manifest": "components/provider-ui/package.json"
+          }
+        },
+        {
+          "id": "cowboy.provider-runtime",
+          "version": "1.1.18",
+          "publisher": "cowboy",
+          "sources": [
+            "components/provider-runtime"
+          ],
+          "digest": "sha256:80be50d45355d8ce89555cf88468bb6f0dec625c7f6eb634447d12c7aca8c40e",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/provider-runtime",
+            "manifest": "components/provider-runtime/package.json"
+          }
+        },
+        {
+          "id": "cowboy.code-intelligence",
+          "version": "1.2.0",
+          "publisher": "cowboy",
+          "sources": [
+            "components/code-intelligence"
+          ],
+          "digest": "sha256:4f29d62ff1de51b8035f870995ab5a77eb20e8b46c18d6b0454f5bfdd9c37e45",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/code-intelligence-contract",
+            "manifest": "components/code-intelligence/package.json"
+          }
+        },
+        {
+          "id": "cowboy.provider-authoring",
+          "version": "1.0.9",
+          "publisher": "cowboy",
+          "sources": [
+            "components/provider-authoring"
+          ],
+          "digest": "sha256:9cff0a59f2d5b247ec1904434358e5eb246cf706632929c4db0c0c664a384026",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/provider-authoring",
+            "manifest": "components/provider-authoring/package.json"
+          }
+        },
+        {
+          "id": "cowboy.memory-client",
+          "version": "0.2.0",
+          "publisher": "cowboy",
+          "sources": [
+            "components/memory-client"
+          ],
+          "digest": "sha256:879f30e8f0516aa7a1516ea02a08862383fbf88fdcb5ddec110cd8b1d5e78f3e",
+          "package": {
+            "kind": "npm",
+            "name": "@cowboy/memory-client",
+            "manifest": "components/memory-client/package.json"
+          }
+        }
+      ],
+      "plugins": {
+        "claude-code": "3.20.11",
+        "claude-deepseek": "3.1.41",
+        "codex": "3.5.7",
+        "codex-deepseek": "3.1.41",
+        "gemini": "3.1.40",
+        "grok": "3.1.42",
+        "zed": "1.20.10",
+        "github": "0.2.5",
+        "matrix": "1.0.2",
+        "review": "1.0.5"
+      },
+      "closure": {
+        "component_dependencies": {
+          "cowboy.plugin-contract": [],
+          "cowboy.plugin-sdk": [
+            "cowboy.provider-sdk"
+          ],
+          "cowboy.plugin-api": [],
+          "cowboy.app-shell": [],
+          "cowboy.state-store": [],
+          "cowboy.state-sync": [
+            "cowboy.state-store"
+          ],
+          "cowboy.state-sync-idb": [
+            "cowboy.state-store",
+            "cowboy.state-sync"
+          ],
+          "cowboy.provider-sdk": [],
+          "cowboy.provider-ui": [],
+          "cowboy.provider-runtime": [],
+          "cowboy.code-intelligence": [],
+          "cowboy.provider-authoring": [
+            "cowboy.provider-ui"
+          ],
+          "cowboy.memory-client": []
+        },
+        "plugins": {
+          "claude-code": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              },
+              {
+                "id": "cowboy.memory-client",
+                "version": "0.2.0"
+              }
+            ],
+            "source_digest": "sha256:84e9a2867317ba5295a4caa0c5fd6e58bd123cd3ea652311d4c43a6aee55034d"
+          },
+          "claude-deepseek": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              }
+            ],
+            "source_digest": "sha256:795bd1f09ccdc04ae675e028535340198beb39255cea325587309578aee18933"
+          },
+          "codex": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              },
+              {
+                "id": "cowboy.memory-client",
+                "version": "0.2.0"
+              }
+            ],
+            "source_digest": "sha256:df49a413504003f1c4763a4bf3bdca15955c7d5ad0a6bc19558898f0dfbd73c9"
+          },
+          "codex-deepseek": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              }
+            ],
+            "source_digest": "sha256:b6f7f3036aaf063e58305bf43d033ce2a1d33884161d4b17b4b5f2b8d6d0b262"
+          },
+          "gemini": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              }
+            ],
+            "source_digest": "sha256:7318fa45da5aeb1b09fee3a367be69bffaadd070239e7a1143d3d6076fafc2c3"
+          },
+          "github": {
+            "component_release": "3.60.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              }
+            ],
+            "source_digest": "sha256:0d19d9d9710c6c0a26f93a504f5d8b839d27b86e3399f49c8fec2d17094dcf8d"
+          },
+          "grok": {
+            "component_release": "3.64.0",
+            "components": [
+              {
+                "id": "cowboy.plugin-contract",
+                "version": "1.11.0"
+              },
+              {
+                "id": "cowboy.plugin-sdk",
+                "version": "1.12.2"
+              },
+              {
+                "id": "cowboy.plugin-api",
+                "version": "1.1.2"
+              },
+              {
+                "id": "cowboy.provider-sdk",
+                "version": "3.1.15"
+              },
+              {
+                "id": "cowboy.provider-ui",
+                "version": "3.1.21"
+              },
+              {
+                "id": "cowboy.provider-runtime",
+                "version": "1.1.18"
+              }
+            ],
+            "source_digest": "sha256:b39740b61c9cd5431404f43a3f0fca46fa4ec90b9509f1c4be8677841da2f951"
           },
           "matrix": {
             "component_release": "3.60.0",
