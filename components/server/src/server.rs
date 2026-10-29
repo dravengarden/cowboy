@@ -25,6 +25,7 @@ mod session_provider_updates;
 mod session_reclaim;
 mod session_trash;
 mod web_roots;
+mod workspace_preparation;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -376,6 +377,7 @@ struct AppState {
     code_navigation_admission: bool,
     project_placement: crate::project_placement::Store,
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
+    workspace_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
     execution_readiness: execution::recovery::Readiness,
     lost_turns: execution::recovery::LostTurns,
     execution_closures:
@@ -1922,6 +1924,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             args.execution_runtime_machine,
         )?,
         execution_preparations: parking_lot::Mutex::default(),
+        workspace_preparations: parking_lot::Mutex::default(),
         execution_readiness: Default::default(),
         lost_turns: Default::default(),
         execution_closures: Arc::default(),
@@ -3625,6 +3628,14 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
             return;
         }
     };
+    // A failed or interrupted Web workspace preparation left this session on
+    // its source checkout; prepare it again before any worker can start.
+    // Completion drains the queue; an explicit intent would re-drain it on
+    // every maintenance tick while the Machine is still preparing.
+    if let Some(wait) = workspace_preparation::resume(&state, &session_id) {
+        retain_failed_dispatch(hub, session_id, text, content, cmid, &wait);
+        return;
+    }
     if let Err(error) = session_context::claim_carrier(&state, &session_id, cmid.as_deref()).await {
         retain(session_id, text, content, cmid, &error);
         return;
@@ -10691,6 +10702,7 @@ async fn serve_axum(
         state.public_origins.as_ref().clone(),
     )?);
     execution::sessions::start_recovery(&state);
+    workspace_preparation::start_recovery(&state);
     managed_calls::Coordinator::start(&state);
     let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
@@ -17044,6 +17056,11 @@ async fn api_session_reload(
         confirm_active_turn = query.confirm_active_turn,
         "session runtime reload requested"
     );
+    if info.meta.status != Status::Starting
+        && workspace_preparation::resume(&state, &session_id).is_some()
+    {
+        return (StatusCode::ACCEPTED, "preparing the workspace").into_response();
+    }
     match state
         .supervisor
         .reload_session(&session_id, query.confirm_active_turn)
@@ -17905,10 +17922,6 @@ async fn api_new_session(
         ) {
             return (StatusCode::BAD_REQUEST, error).into_response();
         }
-        let prepare_state = Arc::clone(&state);
-        let prepare_session_id = session_id.clone();
-        let prepare_machine_id = req.machine_id.clone();
-        let prepare_source_path = source_path.to_owned();
         let initial_prompt = req.initial_prompt;
         let eager = req.system;
         if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
@@ -17923,87 +17936,7 @@ async fn api_new_session(
         if let Err(error) = session_context::initialized(&state, &session_id).await {
             return (StatusCode::CONFLICT, error).into_response();
         }
-        tokio::spawn(async move {
-            let result = prepare_state
-                .machine_control
-                .adapter_request(
-                    &prepare_machine_id,
-                    "workspace",
-                    serde_json::json!({
-                        "root": &prepare_source_path,
-                        "session_id": &prepare_session_id,
-                    }),
-                )
-                .await
-                .map_err(|error| {
-                    format!("Machine could not prepare an isolated workspace: {error}")
-                })
-                .and_then(|value| {
-                    serde_json::from_value::<PreparedMachineWorkspace>(value).map_err(|error| {
-                        format!("Machine returned invalid workspace metadata: {error}")
-                    })
-                });
-
-            let prepared = match result {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    prepare_state.hub.set_status(
-                        &prepare_session_id,
-                        crate::agent_model::Status::Crashed,
-                        Some(error),
-                    );
-                    return;
-                }
-            };
-            tracing::info!(
-                session_id = %prepare_session_id,
-                machine_id = %prepare_machine_id,
-                source_path = %prepared.source_path,
-                prepared_path = %prepared.path,
-                revision = ?prepared.revision,
-                isolated = prepared.isolated,
-                created = prepared.created,
-                "prepared Machine workspace for session"
-            );
-            loop {
-                match plugin_fence_state_for_session(
-                    &prepare_state.hub,
-                    &prepare_state.plugin_lifecycle_fences,
-                    &prepare_session_id,
-                ) {
-                    Some(PluginFenceState::Uninstalling) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    }
-                    Some(PluginFenceState::Uninstalled | PluginFenceState::NeedsReconcile) => {
-                        return;
-                    }
-                    Some(PluginFenceState::Installing) | None => break,
-                }
-            }
-            let prepared_session = if eager {
-                prepare_state
-                    .hub
-                    .update_session_cwd(&prepare_session_id, prepared.path)
-                    .and_then(|()| {
-                        prepare_state
-                            .supervisor
-                            .start_registered_session(&prepare_session_id)
-                    })
-            } else {
-                prepare_state
-                    .supervisor
-                    .finish_session_preparation(&prepare_session_id, |hub| {
-                        hub.update_session_cwd(&prepare_session_id, prepared.path)
-                    })
-            };
-            if let Err(error) = prepared_session {
-                prepare_state.hub.set_status(
-                    &prepare_session_id,
-                    crate::agent_model::Status::Crashed,
-                    Some(format!("Session preparation failed: {error}")),
-                );
-            }
-        });
+        workspace_preparation::schedule(&state, &session_id, &req.machine_id, source_path, eager);
         return (
             StatusCode::CREATED,
             Json(NewSessionResponse {

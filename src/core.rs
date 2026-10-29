@@ -610,6 +610,35 @@ impl SessionMeta {
         Ok(())
     }
 
+    /// Web creation registers a remote session against the stable source root
+    /// and only later publishes the Machine-prepared session worktree as its
+    /// `cwd`. A non-Git root legitimately stays shared, so this structural
+    /// check alone does not prove the workspace is unprepared.
+    #[must_use]
+    pub fn on_workspace_source_root(&self) -> bool {
+        self.origin == SessionOrigin::Web
+            && self.machine_id != "local"
+            && self.execution_binding.is_none()
+            && self.workspace_source_path.as_deref() == Some(self.cwd.as_str())
+    }
+
+    /// A session whose Machine workspace preparation is still pending, was
+    /// interrupted (Controller restart, dropped Machine connection) or failed
+    /// (for example a Git timeout): it is on its source root and no native
+    /// agent thread ever started. Callers that can observe a live worker must
+    /// also exclude one, which covers the first launch on a shared non-Git
+    /// root. Its source checkout is never a valid worker cwd for a Git root,
+    /// and re-running preparation is idempotent for both kinds.
+    #[must_use]
+    pub fn awaits_workspace_preparation(&self) -> bool {
+        self.on_workspace_source_root()
+            && self.agent_session_id.is_none()
+            && matches!(
+                self.status,
+                crate::agent_model::Status::Starting | crate::agent_model::Status::Crashed
+            )
+    }
+
     /// Binding identity alone cannot authorize execution. The selected exact
     /// signed Provider must also accept this executor contract. This is a
     /// structural check only: named dispatch and projection require the fresh

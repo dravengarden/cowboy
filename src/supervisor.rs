@@ -182,6 +182,25 @@ impl Supervisor {
         !runtime.has_worker(session_id) && self.hub.status(session_id) == Some(Status::Exited)
     }
 
+    /// The Controller re-runs Machine workspace preparation before dispatch;
+    /// never fall through to a worker on an unprepared source checkout.
+    fn refuse_unprepared_workspace(&self, session_id: &str) -> Result<(), String> {
+        if self
+            .hub
+            .session_info(session_id)
+            .is_some_and(|info| info.meta.awaits_workspace_preparation())
+            && !self.has_worker(session_id)
+        {
+            return Err("Waiting for resources: preparing the workspace".to_owned());
+        }
+        Ok(())
+    }
+
+    fn has_worker(&self, session_id: &str) -> bool {
+        self.runtime_for_session(session_id)
+            .is_ok_and(|runtime| runtime.has_worker(session_id))
+    }
+
     /// Editing preferences is not a request to start or recover a process.
     /// This also covers workspace preparation and stopped/offline Machines.
     fn defer_configuration(&self, session_id: &str) -> bool {
@@ -625,6 +644,7 @@ impl Supervisor {
             self.recover_execution_session_inner(session_id, intent)?;
         }
         self.prepare_session_inner(session_id)?;
+        self.refuse_unprepared_workspace(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
         match command {
             AgentCommand::Prompt(blocks, cmid, completion) => {
@@ -750,11 +770,7 @@ impl Supervisor {
         // before Machine asynchronously returns the isolated worktree. Opening
         // that projected session must not spawn a worker from the source root.
         // The preparation task updates `cwd` and calls start_registered_session.
-        if meta.status == Status::Starting
-            && meta.machine_id != "local"
-            && meta.origin == SessionOrigin::Web
-            && meta.workspace_source_path.as_deref() == Some(meta.cwd.as_str())
-        {
+        if meta.awaits_workspace_preparation() && !self.has_worker(session_id) {
             return Ok(false);
         }
         let runtime = self.runtime_for_session(session_id)?;
@@ -961,15 +977,13 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         self.runtime_restrictions
             .check(&meta.provider, &meta.machine_id)?;
-        if meta.status == Status::Starting
-            && meta.machine_id != "local"
-            && meta.origin == SessionOrigin::Web
-            && meta.workspace_source_path.as_deref() == Some(meta.cwd.as_str())
-        {
-            return Err(
+        if meta.awaits_workspace_preparation() && !self.has_worker(session_id) {
+            return Err(if meta.status == Status::Starting {
                 "session workspace is still being prepared; reload it after preparation finishes"
-                    .to_owned(),
-            );
+            } else {
+                "session workspace was never prepared; send a message or Retry to prepare it"
+            }
+            .to_owned());
         }
 
         let active_turn = matches!(meta.status, Status::Busy | Status::Starting)
@@ -1242,6 +1256,17 @@ impl Supervisor {
             .session_list()
             .into_iter()
             .find(|meta| meta.id == session_id);
+        // A session whose workspace preparation failed or was interrupted
+        // still points at the stable source checkout. Recycling would launch
+        // a worker there, which the Machine refuses, and leave the session
+        // permanently crashed. Workspace preparation owns its first launch.
+        if session
+            .as_ref()
+            .is_some_and(crate::core::SessionMeta::awaits_workspace_preparation)
+            && !self.has_worker(session_id)
+        {
+            return Ok(false);
+        }
         let crashed = session
             .as_ref()
             .is_some_and(|meta| meta.status == Status::Crashed);
@@ -2230,6 +2255,37 @@ mod tests {
                 .expect("open preparing session")
         );
         assert!(runtime.pending_for_test().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_workspace_preparation_never_launches_from_source_checkout() {
+        // A Controller restart or Git timeout can end Machine preparation and
+        // leave the session Crashed on the stable source root. Resume must not
+        // recycle a worker there (the Machine refuses it as untrusted); the
+        // Controller re-runs workspace preparation instead.
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        std::fs::create_dir_all(&source).expect("source");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some("Machine could not prepare an isolated workspace: git timed out".into()),
+        );
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), runtime.clone(), root.0.clone());
+
+        assert!(!supervisor.prepare_session("s").expect("retry preflight"));
+        assert!(!supervisor.ensure_alive("s").expect("open"));
+        assert!(
+            supervisor
+                .send("s", AgentCommand::Prompt(vec![], Some("c".into()), None))
+                .is_err()
+        );
+        assert!(supervisor.reload_session("s", false).is_err());
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
     }
 
     #[tokio::test]
