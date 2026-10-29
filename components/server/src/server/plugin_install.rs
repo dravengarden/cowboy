@@ -17,7 +17,9 @@ use crate::plugin_operation::installation::{
 use anyhow::ensure;
 use axum::http::HeaderValue;
 
+mod interrupted;
 pub(super) mod journal;
+pub(super) use interrupted::recover_interrupted_staging;
 use journal::Progress;
 pub(super) use journal::api_machine_plugin_install_operations;
 

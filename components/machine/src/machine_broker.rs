@@ -3576,6 +3576,7 @@ impl Broker {
                 } else {
                     command.envs(&self.args.worker_environment);
                 }
+                worker_environment::remove_shell_init_guards(&mut command);
                 for (name, value) in &session_environment {
                     command.env(name, value);
                 }
@@ -3599,6 +3600,9 @@ impl Broker {
                     "--property=Slice=cowboy-agents.slice",
                     &format!("--unit={unit}"),
                 ]);
+                // A unit starts from the user manager's environment, which a
+                // desktop login fills with its shell-initialization guards.
+                command.arg(worker_environment::unset_shell_init_guards_property());
                 for (name, _) in std::env::vars().filter(|(name, _)| {
                     let inherited = matches!(
                         name.as_str(),

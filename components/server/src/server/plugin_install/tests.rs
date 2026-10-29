@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod interrupted_staging;
 mod journal;
 
 // Preserve the original continuation/transport tests while exercising the

@@ -92,7 +92,9 @@ as `Unknown/Staging/Interrupted`, under the process and lifecycle locks and only
 when no live continuation owns it. Activation requires a durable phase advance,
 so this proves interrupted preparation without assuming an installation result.
 Other pending phases stay fenced. The Service separately verifies the exact
-receipt and unchanged target under fresh Operator reconciliation authority.
+receipt and unchanged target, either under fresh Operator reconciliation
+authority or, for `Interrupted` staging only, automatically on reconnect (see
+`plugin-install-journal.md`).
 Startup never
 replays, infers success from inventory, repairs a missing slot from links, or
 converts an old receipt into a continuation. Missing installation authority or

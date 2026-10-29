@@ -112,9 +112,22 @@ its journal process lock and lifecycle lock and verifies there is no live
 continuation. Activation requires a durable `Activating` receipt first, so this
 transition proves only that preparation stopped before activation. Reader-only
 startup preserves the original bytes; live attempts and every other pending
-phase remain untouched. A failed receipt write poisons admission. The Service
-still requires the exact receipt and unchanged-target Operator reconciliation
-described above; this does not replay an install or infer success from inventory.
+phase remain untouched. A failed receipt write poisons admission.
+
+Reboot convergence requires that this exact case recover without a human step.
+On every authenticated Machine connection (retried briefly while the original
+observer may still be settling), the Controller inspects only slots it holds as
+`NeedsReconcile` with exactly one unresolved schema-two attempt interrupted
+from `Installing`. It takes the same reconciliation fence as the Operator path,
+asks the captured connection for the original step and accepts only
+`Unknown/Staging/Interrupted`. It records that receipt with the snapshot CAS,
+then requires the same connection, with installation admission enabled, to
+report the original target exactly, and commits the ordinary audited staging
+resolution with actor `admin:cowboy-controller:interrupted-staging`. Any other
+outcome or reason (`Pending`, `EffectFailure`, `Expired`, `Activating` or
+later), a changed target, a replaced connection or a live fence leaves the slot
+for Operator reconciliation. This does not replay an install or infer success
+from inventory.
 
 If the original observer timed out before the Machine completed Staging, the
 first reconciliation records the later exact `Unknown/Staging` receipt with a
