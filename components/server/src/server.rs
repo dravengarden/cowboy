@@ -15925,6 +15925,13 @@ async fn handle_machine_ws(
             }
         });
     }
+    // A Machine that restarted mid-install proves an interrupted staging
+    // attempt durably at startup; release its Service fence without an Operator.
+    tokio::spawn(plugin_install::recover_interrupted_staging(
+        Arc::clone(&state),
+        hello.machine_id.clone(),
+        connection.clone(),
+    ));
     for authentication in state.provider_auth.replica_statuses() {
         let sync_state = Arc::clone(&state);
         let machine_id = hello.machine_id.clone();
