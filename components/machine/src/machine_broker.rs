@@ -1907,7 +1907,7 @@ impl Broker {
             .sessions
             .lock()
             .get(&session.session_id)
-            .is_none_or(|previous| carries(previous));
+            .is_none_or(&carries);
         declaration_matches
             && self
                 .workers
