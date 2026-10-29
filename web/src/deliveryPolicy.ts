@@ -30,7 +30,44 @@ export async function readDeliveryOptions(
     },
   );
   if (!response.ok) throw new Error("Delivery options are unavailable.");
-  return await response.json() as DeliveryOptions;
+  const options = await response.json() as DeliveryOptions;
+  optionsCache.set(session, options);
+  return options;
+}
+
+/** The last options read for each session: the picker opens on them at once
+ *  (policy, checkpoint support) while a fresh read confirms the live turn. */
+const optionsCache = new Map<string, DeliveryOptions>();
+
+export function cachedDeliveryOptions(session: string): DeliveryOptions | null {
+  return optionsCache.get(session) ?? null;
+}
+
+/** A transient failure (a cold connection over a remote link, a brief
+ *  reconnect) must not read as "unavailable": retry before giving up. */
+const RETRY_DELAYS_MS = [0, 400, 1200] as const;
+
+export async function readDeliveryOptionsRetrying(
+  session: string,
+  signal?: AbortSignal,
+): Promise<DeliveryOptions> {
+  let failure: unknown;
+  for (const delay of RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (signal?.aborted) throw signal.reason;
+    try {
+      return await readDeliveryOptions(session, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      failure = error;
+    }
+  }
+  throw failure;
+}
+
+/** Warm the cache when a turn starts, so the busy Send opens on real data. */
+export function prefetchDeliveryOptions(session: string): void {
+  void readDeliveryOptionsRetrying(session).catch(() => undefined);
 }
 
 const changed = "cowboy:delivery-policy";

@@ -1,5 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
+import { prefetchDeliveryOptions } from "./deliveryPolicy";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
@@ -1528,6 +1529,11 @@ export function ComposerWorkspace({
   const serverConnected = useConnected();
   const currentTurnAvailable = serverConnected && status === "busy" &&
     supportsCurrentTurn;
+  // Warm the delivery options as a turn starts, so the busy Send opens on
+  // the session's real policy and checkpoint support without a wait.
+  useEffect(() => {
+    if (currentTurnAvailable) prefetchDeliveryOptions(sessionId);
+  }, [currentTurnAvailable, sessionId]);
   // A compaction is running right now: the turn is busy AND the live tail is
   // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
   // the agent's own auto-compaction). Drives the Compact button's disabled +
@@ -3231,6 +3237,7 @@ export function ComposerWorkspace({
         sessionId={sessionId}
         anchor={deliveryAnchor}
         busy={busy}
+        steerReady={currentTurnAvailable}
         paused={paused}
         queueCount={queue.length}
         onClose={closeDeliveryPicker}
@@ -5029,8 +5036,13 @@ function PendingRow({
   const queuePaused = useStoreSelector((snapshot) =>
     snapshot.sessions.find((session) => session.id === sessionId)?.paused ?? false
   );
+  const queueSteerCapable = useStoreSelector((snapshot) =>
+    snapshot.sessions.find((session) => session.id === sessionId)
+      ?.supports_current_turn === true
+  );
+  const queueConnected = useConnected();
   const steerQueued = (
-    target: import("./currentTurnDelivery").DeliveryTarget,
+    target: import("./currentTurnDelivery").DeliveryTarget | undefined,
     nextCheckpoint = false,
   ): void => {
     setDeliveryAnchor(null);
@@ -6073,6 +6085,7 @@ function PendingRow({
             sessionId={sessionId}
             anchor={deliveryAnchor}
             busy={status === "busy"}
+            steerReady={queueConnected && status === "busy" && queueSteerCapable}
             paused={queuePaused}
             queueCount={queuedAhead}
             queued
