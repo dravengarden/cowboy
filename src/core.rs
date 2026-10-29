@@ -4969,6 +4969,21 @@ impl Hub {
             let session = sessions
                 .get_mut(&expected.id)
                 .ok_or_else(|| "session no longer exists".to_owned())?;
+            // Every live Provider reload (Web Reload, local Operator, automatic
+            // pass) starts a replacement worker here. A managed child serves one
+            // call on its parent's binding and has no execution recovery, so a
+            // replacement only crashes once its execution lifetime is gone.
+            if session
+                .meta
+                .execution_binding
+                .as_ref()
+                .is_some_and(|binding| binding.managed().is_some())
+            {
+                return Err(
+                    "managed child sessions keep their Provider release until they are retired"
+                        .to_owned(),
+                );
+            }
             if session.in_flight || matches!(session.meta.status, Status::Busy | Status::Starting) {
                 return Err(
                     "wait for the current turn to finish before loading a new Provider version"
@@ -7492,6 +7507,27 @@ mod managed_call_tests {
         assert_eq!(settled.provider_version, "3.3.0");
         assert_eq!(settled.provider_generation_digest, "older-generation");
         assert!(hub.accept_runtime_snapshot(&worker));
+    }
+
+    #[test]
+    fn a_crashed_managed_child_is_never_reloaded_onto_another_provider_release() {
+        // 2026-10-29: Provider updates restarted failed review children whose
+        // Hawk execution lifetimes were lost; each replacement only crashed.
+        let hub = Hub::new();
+        hub.create_session(child("crashed-child"));
+        hub.set_status("crashed-child", Status::Crashed, Some("lost".to_owned()));
+        let before = hub.session_info("crashed-child").unwrap().meta;
+        let behavior = crate::provider::legacy_behavior("codex");
+
+        let error = hub
+            .begin_provider_reload(&before, "3.5.0", "newer", &behavior, false, None)
+            .expect_err("a managed child keeps its release");
+
+        assert!(error.contains("managed child"), "{error}");
+        let after = hub.session_info("crashed-child").unwrap().meta;
+        assert_eq!(after.status, Status::Crashed);
+        assert_eq!(after.provider_version, "3.4.0");
+        assert_eq!(after.provider_generation_digest, "generation");
     }
 
     #[test]
