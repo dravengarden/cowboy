@@ -170,6 +170,98 @@ fn completed_staging_failure_retains_evidence_but_allows_fresh_target_cas() {
 }
 
 #[test]
+fn abandoned_staging_completion_preserves_live_and_other_phases() {
+    for phase in [
+        InstallPhase::Prepared,
+        InstallPhase::Staging,
+        InstallPhase::Activating,
+        InstallPhase::ProjectingAuthentication,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(DIRECTORY);
+        let journal = Attempts::open(path.clone()).unwrap();
+        let mut step = fixture();
+        step.plugin_kind = cowboy_plugin_sdk::PluginKind::AgentProvider;
+        let mut pending = journal.begin(&step).unwrap();
+        for next in [
+            InstallPhase::Staging,
+            InstallPhase::Activating,
+            InstallPhase::ProjectingAuthentication,
+        ] {
+            if pending.receipt().outcome == (InstallOutcome::Pending { phase }) {
+                break;
+            }
+            journal
+                .advance(&mut pending, InstallOutcome::Pending { phase: next })
+                .unwrap();
+        }
+        let file = path.join(format!("{}.json", step.key().unwrap()));
+        let original = fs::read(&file).unwrap();
+        journal.finish_abandoned_staging().unwrap();
+        assert_eq!(fs::read(&file).unwrap(), original, "live {phase:?}");
+        drop(pending);
+        drop(journal);
+        let reopened = Attempts::open(path.clone()).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), original, "read-only reopen");
+        reopened.finish_abandoned_staging().unwrap();
+        let InstallLookup::Found { receipt } = reopened.query(&step) else {
+            panic!("missing receipt")
+        };
+        assert_eq!(receipt.step, step);
+        if phase == InstallPhase::Staging {
+            assert_eq!(
+                receipt.outcome,
+                InstallOutcome::Unknown {
+                    phase,
+                    reason:
+                        crate::machine_protocol::plugin_install::InstallUncertainty::Interrupted,
+                }
+            );
+            assert!(reopened.ensure_unfenced(&step.plugin_id).is_ok());
+        } else {
+            assert_eq!(fs::read(&file).unwrap(), original);
+            assert!(reopened.ensure_unfenced(&step.plugin_id).is_err());
+        }
+        assert!(
+            reopened.begin(&step).is_err(),
+            "never replay the old identity"
+        );
+        let completed = fs::read(&file).unwrap();
+        drop(reopened);
+        Attempts::open(path)
+            .unwrap()
+            .finish_abandoned_staging()
+            .unwrap();
+        assert_eq!(fs::read(&file).unwrap(), completed, "idempotent recovery");
+    }
+}
+
+#[test]
+fn abandoned_staging_flush_failure_poisons_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let journal = Attempts::open(root.path().join(DIRECTORY)).unwrap();
+    let step = fixture();
+    let mut pending = journal.begin(&step).unwrap();
+    journal
+        .advance(
+            &mut pending,
+            InstallOutcome::Pending {
+                phase: InstallPhase::Staging,
+            },
+        )
+        .unwrap();
+    drop(pending);
+    journal.before_write_for_test(Box::new(|_| anyhow::bail!("fixture flush failure")));
+    assert!(journal.finish_abandoned_staging().is_err());
+    assert_eq!(
+        journal.query(&step),
+        unavailable(InstallUnavailable::Storage)
+    );
+    assert!(journal.ensure_unfenced("unrelated").is_err());
+    assert!(journal.begin(&step).is_err());
+}
+
+#[test]
 fn failed_intent_and_completion_flushes_poison_all_mutation_paths() {
     for after in [false, true] {
         let root = tempfile::tempdir().unwrap();

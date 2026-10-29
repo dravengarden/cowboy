@@ -84,9 +84,16 @@ closed schema and complete-request checksum. Files are 0600, the directory 0700;
 atomic replacement is followed by directory flush. Capacity preserves history
 and unresolved references instead of silently pruning them.
 
-Only a process-local continuation can advance its exact prior receipt and
-phase. Identical IDs return historical evidence without execution; changed
-inputs are conflicts. Startup retains pending evidence verbatim. It never
+Normal installation advances its exact prior receipt and phase only through a
+process-local continuation. Identical IDs return historical evidence without execution; changed
+inputs are conflicts. Reader startup retains pending evidence verbatim. Explicit
+installation-writer admission may durably finish abandoned `Pending/Staging`
+as `Unknown/Staging/Interrupted`, under the process and lifecycle locks and only
+when no live continuation owns it. Activation requires a durable phase advance,
+so this proves interrupted preparation without assuming an installation result.
+Other pending phases stay fenced. The Service separately verifies the exact
+receipt and unchanged target under fresh Operator reconciliation authority.
+Startup never
 replays, infers success from inventory, repairs a missing slot from links, or
 converts an old receipt into a continuation. Missing installation authority or
 a required incarnation slot fails startup closed. Corrupt, future-schema,

@@ -30,6 +30,48 @@ fn found(
 }
 
 #[tokio::test]
+async fn abandoned_staging_requires_writer_admission_after_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+    store.enable_installation_tracking().await.unwrap();
+    let step = fixture();
+    let mut pending = store.operations.install_attempts.begin(&step).unwrap();
+    store
+        .operations
+        .install_attempts
+        .advance(
+            &mut pending,
+            InstallOutcome::Pending {
+                phase: InstallPhase::Staging,
+            },
+        )
+        .unwrap();
+    store.enable_installation_tracking().await.unwrap();
+    assert!(store.operations.ensure_unfenced(&step.plugin_id).is_err());
+    drop(pending);
+    drop(store);
+    let reader = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+    assert!(
+        matches!(reader.operations.install_attempts.query(&step), InstallLookup::Found { receipt }
+        if receipt.outcome == (InstallOutcome::Pending { phase: InstallPhase::Staging }))
+    );
+    assert!(reader.operations.ensure_unfenced(&step.plugin_id).is_err());
+    reader.enable_installation_tracking().await.unwrap();
+    assert!(
+        matches!(reader.operations.install_attempts.query(&step), InstallLookup::Found { receipt }
+        if receipt.outcome == (InstallOutcome::Unknown { phase: InstallPhase::Staging, reason: InstallUncertainty::Interrupted }))
+    );
+    assert!(reader.operations.ensure_unfenced(&step.plugin_id).is_ok());
+    assert!(reader.operations.install_attempts.begin(&step).is_err());
+    assert!(
+        reader
+            .recovery_active_digest(&step.plugin_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn sealed_continuations_recheck_exact_lease_and_envelope_before_any_effect() {
     let root = tempfile::tempdir().unwrap();
     let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();

@@ -454,7 +454,8 @@ impl MachinePluginStore {
                 existing.push((plugin, active.generation_digest));
             }
         }
-        self.operations.installations.enable(&existing)
+        self.operations.installations.enable(&existing)?;
+        self.operations.install_attempts.finish_abandoned_staging()
     }
 
     fn begin_installation(

@@ -148,6 +148,40 @@ impl Attempts {
         Self::lookup(&self.state.lock(), step)
     }
 
+    /// Called only after explicit writer admission, under the store lifecycle
+    /// lock and journal process lock. Staging cannot activate without first
+    /// persisting Activating. With no live continuation, its pending receipt
+    /// therefore proves an interrupted preparation, never a successful install.
+    /// Readers retain the original bytes; the Service still needs independent
+    /// reconciliation authority and an unchanged target before releasing its fence.
+    pub(in crate::machine_plugins) fn finish_abandoned_staging(&self) -> Result<()> {
+        let mut state = self.state.lock();
+        ensure!(!state.poisoned, "install attempt storage unavailable");
+        let abandoned: Vec<_> = state
+            .receipts
+            .iter()
+            .filter(|(_, receipt)| {
+                receipt.outcome
+                    == (InstallOutcome::Pending {
+                        phase: InstallPhase::Staging,
+                    })
+                    && state
+                        .live
+                        .get(&receipt.step.plugin_id)
+                        .is_none_or(|live| live.strong_count() == 0)
+            })
+            .map(|(key, receipt)| (key.clone(), receipt.clone()))
+            .collect();
+        for (key, mut receipt) in abandoned {
+            receipt.outcome = InstallOutcome::Unknown {
+                phase: InstallPhase::Staging,
+                reason: crate::machine_protocol::plugin_install::InstallUncertainty::Interrupted,
+            };
+            self.persist(&mut state, &key, &receipt)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::machine_plugins) fn has_capacity(&self) -> bool {
         let state = self.state.lock();
         !state.poisoned && state.receipts.len() < MAX_ATTEMPTS

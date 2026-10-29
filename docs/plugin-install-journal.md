@@ -106,6 +106,16 @@ original fence in place. A saved Applied receipt interrupted after
 replaced. Agent Providers repeat the ordinary post-install authentication sync,
 falling back to `AuthenticationPending` without replaying installation.
 
+On explicit Machine installation-writer admission, an abandoned `Pending/Staging`
+attempt is durably completed as `Unknown/Staging/Interrupted`. The Machine holds
+its journal process lock and lifecycle lock and verifies there is no live
+continuation. Activation requires a durable `Activating` receipt first, so this
+transition proves only that preparation stopped before activation. Reader-only
+startup preserves the original bytes; live attempts and every other pending
+phase remain untouched. A failed receipt write poisons admission. The Service
+still requires the exact receipt and unchanged-target Operator reconciliation
+described above; this does not replay an install or infer success from inventory.
+
 If the original observer timed out before the Machine completed Staging, the
 first reconciliation records the later exact `Unknown/Staging` receipt with a
 complete-snapshot compare-and-swap. It returns HTTP 202 with
