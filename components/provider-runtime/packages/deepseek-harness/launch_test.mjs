@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileText, planOf, presentMessage, requestCwd } from "./launch.mjs";
+import {
+  dshHome,
+  fileText,
+  planOf,
+  presentMessage,
+  requestCwd,
+} from "./launch.mjs";
 
 const cwd = "/work/session";
 
@@ -288,4 +294,18 @@ test("fileText leaves unframed or unnumbered text alone", () => {
     ),
     "no numbers",
   );
+});
+
+test("the profile patch follows dsh's own home resolution", () => {
+  assert.equal(
+    dshHome({ DSH_HOME: "/isolated/dsh" }, "/home/u"),
+    "/isolated/dsh",
+  );
+  assert.equal(
+    dshHome({ DSH_HOME: "  " }, "/runtime/home"),
+    "/runtime/home/.dsh",
+  );
+  assert.equal(dshHome({}, "/runtime/home"), "/runtime/home/.dsh");
+  assert.equal(dshHome({ DSH_HOME: "relative" }, "/home/u"), undefined);
+  assert.equal(dshHome({}, ""), undefined);
 });

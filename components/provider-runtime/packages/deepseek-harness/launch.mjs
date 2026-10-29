@@ -6,6 +6,7 @@
 // input or any other message.
 import { spawn } from "node:child_process";
 import { mkdir, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -352,6 +353,16 @@ export function requestCwd(message) {
   return typeof cwd === "string" && isAbsolute(cwd) ? cwd : undefined;
 }
 
+/**
+ * dsh's own home resolution: a non-blank `$DSH_HOME`, else `~/.dsh`. Packaged
+ * Cowboy runtimes give each auth generation its own `$HOME` and no `DSH_HOME`.
+ */
+export function dshHome(env = process.env, home = homedir()) {
+  const configured = env.DSH_HOME?.trim();
+  if (configured) return isAbsolute(configured) ? configured : undefined;
+  return home && isAbsolute(home) ? join(home, ".dsh") : undefined;
+}
+
 async function writePatch(home) {
   const directory = join(home, "cowboy");
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -389,10 +400,8 @@ async function main(argv) {
   const args = argv[0] === "--cowboy-private-cli" ? argv.slice(1) : [...argv];
   const acp = args.includes("--profile") &&
     args[args.indexOf("--profile") + 1] === "acp";
-  const home = process.env.DSH_HOME;
-  if (acp && home && isAbsolute(home)) {
-    args.push("--patch", await writePatch(home));
-  }
+  const home = dshHome();
+  if (acp && home) args.push("--patch", await writePatch(home));
   const child = spawn(process.execPath, [dsh, ...args], {
     stdio: [acp ? "pipe" : "inherit", acp ? "pipe" : "inherit", "inherit"],
   });
