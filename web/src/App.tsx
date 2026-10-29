@@ -145,7 +145,7 @@ import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
-import { requestNewAgent } from "./sessionSettingsOpen";
+import { openSessionSettings, requestNewAgent } from "./sessionSettingsOpen";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -745,7 +745,9 @@ function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | n
     );
 }
 
-type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename" | "newSession";
+type SessionRowCommand =
+    | "open" | "left" | "settings" | "move" | "newFolder" | "rename" | "newSession"
+    | "trash" | "preferences";
 /** Primary-tint opacity of the open session's row on Desktop. */
 const CURRENT_ROW_FILL = 0.12;
 /** Input that hands the Sessions list back to the user while it settles. */
@@ -757,6 +759,12 @@ const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
     m: "move",
     n: "newFolder",
     i: "rename",
+    // The row's actions modal names Rename `R` and Trash `X`; the same
+    // letters act on the cursor row directly.
+    r: "rename",
+    x: "trash",
+    // Settings is `␣,` for the app; `,` on a row is that row's settings.
+    ",": "preferences",
     // nvim-tree's `a`dd: a new Session in the cursor row's directory.
     a: "newSession",
 };
@@ -1298,7 +1306,7 @@ function SessionList({
             else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
             else if (command === "newSession") onNewInFolder?.(draft.parent_id ?? null);
             else if (command === "move" && desktop) startMovePick(rowKey);
-            else onDraftAction({ draft, action: command === "settings" ? "menu" : command });
+            else onDraftAction({ draft, action: command === "settings" || command === "preferences" ? "menu" : command });
             return;
         }
         switch (command) {
@@ -1343,6 +1351,34 @@ function SessionList({
                 return;
             case "newSession":
                 onNewInFolder?.(folder ? folder.id : session ? tree.folderOf.get(session.id) ?? null : null);
+                return;
+            case "trash": {
+                // A folder always confirms. An idle session goes to Trash with
+                // Undo (a working one confirms first), so the cursor moves on to
+                // the neighbouring row once this one leaves the list.
+                if (folder) {
+                    setDeleteFolder(folder);
+                    return;
+                }
+                if (!session) return;
+                const visible = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
+                    .filter((candidate) => candidate.offsetParent !== null);
+                const index = visible.indexOf(el);
+                const neighbour = (visible[index + 1] ?? visible[index - 1])?.dataset.desktopItem;
+                onRequestDelete(session);
+                if (neighbour) {
+                    window.setTimeout(() => {
+                        if (!el.isConnected && !document.querySelector("[role=\"dialog\"]")) focusRow(neighbour);
+                    }, 300);
+                }
+                return;
+            }
+            case "preferences":
+                if (folder) setDefaultsFolder(folder.id);
+                else if (session) {
+                    requestPickSession(session.id, session);
+                    openSessionSettings("agent", session.id);
+                }
                 return;
         }
     };
@@ -2561,6 +2597,46 @@ function SessionList({
                         : <LoadingState compact />
                 )}
             </List>
+            {desktop && (
+                // The cursor row's own keys, beside the list they act on. The
+                // window status line lists them too, but far from the rail;
+                // shown only while Sessions owns focus (FOCUS.md "Sessions").
+                <Box
+                    data-sessions-row-keys
+                    aria-hidden
+                    sx={{
+                        display: "none",
+                        "[data-desktop-region='sessions.list'][data-desktop-focused='true'] &": {
+                            display: "flex",
+                        },
+                        flexShrink: 0,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        columnGap: 1,
+                        rowGap: 0.5,
+                        px: 1,
+                        py: 0.75,
+                        borderTop: 1,
+                        borderColor: "divider",
+                        typography: "caption",
+                        color: "text.secondary",
+                        "& > span": { display: "inline-flex", alignItems: "center", whiteSpace: "nowrap" },
+                        "& .MuiBox-root, & kbd": { ml: "0 !important", mr: 0.5 },
+                    }}
+                >
+                    {([
+                        ["Enter", "Open"],
+                        ["R", "Rename"],
+                        ["M", "Move"],
+                        ["X", "Trash"],
+                        [",", "Settings"],
+                        ["A", "New here"],
+                        ["S", "More"],
+                    ] as const).map(([key, label]) => (
+                        <span key={key}><Kbd keys={key} />{label}</span>
+                    ))}
+                </Box>
+            )}
             {mobileDrawer && (
                 <Box
                     sx={{
@@ -2826,7 +2902,11 @@ function SessionList({
                             spacing={0.5}
                         >
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
-                            <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={requestRenameFromMenu} sx={{ justifyContent: "flex-start" }}>
+                            <Button data-session-shortcut="," autoFocus fullWidth startIcon={<SettingsIcon />} onClick={(): void => { if (!menuAnchor) return; const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); openSessionSettings("agent", row.id); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Settings…</Box>
+                                <Kbd keys="," />
+                            </Button>
+                            <Button data-session-shortcut="r" fullWidth startIcon={<DriveFileRenameOutline />} onClick={requestRenameFromMenu} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
                             </Button>
@@ -2979,7 +3059,7 @@ function SessionList({
                         ) return;
                         const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
                         const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
-                            `[data-folder-shortcut="${key}"]`,
+                            `[data-folder-shortcut="${key}"], [data-folder-shortcut-alt="${key}"]`,
                         );
                         if (directAction) {
                             event.preventDefault();
@@ -3031,7 +3111,7 @@ function SessionList({
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to…</Box>
                             <Kbd keys="M" />
                         </Button>
-                        <Button data-folder-shortcut="d" fullWidth startIcon={<SettingsIcon />} onClick={(): void => { if (folderMenuFolder) setDefaultsFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                        <Button data-folder-shortcut="d" data-folder-shortcut-alt="," fullWidth startIcon={<SettingsIcon />} onClick={(): void => { if (folderMenuFolder) setDefaultsFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Directory defaults…</Box><Kbd keys="D" />
                         </Button>
                         <Button data-folder-shortcut="b" fullWidth startIcon={<LabelOutlined />} onClick={(): void => { setProjectPicker(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>

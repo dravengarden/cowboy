@@ -146,9 +146,11 @@ function regionHints(
         { keys: "za/zM/zR", label: "Fold" },
         { keys: "A", label: "New session here" },
         { keys: "S", label: "Actions" },
+        { keys: ",", label: "Settings" },
+        { keys: "R", label: "Rename" },
         { keys: "M", label: "Move to" },
+        { keys: "X", label: "Trash" },
         { keys: "N", label: "New folder" },
-        { keys: "I", label: "Rename" },
         { keys: "O", label: "Order mode" },
       ];
     case "prompt.calls":

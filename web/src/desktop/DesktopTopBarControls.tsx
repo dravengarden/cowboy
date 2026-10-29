@@ -1290,7 +1290,14 @@ export function DesktopTopBarControls({
   const clearConfirm = openSurface === "clear";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
-  useEffect(() => setOpenSurface(null), [sessionId]);
+  // A session switch closes this session's surfaces, except settings that
+  // were requested for the session being opened (Sessions `,`, Continue in
+  // new agent). This runs after the listener effect above, so it must honor
+  // that request itself or it would close what the request just opened.
+  useEffect(
+    () => setOpenSurface(pendingSessionSettings(sessionId) ? "config" : null),
+    [sessionId],
+  );
   const closeSurface = useCallback(() => setOpenSurface(null), []);
   const optionPresentations = useMemo(
     () =>

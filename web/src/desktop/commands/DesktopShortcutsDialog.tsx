@@ -128,6 +128,11 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["zz", "zt", "zb"], title: "Scroll the cursor row to the centre / top / bottom" },
   { keys: ["za", "zM", "zR"], title: "Sessions: fold button, close every folder, open every folder" },
   { keys: ["A"], title: "Sessions: new session in the cursor row's directory" },
+  {
+    keys: ["R", "M", "X", ","],
+    title: "Sessions: rename, move, move to Trash, open settings of the cursor row",
+    description: "The same letters as the row's actions modal (S). An idle session goes to Trash with Undo; a working one or a folder asks first. On a folder `,` opens its directory defaults",
+  },
   { keys: ["Shift+G"], title: "Last item" },
   {
     keys: ["'"],

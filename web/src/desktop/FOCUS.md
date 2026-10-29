@@ -602,8 +602,13 @@ it); macOS Chrome binds none of them.
   and moves from a session row to its folder. `s` opens the row's actions
   (the session Settings modal, or the folder actions modal), `m` opens Move
   to…, `n` creates a folder (inside a folder, beside a session), `a` creates
-  a session in the row's directory (nvim-tree's add), and `i` renames. All
-  are region-scoped bare letters resolved from physical codes.
+  a session in the row's directory (nvim-tree's add), `r` (or `i`)
+  renames, `x` moves to Trash (an idle session at once with Undo, a working
+  session or a folder after confirmation), and `,` opens the row's
+  settings (Session Settings, or a folder's directory defaults). They match
+  the letters of the actions modal `s` opens. All are region-scoped bare
+  letters resolved from physical codes, and a key strip at the foot of the
+  Sessions pane names them while Sessions owns focus.
 - `␣N` and the sidebar Create button create in the current directory: the
   Sessions cursor row's, otherwise the open session's, like a file
   explorer's New File. The Create form shows the directory and can change
