@@ -92,6 +92,16 @@ async fn session_provider_update(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    // A managed child serves exactly one call on its parent's binding and is
+    // retired once that call finishes. Reloading it cannot help the call and,
+    // once its execution lifetime is gone, only leaves it crashed.
+    if state.hub.is_managed_child(&session_id) {
+        return (
+            StatusCode::CONFLICT,
+            "managed child sessions keep their Provider release until they are retired",
+        )
+            .into_response();
+    }
     let meta = info.meta;
     let target = match session_upgrade_target(&state, &meta).await {
         Ok(target) => target,

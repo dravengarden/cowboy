@@ -415,6 +415,10 @@ async fn pass(
         if !meta.provider_account_id.is_default() {
             continue;
         }
+        // A managed child serves one call and is retired after it; no Update.
+        if state.hub.is_managed_child(&meta.id) {
+            continue;
+        }
         if !state.runtime_router.connected(&meta.machine_id)
             || !state.hub.provider_version_changeable(&meta.id)
         {
