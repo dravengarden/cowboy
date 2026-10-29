@@ -575,50 +575,18 @@ pub struct SessionMeta {
     pub owner_username: Option<String>,
 }
 
-/// Whether a named login made for the `current` release also serves `next`;
-/// an unknown release never matches.
-fn named_login_follows(
-    current: Option<&cowboy_provider_sdk::ProviderManifest>,
-    next: Option<&cowboy_provider_sdk::ProviderManifest>,
-) -> bool {
-    matches!((current, next), (Some(current), Some(next))
-        if crate::provider_account::native_release_compatible(current, next))
-}
-
 impl SessionMeta {
-    /// A named account's session moves to another release only when its
-    /// login does: the signed authentication section must be identical, the
-    /// rule the login itself and the Machine apply before every launch
-    /// (`provider_account::native_release_compatible`). Anything else needs a
-    /// verified login transition. Without a catalog nothing is known to match.
     fn require_provider_release_transition(
         &self,
         version: &str,
         digest: &str,
-        catalog: Option<&crate::provider_catalog::ProviderCatalog>,
     ) -> Result<(), String> {
-        if self.provider_account_id.is_default()
-            || (self.provider_version == version && self.provider_generation_digest == digest)
+        if !self.provider_account_id.is_default()
+            && (self.provider_version != version || self.provider_generation_digest != digest)
         {
-            return Ok(());
+            return Err("named account release change requires a verified login transition".into());
         }
-        let login_follows = catalog.is_some_and(|catalog| {
-            let current = catalog.package(
-                &self.provider,
-                &self.provider_version,
-                &self.provider_generation_digest,
-            );
-            let next = catalog.package(&self.provider, version, digest);
-            named_login_follows(
-                current.as_ref().map(|package| &package.manifest),
-                next.as_ref().map(|package| &package.manifest),
-            )
-        });
-        if login_follows {
-            Ok(())
-        } else {
-            Err("named account release change requires a verified login transition".into())
-        }
+        Ok(())
     }
 
     /// Binding identity alone cannot authorize execution. The selected exact
@@ -1996,9 +1964,6 @@ struct HubInner {
     /// are replaced with `/api/artifacts/…` URLs before the Hub clones the
     /// envelope into history, the persistence queue, and live fan-out.
     artifacts: Mutex<Option<crate::artifacts::ArtifactStore>>,
-    /// Signed Provider releases, for named-account release transitions.
-    /// Never held together with `sessions`.
-    provider_catalog: Mutex<Option<std::sync::Arc<crate::provider_catalog::ProviderCatalog>>>,
     /// Insertion order of session ids, so the list view is stable.
     order: Mutex<Vec<String>>,
     /// Sessions-sidebar folder tree + explicit placements, the typed truth
@@ -2200,7 +2165,6 @@ impl Hub {
                 automatic_update_failed_sessions: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
-                provider_catalog: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 workspace_orders: Mutex::new(HashMap::new()),
@@ -2235,13 +2199,6 @@ impl Hub {
 
     pub fn set_artifacts(&self, artifacts: crate::artifacts::ArtifactStore) {
         *self.inner.artifacts.lock() = Some(artifacts);
-    }
-
-    pub fn set_provider_catalog(
-        &self,
-        catalog: std::sync::Arc<crate::provider_catalog::ProviderCatalog>,
-    ) {
-        *self.inner.provider_catalog.lock() = Some(catalog);
     }
 
     /// Store a prompt's large images ahead of dispatch. `true` lets a remote
@@ -4916,7 +4873,6 @@ impl Hub {
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
         after_rejected_launch: bool,
     ) -> Result<(), String> {
-        let catalog = self.inner.provider_catalog.lock().clone();
         let meta = {
             let mut sessions = self.inner.sessions.lock();
             let session = sessions
@@ -4948,11 +4904,9 @@ impl Hub {
                     "a saved native session is required to change Provider version".to_owned(),
                 );
             }
-            session.meta.require_provider_release_transition(
-                version,
-                digest,
-                catalog.as_deref(),
-            )?;
+            session
+                .meta
+                .require_provider_release_transition(version, digest)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -4986,7 +4940,6 @@ impl Hub {
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
         automatic: bool,
     ) -> Result<(), String> {
-        let catalog = self.inner.provider_catalog.lock().clone();
         let meta = {
             let mut sessions = self.inner.sessions.lock();
             let session = sessions
@@ -5022,11 +4975,9 @@ impl Hub {
             if automatic && session.meta.background_tasks > 0 {
                 return Err("session has background work in progress".to_owned());
             }
-            session.meta.require_provider_release_transition(
-                version,
-                digest,
-                catalog.as_deref(),
-            )?;
+            session
+                .meta
+                .require_provider_release_transition(version, digest)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -5093,7 +5044,6 @@ impl Hub {
         }) else {
             return;
         };
-        let catalog = self.inner.provider_catalog.lock().clone();
         let reconciled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(session) = sessions.get_mut(&worker.session_id) else {
@@ -5106,7 +5056,6 @@ impl Hub {
                     .require_provider_release_transition(
                         &launch.provider_version,
                         &launch.provider_generation_digest,
-                        catalog.as_deref(),
                     )
                     .is_err()
                 || session.meta.require_runtime_launch().is_err()
@@ -11418,20 +11367,6 @@ mod core_tests {
             serde_json::to_value(&hub.snapshot(&before.id).unwrap().0[..history.len()]).unwrap(),
             serde_json::to_value(history).unwrap()
         );
-    }
-
-    #[test]
-    fn a_named_session_follows_only_releases_its_login_follows() {
-        let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
-        let current = source.compile().unwrap();
-        let mut next = current.clone();
-        next.version = "999.0.0".into();
-        assert!(super::named_login_follows(Some(&current), Some(&next)));
-        assert!(!super::named_login_follows(Some(&current), None));
-        assert!(!super::named_login_follows(None, Some(&next)));
-        next.authentication.methods.pop();
-        assert!(!super::named_login_follows(Some(&current), Some(&next)));
     }
 
     #[test]

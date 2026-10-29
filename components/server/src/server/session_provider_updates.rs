@@ -409,6 +409,12 @@ async fn pass(
         if meta.status == Status::Starting || meta.closing || meta.trashed_at_ms.is_some() {
             continue;
         }
+        // A named subscription's session changes release only through a
+        // verified login transition; the Machine keeps each named worker on
+        // its exact release. Offering Update here would only ever fail.
+        if !meta.provider_account_id.is_default() {
+            continue;
+        }
         if !state.runtime_router.connected(&meta.machine_id)
             || !state.hub.provider_version_changeable(&meta.id)
         {

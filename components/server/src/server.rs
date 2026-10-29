@@ -1434,7 +1434,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             managed_export_activation = None;
             (Hub::new(), None, None, None, None, 1)
         };
-    hub.set_provider_catalog(Arc::clone(&provider_catalog));
     let plugin_storage = match store.as_ref() {
         Some(store) => store.plugin_storage(plugin_dir.clone()),
         None => crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir.clone()),
