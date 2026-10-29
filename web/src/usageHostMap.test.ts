@@ -222,7 +222,7 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   assertEquals(usageWidgetBalanceLabel("deepseek"), "Balance");
   assertEquals(usageWidgetSpendLabel("deepseek"), "24h spend");
   assertEquals(usageWidgetBalanceLabel("openai"), "Balance");
-  assertEquals(usageActivityAgentIds(), ["codex", "claude"]);
+  assertEquals(usageActivityAgentIds(), ["codex", "claude", "deepseek-harness"]);
   assertEquals(usageActivityAgentLabel("claude"), "Claude Code");
   assertEquals(usageActivityAgents("gemini"), []);
   assertEquals(usageActivityModelIds(), ["flash", "pro"]);
