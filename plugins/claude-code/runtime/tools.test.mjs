@@ -608,7 +608,10 @@ test("a Bash timeout above the maximum is clamped as native does", async (t) => 
     assert.doesNotMatch(result.content[0].text, /Invalid tool limit/);
   }
   const invalid = await tools.call("bash", { command: "true", timeout: 0 });
-  assert.match(invalid.content[0].text, /Invalid tool limit/);
+  assert.match(
+    invalid.content[0].text,
+    /Invalid tool limit: timeout must be an integer from 1 to 600000/,
+  );
 });
 
 test("a changed file is refused until read again, including after cold resume", async (t) => {

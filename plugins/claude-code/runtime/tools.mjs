@@ -642,10 +642,14 @@ function checkedString(value, name, max = MAX_FILE) {
   }
   return value;
 }
-function bounded(value, fallback, min, max) {
+// Name the parameter and its range: a bare "Invalid tool limit" made the
+// model guess which argument to change.
+function bounded(value, fallback, min, max, name) {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error("Invalid tool limit");
+    throw new Error(
+      `Invalid tool limit: ${name} must be an integer from ${min} to ${max}`,
+    );
   }
   return value;
 }
@@ -2059,8 +2063,8 @@ export class WorkspaceTools {
   }
 
   async rangeRead(path, args, call) {
-    const offset = bounded(args.offset, 1, 1, 10000000);
-    const limit = bounded(args.limit, 2000, 1, 10000);
+    const offset = bounded(args.offset, 1, 1, 10000000, "offset");
+    const limit = bounded(args.limit, 2000, 1, 10000, "limit");
     const result = await this.command(
       [
         this.fileHelper,
@@ -3242,6 +3246,7 @@ export class WorkspaceTools {
         120000,
         1,
         maxTimeout,
+        "timeout",
       );
       // A foreground command reports its final directory, as native's
       // `pwd -P >| file` does; a background one never moves the session.
@@ -3437,7 +3442,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         ? 10000
         : args.block === false
         ? 1
-        : bounded(args.timeout, 10000, 1, 120000);
+        : bounded(args.timeout, 10000, 1, 120000, "timeout");
       const result = await this.collect(id, timeout);
       const command = job.command ?? "";
       return text(JSON.stringify(result), {
@@ -3466,11 +3471,11 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         if (args.multiline) argv.push("--multiline", "--multiline-dotall");
         for (const key of ["-A", "-B", "-C"]) {
           if (args[key] !== undefined) {
-            argv.push(key, String(bounded(args[key], 0, 0, 1000)));
+            argv.push(key, String(bounded(args[key], 0, 0, 1000, key)));
           }
         }
         if (args.context !== undefined) {
-          argv.push("-C", String(bounded(args.context, 0, 0, 1000)));
+          argv.push("-C", String(bounded(args.context, 0, 0, 1000, "context")));
         }
         if (args.glob !== undefined) {
           argv.push("--glob", checkedString(args.glob, "glob", 16384));
@@ -3486,8 +3491,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       if (result.exitCode !== 0 && result.exitCode !== 1) {
         throw new Error(result.output.slice(0, 4096) || "Search failed");
       }
-      const offset = bounded(args.offset, 0, 0, 1000000);
-      const limit = bounded(args.head_limit, 200, 0, 10000) || 10000;
+      const offset = bounded(args.offset, 0, 0, 1000000, "offset");
+      const limit = bounded(args.head_limit, 200, 0, 10000, "head_limit") ||
+        10000;
       const lines = result.output.replace(/\n$/, "").split("\n").filter((
         line,
       ) => line.length > 0);
@@ -3628,8 +3634,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         return await remember(await this.localRead(bytes, "", path));
       }
       // As natively, `pages` means nothing for a file not named .pdf.
-      const offset = bounded(args.offset, 1, 1, 10000000) - 1;
-      const limit = bounded(args.limit, 2000, 1, 10000);
+      const offset = bounded(args.offset, 1, 1, 10000000, "offset") - 1;
+      const limit = bounded(args.limit, 2000, 1, 10000, "limit");
       // Read and Edit now agree on BOM-marked UTF-16LE decoding.
       const decoded = textFile(bytes);
       const warning = encodingWarning(bytes, decoded);
