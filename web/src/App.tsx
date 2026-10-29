@@ -2041,6 +2041,52 @@ function SessionList({
                             opacity: 1,
                             transitionDelay: "0ms",
                         },
+                        // Folder rows: activity and actions share one right-aligned
+                        // slot as wide as the two actions. They swap in place
+                        // (no reflow); an empty folder keeps the slot for them.
+                        "& .cowboy-folder-trailing": {
+                            position: "relative",
+                            flexShrink: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "flex-end",
+                            minWidth: `calc(2 * ${desktopSize(24)} + 6px)`,
+                            ml: 0.5,
+                        },
+                        "& .cowboy-folder-trailing [data-folder-activity]": {
+                            transition: "opacity 120ms ease",
+                        },
+                        "& .cowboy-folder-trailing .cowboy-row-actions": {
+                            position: "absolute",
+                            top: 0,
+                            bottom: 0,
+                            right: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "2px",
+                            opacity: 0,
+                            pointerEvents: "none",
+                            transition: "opacity 120ms ease",
+                            "& .cowboy-session-actions": { ml: 0 },
+                        },
+                        "& [data-desktop-item]:hover .cowboy-folder-trailing .cowboy-row-actions": {
+                            opacity: 1,
+                            pointerEvents: "auto",
+                            transitionDelay: "250ms",
+                        },
+                        "& [data-desktop-item]:hover .cowboy-folder-trailing [data-folder-activity]": {
+                            opacity: 0,
+                            transitionDelay: "250ms",
+                        },
+                        "& [data-desktop-item]:focus .cowboy-folder-trailing .cowboy-row-actions, & .cowboy-folder-trailing .cowboy-row-actions:focus-within, & .cowboy-folder-trailing .cowboy-row-actions:has([data-menu-open='true'])": {
+                            opacity: 1,
+                            pointerEvents: "auto",
+                            transitionDelay: "0ms",
+                        },
+                        "& [data-desktop-item]:focus .cowboy-folder-trailing [data-folder-activity], & .cowboy-folder-trailing:has(.cowboy-row-actions:focus-within) [data-folder-activity], & .cowboy-folder-trailing:has([data-menu-open='true']) [data-folder-activity]": {
+                            opacity: 0,
+                            transitionDelay: "0ms",
+                        },
                     }),
                 }}
             >
@@ -2198,7 +2244,14 @@ function SessionList({
                             }
                             slotProps={{ primary: { component: "div" } }}
                         />
+                        {/* Desktop: one right-aligned slot. Activity rests here and
+                            the actions take its place on dwell or keyboard focus,
+                            so every folder's badges share one right edge and
+                            the hidden actions never leave a gap. Touch keeps
+                            its inline layout (`display: contents`). */}
+                        <Box className="cowboy-folder-trailing" sx={desktop ? undefined : { display: "contents" }}>
                         <FolderActivityBadges activity={row.activity} total={row.sessionCount} />
+                        <Box className="cowboy-row-actions" sx={desktop ? undefined : { display: "contents" }}>
                         {desktop && allowNewSession && onNewInFolder && (
                             <HintTooltip
                                 title="New session here"
@@ -2244,6 +2297,8 @@ function SessionList({
                                 <MoreVert sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </HintTooltip>
+                        </Box>
+                        </Box>
                     </ReliableListItemButton>
                         );
                     }
