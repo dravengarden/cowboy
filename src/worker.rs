@@ -150,6 +150,7 @@ impl Shared {
                 // process death may clear it without that edge.
                 if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                     snapshot.current_turn_id = None;
+                    snapshot.native_cycle_id = None;
                 }
             }
             RuntimeEvent::PermissionRequest { request_id, .. } => {
@@ -162,6 +163,9 @@ impl Shared {
             }
             RuntimeEvent::TurnStarted { turn_id, .. } => {
                 snapshot.current_turn_id = Some(turn_id.clone());
+                // A Cowboy turn owns delivery from here; the adapter ends the
+                // self-started cycle when it receives the prompt.
+                snapshot.native_cycle_id = None;
                 snapshot.state = WorkerState::Busy;
             }
             RuntimeEvent::TurnEnded { turn_id, .. } => {
@@ -190,6 +194,11 @@ impl Shared {
                 if crate::runtime_wire::background_tasks_count(update).is_some() =>
             {
                 snapshot.background_tasks = crate::runtime_wire::background_tasks_count(update);
+            }
+            RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::native_cycle(update).is_some() =>
+            {
+                snapshot.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
             }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
@@ -311,7 +320,7 @@ impl AgentSink for RemoteSink {
         let snapshot = self.shared.snapshot.lock();
         session_id == self.shared.session_id
             && snapshot.worker_epoch == target.worker_epoch
-            && snapshot.current_turn_id.as_deref() == Some(&target.turn_id)
+            && snapshot.delivery_turn_id() == Some(target.turn_id.as_str())
             && !snapshot.drain_requested
     }
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
@@ -415,6 +424,13 @@ impl AgentSink for RemoteSink {
     fn set_background_tasks(&self, _session_id: &str, count: u32) {
         self.shared.emit(RuntimeEvent::Update {
             update: crate::runtime_wire::background_tasks_update(count),
+            cmid: None,
+        });
+    }
+
+    fn set_native_cycle(&self, _session_id: &str, cycle_id: Option<&str>) {
+        self.shared.emit(RuntimeEvent::Update {
+            update: crate::runtime_wire::native_cycle_update(cycle_id),
             cmid: None,
         });
     }
@@ -669,6 +685,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             drain_requested: false,
             exit_detail: None,
             background_tasks: Some(0),
+            native_cycle_id: None,
             incarnation: None,
         }),
         outbox: Mutex::new(BTreeMap::new()),
@@ -1016,7 +1033,7 @@ pub fn handle_command(
                     || !shared.workspace_is_current()
                     || shared.managed_read_only()
                     || snapshot.worker_epoch != worker_epoch
-                    || snapshot.current_turn_id.as_deref() != Some(&turn_id)
+                    || snapshot.delivery_turn_id() != Some(turn_id.as_str())
                     || snapshot.drain_requested
                 {
                     return command_ack(
@@ -1261,6 +1278,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 drain_requested: false,
                 exit_detail: None,
                 background_tasks: None,
+                native_cycle_id: None,
                 incarnation: None,
             }),
             outbox: Mutex::new(BTreeMap::new()),
@@ -1352,6 +1370,67 @@ mod tests {
         );
         assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
         assert!(matches!(rx.try_recv(), Ok(AgentCommand::Cancel)));
+    }
+
+    #[test]
+    fn a_named_native_cycle_is_a_steering_target_only_without_a_cowboy_turn() {
+        let (shared, _notify) = shared();
+        shared.snapshot.lock().supports_current_turn = true;
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        let target = |turn: &str| crate::send_delivery::DeliveryTarget {
+            worker_epoch: "epoch-1".into(),
+            turn_id: turn.into(),
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tx = Some(tx);
+        let mut steer = |id: &str, turn: &str| {
+            handle_command(
+                &shared,
+                &mut tx,
+                WorkerCommand::Steer {
+                    command_id: id.into(),
+                    worker_epoch: "epoch-1".into(),
+                    turn_id: turn.into(),
+                    content: vec![serde_json::json!({"type":"text","text":"correction"})],
+                    cmid: id.into(),
+                    next_checkpoint: false,
+                },
+            )
+        };
+        let accepted = |frame: &Frame| matches!(frame, Frame::CommandAck { accepted: true, .. });
+        assert!(!accepted(&steer("none", "native-a")));
+
+        sink.set_native_cycle("sess-1", Some("native-a"));
+        assert_eq!(
+            shared.snapshot().native_cycle_id.as_deref(),
+            Some("native-a")
+        );
+        assert!(sink.delivery_target_is_current("sess-1", &target("native-a")));
+        assert!(!sink.delivery_target_is_current("sess-1", &target("native-b")));
+        assert!(!accepted(&steer("other", "native-b")));
+        assert!(accepted(&steer("join", "native-a")));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AgentCommand::Steer { target: Some(target), .. }) if target.turn_id == "native-a"
+        ));
+
+        // A Cowboy turn owns delivery: the cycle's name no longer addresses it.
+        shared.emit(RuntimeEvent::TurnStarted {
+            turn_id: "turn-1".into(),
+            command_id: "command-1".into(),
+        });
+        assert_eq!(shared.snapshot().native_cycle_id, None);
+        assert!(!accepted(&steer("late", "native-a")));
+
+        sink.set_native_cycle("sess-1", Some("native-c"));
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: None,
+        });
+        assert_eq!(shared.snapshot().native_cycle_id, None);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

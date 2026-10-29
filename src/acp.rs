@@ -2121,6 +2121,10 @@ struct ClientState {
     active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
     /// Combine the requested prompt lifecycle with native autonomous activity.
     activity: Mutex<SessionActivity>,
+    /// The cycle the adapter reports Claude running on its own (a follow-up
+    /// to a finished background task), named by the adapter's own foreground
+    /// work. Current-turn delivery while no prompt runs targets exactly it.
+    native_cycle: Mutex<Option<String>>,
     /// Every Cancel advances this generation. A prompt captures the current
     /// value when accepted, so Stop also cancels a retry waiting in backoff (or
     /// a prompt queued before Stop but not yet started).
@@ -2457,6 +2461,7 @@ async fn agent_main(
         active_prompt: Mutex::new(None),
         steering_gate: tokio::sync::Mutex::new(()),
         activity: Mutex::new(SessionActivity::default()),
+        native_cycle: Mutex::new(None),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
@@ -2962,6 +2967,7 @@ fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotificat
     match notif.message["subtype"].as_str() {
         Some("session_state_changed") => handle_native_state(state, notif),
         Some("background_tasks_changed") => handle_native_background_tasks(state, notif),
+        Some(NATIVE_CYCLE_SUBTYPE) => handle_native_cycle(state, notif),
         Some("api_error") => handle_native_api_error(state, notif),
         _ => {}
     }
@@ -2997,6 +3003,26 @@ fn handle_native_state(state: &ClientState, notif: &ClaudeSdkMessageNotification
     if status != previous {
         state.sink.set_status(&state.session_id, status, None);
     }
+}
+
+/// The Claude plugin's adapter names each cycle Claude runs on its own (see
+/// `plugins/claude-code/runtime/native-cycle.mjs`). An older adapter never
+/// sends it, so such cycles stay unsteerable rather than guessed.
+const NATIVE_CYCLE_SUBTYPE: &str = "cowboy_native_cycle";
+
+fn handle_native_cycle(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
+    let cycle = notif.message["cycle_id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 128)
+        .map(str::to_owned);
+    let mut current = state.native_cycle.lock();
+    if *current == cycle {
+        return;
+    }
+    current.clone_from(&cycle);
+    state
+        .sink
+        .set_native_cycle(&state.session_id, cycle.as_deref());
 }
 
 /// The SDK replaces its whole live background-task set on every membership
@@ -3591,6 +3617,17 @@ async fn run_session(
                 target,
             } => {
                 let expected_prompt = state.current_prompt();
+                // A self-started cycle has no prompt. It is addressed only by
+                // its exact name, which the adapter checks again atomically.
+                let expected_cycle = expected_prompt
+                    .is_none()
+                    .then(|| state.native_cycle.lock().clone())
+                    .flatten()
+                    .filter(|cycle| {
+                        target
+                            .as_ref()
+                            .is_some_and(|target| &target.turn_id == cycle)
+                    });
                 let connection = cx.clone();
                 let state = Arc::clone(state);
                 let acp_id = acp_id.clone();
@@ -3599,16 +3636,23 @@ async fn run_session(
                     let _gate = state.steering_gate.lock().await;
                     let same_prompt = expected_prompt.as_ref().zip(state.current_prompt().as_ref())
                         .is_some_and(|(expected, active)| Arc::ptr_eq(expected, active));
+                    let same_cycle = expected_cycle.is_some()
+                        && state.current_prompt().is_none()
+                        && *state.native_cycle.lock() == expected_cycle;
                     let outcome = if !supports_current_turn || (next_checkpoint && !supports_next_checkpoint) || state.sink.session_is_managed_read_only(&session_id) {
                         "unsupported"
-                    } else if !same_prompt || target.as_ref().is_some_and(|target| !state.sink.delivery_target_is_current(&session_id, target)) {
+                    } else if !(same_prompt || same_cycle) || target.as_ref().is_some_and(|target| !state.sink.delivery_target_is_current(&session_id, target)) {
                         "not_delivered"
                     } else {
                         state.last_echoed_user_contents.lock().extend(blocks.iter().map(|block| serde_json::to_value(block).unwrap_or_default()));
+                        let mut steering = serde_json::json!({"idleBehavior":"promptRequired", "priority":if next_checkpoint { "next" } else { "now" }});
+                        if same_cycle {
+                            steering["nativeCycle"] = serde_json::json!(expected_cycle);
+                        }
                         match tokio::time::timeout(Duration::from_secs(25), connection.send_request(SteeringRequest {
                             session_id: acp_id,
                             prompt: blocks.clone(),
-                            meta: serde_json::json!({"steering":{"idleBehavior":"promptRequired", "priority":if next_checkpoint { "next" } else { "now" }}}),
+                            meta: serde_json::json!({"steering":steering}),
                         }).block_task()).await {
                             Ok(Ok(response)) if response.outcome == "injected" => "injected",
                             Ok(Ok(response)) if response.outcome == "promptRequired" => "not_delivered",

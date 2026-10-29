@@ -115,6 +115,10 @@ pub struct WorkerSnapshot {
     /// observe them. Restores the level after a Controller reconnect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_tasks: Option<u32>,
+    /// The cycle the agent is running on its own, with no Cowboy turn (see
+    /// [`native_cycle_update`]). Restores the level after a reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_cycle_id: Option<String>,
     /// The Machine-minted durable Session lineage (see `incarnations`). Only a
     /// Machine whose incarnation writer was admitted stamps it, on every
     /// snapshot it sends; a worker never sets it and an older Machine omits it.
@@ -131,6 +135,33 @@ pub struct WorkerSnapshot {
 /// it still decode the frame. The Controller projects it onto session
 /// metadata and never stores it in the transcript.
 pub const BACKGROUND_TASKS_UPDATE: &str = "cowboy_background_tasks";
+
+/// Cowboy-owned `sessionUpdate` naming the cycle the agent is running on its
+/// own, or `null` when it runs none.
+///
+/// Claude resumes by itself after a background task ends, while Cowboy holds
+/// no turn for it. The worker names each such cycle once so current-turn
+/// delivery can address exactly that cycle and never a later one. Like
+/// [`BACKGROUND_TASKS_UPDATE`] it is session metadata carried as an update so
+/// older peers still decode the frame; it is never a transcript row and never
+/// a turn edge.
+pub const NATIVE_CYCLE_UPDATE: &str = "cowboy_native_cycle";
+
+#[must_use]
+pub fn native_cycle_update(cycle_id: Option<&str>) -> serde_json::Value {
+    serde_json::json!({ "sessionUpdate": NATIVE_CYCLE_UPDATE, "cycleId": cycle_id })
+}
+
+/// The cycle carried by a [`NATIVE_CYCLE_UPDATE`]: `Some(None)` when it ended.
+#[must_use]
+pub fn native_cycle(update: &serde_json::Value) -> Option<Option<String>> {
+    (update.get("sessionUpdate")?.as_str()? == NATIVE_CYCLE_UPDATE).then(|| {
+        update
+            .get("cycleId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    })
+}
 
 pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +204,15 @@ pub fn background_tasks_count(update: &serde_json::Value) -> Option<u32> {
 }
 
 impl WorkerSnapshot {
+    /// What current-turn delivery addresses: the Cowboy turn, or else the
+    /// cycle the agent started on its own.
+    #[must_use]
+    pub fn delivery_turn_id(&self) -> Option<&str> {
+        self.current_turn_id
+            .as_deref()
+            .or(self.native_cycle_id.as_deref())
+    }
+
     /// The native thread a replacement worker may pass to `--resume`.
     ///
     /// Every Machine-initiated relaunch (generation cutover, fallback,
@@ -880,8 +920,34 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            native_cycle_id: None,
             incarnation: None,
         }
+    }
+
+    #[test]
+    fn native_cycles_round_trip_and_older_snapshots_still_decode() {
+        assert_eq!(
+            native_cycle(&native_cycle_update(Some("native-a"))),
+            Some(Some("native-a".to_owned()))
+        );
+        assert_eq!(native_cycle(&native_cycle_update(None)), Some(None));
+        assert_eq!(native_cycle(&background_tasks_update(1)), None);
+        let mut snapshot = native_snapshot(None, None);
+        let older = serde_json::to_value(&snapshot).unwrap();
+        assert!(
+            older.get("native_cycle_id").is_none(),
+            "omitted when absent"
+        );
+        assert_eq!(
+            serde_json::from_value::<WorkerSnapshot>(older).unwrap(),
+            snapshot
+        );
+        assert_eq!(snapshot.delivery_turn_id(), None);
+        snapshot.native_cycle_id = Some("native-a".to_owned());
+        assert_eq!(snapshot.delivery_turn_id(), Some("native-a"));
+        snapshot.current_turn_id = Some("turn-1".to_owned());
+        assert_eq!(snapshot.delivery_turn_id(), Some("turn-1"));
     }
 
     #[test]

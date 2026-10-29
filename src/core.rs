@@ -8413,6 +8413,7 @@ mod runtime_reconciliation_tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            native_cycle_id: None,
             incarnation: None,
         }
     }

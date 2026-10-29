@@ -693,6 +693,7 @@ impl Broker {
                 drain_requested: false,
                 exit_detail,
                 background_tasks: None,
+                native_cycle_id: None,
                 incarnation: None,
             });
         }
@@ -1327,6 +1328,7 @@ impl Broker {
                     drain_requested: !desired.is_empty() && generation != desired && !pinned,
                     exit_detail: None,
                     background_tasks: None,
+                    native_cycle_id: None,
                     incarnation: None,
                 },
                 acked_runtime_seq: 0,
@@ -3074,6 +3076,7 @@ impl Broker {
             RuntimeEvent::Status { state, detail } => {
                 worker.snapshot.state = *state;
                 if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+                    worker.snapshot.native_cycle_id = None;
                     if let Some(detail) = detail {
                         self.startup_failures
                             .lock()
@@ -3086,6 +3089,7 @@ impl Broker {
             RuntimeEvent::TurnStarted { turn_id, .. } => {
                 worker.snapshot.state = WorkerState::Busy;
                 worker.snapshot.current_turn_id = Some(turn_id.clone());
+                worker.snapshot.native_cycle_id = None;
             }
             RuntimeEvent::TurnEnded { turn_id, .. } => {
                 if worker.snapshot.current_turn_id.as_deref() == Some(turn_id) {
@@ -3115,6 +3119,12 @@ impl Broker {
             {
                 worker.snapshot.background_tasks =
                     crate::runtime_wire::background_tasks_count(update);
+            }
+            RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::native_cycle(update).is_some() =>
+            {
+                worker.snapshot.native_cycle_id =
+                    crate::runtime_wire::native_cycle(update).flatten();
             }
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::current_turn_support(update).is_some() =>
@@ -4842,7 +4852,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 .get(&session_id)
                 .filter(|worker| {
                     worker.snapshot.worker_epoch == worker_epoch
-                        && worker.snapshot.current_turn_id.as_deref() == Some(&turn_id)
+                        && worker.snapshot.delivery_turn_id() == Some(turn_id.as_str())
                         && worker.snapshot.supports_current_turn
                         && (!next_checkpoint || worker.snapshot.delivery_controls.next_checkpoint)
                         && !worker.snapshot.drain_requested
@@ -6403,6 +6413,7 @@ mod tests {
                 drain_requested: false,
                 exit_detail: None,
                 background_tasks: None,
+                native_cycle_id: None,
                 incarnation: None,
             },
             1,
@@ -10548,6 +10559,7 @@ mod tests {
                     drain_requested: false,
                     exit_detail: None,
                     background_tasks: None,
+                    native_cycle_id: None,
                     incarnation: None,
                 }),
             },

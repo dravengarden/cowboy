@@ -33,6 +33,11 @@ import {
 import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
+// The worker names a cycle the agent runs on its own (for example Claude's
+// follow-up to a finished background task) with this prefix. Steering joins
+// that cycle instead of waiting for it to end.
+const NATIVE_CYCLE_PREFIX = "native-";
+
 export interface DeliveryPickerProps {
   sessionId: string;
   anchor: HTMLElement | null;
@@ -300,6 +305,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             ? unavailable
             : props.paused
             ? "Queue stays paused"
+            : target?.turn_id.startsWith(NATIVE_CYCLE_PREFIX)
+            ? "Joins the agent's follow-up now"
             : undefined}
         />
       </MenuItem>
@@ -349,7 +356,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
               ? "Next checkpoint · once"
               : "Next checkpoint"}
             secondary={!checkpoint
-              ? "Not available on this worker"
+              ? steer ? "Not available on this worker" : unavailable
               : props.paused
               ? "Queue stays paused"
               : undefined}

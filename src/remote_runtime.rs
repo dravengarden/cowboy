@@ -856,7 +856,7 @@ impl RemoteRuntime {
         }
         Some(crate::send_delivery::DeliveryTarget {
             worker_epoch: worker.worker_epoch.clone(),
-            turn_id: worker.current_turn_id.clone()?,
+            turn_id: worker.delivery_turn_id()?.to_owned(),
         })
     }
 
@@ -904,8 +904,9 @@ impl RemoteRuntime {
             return Err("next checkpoint is unavailable in this running worker".into());
         }
         let turn_id = worker
-            .current_turn_id
-            .ok_or("session has no current turn")?;
+            .delivery_turn_id()
+            .ok_or("session has no current turn")?
+            .to_owned();
         if target.is_some_and(|expected| {
             expected.worker_epoch != worker.worker_epoch || expected.turn_id != turn_id
         }) {
@@ -948,7 +949,20 @@ impl RemoteRuntime {
         cmid: String,
     ) -> Result<SteeringDelivery, String> {
         let controls = self.delivery_controls(session_id);
-        if controls.version == 0 || self.delivery_target(session_id).as_ref() != Some(target) {
+        // Only a Cowboy turn can be cancelled and replaced; a self-started
+        // cycle is a steering target only.
+        let cowboy_turn = self
+            .shared
+            .workers
+            .lock()
+            .get(session_id)
+            .is_some_and(|worker| {
+                worker.current_turn_id.as_deref() == Some(target.turn_id.as_str())
+            });
+        if controls.version == 0
+            || !cowboy_turn
+            || self.delivery_target(session_id).as_ref() != Some(target)
+        {
             return Err("cancellation target is unavailable".into());
         }
         let key = (session_id.to_owned(), cmid.clone());
@@ -2643,10 +2657,16 @@ fn update_snapshot_from_event(
                 worker.agent_session_id.clone_from(agent_session_id);
             }
         }
-        RuntimeEvent::Status { state, .. } => worker.state = *state,
+        RuntimeEvent::Status { state, .. } => {
+            worker.state = *state;
+            if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+                worker.native_cycle_id = None;
+            }
+        }
         RuntimeEvent::TurnStarted { turn_id, .. } => {
             worker.state = WorkerState::Busy;
             worker.current_turn_id = Some(turn_id.clone());
+            worker.native_cycle_id = None;
         }
         RuntimeEvent::TurnEnded { turn_id, .. } => {
             if worker.current_turn_id.as_deref() == Some(turn_id) {
@@ -2685,6 +2705,11 @@ fn update_snapshot_from_event(
             if crate::runtime_wire::background_tasks_count(update).is_some() =>
         {
             worker.background_tasks = crate::runtime_wire::background_tasks_count(update);
+        }
+        RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::native_cycle(update).is_some() =>
+        {
+            worker.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
         }
         RuntimeEvent::Update { .. }
         | RuntimeEvent::ScheduleWakeup { .. }
@@ -2760,6 +2785,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                 == Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
             {
                 return; // Consumed by the delivery waiter, not conversation content.
+            }
+            if crate::runtime_wire::native_cycle(&update).is_some() {
+                return; // Worker metadata for delivery targets, never a transcript row.
             }
             let compact_failure = remote_compact_failure(hub, session_id, &update);
             hub.push_tagged(session_id, Event::Update { update }, cmid);
@@ -3228,6 +3256,95 @@ mod tests {
         );
         assert!(runtime.pending_for_test().is_empty());
         assert!(runtime.shared.steering.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_named_native_cycle_is_steerable_but_never_cancelled_or_stored() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "cycle".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let mut worker = snapshot("cycle");
+        worker.supports_current_turn = true;
+        worker.current_turn_id = None;
+        worker.delivery_controls.version = 1;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![]);
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("cycle".into(), worker.clone());
+        runtime.connect_for_test();
+        assert_eq!(runtime.delivery_target("cycle"), None);
+
+        let named = RuntimeEvent::Update {
+            update: crate::runtime_wire::native_cycle_update(Some("native-a")),
+            cmid: None,
+        };
+        let before = hub.snapshot("cycle").unwrap().0.len();
+        update_snapshot_from_event(&runtime.shared, "cycle", 5, &named);
+        apply_event(&hub, "cycle", named);
+        assert_eq!(
+            hub.snapshot("cycle").unwrap().0.len(),
+            before,
+            "never a transcript row"
+        );
+        let target = runtime.delivery_target("cycle").unwrap();
+        assert_eq!(target.turn_id, "native-a");
+        assert_eq!(target.worker_epoch, worker.worker_epoch);
+        assert!(
+            runtime
+                .start_cancel_turn("cycle", &target, "stop".into())
+                .is_err()
+        );
+        let effect = runtime
+            .start_steer_targeted("cycle", vec![], "join".into(), Some(&target), false)
+            .unwrap();
+        assert!(matches!(
+            runtime.pending_for_test().as_slice(),
+            [CoreCommand::Steer { turn_id, .. }] if turn_id == "native-a"
+        ));
+        drop(effect);
+
+        // A Cowboy turn takes precedence and clears the name.
+        update_snapshot_from_event(
+            &runtime.shared,
+            "cycle",
+            6,
+            &RuntimeEvent::TurnStarted {
+                turn_id: "turn-1".into(),
+                command_id: "command-1".into(),
+            },
+        );
+        assert_eq!(runtime.delivery_target("cycle").unwrap().turn_id, "turn-1");
+        update_snapshot_from_event(
+            &runtime.shared,
+            "cycle",
+            7,
+            &RuntimeEvent::TurnEnded {
+                turn_id: "turn-1".into(),
+                stop_reason: "end_turn".into(),
+                usage: None,
+            },
+        );
+        assert_eq!(runtime.delivery_target("cycle"), None);
+        for cycle in [Some("native-b"), None] {
+            update_snapshot_from_event(
+                &runtime.shared,
+                "cycle",
+                8,
+                &RuntimeEvent::Update {
+                    update: crate::runtime_wire::native_cycle_update(cycle),
+                    cmid: None,
+                },
+            );
+        }
+        assert_eq!(runtime.delivery_target("cycle"), None);
     }
 
     #[tokio::test]
@@ -3825,6 +3942,7 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            native_cycle_id: None,
             incarnation: None,
         }
     }

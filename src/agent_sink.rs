@@ -26,6 +26,9 @@ pub trait AgentSink: Send + Sync + 'static {
     /// Live native background tasks that count as activity. A level, not an
     /// edge: every call replaces the previous count.
     fn set_background_tasks(&self, _session_id: &str, _count: u32) {}
+    /// The cycle the agent runs on its own with no Cowboy turn, or `None`
+    /// when it ends. Current-turn delivery addresses exactly this cycle.
+    fn set_native_cycle(&self, _session_id: &str, _cycle_id: Option<&str>) {}
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String);
     fn session_is_system(&self, session_id: &str) -> bool;
     /// Immutable native profile, independent of the system-session UI flag.
