@@ -11584,8 +11584,14 @@ fn usage_response(state: &AppState, snapshot: crate::usage::UsageSnapshot) -> Re
 
 async fn api_usage_refresh(
     State(state): State<Arc<AppState>>,
+    authenticated: Option<Extension<AuthenticatedProductRequest>>,
     Query(query): Query<UsageRefreshQuery>,
 ) -> Response {
+    // One global refresh covers every account the caller sees, named ones
+    // included, instead of one client request per account.
+    if let Some(Extension(auth)) = &authenticated {
+        provider_accounts::usage::refresh_owner_accounts(&state, &auth.principal.user_id);
+    }
     if query.wait == Some(false) {
         return match state.usage.request_refresh(None).await {
             Ok(snapshot) => usage_response(&state, snapshot),

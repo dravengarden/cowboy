@@ -289,6 +289,46 @@ pub(in crate::server) async fn list_value(
     Ok(json!({"accounts":accounts}))
 }
 
+/// Owners whose named accounts are being refreshed by a global refresh.
+static OWNER_REFRESHES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Refresh every available named account of `owner` once, serially, as part
+/// of a global usage refresh. A global refresh arriving while one is running
+/// joins it instead of starting another, and each account keeps its own
+/// budget, so an account that is not due sends nothing. Results publish
+/// through the shared cache and its change broadcast.
+pub(in crate::server) fn refresh_owner_accounts(state: &Arc<AppState>, owner: &str) {
+    struct Running(String);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            OWNER_REFRESHES.lock().remove(&self.0);
+        }
+    }
+    if !OWNER_REFRESHES.lock().insert(owner.to_owned()) {
+        return;
+    }
+    let running = Running(owner.to_owned());
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        let owner = running.0.clone();
+        let Some(store) = state.store.as_ref() else {
+            return;
+        };
+        let Ok(registry) = store.provider_accounts(&owner).await else {
+            return;
+        };
+        for account in registry
+            .accounts
+            .iter()
+            .filter(|account| account.available())
+        {
+            let _ = refresh_one(&state, &owner, &account.id).await;
+        }
+        drop(running);
+    });
+}
+
 pub(in crate::server) async fn refresh_one(
     state: &Arc<AppState>,
     owner: &str,

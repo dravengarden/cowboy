@@ -305,7 +305,10 @@ a five-minute budget; failed refreshes retain the last valid quota as stale.
 Successful observations persist (`usage-named.json`, owner-only, bound to their
 exact login) so a Controller restart does not blank a card while the persisted
 budget still defers the next collection; a different login never sees them.
-Collection is serial and
+The global refresh (`POST /api/usage`, used by every "refresh all" control)
+also refreshes the caller's named accounts once, serially; a global refresh
+arriving while one runs joins it, and results reach every surface through the
+same broadcasts. Collection is serial and
 independent of session workers, including while all sessions are asleep.
 
 `cowboy.accounts.usage(account_id)` reads the same owner-scoped observation as

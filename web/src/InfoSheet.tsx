@@ -63,6 +63,7 @@ import {
   scheduleNearestReset,
 } from "./usageApi";
 import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
+import { refreshAllUsage } from "./usageRefresh";
 import { ConfirmSheet } from "./Sheet";
 import { desktopPanelSx } from "./desktop/DesktopEmbeddedControl";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
@@ -685,14 +686,13 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
   const load = useCallback(async (manual: boolean): Promise<void> => {
     setError(null);
     try {
-      await (manual ? Promise.all([requestUsageRefresh(), accounts.refresh(),
-        ...native.accounts.filter((account) => account.available).map((account) => native.refresh(account.account_id))])
+      await (manual ? Promise.all([refreshAllUsage(), accounts.refresh()])
         : loadUsageSnapshot());
       setExecution(await readUsageExecutors());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     }
-  }, [accounts.refresh, native.accounts, native.refresh]);
+  }, [accounts.refresh]);
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {

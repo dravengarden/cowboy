@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
@@ -1347,10 +1348,8 @@ export function DesktopTopBarControls({
     .map((_, index) => String(index + 1))
     .join("/");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
-    await (manual ? Promise.all([requestUsageRefresh(),
-      ...native.accounts.filter((account) => account.available).map((account) => native.refresh(account.account_id))])
-      : loadUsageSnapshot());
-  }, [native.accounts, native.refresh]);
+    await (manual ? refreshAllUsage() : loadUsageSnapshot());
+  }, []);
   useEffect(() => {
     void loadUsage(false).catch(() => undefined);
   }, []);
