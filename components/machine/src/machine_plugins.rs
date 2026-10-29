@@ -2395,7 +2395,7 @@ impl MachinePluginStore {
         !generations.is_empty()
             && generations.iter().all(|generation| {
                 projected_credential_bundle(auth, generation, &bundle.method_id)
-                    .is_ok_and(|projected| projected == *bundle)
+                    .is_ok_and(|projected| projected.materially_equals(bundle))
             })
     }
 
@@ -3494,7 +3494,7 @@ impl MachinePluginStore {
                     continue;
                 }
             };
-            if projected == *baseline {
+            if projected.materially_equals(baseline) {
                 continue;
             }
             let identity = serde_json::to_vec(&projected)?;
@@ -5548,6 +5548,51 @@ mod tests {
     }
 
     use super::*;
+
+    fn claude_bundle(credential: &serde_json::Value) -> PortableCredentialBundle {
+        PortableCredentialBundle {
+            portable_schema: "claude-code-auth-v1".to_owned(),
+            method_id: "subscription".to_owned(),
+            values: BTreeMap::from([(
+                "credentials".to_owned(),
+                base64::engine::general_purpose::STANDARD
+                    .encode(serde_json::to_vec(credential).unwrap()),
+            )]),
+        }
+    }
+
+    #[test]
+    fn a_cli_metadata_rewrite_is_not_a_credential_refresh() {
+        let baseline = claude_bundle(&serde_json::json!({"claudeAiOauth": {
+            "accessToken": "a1", "refreshToken": "r1", "expiresAt": 1, "scopes": ["x"]}}));
+        // A newer CLI adds fields, an older one drops them: no refresh.
+        let enriched = claude_bundle(&serde_json::json!({"claudeAiOauth": {
+            "accessToken": "a1", "refreshToken": "r1", "expiresAt": 1, "scopes": ["x"],
+            "subscriptionType": "max", "subscriptionTypeSource": "profile"}}));
+        assert!(enriched.materially_equals(&baseline));
+        assert!(baseline.materially_equals(&enriched));
+        // A rotated token, a new expiry or a changed shared field is a refresh.
+        for changed in [
+            serde_json::json!({"claudeAiOauth": {"accessToken": "a2", "refreshToken": "r2", "expiresAt": 2, "scopes": ["x"]}}),
+            serde_json::json!({"claudeAiOauth": {"accessToken": "a1", "refreshToken": "r1", "expiresAt": 2, "scopes": ["x"]}}),
+            serde_json::json!({"claudeAiOauth": {"accessToken": "a1", "refreshToken": "r1", "expiresAt": 1, "scopes": ["y"]}}),
+        ] {
+            assert!(!claude_bundle(&changed).materially_equals(&baseline));
+        }
+        // Credentials appearing in an empty file are a sign-in, not metadata.
+        let empty = claude_bundle(&serde_json::json!({}));
+        assert!(!baseline.materially_equals(&empty));
+        assert!(!empty.materially_equals(&baseline));
+        // Non-JSON values and different bundle keys still compare exactly.
+        let mut opaque = baseline.clone();
+        opaque
+            .values
+            .insert("credentials".to_owned(), "bm90LWpzb24=".to_owned());
+        assert!(!opaque.materially_equals(&baseline));
+        let mut extra = baseline.clone();
+        extra.values.insert("other".to_owned(), "e30=".to_owned());
+        assert!(!extra.materially_equals(&baseline));
+    }
 
     #[test]
     fn host_observation_rejects_same_bytes_reinstallation_and_uninstall() {

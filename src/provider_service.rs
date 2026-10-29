@@ -753,7 +753,9 @@ impl ProviderAuthService {
             current_bundle.method_id == bundle.method_id,
             "credential refresh cannot change authentication method"
         );
-        if current_bundle == *bundle {
+        // A CLI that only rewrote metadata fields has not refreshed anything;
+        // promoting it would redistribute and reload every Machine.
+        if current_bundle.materially_equals(bundle) {
             let statuses = packages
                 .iter()
                 .filter_map(|package| providers.get(&package.manifest.id))
