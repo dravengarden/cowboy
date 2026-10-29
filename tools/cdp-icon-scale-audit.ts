@@ -10,7 +10,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { openFixturePage } from "./cdp-fixture.ts";
 
 const [endpoint = "", output, theme = "light"] = process.argv.slice(2);
-if (!output?.startsWith("/")) throw new Error("expected an absolute output directory");
+if (!output?.startsWith("/")) {
+  throw new Error("expected an absolute output directory");
+}
 await mkdir(output, { recursive: true });
 const page = await openFixturePage(
   endpoint,
@@ -28,7 +30,10 @@ await page.send("Emulation.setEmulatedMedia", {
   features: [{ name: "prefers-color-scheme", value: theme }],
 });
 await page.send("Emulation.setDeviceMetricsOverride", {
-  width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+  width: 1440,
+  height: 900,
+  deviceScaleFactor: 2,
+  mobile: false,
 });
 
 const measure = `(() => {
@@ -73,34 +78,64 @@ const scaleTo = async (scale: number) => {
 };
 const shot = async (file: string) => {
   const { data } = await page.send("Page.captureScreenshot", { format: "png" });
-  await writeFile(`${output}/${file}`, Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
+  await writeFile(
+    `${output}/${file}`,
+    Uint8Array.from(atob(data), (c) => c.charCodeAt(0)),
+  );
 };
 
 try {
   let held: unknown = null;
   for (let attempt = 0; attempt < 600 && !held; attempt++) {
-    held = await page.evaluate("globalThis.__cowboyShortcutAuditResult ?? null");
+    held = await page.evaluate(
+      "globalThis.__cowboyShortcutAuditResult ?? null",
+    );
     if (!held) await new Promise((resolve) => setTimeout(resolve, 300));
   }
   if (!held) throw new Error("the integrated App was not reached");
   await scaleTo(1);
   await shot(`${theme}-100.png`);
-  const base = await page.evaluate<{ kind: string; key: string; size: number }[]>(measure);
+  const base = await page.evaluate<
+    { kind: string; key: string; size: number }[]
+  >(measure);
   await scaleTo(1.5);
   await shot(`${theme}-150.png`);
-  const large = await page.evaluate<{ kind: string; key: string; size: number }[]>(measure);
+  const large = await page.evaluate<
+    { kind: string; key: string; size: number }[]
+  >(measure);
   await scaleTo(0.75);
   await shot(`${theme}-075.png`);
-  const fixed: Record<string, Set<string>> = { graphic: new Set(), glyph: new Set(), text: new Set() };
+  const fixed: Record<string, Set<string>> = {
+    graphic: new Set(),
+    glyph: new Set(),
+    text: new Set(),
+  };
   base.forEach((item, index) => {
     const after = large[index];
     if (!after || after.key !== item.key || item.size === 0) return;
-    if (after.size / item.size < 1.2) fixed[item.kind]!.add(`${item.key} (${item.size}px)`);
+    if (after.size / item.size < 1.2) {
+      fixed[item.kind]!.add(`${item.key} (${item.size}px)`);
+    }
   });
-  const report = Object.fromEntries(Object.entries(fixed).map(([kind, set]) => [kind, [...set].sort()]));
-  await writeFile(`${output}/${theme}-report.json`, JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ measured: base.length, graphic: report.graphic!.length, glyph: report.glyph!.length,
-    text: report.text!.length }, null, 2));
+  const report = Object.fromEntries(
+    Object.entries(fixed).map(([kind, set]) => [kind, [...set].sort()]),
+  );
+  await writeFile(
+    `${output}/${theme}-report.json`,
+    JSON.stringify(report, null, 2),
+  );
+  console.log(
+    JSON.stringify(
+      {
+        measured: base.length,
+        graphic: report.graphic!.length,
+        glyph: report.glyph!.length,
+        text: report.text!.length,
+      },
+      null,
+      2,
+    ),
+  );
 } finally {
   await page.close();
 }
