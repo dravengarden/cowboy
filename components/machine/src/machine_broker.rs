@@ -1889,7 +1889,8 @@ impl Broker {
 
     /// A named session keeps its exact binding, or moves to a release its
     /// login carries over to. Adoption keeps a live worker's exact binding;
-    /// only a `replacing` reset (which stops that worker first) may move it.
+    /// only a `replacing` reload (an adopt-only declaration followed by a reset
+    /// that stops that worker first) may move it.
     fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
         let store = &self.args.provider_store;
         if !matches!(
@@ -1943,7 +1944,10 @@ impl Broker {
             );
             return;
         }
-        if !self.account_binding_matches(&session, false) {
+        // An adopt-only declaration precedes a reload's reset and never spawns
+        // (every launch rechecks the journal), so it may name a release the
+        // same login carries over to while the old worker is still running.
+        if !self.account_binding_matches(&session, session.adopt_only) {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
