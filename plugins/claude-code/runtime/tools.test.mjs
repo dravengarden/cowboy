@@ -589,6 +589,28 @@ test("interrupt includes foreground starts whose acknowledgement is still pendin
   assert.equal(tools.foreground.size, 0);
 });
 
+test("a Bash timeout above the maximum is clamped as native does", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.shell = "/bin/bash";
+  connection.call = async (method, params) => {
+    if (method === "process/start") return { processId: params.processId };
+    if (method === "process/read") {
+      return { chunks: [], exited: true, closed: true, exitCode: 0 };
+    }
+    return {};
+  };
+  for (const run_in_background of [false, true]) {
+    const result = await tools.call("bash", {
+      command: "true",
+      timeout: 9000000,
+      run_in_background,
+    });
+    assert.doesNotMatch(result.content[0].text, /Invalid tool limit/);
+  }
+  const invalid = await tools.call("bash", { command: "true", timeout: 0 });
+  assert.match(invalid.content[0].text, /Invalid tool limit/);
+});
+
 test("a changed file is refused until read again, including after cold resume", async (t) => {
   const { tools, files, connection, binding, state } = await fixture(t);
   files.set("/target with space/file", Buffer.from("before\n"));

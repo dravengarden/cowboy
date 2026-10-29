@@ -3233,11 +3233,15 @@ export class WorkspaceTools {
       }
       // Native: a foreground timeout up to 10 minutes; a background one is
       // its deadline, up to 2 hours (enforced by native's task for it).
+      // Like native, a longer request is clamped to the maximum, not refused.
+      const maxTimeout = background ? 7200000 : 600000;
       const timeout = bounded(
-        args.timeout,
+        Number.isSafeInteger(args.timeout)
+          ? Math.min(args.timeout, maxTimeout)
+          : args.timeout,
         120000,
         1,
-        background ? 7200000 : 600000,
+        maxTimeout,
       );
       // A foreground command reports its final directory, as native's
       // `pwd -P >| file` does; a background one never moves the session.
