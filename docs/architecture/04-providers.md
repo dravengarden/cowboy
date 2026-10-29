@@ -78,6 +78,17 @@ add/replace/clear actions without any Provider-ID branch in Web. Their common
 `deepseek-api-key-v1` authentication scope means the API key is entered once;
 each lane receives its own encrypted projection and keeps its own Provider card.
 
+DeepSeek Harness (`dsh --profile acp`) reaches DeepSeek only through its
+session-owned gateway sidecar, for chat and for its server-side web search
+(`DEEPSEEK_SEARCH_BASE_URL`). Its ACP bridge reports every tool as the generic
+`kind: other` titled with the bare tool name, so the runtime's private launcher
+re-labels only tool updates with the standard ACP kind, title, locations and
+applied diff, and mirrors `todo_write` as an ACP plan; requests, results and
+every other message pass through unchanged. The launcher also selects the
+current Flash model through a Cowboy-owned dsh profile patch in the isolated
+`DSH_HOME`. dsh's own `web_fetch` refuses hosts whose DNS answer is not a
+public address, which includes proxy fake-IP resolvers.
+
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases
 enable native subagent tools by default, so Cowboy deliberately does not pass the
