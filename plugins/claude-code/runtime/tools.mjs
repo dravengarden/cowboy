@@ -408,8 +408,9 @@ export function cksumDigest(bytes) {
 // its end line holds no more output; the most recent few stay readable.
 const FINISHED_JOBS_KEPT = 64;
 export function pruneFinishedJobs(jobs) {
+  // Output retained for a handle not yet read keeps its record.
   const finished = Object.keys(jobs).filter((id) =>
-    jobs[id].closed && jobs[id].endRead
+    jobs[id].closed && jobs[id].endRead && !jobs[id].retained
   );
   const dropped = new Set(finished.slice(0, -FINISHED_JOBS_KEPT));
   return dropped.size
@@ -2234,6 +2235,7 @@ export class WorkspaceTools {
   async collectOutput(processId, timeout, limit = MAX_OUTPUT) {
     const previous = this.state.jobs[processId];
     if (!previous) throw new Error("Task does not belong to this session");
+    if (previous.retained) return await this.takeRetained(processId);
     // Past its end line, the pipe carries only what the command left running
     // writes; natively that never reaches the task's output.
     if (previous.endRead) {
@@ -4367,10 +4369,70 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     return ids.filter((id) => this.state.jobs[id]?.cancelRequested);
   }
 
+  // A background command's waiter: observe how it ends, then retain its
+  // output for the handle (see retainFinished).
+  async waitTask(id, afterSeq, holdMs) {
+    const result = await this.observeTask(id, afterSeq, holdMs);
+    if (result.closed) await this.retainFinished(id).catch(() => {});
+    return result;
+  }
+
+  // The executor forgets a finished process about 15 minutes after it
+  // completes. A completion notice can reach the model later than that (it
+  // waits for a busy turn), and its handle then failed with an unknown
+  // process. Read what the command printed as soon as it ends and keep it
+  // runtime-local until the handle is read; output past the read limit
+  // stays on the target as before.
+  async retainFinished(id) {
+    const job = this.state.jobs[id];
+    if (!job || job.retained || job.endRead || job.stopped) return;
+    const result = await this.collect(id, 2000);
+    const directory = join(dirname(this.statePath), "retained-output");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const file = join(directory, encodeURIComponent(id));
+    await writeFile(file, result.output, { mode: 0o600 });
+    await this.save(() => {
+      const previous = this.state.jobs[id];
+      if (!previous) return;
+      this.state.jobs[id] = {
+        ...previous,
+        retained: {
+          file,
+          output_limit: result.output_limit,
+          drained: result.closed && !result.output_limit,
+        },
+      };
+      return () => this.state.jobs[id] = previous;
+    });
+  }
+
+  async takeRetained(id) {
+    const job = this.state.jobs[id];
+    const { file, output_limit, drained } = job.retained;
+    const output = await readFile(file, "utf8").catch(() => "");
+    await this.save(() => {
+      const previous = this.state.jobs[id];
+      if (!previous) return;
+      const { retained: _retained, ...rest } = previous;
+      // Fully drained output leaves nothing for the target to answer.
+      this.state.jobs[id] = drained ? { ...rest, endRead: true } : rest;
+      return () => this.state.jobs[id] = previous;
+    });
+    await rm(file, { force: true }).catch(() => {});
+    return {
+      output,
+      exited: job.exited ?? true,
+      closed: job.closed ?? true,
+      exitCode: job.exitCode,
+      task_id: id,
+      output_limit,
+    };
+  }
+
   // How a command left running ends, observed for its completion notice
   // without consuming the output its handle reads. `afterSeq` is the
   // watcher's own position.
-  async waitTask(id, afterSeq, holdMs) {
+  async observeTask(id, afterSeq, holdMs) {
     const deadline = Date.now() + holdMs;
     // Output that may begin the end line, with the chunks it came from, so
     // the next wait reads them again.
