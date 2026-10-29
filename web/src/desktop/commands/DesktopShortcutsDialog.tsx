@@ -53,7 +53,11 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_FOCUS_CALLS_SHORTCUT], title: "Open the running call, or open or close Calls" },
   { keys: [DESKTOP_SHORTCUTS.focusConversation], title: "Focus Conversation Log" },
   { keys: [DESKTOP_SHORTCUTS.focusTopbar], title: "Focus Top Bar" },
-  { keys: [DESKTOP_SHORTCUTS.newSession], title: "Create a new Session" },
+  {
+    keys: [DESKTOP_SHORTCUTS.newSession],
+    title: "Create a new Session in the current directory",
+    description: "The Sessions cursor row's directory, otherwise the open session's. The form shows it and can change it",
+  },
   { keys: [DESKTOP_SHORTCUTS.settings], title: "Open Settings" },
   { keys: [DESKTOP_SHORTCUTS.extensions], title: "Extensions" },
   {
@@ -123,6 +127,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl+D/U", "Ctrl+F/B"], title: "Half page / page down and up in a list, cursor and view together" },
   { keys: ["zz", "zt", "zb"], title: "Scroll the cursor row to the centre / top / bottom" },
   { keys: ["za", "zM", "zR"], title: "Sessions: fold button, close every folder, open every folder" },
+  { keys: ["A"], title: "Sessions: new session in the cursor row's directory" },
   { keys: ["Shift+G"], title: "Last item" },
   {
     keys: ["'"],

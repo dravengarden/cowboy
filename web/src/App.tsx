@@ -745,7 +745,7 @@ function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | n
     );
 }
 
-type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
+type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename" | "newSession";
 /** Primary-tint opacity of the open session's row on Desktop. */
 const CURRENT_ROW_FILL = 0.12;
 /** Input that hands the Sessions list back to the user while it settles. */
@@ -757,6 +757,8 @@ const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
     m: "move",
     n: "newFolder",
     i: "rename",
+    // nvim-tree's `a`dd: a new Session in the cursor row's directory.
+    a: "newSession",
 };
 const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
     "cowboy:desktop-tree-right": "open",
@@ -809,7 +811,7 @@ function SessionList({
     onPick: (id: string) => void;
     onNew: () => void;
     /** "New session here" from a folder: the created session is filed there. */
-    onNewInFolder?: ((folder: string) => void) | undefined;
+    onNewInFolder?: ((folder: string | null) => void) | undefined;
     onClose?: (() => void) | undefined;
     onOpenSettings?: (() => void) | undefined;
     onOpenAbout?: (() => void) | undefined;
@@ -1294,6 +1296,7 @@ function SessionList({
             if (command === "open") { onPick(rowKey); focusPrompt(); }
             else if (command === "left") { if (draft.parent_id) focusRow(`folder:${draft.parent_id}`); }
             else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
+            else if (command === "newSession") onNewInFolder?.(draft.parent_id ?? null);
             else if (command === "move" && desktop) startMovePick(rowKey);
             else onDraftAction({ draft, action: command === "settings" ? "menu" : command });
             return;
@@ -1338,6 +1341,9 @@ function SessionList({
                 if (folder) setNamePrompt({ mode: "rename", folder });
                 else if (session) onRequestRename(session);
                 return;
+            case "newSession":
+                onNewInFolder?.(folder ? folder.id : session ? tree.folderOf.get(session.id) ?? null : null);
+                return;
         }
     };
     const runRowCommandRef = useRef(runRowCommand);
@@ -1370,6 +1376,12 @@ function SessionList({
         switch (action) {
             case "newFolder":
                 setNamePrompt({ mode: "create", parent: currentFolder });
+                return;
+            case "newSession":
+                // `␣N` and Create: the directory you are working in, like a
+                // file explorer's New File. The form shows it and can change it.
+                if (onNewInFolder) onNewInFolder(currentFolder);
+                else onNew();
                 return;
             case "organize":
                 if (organizeSessionsByProject() === 0) notify("Every project already has a folder.");
@@ -1739,10 +1751,10 @@ function SessionList({
                         <DesktopSidebarAction
                             data-desktop-new-session="true"
                             label="Create"
-                            detail="Session, Draft or Folder"
+                            detail="Session, Draft or Folder · in the current directory"
                             shortcut={DESKTOP_SHORTCUTS.newSession}
                             disabled={movePicking}
-                            onClick={onNew}
+                            onClick={(): void => runFoldersAction("newSession", null)}
                         >
                             <Add />
                         </DesktopSidebarAction>
@@ -2151,6 +2163,30 @@ function SessionList({
                             slotProps={{ primary: { component: "div" } }}
                         />
                         <FolderActivityBadges activity={row.activity} total={row.sessionCount} />
+                        {desktop && allowNewSession && onNewInFolder && (
+                            <HintTooltip
+                                title="New session here"
+                                shortcut="A"
+                                detail="Uses this directory's defaults"
+                                placement="left"
+                                enterDelay={600}
+                                enterNextDelay={600}
+                            >
+                                <IconButton
+                                    className="cowboy-session-actions"
+                                    aria-label={`New session in ${f.name}`}
+                                    data-folder-new-session={f.id}
+                                    disabled={movePicking}
+                                    onClick={(e): void => {
+                                        e.stopPropagation();
+                                        onNewInFolder(f.id);
+                                    }}
+                                    sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0, position: "relative" }}
+                                >
+                                    <Add sx={{ fontSize: "1.5rem" }} />
+                                </IconButton>
+                            </HintTooltip>
+                        )}
                         <HintTooltip
                             title={desktop ? "Actions" : ""}
                             detail="M move to · I rename"
