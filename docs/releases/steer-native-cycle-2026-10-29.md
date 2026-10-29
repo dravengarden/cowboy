@@ -1,6 +1,6 @@
 # Steering a cycle Claude starts on its own — 2026-10-29
 
-Status: source accepted; deployment receipts below.
+Status: deployed on 2026-10-29; receipts below.
 
 ## Problem
 
@@ -72,3 +72,20 @@ Code Plugin (the adapter that names cycles), then OVH worker maintenance (the
 worker and broker that carry and admit the name). Until a session runs both
 the new Plugin and the new worker, its self-started cycles stay unsteerable as
 before.
+
+## Deployment
+
+| Step | Receipt |
+| --- | --- |
+| Claude Code 3.20.18 | Built and signed from `d4831857`; the final adapter bytes passed worker (96 checks, all phases) and managed conformance again, Linux coexistence with 3.20.16 and macOS arm64 probes; Catalog readers before and after; 5 public URLs verified; installed on OVH (`ovh-claude-code-3-20-18-converge`, completed) |
+| Controller and Web | `757d4d9a`, both committed by the Hawk component activator; health 200 |
+| OVH Machine | `tools/ovh-machine-host-release.sh --workers`, generation `worker-0fb0c514d65f8b2b2208`, receipt `/var/lib/columbus/ovh-machine-757d4d9a51e4-20261029T140554Z` committed, rollback timer inactive |
+
+Releasing from the latest `main` required `757d4d9a`, which refreshes the
+Cargo vendor hash that `6b64f881` left stale. The 17 idle OVH sessions were
+hibernated first so their workers would not cold-start on the new generation
+together; they resume on their next prompt with Claude Code 3.20.18. The five
+busy workers were retained and move at their turn boundary. A session's
+self-started cycles become steerable once it runs both the new worker and
+3.20.18. No live paid inference was used for acceptance.
+
