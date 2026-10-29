@@ -90,6 +90,7 @@ test("website catalog follows every first-party Plugin manifest", async () => {
     "grok",
     "codex-deepseek",
     "claude-deepseek",
+    "deepseek-harness",
     "zed",
     "victoria",
     "github",

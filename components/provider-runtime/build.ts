@@ -62,6 +62,8 @@ interface NodeNpmRecipe {
   package_dir: string;
   script: string;
   launcher?: string;
+  /** Keep platform-filtered optional native bindings the package requires. */
+  include_optional?: boolean;
   probe: string[];
 }
 
@@ -298,7 +300,7 @@ async function buildComponent(
       await run("npm", [
         "ci",
         "--ignore-scripts",
-        "--omit=optional",
+        ...(recipe.include_optional === true ? [] : ["--omit=optional"]),
         "--no-audit",
         "--no-fund",
         `--os=${npmOs}`,

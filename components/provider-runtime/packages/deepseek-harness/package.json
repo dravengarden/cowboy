@@ -1,0 +1,8 @@
+{
+  "name": "cowboy-runtime-deepseek-harness",
+  "version": "0.2.1-rc.2",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2"
+  }
+}

@@ -74,6 +74,7 @@ const PLUGIN_ORDER = [
   "grok",
   "codex-deepseek",
   "claude-deepseek",
+  "deepseek-harness",
   "zed",
   "victoria",
   "matrix",

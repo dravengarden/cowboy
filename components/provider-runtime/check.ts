@@ -47,6 +47,7 @@ interface NodeNpmRecipe {
   package_dir: string;
   script: string;
   launcher?: string;
+  include_optional?: boolean;
 }
 
 interface GitGoRecipe {
@@ -278,6 +279,10 @@ async function validateNpmRecipe(
   dependency: ExactDependency,
   recipe: NodeNpmRecipe,
 ): Promise<void> {
+  assert(
+    recipe.include_optional === undefined || recipe.include_optional === true,
+    `${providerId}: ${dependency.id} include_optional must be true or absent`,
+  );
   if (recipe.launcher !== undefined) {
     assert(
       /^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher) &&

@@ -201,6 +201,8 @@ const zhMessages = {
     "运行于隔离 DeepSeek runtime、支持 V4 Flash 与 V4 Pro 的 Codex",
   "plugins.summary.claude-deepseek":
     "运行于隔离 DeepSeek runtime、提供百万 token 通道的 Claude Code",
+  "plugins.summary.deepseek-harness":
+    "运行于隔离 DeepSeek runtime 的 DeepSeek 官方 Agent Harness",
   "plugins.summary.zed":
     "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
   "plugins.summary.matrix":

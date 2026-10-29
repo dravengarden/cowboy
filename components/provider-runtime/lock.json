@@ -121,13 +121,23 @@
         "--version"
       ]
     },
+    "deepseek-harness": {
+      "kind": "node_npm",
+      "version": "0.2.1-rc.2",
+      "package_dir": "packages/deepseek-harness",
+      "script": "node_modules/@deepseek-ai/dsh/lib/bin.js",
+      "include_optional": true,
+      "probe": [
+        "--version"
+      ]
+    },
     "claude-deepseek-gateway": {
       "kind": "git_go_static",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "repository": "git@github.com:dravengarden/columbus.git",
-      "revision": "0a5e25d5d4aadae833991afdea54e816ecbce5a1",
+      "revision": "98942d1d2e1bb1747510e1c993f6488af1a3f378",
       "subdir": "projects/claude-deepseek",
-      "source_archive_sha256": "707dca9e9403d2627b0a7c9ea54d521d57ed57136bd04394db830ea751dc0082",
+      "source_archive_sha256": "74723dad0da785b63a38f4c4d3cd7db8ce9d0fd34f023e54a315dcc2f100ce75",
       "binary": "claude-deepseek",
       "probe": [
         "--help"

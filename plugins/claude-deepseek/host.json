@@ -65,7 +65,8 @@
     "widget_spend_label": "24h spend",
     "activity_agents": [
       { "id": "codex", "label": "Codex" },
-      { "id": "claude", "label": "Claude Code" }
+      { "id": "claude", "label": "Claude Code" },
+      { "id": "deepseek-harness", "label": "DeepSeek Harness" }
     ],
     "activity_models": [
       { "id": "flash", "label": "Flash" },
