@@ -16670,12 +16670,32 @@ fn provider_reload_contract_compatible(
     next: &cowboy_provider_sdk::ProviderManifest,
 ) -> bool {
     previous.id == next.id
-        && previous.compatibility.auth_contract_fingerprint
+        && (previous.compatibility.auth_contract_fingerprint
             == next.compatibility.auth_contract_fingerprint
+            || authentication_only_adds_methods(&previous.authentication, &next.authentication))
         && previous.authentication.projection_schema == next.authentication.projection_schema
         && previous.authentication.portable_schema == next.authentication.portable_schema
         && previous.runtime.behavior.session == next.runtime.behavior.session
         && previous.runtime.behavior.configuration == next.runtime.behavior.configuration
+}
+
+/// Whether `next` is `previous` plus further sign-in methods. A session can
+/// only be bound to a method its release offered, and each of those is
+/// unchanged, so it keeps an identical authentication contract. Claude Code
+/// 3.20.1 added the named "claude-subscription" method this way; comparing
+/// whole-section fingerprints pinned every 3.20.0 session to 3.20.0 forever.
+fn authentication_only_adds_methods(
+    previous: &cowboy_provider_sdk::AuthenticationContract,
+    next: &cowboy_provider_sdk::AuthenticationContract,
+) -> bool {
+    let mut widened = previous.clone();
+    widened.methods.clone_from(&next.methods);
+    next.methods.len() > previous.methods.len()
+        && widened == *next
+        && previous
+            .methods
+            .iter()
+            .all(|method| next.methods.contains(method))
 }
 
 async fn api_session_reload_plan(
@@ -17824,6 +17844,29 @@ mod machine_provider_tests {
         ));
         next = previous.clone();
         next.compatibility.auth_contract_fingerprint = "different-auth".to_owned();
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        // A later release may add a sign-in method and keep every earlier one.
+        next = previous.clone();
+        next.compatibility.auth_contract_fingerprint = "different-auth".to_owned();
+        let mut added = next.authentication.methods[0].clone();
+        added.id = "added-method".to_owned();
+        next.authentication.methods.push(added);
+        assert!(super::provider_reload_contract_compatible(&previous, &next));
+        // Changing or removing a method the session may use is not additive.
+        next.authentication.methods[0].label = "changed".to_owned();
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        next.authentication.methods.remove(0);
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        // Nor is any change outside the method list.
+        next = previous.clone();
+        next.compatibility.auth_contract_fingerprint = "different-auth".to_owned();
+        next.authentication.required = !next.authentication.required;
         assert!(!super::provider_reload_contract_compatible(
             &previous, &next
         ));
