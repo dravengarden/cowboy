@@ -880,6 +880,13 @@ async fn dispatch(
                 .await
                 .map_err(str::to_owned);
         }
+        // A global refresh covers the caller's named accounts too, through
+        // the same coalesced serial refresh as the Web's "refresh all".
+        if account.is_none()
+            && let Ok(owner) = super::actions::account_owner(state, parent).await
+        {
+            super::super::provider_accounts::usage::refresh_owner_accounts(state, &owner);
+        }
         let snapshot = state
             .usage
             .request_refresh(account)

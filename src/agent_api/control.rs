@@ -97,7 +97,7 @@ operations! {
     "drafts.reorder", true, "{session_id:string,order:string[]}";
     "drafts.schedule", true, "{session_id:string,id?:string,text?:string,content?:unknown[],fire_at_ms:number,delivery?:'back'|'front'}";
     "drafts.unschedule", true, "{session_id:string,id:string}";
-    "usage.refresh", true, "{account?:string}; shared per-account cooldown and in-flight deduplication; Service collectors return immediately; named account IDs await their bounded native query";
+    "usage.refresh", true, "{account?:string}; shared per-account cooldown and in-flight deduplication; Service collectors return immediately; named account IDs await their bounded native query; no account also refreshes your named accounts once, serially";
     "usage.reset", true, "{account:string,body:{confirm:'confirm',expected_credit_id:string}}; consumes a reset credit; explicit user intent required";
     "usage.reset_schedule", true, "{account:string,body:{fire_at_ms:number,confirm:'confirm'}}; schedules credit consumption";
     "usage.reset_cancel", true, "{account:string}; cancels only a scheduled reset";
