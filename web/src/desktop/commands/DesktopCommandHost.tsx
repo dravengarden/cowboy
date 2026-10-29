@@ -66,17 +66,21 @@ function sessionsListMounted(): boolean {
 
 /** Folder-wide Sessions actions run inside the list (docs/sessions-folders.md);
  *  the focused row, if any, is the subject. */
-function dispatchSessionFolders(action: string): void {
-  const focused = document.activeElement instanceof HTMLElement
+function dispatchSessionFolders(action: string): boolean {
+  const list = sessionsListElement();
+  // Only a Sessions row is the subject: Queue and Draft rows are list items
+  // too, and without a row the list falls back to the open session.
+  const row = document.activeElement instanceof HTMLElement
     ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
-      ?.dataset.desktopItem ?? null
     : null;
-  sessionsListElement()?.dispatchEvent(
+  const focused = row && list?.contains(row) ? row.dataset.desktopItem ?? null : null;
+  // The list cancels the event when it handled the action.
+  return list?.dispatchEvent(
     new CustomEvent("cowboy:desktop-folders", {
       cancelable: true,
       detail: { action, row: focused },
     }),
-  );
+  ) === false;
 }
 
 export function DesktopCommandHost({
@@ -221,10 +225,12 @@ export function DesktopCommandHost({
     {
       id: "session.new",
       title: "New Session",
-      description: "Create a Cowboy session",
+      description: "Create a session in the current directory: the Sessions cursor row's, or the open session's",
       group: "Session",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.newSession),
-      run: onNewSession,
+      run: () => {
+        if (!dispatchSessionFolders("newSession")) onNewSession();
+      },
     },
     {
       id: "session.folder.new",

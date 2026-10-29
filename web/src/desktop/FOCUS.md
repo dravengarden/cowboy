@@ -601,8 +601,13 @@ it); macOS Chrome binds none of them.
   parent from a collapsed one, collapses every folder from a top-level one,
   and moves from a session row to its folder. `s` opens the row's actions
   (the session Settings modal, or the folder actions modal), `m` opens Move
-  to…, `n` creates a folder (inside a folder, beside a session), and `i`
-  renames. All are region-scoped bare letters resolved from physical codes.
+  to…, `n` creates a folder (inside a folder, beside a session), `a` creates
+  a session in the row's directory (nvim-tree's add), and `i` renames. All
+  are region-scoped bare letters resolved from physical codes.
+- `␣N` and the sidebar Create button create in the current directory: the
+  Sessions cursor row's, otherwise the open session's, like a file
+  explorer's New File. The Create form shows the directory and can change
+  it. A folder row also offers a dwell-revealed `+` (New session here).
 - Sessions use `o` to enter or leave Order reorder mode. While pinned, `j/k`
   moves the selected row instead of moving selection: a session that crosses a
   folder header files into that folder, a folder moves among its siblings, and

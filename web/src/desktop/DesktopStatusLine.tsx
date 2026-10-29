@@ -144,6 +144,7 @@ function regionHints(
         { keys: "Ctrl+D/U", label: "Page" },
         { keys: "zz/zt/zb", label: "View" },
         { keys: "za/zM/zR", label: "Fold" },
+        { keys: "A", label: "New session here" },
         { keys: "S", label: "Actions" },
         { keys: "M", label: "Move to" },
         { keys: "N", label: "New folder" },
