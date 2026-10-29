@@ -1588,6 +1588,8 @@ mod tests {
         );
         assert!(rendered.starts_with("model = \"deepseek-flash\""));
         assert!(rendered.contains("model_reasoning_effort = \"max\""));
+        // DeepSeek Flash has no built-in web search (official Codex setup).
+        assert!(rendered.contains("web_search = \"disabled\""));
         assert!(rendered.contains("approval_policy = \"never\""));
         assert!(rendered.contains("model_context_window = 680000"));
         assert!(rendered.contains("model_auto_compact_token_limit = 646000"));
