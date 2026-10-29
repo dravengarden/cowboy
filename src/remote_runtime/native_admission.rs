@@ -74,6 +74,7 @@ pub(super) async fn snapshot(
         return false;
     };
     if !matches(&meta, launch) || meta.provider_account_id.is_default() {
+        warn_declined_launch(&meta, worker);
         return false;
     }
     let Some(owner) = meta.owner_user_id.as_deref() else {
@@ -124,6 +125,35 @@ pub(super) async fn snapshot(
         })
         .await
         .is_ok()
+}
+
+/// The last worker epoch whose mismatched launch was reported, per session.
+static DECLINED: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// A declined snapshot leaves the worker unknown to this Controller, so its
+/// execution requests are refused as retryable until startup times out. Say
+/// so once per worker epoch instead of failing silently for minutes.
+fn warn_declined_launch(meta: &crate::core::SessionMeta, worker: &WorkerSnapshot) {
+    // A running worker awaiting its reload stop is expected to lag the new
+    // declaration; only a starting one waits on admission it cannot get.
+    let (WorkerState::Starting, Some(launch)) = (worker.state, worker.launch.as_ref()) else {
+        return;
+    };
+    let mut declined = DECLINED.lock();
+    if declined.get(&meta.id) == Some(&worker.worker_epoch) {
+        return;
+    }
+    declined.insert(meta.id.clone(), worker.worker_epoch.clone());
+    tracing::warn!(
+        session = %meta.id,
+        worker_epoch = %worker.worker_epoch,
+        declared_version = %meta.provider_version,
+        launch_version = %launch.provider_version,
+        declared_auth_generation = ?meta.provider_auth_generation,
+        launch_auth_generation = ?launch.provider_auth_generation,
+        "starting named worker does not match the session declaration; worker is not admitted"
+    );
 }
 
 fn launch(command: &CoreCommand) -> Option<&StartSession> {
