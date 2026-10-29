@@ -349,7 +349,7 @@ import {
     publishSessionJumpTargets,
     sessionJumpLabels,
 } from "./desktop/commands/sessionJump";
-import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
+import { DesktopShortcut, desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { fireLabel, fireRel } from "./scheduleTime";
@@ -5129,6 +5129,7 @@ export function App({
                         kinds={["update"]}
                         canApplyUpdate={canApplyUpdateNow}
                         beforeReload={markDesktopUpdateSwapping}
+                        shortcut={desktopShortcutCaps(DESKTOP_SHORTCUTS.reconnect).join(" ")}
                     />
                     <NativeReleaseUpdatePrompt
                         appId="top.thundersparrow.cowboy"

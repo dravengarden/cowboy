@@ -131,8 +131,9 @@ export const DESKTOP_WORKSPACE_KEYS = {
   cycleRegion: "WW",
   resize: "WR",
   settings: ",",
-  // Only while a Retry control is on screen (the server is unreachable).
-  // Vim's `.` repeats the last action; here it repeats the connection.
+  // The pending refresh, offered only while there is one: a Retry control
+  // (the server is unreachable) or the update bar's action (Reload into a
+  // ready version). Vim's `.` repeats the last action; here it refreshes.
   reconnect: ".",
   // Obsidian binds live-preview ↔ source to Mod+E, which Cowboy cannot have:
   // Chrome owns it for the address bar and macOS apps for a common editor

@@ -224,7 +224,10 @@ test("the bar shows its press as a control, not as a sentence", () => {
   // always used to *tell* the user something. An imperative sentence inside
   // one does not read as a button, so the verb leaves the sentence.
   assert(bannerSource.includes("export function UpdateActionPill"));
-  assert(bannerSource.includes("<UpdateActionPill action={copy.action} />"));
+  assert(bannerSource.includes("<UpdateActionPill\n          action={copy.action}"));
+  // A keyboard surface may name its key inside the pill; the bar stays the
+  // one control, marked for that surface's command.
+  assert(bannerSource.includes("data-update-action="));
   assert(mobileSource.includes("<UpdateActionPill action={copy.action} />"));
 
   // Decoration, not a nested button: the whole bar takes the touch, so the

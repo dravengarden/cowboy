@@ -1,7 +1,12 @@
 // Real update hook; a controlled download and reload sink avoid navigation.
 import { createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { type ConnectionStore, createConnectionStore, useAutoUpdate } from "@cowboy/app-shell";
+import {
+  ConnectionBanner,
+  type ConnectionStore,
+  createConnectionStore,
+  useAutoUpdate,
+} from "@cowboy/app-shell";
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 export async function runClientUpdateFixture() {
@@ -64,7 +69,43 @@ export async function runClientUpdateFixture() {
     } finally { root.unmount(); }
   }
   results.push(...await connectionUpdateSignals(host));
+  results.push(await bannerKeyboardAction(host));
   return results;
+}
+
+/** Desktop names the bar's key in its pill and presses the bar through
+ *  `data-update-action`; the press is the bar's own (no second control). */
+async function bannerKeyboardAction(host: HTMLElement): Promise<string> {
+  let reloads = 0;
+  const store = {
+    useConnectionBanner: () => ({ kind: "update" as const }),
+    downloadUpdate: () => Promise.resolve("ready" as const),
+    reloadIntoUpdate: async () => { reloads++; },
+  } as unknown as ConnectionStore;
+  const root = createRoot(host);
+  try {
+    root.render(createElement(ConnectionBanner, {
+      store,
+      automatic: false,
+      kinds: ["update"],
+      shortcut: "␣.",
+    }));
+    await wait(200);
+    const bar = document.querySelector<HTMLElement>("[data-update-action]");
+    if (bar?.getAttribute("data-update-action") !== "Reload") {
+      throw new Error(`ready bar must expose its Reload action: ${bar?.outerHTML.slice(0, 200)}`);
+    }
+    if (!bar.querySelector("kbd")?.textContent?.includes("␣.")) {
+      throw new Error("the pill must name the keyboard shortcut");
+    }
+    if (bar.querySelectorAll("button").length !== 0) {
+      throw new Error("the key is decoration, not a nested control");
+    }
+    bar.click();
+    await wait(100);
+    if (reloads !== 1) throw new Error("pressing the marked bar must reload once");
+    return "banner-keyboard-action";
+  } finally { root.unmount(); }
 }
 
 async function connectionUpdateSignals(host: HTMLElement): Promise<string[]> {

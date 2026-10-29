@@ -293,13 +293,23 @@ export function DesktopCommandHost({
     },
     {
       id: "sync.retry",
-      title: "Reconnect Now",
-      description: "Retry the Cowboy server connection without waiting",
+      title: "Reconnect or Reload Now",
+      description: "Retry the Cowboy server connection, or reload into a ready new version",
       group: "Connection",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
-      // Offered exactly while a Retry control is on screen.
-      when: () => document.querySelector("[data-desktop-sync-retry]") !== null,
-      run: retrySyncNow,
+      // `.` is the pending refresh: offered exactly while a Retry control or
+      // the update bar's action (Reload, Retry, Cancel) is on screen. The
+      // connection comes first: a new version cannot load without it.
+      when: () =>
+        document.querySelector("[data-desktop-sync-retry]") !== null ||
+        document.querySelector("[data-update-action]") !== null,
+      run: () => {
+        if (document.querySelector("[data-desktop-sync-retry]")) {
+          retrySyncNow();
+          return;
+        }
+        document.querySelector<HTMLElement>("[data-update-action]")?.click();
+      },
     },
     {
       id: "settings.open",

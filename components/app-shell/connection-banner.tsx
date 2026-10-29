@@ -703,7 +703,9 @@ function bannerCopy(kind: BannerKind, update: AutoUpdateState): BannerCopy {
  *
  *  Paint-only, like everything else that may sit over the phone's moving
  *  chrome: a border and a radius, no shadow and no transform. */
-export function UpdateActionPill({ action }: { readonly action: string }): ReactNode {
+export function UpdateActionPill(
+  { action, shortcut }: { readonly action: string; readonly shortcut?: string },
+): ReactNode {
   return (
     <Box
       component="span"
@@ -726,6 +728,28 @@ export function UpdateActionPill({ action }: { readonly action: string }): React
     >
       <RefreshIcon sx={{ fontSize: "0.9375rem" }} />
       {action}
+      {shortcut !== undefined && (
+        // A keyboard surface names its key inside the pill, in the bar's own
+        // contrast colour: a theme keycap would vanish on the tinted bar.
+        <Box
+          component="kbd"
+          sx={{
+            ml: 0.25,
+            px: 0.5,
+            borderRadius: 0.75,
+            border: "1px solid",
+            borderColor: "currentColor",
+            fontFamily: "inherit",
+            fontSize: "0.75rem",
+            fontWeight: 800,
+            letterSpacing: "0.12em",
+            lineHeight: 1.35,
+            opacity: 0.9,
+          }}
+        >
+          {shortcut}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -744,6 +768,10 @@ export interface ConnectionBannerProps {
   readonly canApplyUpdate?: () => boolean;
   /** See AutoUpdateOptions.beforeReload. */
   readonly beforeReload?: () => void;
+  /** A keyboard surface's key for the bar's action, shown in its pill. The
+   *  bar is marked `data-update-action` so that surface's command can press
+   *  it; the app owns the binding. */
+  readonly shortcut?: string;
 }
 
 // Full-width overlay bar tracking the app's socket + build version. All three
@@ -760,7 +788,7 @@ export interface ConnectionBannerProps {
 // it is the one that may be pressed — a full-width target needs no aim, and
 // pressing it only brings forward a reload that was coming anyway.
 export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
-  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, automatic = true, kinds, canApplyUpdate, beforeReload } = props;
+  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, automatic = true, kinds, canApplyUpdate, beforeReload, shortcut } = props;
   const rawBanner = store.useConnectionBanner();
   const banner = rawBanner !== undefined && kinds !== undefined && !kinds.includes(rawBanner.kind)
     ? undefined
@@ -850,7 +878,12 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
       {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
       {isUpdate && busy && <CircularProgress size={14} color="inherit" thickness={5} />}
       <span>{copy.text}</span>
-      {copy.action !== undefined && <UpdateActionPill action={copy.action} />}
+      {copy.action !== undefined && (
+        <UpdateActionPill
+          action={copy.action}
+          {...(isUpdate && shortcut !== undefined ? { shortcut } : {})}
+        />
+      )}
     </>
   );
 
@@ -864,6 +897,9 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
         // label, which is the feedback that means anything here.
         disableRipple
         disabled={update.phase === "reloading"}
+        data-update-action={copy.action !== undefined && update.phase !== "reloading"
+          ? copy.action
+          : undefined}
         onClick={update.requestUpdate}
         sx={barSx}
       >

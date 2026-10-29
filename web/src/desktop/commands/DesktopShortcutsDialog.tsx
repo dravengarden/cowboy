@@ -161,8 +161,8 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
   {
     keys: [DESKTOP_SHORTCUTS.reconnect],
-    title: "Reconnect now",
-    description: "Only while the status line shows a Retry control",
+    title: "Reconnect, or reload into a ready new version",
+    description: "While the status line shows Retry it reconnects; otherwise it presses the update bar's action (Reload, Retry, Cancel)",
   },
   {
     keys: [DESKTOP_SHORTCUTS.switchSession],

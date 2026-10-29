@@ -15,7 +15,7 @@ const suite = process.argv.slice(2)[1] ?? "desktop-composer";
 const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
-  "client-update": ["runClientUpdateFixture", 8],
+  "client-update": ["runClientUpdateFixture", 9],
   "subscriptions": ["runSubscriptionsBrowserConformance", 131],
   "session-context": ["runSessionContextBrowserConformance", 75],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
