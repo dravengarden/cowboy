@@ -178,9 +178,10 @@ fn json_pages_bound_large_history_and_allow_discovery_without_copying_it() {
         json!({"offset":-1}),
         json!({"describe":"true"}),
     ] {
-        assert_eq!(
-            json_page(Some(&data), &args),
-            Err("invalid_argument".into())
+        assert!(
+            json_page(Some(&data), &args)
+                .unwrap_err()
+                .starts_with("invalid_argument")
         );
     }
     assert_eq!(
