@@ -1086,6 +1086,12 @@ fn classify_usage_failure(detail: &str) -> UsageFailureKind {
         // settled generation.
         "changed during host observation",
         "changed before host invocation",
+        // A Plugin installation or its reconciliation briefly fences host
+        // observations; the account itself is unaffected, so keep its usage.
+        "requires install attempt reconciliation",
+        "requires machine operation reconciliation",
+        "installation requires reconciliation",
+        "lifecycle is changing",
         "service unavailable",
         "connection refused",
         "connection reset",
@@ -2139,6 +2145,11 @@ mod tests {
                 "active Plugin or authentication generation changed before host invocation"
             ),
             UsageFailureKind::Transient
+        );
+        assert_eq!(
+            classify_usage_failure("Plugin requires install attempt reconciliation"),
+            UsageFailureKind::Transient,
+            "an interrupted installation must not hide the account's usage"
         );
         assert_eq!(
             classify_usage_failure("account/read: 401 Unauthorized"),

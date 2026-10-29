@@ -30,17 +30,21 @@ The driver reaches OVH only through the `ovh` SSH alias and:
 
 1. refuses a dirty or unpublished release, or a drop-in without exactly one host
    `ExecStart`;
-2. copies only the store paths OVH lacks, verifies the archive checksum, and
+2. refuses while the Machine is driving a Plugin installation (a pending
+   install attempt younger than 15 minutes): a host restart during staging
+   leaves an interrupted attempt that blocks that Plugin's usage, generation
+   retention and upgrades until it is reconciled. Retry after it finishes;
+3. copies only the store paths OVH lacks, verifies the archive checksum, and
    records the full closure under `/nix/var/nix/gcroots/ovh-cowboy-machine-<rev>`;
-3. writes a root-only receipt `/var/lib/columbus/ovh-machine-<rev>-<time>/`
+4. writes a root-only receipt `/var/lib/columbus/ovh-machine-<rev>-<time>/`
    with `previous.conf`, a `candidate.conf` that differs only in the host
    release and its header revision, the current host identity and every live
    `cowboy-acp-worker` identity;
-4. arms an independent root timer that rolls back after four minutes, then runs
+5. arms an independent root timer that rolls back after four minutes, then runs
    `activate` in its own root unit. The script switches the user unit to
    `KillMode=process` so stopping the host does not stop workers, and refuses if
    any recorded worker changed;
-5. waits for the new host to log `Machine controller authenticated`, then runs
+6. waits for the new host to log `Machine controller authenticated`, then runs
    `accept` (which rechecks every worker and restores normal containment) and
    disarms the timer.
 
