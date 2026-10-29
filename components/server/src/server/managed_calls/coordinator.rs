@@ -33,6 +33,7 @@ const INSTALL_RETRY: Duration = Duration::from_secs(30);
 /// session and snapshot are removed. The parent's call ledger remains.
 const CHILD_RETENTION: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 const CHILD_REAP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const CHILD_REAP_FIRST_DELAY: Duration = Duration::from_secs(10 * 60);
 const CHILD_REAP_BATCH: usize = 32;
 const CLOSE_ATTEMPTS: u32 = 5;
 
@@ -102,8 +103,12 @@ impl Coordinator {
         });
         let weak = Arc::downgrade(state);
         tokio::spawn(async move {
+            // Controller releases restart this process often; waiting a full
+            // interval after each start could postpone retirement forever.
+            let mut delay = CHILD_REAP_FIRST_DELAY;
             loop {
-                tokio::time::sleep(CHILD_REAP_INTERVAL).await;
+                tokio::time::sleep(delay).await;
+                delay = CHILD_REAP_INTERVAL;
                 let Some(state) = weak.upgrade() else { return };
                 if *state.shutdown.borrow() {
                     return;

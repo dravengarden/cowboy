@@ -109,7 +109,8 @@ analysis retain their existing snapshot and read-only contracts.
   call. A deleted or closing parent cancels its calls; its children are deleted
   once those are terminal. Deleting a child with an active call is refused.
   A child whose newest call finished more than three days ago, or whose parent
-  no longer exists, is retired hourly, one at a time and at most 32 per pass:
+  no longer exists, is retired ten minutes after Controller start and then
+  hourly, one at a time and at most 32 per pass:
   its worker stops and its target snapshot, including delivered image files
   under it, is closed; the session is removed only after the Machine confirms
   that close, so a failed close is retried on a later pass instead of leaving
