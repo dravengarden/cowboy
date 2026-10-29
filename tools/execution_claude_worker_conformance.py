@@ -1442,6 +1442,74 @@ def checkpoint_acp_phase(client, api, target, session_id, checks):
         checks.append("packaged_checkpoint_" + phase + "_settles_original_acp_prompt")
 
 
+def native_cycle_acp_phase(client, api, target, session_id, checks):
+    """A steer joins exactly the cycle Claude starts on its own after a background task."""
+    marker = "NATIVE_CYCLE_STEER"
+    consumed = []
+
+    def background(_):
+        return tool("Bash", {"command": "sleep 1; echo cycle-bg", "run_in_background": True})
+
+    def prompt_done(_):
+        return [{"type": "text", "text": "PROMPT_DONE"}]
+
+    def cycle(requests):
+        require("<task-notification>" in json.dumps(requests[-1]["messages"][-1]),
+                "the self-started cycle did not begin with the background notification")
+        return tool("Bash", {"command": "printf ready > native-cycle-ready; while [ ! -f native-cycle-release ]; "
+                                        "do sleep 0.05; done; printf done > native-cycle-done", "timeout": 30000})
+
+    def after(requests):
+        consumed.append(marker in json.dumps(requests[-1].get("messages", [])))
+        return [{"type": "text", "text": "CYCLE_DONE"}]
+
+    def names():
+        return [notice["params"]["message"].get("cycle_id") for notice in client.__dict__.get("notices", [])
+                if notice.get("method") == "_claude/sdkMessage"
+                and notice["params"].get("message", {}).get("subtype") == "cowboy_native_cycle"]
+
+    def pump(condition, seconds, message):
+        deadline = time.monotonic() + seconds
+        while not condition():
+            require(time.monotonic() < deadline, message)
+            try:
+                client.frame(min(deadline, time.monotonic() + 0.2))
+            except ProbeFailure:
+                pass
+
+    def steer(cycle_name, text):
+        return client.request("_session/steering", {
+            "sessionId": session_id, "prompt": [{"type": "text", "text": text}],
+            "_meta": {"steering": {"idleBehavior": "promptRequired", "priority": "now", "nativeCycle": cycle_name}}})
+
+    while len(api.steps) < len(api.requests):
+        api.steps.append([])
+    start = len(api.requests)
+    seen = len(names())
+    api.steps.extend([background, prompt_done, cycle, after, after])
+    client.request("session/prompt", {"sessionId": session_id,
+                                      "prompt": [{"type": "text", "text": "Run native cycle fixture"}]})
+    require(not names()[seen:], "a prompt turn was named as a self-started cycle")
+    pump(lambda: any(names()[seen:]) and (target / "native-cycle-ready").exists(), 30,
+         "the background result did not start a named self-started cycle")
+    name = next(cycle_name for cycle_name in names()[seen:] if cycle_name)
+    require(re.fullmatch(r"native-[0-9a-f-]{36}", name), "cycle name is not adapter-owned: " + name)
+    require(steer("native-00000000-0000-0000-0000-000000000000", "STALE_CYCLE").get("outcome") == "promptRequired",
+            "a foreign cycle name was accepted")
+    require(steer(name, marker).get("outcome") == "injected", "the named self-started cycle refused the steer")
+    (target / "native-cycle-release").write_text("release")
+    pump(lambda: names()[-1] is None and len(api.requests) - start >= 4, 30, "the joined cycle did not end")
+    require(any(consumed), "the joined message did not reach the running cycle")
+    require((target / "native-cycle-done").exists(), "the cycle's foreground work did not finish")
+    require(not any("STALE_CYCLE" in json.dumps(request.get("messages", [])) for request in api.requests[start:]),
+            "a refused steer reached the model")
+    require(steer(name, "ENDED_CYCLE").get("outcome") == "promptRequired", "an ended cycle accepted a steer")
+    # Unused scripted slots must not shift the next fixture's API sequence.
+    del api.steps[len(api.requests):]
+    require(len(api.requests) - start <= 5, "joining introduced unbounded native rounds")
+    checks.append("packaged_steer_joins_exactly_the_named_self_started_cycle")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -1893,6 +1961,11 @@ def main():
                     require(not ("id" in frame and "method" in frame), "unexpected ACP client operation")
                     if "method" not in frame:
                         return frame
+                    # Bounded record of adapter notifications for phases that
+                    # observe them (the native-cycle names).
+                    notices = self.__dict__.setdefault("notices", [])
+                    notices.append(frame)
+                    del notices[:-4096]
         def acp():
             instance = Acp([str(launcher.parent.parent / "bin/claude-agent-acp")], 120,
                            environment=environment, cwd=args.runtime)
@@ -1909,6 +1982,7 @@ def main():
         context_checked(api.requests)
         require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP did not execute on target")
         checkpoint_acp_phase(client, api, args.target, acp_session, checks)
+        native_cycle_acp_phase(client, api, args.target, acp_session, checks)
         client.close(); client = None
         api.steps.append(tool("Bash", {"command": "cat acp-once.txt"}))
         client = acp()
@@ -1928,7 +2002,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "steering.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs", "managed.mjs", "agent-calls.mjs"]:
+        for name in ["cowboy-launch.mjs", "steering.mjs", "native-cycle.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs", "managed.mjs", "agent-calls.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:

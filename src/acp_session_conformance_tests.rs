@@ -18,6 +18,7 @@ struct HubSink {
     allocations: AtomicUsize,
     prompt_starts: Mutex<Vec<Option<String>>>,
     prompt_completions: Mutex<Vec<(Option<String>, String)>>,
+    native_cycles: Mutex<Vec<Option<String>>>,
 }
 
 impl AgentSink for HubSink {
@@ -26,10 +27,14 @@ impl AgentSink for HubSink {
         session: &str,
         target: &crate::send_delivery::DeliveryTarget,
     ) -> bool {
+        let named = self.native_cycles.lock().last().cloned().flatten();
         session == SESSION
             && target.worker_epoch == "fixture-worker"
-            && target.turn_id == "fixture-turn"
+            && (target.turn_id == "fixture-turn" || named.as_deref() == Some(&target.turn_id))
             && self.hub.status(session) == Some(Status::Busy)
+    }
+    fn set_native_cycle(&self, _: &str, cycle_id: Option<&str>) {
+        self.native_cycles.lock().push(cycle_id.map(str::to_owned));
     }
     fn session_is_managed_read_only(&self, _: &str) -> bool {
         self.managed_read_only.load(Ordering::SeqCst)
@@ -113,6 +118,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         allocations: AtomicUsize::new(0),
         prompt_starts: Mutex::default(),
         prompt_completions: Mutex::default(),
+        native_cycles: Mutex::default(),
     });
     let (prompt_cancellation, _) = watch::channel(0);
     let state = Arc::new(ClientState {
@@ -125,6 +131,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         activity: Mutex::new(SessionActivity::default()),
+        native_cycle: Mutex::new(None),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
@@ -1487,4 +1494,159 @@ fn partial_stream_policy_preserves_worker_but_never_replays_a_prompt() {
             &behavior, detail
         ));
     }
+}
+
+fn native_cycle(cycle: Option<&str>) -> ClaudeSdkMessageNotification {
+    ClaudeSdkMessageNotification {
+        session_id: NATIVE.to_owned(),
+        message: json!({
+            "type": "system", "subtype": "cowboy_native_cycle",
+            "session_id": NATIVE, "cycle_id": cycle,
+        }),
+    }
+}
+
+/// Claude's self-started follow-up has no prompt. A steer addressed to the
+/// adapter's exact cycle name reaches the adapter with that name; any other
+/// cycle, or one that ended, is refused here without a native request.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One real ACP connection across the cycle's lifetime.
+async fn a_self_started_cycle_is_steerable_only_by_its_exact_name() {
+    let (state, sink) = activity_fixture("claude-code");
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let main_state = state.clone();
+    let client = Client.builder().connect_with(
+        ByteStreams::new(client_write.compat_write(), client_read.compat()),
+        async move |cx: ConnectionTo<Agent>| {
+            run_session(
+                &main_state,
+                cx,
+                None,
+                PathBuf::from(CWD),
+                &mut command_rx,
+                "claude-code",
+                &startup,
+            )
+            .await
+        },
+    );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        let initialize: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(&mut writer, json!({"jsonrpc":"2.0","id":initialize["id"],"result":{
+            "protocolVersion":1,"agentCapabilities":{},"_meta":{"steering":{"supported":true,"idleBehavior":"promptRequired","priorities":["now","next"]}}
+        }})).await;
+        let new: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":new["id"],"result":{"sessionId":NATIVE}}),
+        )
+        .await;
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        sink.hub.set_status(SESSION, Status::Busy, None);
+        // The production connection routes `_claude/sdkMessage` here.
+        handle_native_activity(&state, &native_cycle(Some("native-a")));
+        assert_eq!(
+            *sink.native_cycles.lock(),
+            vec![Some("native-a".to_owned())]
+        );
+        handle_native_activity(&state, &native_cycle(Some("native-a")));
+        assert_eq!(
+            sink.native_cycles.lock().len(),
+            1,
+            "an unchanged name is not re-announced"
+        );
+        let blocks = || {
+            vec![ContentBlock::Text(
+                agent_client_protocol::schema::v1::TextContent::new("correction"),
+            )]
+        };
+        let steer = |cmid: &str, cycle: &str, next_checkpoint: bool| AgentCommand::Steer {
+            blocks: blocks(),
+            cmid: cmid.into(),
+            next_checkpoint,
+            target: Some(crate::send_delivery::DeliveryTarget {
+                worker_epoch: "fixture-worker".into(),
+                turn_id: cycle.into(),
+            }),
+        };
+        let outcome = |cmid: &'static str, expected: &'static str| {
+            let hub = sink.hub.clone();
+            async move {
+                loop {
+                    let events = hub.snapshot(SESSION).unwrap().0;
+                    if events.iter().any(|entry| matches!(&entry.event, Event::Update { update } if update["cmid"] == cmid && update["outcome"] == expected)) { break; }
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        command_tx.send(steer("join", "native-a", true)).unwrap();
+        let request: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "_session/steering");
+        assert_eq!(
+            request["params"]["_meta"]["steering"]["nativeCycle"],
+            "native-a"
+        );
+        assert_eq!(request["params"]["_meta"]["steering"]["priority"], "next");
+        assert_eq!(
+            request["params"]["_meta"]["steering"]["idleBehavior"],
+            "promptRequired"
+        );
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":request["id"],"result":{"outcome":"injected"}}),
+        )
+        .await;
+        outcome("join", "injected").await;
+        assert!(
+            sink.hub
+                .snapshot(SESSION)
+                .unwrap()
+                .0
+                .iter()
+                .any(|entry| matches!(
+                    &entry.event,
+                    Event::Update { update } if update["sessionUpdate"] == "user_message_chunk"
+                        && update["_meta"]["cowboyDelivery"] == "current_turn"
+                )),
+            "the joined message is echoed once as current-turn delivery"
+        );
+
+        // A different (earlier or later) cycle is never joined.
+        command_tx.send(steer("other", "native-b", false)).unwrap();
+        outcome("other", "not_delivered").await;
+        // The cycle ended: its name no longer addresses anything.
+        handle_native_activity(&state, &native_cycle(None));
+        assert_eq!(sink.native_cycles.lock().last(), Some(&None));
+        assert_eq!(*state.native_cycle.lock(), None);
+        command_tx.send(steer("ended", "native-a", false)).unwrap();
+        outcome("ended", "not_delivered").await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), lines.next_line())
+                .await
+                .is_err(),
+            "a refused cycle steer sends no native request"
+        );
+        assert!(
+            sink.prompt_starts.lock().is_empty(),
+            "joining never sends session/prompt"
+        );
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded native-cycle fixture");
 }

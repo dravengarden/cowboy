@@ -26,15 +26,18 @@ async function checkLiveSteer(
 ): Promise<void> {
   const steered: string[] = [];
   let reads = 0;
-  let mode: "hang" | "fail-once" = "hang";
+  let mode: "hang" | "fail-once" | "native-cycle" = "hang";
   globalThis.fetch = async () => {
     reads++;
     if (mode === "hang") return await new Promise<Response>(() => {});
-    if (reads === 1) throw new TypeError("network");
+    if (mode === "fail-once" && reads === 1) throw new TypeError("network");
     return Response.json({
-      target: { worker_epoch: "w", turn_id: "live" },
+      target: {
+        worker_epoch: "w",
+        turn_id: mode === "native-cycle" ? "native-cycle-a" : "live",
+      },
       steer: true,
-      controls: { version: 1, next_checkpoint: false },
+      controls: { version: 1, next_checkpoint: mode === "native-cycle" },
       status: "busy",
       paused: false,
       hold: null,
@@ -103,6 +106,33 @@ async function checkLiveSteer(
   );
   key("Enter");
   check(steered.at(-1) === "live", "after the retry Steer carries the fresh turn");
+  flushSync(() => root.render(<></>));
+  // Claude's self-started follow-up is named by the worker. Steer joins it
+  // and says so instead of "Active turn unavailable".
+  mode = "native-cycle";
+  reads = 0;
+  open("native-cycle");
+  const picker = () => document.querySelector("[data-delivery-picker]");
+  for (let attempt = 0; attempt < 150 && !picker()?.textContent?.includes("follow-up"); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  check(
+    steerRow()?.getAttribute("aria-disabled") !== "true" &&
+      steerRow()?.textContent?.includes("Joins the agent's follow-up now"),
+    "Steer joins a self-started cycle and says so",
+  );
+  check(
+    !picker()?.textContent?.includes("unavailable"),
+    "A self-started cycle never reads as unavailable",
+  );
+  check(
+    document.querySelector('[data-delivery-command="checkpoint"]')
+      ?.getAttribute("aria-disabled") !== "true",
+    "Next checkpoint joins the same cycle",
+  );
+  steerRow()?.focus();
+  key("Enter");
+  check(steered.at(-1) === "native-cycle-a", "Steer carries the self-started cycle as its exact target");
   flushSync(() => root.render(<></>));
 }
 

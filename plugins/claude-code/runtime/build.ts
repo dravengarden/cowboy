@@ -91,6 +91,7 @@ try {
     const sources = [
       "launch.mjs",
       "steering.mjs",
+      "native-cycle.mjs",
       "connection.mjs",
       "mod-bridge.mjs",
       "tools.mjs",
