@@ -78,6 +78,21 @@ export type RenderItem = { key: string } & (
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
   | { kind: "cleared"; at: number }
+  // A typed context compaction (`compaction_update`), negotiated through the
+  // `session.compaction` client capability. `summary` accumulates the retained
+  // context the agent streams as `compaction_summary_chunk`s.
+  | {
+    kind: "compaction";
+    id: string;
+    status: string;
+    summary: string;
+    error: string | null;
+    /// Timeline sequence of the update that completed it, else 0.
+    completedSeq: number;
+  }
+  // An advisory `notice` (`session.notices` client capability), e.g. a model
+  // fallback or a rate-limit warning. Not part of the agent's reply.
+  | { kind: "notice"; severity: string; title: string; description: string | null }
 );
 
 // Store timelines are immutable arrays. Transcript and Composer often derive
@@ -148,6 +163,13 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         a.turnFailure === b.turnFailure && a.recovered === b.recovered;
     case "cleared":
       return b.kind === "cleared" && a.at === b.at;
+    case "compaction":
+      return b.kind === "compaction" && a.id === b.id && a.status === b.status &&
+        a.summary === b.summary && a.error === b.error &&
+        a.completedSeq === b.completedSeq;
+    case "notice":
+      return b.kind === "notice" && a.severity === b.severity &&
+        a.title === b.title && a.description === b.description;
   }
 }
 
@@ -360,6 +382,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const permIndex = new Map<string, number>();
   // toolCallId -> index of the permission marker that asked for it.
   const permByTool = new Map<string, number>();
+  const compactionIndex = new Map<string, number>();
   const runtimeFailures = new Set<Extract<RenderItem, { kind: "lifecycle" }>>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
@@ -488,6 +511,53 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               if (input !== undefined) existing.rawInput = input;
               if (content !== undefined) existing.content = content;
             }
+            break;
+          }
+          case "compaction_update":
+          case "compaction_summary_chunk": {
+            const id = typeof u["compactionId"] === "string" ? u["compactionId"] : "";
+            const idx = compactionIndex.get(id);
+            let item = idx === undefined ? undefined : items[idx];
+            if (item?.kind !== "compaction") {
+              // The status defaults to in progress: a summary chunk may arrive
+              // before its compaction's first lifecycle update.
+              item = {
+                kind: "compaction",
+                key: String(env.seq),
+                id,
+                status: "in_progress",
+                summary: "",
+                error: null,
+                completedSeq: 0,
+              };
+              items.push(item);
+              compactionIndex.set(id, items.length - 1);
+            }
+            if (u.sessionUpdate === "compaction_summary_chunk") {
+              item.summary += textOf(u);
+            } else {
+              if (typeof u.status === "string") item.status = u.status;
+              if (typeof u["summary"] === "string") item.summary = u["summary"];
+              if (typeof u["error"] === "string") item.error = u["error"];
+              if (item.status === "completed") item.completedSeq = env.seq;
+            }
+            cursor = null;
+            break;
+          }
+          case "notice": {
+            const title = typeof u.title === "string" ? u.title.trim() : "";
+            if (!title) break;
+            const description = typeof u["description"] === "string"
+              ? u["description"].trim()
+              : "";
+            items.push({
+              kind: "notice",
+              key: String(env.seq),
+              severity: typeof u["severity"] === "string" ? u["severity"] : "info",
+              title,
+              description: description || null,
+            });
+            cursor = null;
             break;
           }
           case "context_cleared": {
@@ -634,6 +704,9 @@ function settleOutstandingTools(items: RenderItem[], status: string): void {
   for (const item of items) {
     if (item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")) {
       item.status = status;
+    } else if (item.kind === "compaction" && item.status === "in_progress") {
+      // A compaction cannot outlive its turn; never leave it spinning.
+      item.status = status === "interrupted" ? "cancelled" : "completed";
     }
   }
 }
@@ -808,6 +881,9 @@ export function latestCompactionCompletionSeq(timeline: Envelope[]): number {
   const items = derive(timeline);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
+    if (item?.kind === "compaction" && item.status === "completed") {
+      return item.completedSeq;
+    }
     if (item?.kind !== "message" || item.role !== "assistant") continue;
     const text = messageText(item);
     if (text && isCompactionCompletionText(text)) return Number(item.key);
@@ -817,6 +893,7 @@ export function latestCompactionCompletionSeq(timeline: Envelope[]): number {
 
 export function isCompactionCompletionTail(timeline: Envelope[]): boolean {
   const last = derive(timeline).at(-1);
+  if (last?.kind === "compaction") return last.status === "completed";
   if (last?.kind !== "message" || last.role !== "assistant") return false;
   const text = messageText(last);
   return text !== null && isCompactionCompletionText(text);
@@ -844,6 +921,7 @@ export function isCompactionRequestTail(timeline: Envelope[]): boolean {
 export function isCompactingTail(timeline: Envelope[]): boolean {
   const items = derive(timeline);
   const last = items[items.length - 1];
+  if (last?.kind === "compaction") return last.status === "in_progress";
   if (last?.kind !== "message") return false;
   const text = messageText(last);
   if (text === null) return false;

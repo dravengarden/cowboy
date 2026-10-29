@@ -98,13 +98,22 @@ impl EventReducer {
         if kind == Some("tool_call_update") && is_pure_terminal_output_delta(update) {
             return None;
         }
-        if matches!(kind, Some("agent_message_chunk" | "agent_thought_chunk")) {
+        // A compaction summary streams like a message; its compaction identity
+        // takes the place of the message identity when coalescing.
+        if matches!(
+            kind,
+            Some("agent_message_chunk" | "agent_thought_chunk" | "compaction_summary_chunk")
+        ) {
             let text = update
                 .get("content")
                 .and_then(|content| content.get("text"))
                 .and_then(serde_json::Value::as_str);
             let message_id = update
-                .get("messageId")
+                .get(if kind == Some("compaction_summary_chunk") {
+                    "compactionId"
+                } else {
+                    "messageId"
+                })
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
             if let (Some(kind), Some(chunk)) = (kind, text) {
@@ -335,6 +344,40 @@ mod tests {
         let mut legacy = serde_json::to_value(&envelope.event).expect("legacy row");
         assert!(take_persisted_cmid(&mut legacy).is_none());
         assert!(take_persisted_cmid(&mut serde_json::Value::Null).is_none());
+    }
+
+    #[test]
+    fn compaction_summary_chunks_coalesce_per_compaction() {
+        let summary = |seq, id: &str, text: &str| Envelope {
+            session_id: "session".to_owned(),
+            seq,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "compaction_summary_chunk",
+                    "compactionId": id,
+                    "content": { "type": "text", "text": text },
+                }),
+            },
+            cmid: None,
+        };
+        let text = |envelope: &Envelope| match &envelope.event {
+            Event::Update { update } => update
+                .pointer("/content/text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            _ => None,
+        };
+        let mut reducer = EventReducer::default();
+        let first = reducer.reduce(summary(1, "c-1", "Kept ")).expect("first");
+        assert_eq!(first.seq, 1);
+        let joined = reducer
+            .reduce(summary(2, "c-1", "context."))
+            .expect("joined");
+        assert_eq!(joined.seq, 1);
+        assert_eq!(text(&joined).as_deref(), Some("Kept context."));
+        let next = reducer.reduce(summary(3, "c-2", "Later.")).expect("next");
+        assert_eq!(next.seq, 3);
+        assert_eq!(text(&next).as_deref(), Some("Later."));
     }
 
     #[test]

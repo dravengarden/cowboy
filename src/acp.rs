@@ -38,8 +38,9 @@ use std::time::{Duration, Instant};
 // version-agnostic schema root and the `Agent`/`Client` traits at the crate root.
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientNotification, ContentBlock, ExtNotification, InitializeRequest,
-    LoadSessionRequest, Meta, NewSessionRequest, PermissionOption, PermissionOptionId,
+    CancelNotification, ClientCapabilities, ClientNotification, ClientSessionCapabilities,
+    CompactionCapabilities, ContentBlock, ExtNotification, InitializeRequest, LoadSessionRequest,
+    Meta, NewSessionRequest, NoticeCapabilities, PermissionOption, PermissionOptionId,
     PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
@@ -995,6 +996,22 @@ fn projected_auth_error(
     .data(diagnostic)
 }
 
+/// The ACP `initialize` request every Cowboy client sends. Cowboy persists and
+/// renders the stable typed session updates for context compaction and
+/// advisory notices, so it advertises both. Without them, adapters fall back to
+/// presentation-specific transcript text or tool calls whose identifying
+/// `_meta` is reserved for other clients, leaving Cowboy unable to tell a
+/// compaction's lifecycle apart from ordinary agent output.
+fn initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+        ClientCapabilities::new().session(
+            ClientSessionCapabilities::new()
+                .compaction(CompactionCapabilities::new())
+                .notices(NoticeCapabilities::new()),
+        ),
+    )
+}
+
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
     NewSessionRequest::new(cwd).meta(provider_session_meta(provider_id))
 }
@@ -1027,8 +1044,8 @@ mod startup_mode_tests {
         StartupPhase, StartupTimeout, backoff_verdict, codex_full_access_available,
         codex_full_access_selected, current_model_label, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
-        is_empty_stream_message_update, is_turn_progress_update, load_session_request,
-        new_session_request, note_tool_liveness, parse_provider_backoff,
+        initialize_request, is_empty_stream_message_update, is_turn_progress_update,
+        load_session_request, new_session_request, note_tool_liveness, parse_provider_backoff,
         permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
         resume_session_request, run_serial_config_queue, select_resume_method,
         session_config_value, startup_full_access_mode, turn_is_wedged,
@@ -1044,6 +1061,16 @@ mod startup_mode_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
     use tokio::sync::{Notify, mpsc};
+
+    #[test]
+    fn initialize_advertises_typed_compaction_and_notices() {
+        let request = serde_json::to_value(initialize_request()).unwrap();
+        assert_eq!(request["protocolVersion"], 1);
+        assert_eq!(
+            request["clientCapabilities"]["session"],
+            serde_json::json!({ "compaction": {}, "notices": {} })
+        );
+    }
 
     #[test]
     fn providers_use_their_native_full_access_mode() {
@@ -3219,7 +3246,7 @@ async fn run_session(
     let service_auth_projected = state.service_auth_projected;
 
     let init = cx
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(initialize_request())
         .block_task()
         .await
         .map_err(|error| {
@@ -4336,9 +4363,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
+            cx.send_request(initialize_request()).block_task().await?;
 
             let session = cx
                 .send_request(new_session_request(provider_id, cwd.clone()))

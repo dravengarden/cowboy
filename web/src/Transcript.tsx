@@ -59,6 +59,7 @@ import {
   ExpandMore,
   ExtensionOutlined,
   Folder,
+  InfoOutlined,
   KeyboardArrowDown,
   MyLocation,
   NavigateBefore,
@@ -3216,6 +3217,79 @@ const ItemView = memo(function ItemView({
           </Typography>
         </Box>
       );
+    case "compaction": {
+      if (item.status === "failed" || item.status === "cancelled") {
+        const failed = item.status === "failed";
+        return (
+          <Box sx={{ ...LIFECYCLE_ROW_SX, color: failed ? "error.main" : "warning.main" }}>
+            {failed
+              ? <ErrorOutline sx={LIFECYCLE_ICON_SX} />
+              : <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />}
+            <Box sx={{ minWidth: 0 }}>
+              <Box component="span">
+                {failed ? "Context compaction failed" : "Context compaction cancelled"}
+              </Box>
+              {item.error && <ErrorDetails detail={item.error} />}
+            </Box>
+          </Box>
+        );
+      }
+      return (
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+          <CompactingWidget
+            active={item.status === "in_progress" && status === "busy"}
+            provider={provider}
+            providerVersion={providerVersion}
+            providerDigest={providerDigest}
+            desktop={desktop}
+          />
+          {item.summary.trim() && (
+            <Box
+              component="details"
+              sx={{ color: "text.secondary", fontSize: "0.75rem", maxWidth: "100%" }}
+            >
+              <Box component="summary" sx={{ cursor: "pointer" }}>Retained summary</Box>
+              <Box
+                component="div"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  mt: 0.5,
+                  maxHeight: "40vh",
+                  overflow: "auto",
+                }}
+              >
+                {item.summary.trim()}
+              </Box>
+            </Box>
+          )}
+        </Box>
+      );
+    }
+    case "notice": {
+      const color = item.severity === "error"
+        ? "error.main"
+        : item.severity === "warning"
+        ? "warning.main"
+        : "text.secondary";
+      return (
+        <Box role="status" sx={{ ...LIFECYCLE_ROW_SX, color }}>
+          {item.severity === "error"
+            ? <ErrorOutline sx={LIFECYCLE_ICON_SX} />
+            : item.severity === "warning"
+            ? <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />
+            : <InfoOutlined sx={LIFECYCLE_ICON_SX} />}
+          <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            <Box component="span" sx={{ fontWeight: 600 }}>{item.title}</Box>
+            {item.description && (
+              <Box sx={{ color: "text.secondary", whiteSpace: "pre-wrap" }}>
+                {item.description}
+              </Box>
+            )}
+          </Box>
+        </Box>
+      );
+    }
   }
 });
 
@@ -3421,6 +3495,10 @@ function itemProgressSignature(
       return `${count}:${item.key}:lifecycle:${item.status}:${item.recovered ?? false}`;
     case "cleared":
       return `${count}:${item.key}:cleared:${item.at}`;
+    case "compaction":
+      return `${count}:${item.key}:compaction:${item.status}:${item.summary.length}`;
+    case "notice":
+      return `${count}:${item.key}:notice:${item.title}`;
   }
 }
 

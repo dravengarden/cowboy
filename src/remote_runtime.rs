@@ -2951,21 +2951,24 @@ fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event
 
 const REMOTE_COMPACT_FAILURE_PREFIX: &str = "Error running remote compact task:";
 
-/// Codex ACP currently reports a failed remote `/compact` as an ordinary
-/// assistant message rather than a runtime error. Promote only the documented
-/// compact sequence; arbitrary assistant text containing "Error" must remain
-/// conversation content and must not create diagnostic incidents.
+/// A failed context compaction is a session error. Agents that received the
+/// `session.compaction` client capability report it as a typed
+/// `compaction_update`. Older Codex ACP releases instead report a failed remote
+/// `/compact` as an ordinary assistant message rather than a runtime error;
+/// promote only that documented compact sequence, so arbitrary assistant text
+/// containing "Error" remains conversation content and creates no incident.
 fn remote_compact_failure(
     hub: &Hub,
     session_id: &str,
     update: &serde_json::Value,
 ) -> Option<String> {
-    if update
+    match update
         .get("sessionUpdate")
         .and_then(serde_json::Value::as_str)
-        != Some("agent_message_chunk")
     {
-        return None;
+        Some("compaction_update") => return typed_compaction_failure(update),
+        Some("agent_message_chunk") => {}
+        _ => return None,
     }
     let message = update
         .pointer("/content/text")
@@ -3000,6 +3003,21 @@ fn remote_compact_failure(
         .unwrap_or(false);
 
     active_compaction.then(|| message.trim_end().to_owned())
+}
+
+fn typed_compaction_failure(update: &serde_json::Value) -> Option<String> {
+    if update.get("status").and_then(serde_json::Value::as_str) != Some("failed") {
+        return None;
+    }
+    let detail = update
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|error| !error.is_empty());
+    Some(detail.map_or_else(
+        || "Context compaction failed".to_owned(),
+        |error| format!("Context compaction failed: {error}"),
+    ))
 }
 
 fn handle_rejected_command(
@@ -3860,6 +3878,38 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn typed_compaction_failure_is_a_session_error() {
+        let hub = Hub::new();
+        let failed = serde_json::json!({
+            "sessionUpdate": "compaction_update",
+            "compactionId": "c-1",
+            "status": "failed",
+            "error": "transport disconnected"
+        });
+        assert_eq!(
+            remote_compact_failure(&hub, "s", &failed).as_deref(),
+            Some("Context compaction failed: transport disconnected")
+        );
+        let without_detail = serde_json::json!({
+            "sessionUpdate": "compaction_update",
+            "compactionId": "c-1",
+            "status": "failed"
+        });
+        assert_eq!(
+            remote_compact_failure(&hub, "s", &without_detail).as_deref(),
+            Some("Context compaction failed")
+        );
+        for status in ["in_progress", "completed", "cancelled"] {
+            let update = serde_json::json!({
+                "sessionUpdate": "compaction_update",
+                "compactionId": "c-1",
+                "status": status
+            });
+            assert_eq!(remote_compact_failure(&hub, "s", &update), None, "{status}");
+        }
     }
 
     #[test]

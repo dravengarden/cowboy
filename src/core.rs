@@ -2968,12 +2968,15 @@ impl Hub {
                                 final_text.push_str(text);
                             }
                         }
+                        // Advisory notices are not part of the reply and may
+                        // arrive after it.
                         Some(
                             "agent_thought_chunk"
                             | "usage_update"
                             | "available_commands_update"
                             | "current_mode_update"
-                            | "config_option_update",
+                            | "config_option_update"
+                            | "notice",
                         )
                         | None => {}
                         Some(_) => {
@@ -7696,6 +7699,36 @@ mod managed_call_tests {
         let turn = hub.managed_turn("child", 0).unwrap();
         assert_eq!(turn.final_text, "{\"verdict\":\"needs-attention\"}");
         assert!(serde_json::from_str::<serde_json::Value>(&turn.final_text).is_ok());
+    }
+
+    #[test]
+    fn managed_turn_keeps_its_final_message_across_a_trailing_notice() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        hub.push("child", update("user_message_chunk", "review"));
+        hub.push(
+            "child",
+            update("agent_message_chunk", "{\"verdict\":\"approve\"}"),
+        );
+        hub.push(
+            "child",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "notice",
+                    "severity": "warning",
+                    "title": "Model fallback",
+                }),
+            },
+        );
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                usage: None,
+                stop_reason: "end_turn".into(),
+            },
+        );
+        let turn = hub.managed_turn("child", 0).unwrap();
+        assert_eq!(turn.final_text, "{\"verdict\":\"approve\"}");
     }
 
     #[test]
