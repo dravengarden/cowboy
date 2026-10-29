@@ -198,6 +198,13 @@ measurable CPU cost while busy or idle. Native pins and component release
 Version 3.20.8 was never published: the change first shipped in 3.20.9 with
 claude-agent-acp 0.98.0 (see the 2026-10-28 runtime release record).
 
+Claude Code 3.20.10 clamps a Bash `timeout` above the maximum (10 minutes in
+the foreground, 2 hours in the background) as native does, instead of refusing
+the call with `Invalid tool limit`. Native pins and its component release
+3.62.0 are unchanged. It is a runtime change requiring packaged acceptance.
+Scoped release 3.63.0 records app-shell 1.1.33 for the already-committed
+`9daa4cdb`; no Plugin depends on that component.
+
 `cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source
