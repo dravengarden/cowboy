@@ -126,6 +126,7 @@
       "version": "0.2.1-rc.2",
       "package_dir": "packages/deepseek-harness",
       "script": "node_modules/@deepseek-ai/dsh/lib/bin.js",
+      "launcher": "packages/deepseek-harness/launch.mjs",
       "include_optional": true,
       "probe": [
         "--version"

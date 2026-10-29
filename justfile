@@ -599,6 +599,7 @@ claude-remote-check:
 # payload gate used by the generic Plugin release workflow.
 provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
+    node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/execution-mcp.test.mjs
     dprint check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/source.json plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json

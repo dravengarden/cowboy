@@ -16040,6 +16040,8 @@ async fn handle_machine_ws(
     let mut current_workspace_revision = hello.workspace_revision.clone();
     let mut current_workspace_owner = hello.workspace_owner;
     let mut current_providers = hello.plugins.clone();
+    // The last usage batch this connection declined, reported once per batch.
+    let mut declined_usage_batch: Option<(String, u64)> = None;
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
@@ -16367,8 +16369,9 @@ async fn handle_machine_ws(
                             )
                         })
                 });
-                if !bounded {
-                    Err(anyhow::anyhow!("invalid provider usage sequence envelope"))
+                let mut result = Ok(());
+                let declined = if !bounded {
+                    Some("invalid provider usage sequence envelope".to_owned())
                 } else {
                     match store
                         .ingest_provider_usage(&hello.machine_id, &producer_id, &events)
@@ -16378,11 +16381,11 @@ async fn handle_machine_ws(
                             let ack = crate::machine_protocol::MachineFrame::Command {
                                 command:
                                     crate::machine_protocol::MachineCommand::ProviderUsageAck {
-                                        producer_id,
+                                        producer_id: producer_id.clone(),
                                         sequence: acknowledged,
                                     },
                             };
-                            match queue_machine_json(&machine_write_tx, &ack) {
+                            result = match queue_machine_json(&machine_write_tx, &ack) {
                                 Ok(()) => {
                                     store
                                         .machine_seen(&hello.machine_id, &challenge_id, None)
@@ -16391,11 +16394,32 @@ async fn handle_machine_ws(
                                 Err(()) => Err(anyhow::anyhow!(
                                     "Machine disconnected while acknowledging provider usage"
                                 )),
-                            }
+                            };
+                            None
                         }
-                        Err(error) => Err(error),
+                        Err(error) => Some(format!("{error:#}")),
+                    }
+                };
+                // A batch this Controller cannot accept stays unacknowledged in
+                // the Machine's spool and the connection is kept: under release
+                // skew a newer Machine's usage would otherwise reconnect-loop
+                // every session there. Report each declined batch once.
+                if let Some(reason) = declined {
+                    let batch = (producer_id, first_sequence);
+                    if declined_usage_batch.as_ref() != Some(&batch) {
+                        tracing::warn!(
+                            machine = %hello.machine_id,
+                            producer_id = %batch.0,
+                            first_sequence,
+                            last_sequence,
+                            events = events.len(),
+                            %reason,
+                            "provider usage batch declined; left unacknowledged on the Machine"
+                        );
+                        declined_usage_batch = Some(batch);
                     }
                 }
+                result
             }
             crate::machine_protocol::MachineFrame::Event {
                 event: crate::machine_protocol::MachineEvent::NativeProfileCompleted { profile },

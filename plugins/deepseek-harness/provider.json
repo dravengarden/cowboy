@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.15",
   "display": {
@@ -68,7 +68,13 @@
         "current_surface": "soft"
       }
     },
-    "features": []
+    "features": [],
+    "tool_presentations": [
+      {
+        "tool_name": "todo_write",
+        "renderer": "todo_list_v1"
+      }
+    ]
   },
   "runtime": {
     "driver_schema": 1,
@@ -80,7 +86,9 @@
       "session": "portable_v1",
       "turn_end": "portable_v1",
       "configuration": "anthropic_gateway_v1",
-      "default_preferences": {},
+      "default_preferences": {
+        "reasoning_effort": "max"
+      },
       "error_rules": [
         {
           "when": {
@@ -139,7 +147,12 @@
         "source": "sidecar_url",
         "sidecar": "deepseek-gateway"
       },
-      "DEEPSEEK_API_KEY": "cowboy-local-credential-boundary"
+      "DEEPSEEK_API_KEY": "cowboy-local-credential-boundary",
+      "DEEPSEEK_SEARCH_BASE_URL": {
+        "source": "sidecar_url",
+        "sidecar": "deepseek-gateway",
+        "suffix": "/v1"
+      }
     },
     "sidecars": [
       {
