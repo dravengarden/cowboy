@@ -164,3 +164,32 @@ During the release build, seventeen upstream Codex ACP tests that start a real
 in the fifth with no source change. Re-running the identical retained stage,
 environment and Bun spawn options reproduced no failure, so the cause remains
 unidentified; the shipped adapter is the accepted candidate.
+
+## DeepSeek model alignment (2026-10-29)
+
+DeepSeek's pricing page and agent-integration guides, read on 2026-10-29, list
+`deepseek-flash` (DeepSeek-V4.1-Flash-1017, released 2026-10-17, vision) and
+`deepseek-v4-pro` (DeepSeek-V4-Pro-0813, text only), both with a 1M context
+and 384K maximum output; `deepseek-v4-flash` is a retired name still served by
+Flash. Both gateways forward the native Anthropic and Responses protocols with
+the model name unchanged, so sessions already use the 1017 model.
+
+- The Codex model catalog in Columbus `projects/codex-deepseek` matches
+  DeepSeek's published `models.json` field for field for both models, plus the
+  hidden retained alias.
+- Cowboy's peak-hour list prices match the current table (Flash 0.04/2/8 and
+  Pro 0.3/9/27 CNY per million cache-hit input, cache-miss input and output).
+- Claude settings follow the official guide; Cowboy's selectable context budget
+  replaces its fixed 786,432-token compaction line.
+- DeepSeek's Codex setup writes `web_search = "disabled"`: built-in search is
+  unavailable on Flash and is enabled explicitly as `live` only for V4 Pro.
+  Codex 0.164.0 otherwise sends a cached-mode `web_search` tool with every
+  request (measured against a loopback endpoint). codex-deepseek 3.1.40 sets it
+  disabled; it was published from `c35d6c78` and installed on Falcon,
+  macbook-air and Hawk after Linux coexistence, macOS and Catalog-reader gates.
+
+Not changed: Claude Code's Web Search is served natively by DeepSeek, and
+DeepSeek bills Search and Fetch per request from 2026-11-01 00:00 Beijing time
+(5 CNY per 1,000). Neither gateway records server-side search or fetch counts
+yet, so Cowboy cost estimates omit them; adding that needs the exact usage
+fields DeepSeek returns, observed on a real request.
