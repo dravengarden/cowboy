@@ -1,4 +1,4 @@
-import { desktopSize } from "../surface/desktopSize";
+import { glyphSize } from "../surface/desktopSize";
 import { Component, type ReactNode, useMemo, useState } from "react";
 import { Alert, Box, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
@@ -426,12 +426,12 @@ const todoTool: Renderer = (ctx) => {
         const todo = t as { content?: string; status?: string };
         const status = todo.status ?? "pending";
         const icon = status === "completed"
-          ? <CheckCircleRounded sx={{ fontSize: desktopSize(16), color: "success.main" }} />
+          ? <CheckCircleRounded sx={{ fontSize: glyphSize(16), color: "success.main" }} />
           : status === "in_progress"
-          ? <AutorenewRounded sx={{ fontSize: desktopSize(16), color: "primary.main" }} />
+          ? <AutorenewRounded sx={{ fontSize: glyphSize(16), color: "primary.main" }} />
           : (
             <RadioButtonUncheckedRounded
-              sx={{ fontSize: desktopSize(16), color: "text.disabled" }}
+              sx={{ fontSize: glyphSize(16), color: "text.disabled" }}
             />
           );
         return (

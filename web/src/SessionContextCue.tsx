@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
-import { desktopSize } from "./surface/desktopSize";
+import { glyphSize } from "./surface/desktopSize";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import {
   CONTEXT_CHANGED,
@@ -132,7 +132,7 @@ export function SessionContextCue(
       >
         <LinkOutlined
           sx={{
-            fontSize: desktopSize(18),
+            fontSize: glyphSize(18),
             flexShrink: 0,
             color: "primary.main",
           }}

@@ -61,6 +61,13 @@ This is a core visual invariant:
   same scaled height. The integrated Desktop fixture's `fontScaleAudit` measures
   every visible control at 100% and 150% and fails on any box or glyph that
   does not grow (2026-10-15).
+- `desktopSize` is fixed pixels on Mobile, so it sizes chrome geometry, never a
+  glyph that also renders on Mobile. Shared icons use `glyphSize(px)`
+  (root-relative on every surface, equal to `desktopSize` on Desktop);
+  `globalIconScale.test.ts` refuses `desktopSize` or numeric pixel sizes on
+  icons outside Desktop-only chrome. `tools/cdp-icon-scale-audit.ts` measures
+  every visible svg, image and glyph of the integrated App at 100% and 150%,
+  including non-interactive marks (2026-10-29).
 - Non-semantic pixel geometry such as a progress stroke, chart mark, or
   alignment hairline may remain fixed only when it is not the action's readable
   symbol. Document and regression-test any interactive exception.

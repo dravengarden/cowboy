@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alpha,
@@ -228,8 +228,8 @@ function LogDetail({
                           sx={{ width: desktopSize(24), height: desktopSize(24), p: 0, mt: -0.35 }}
                         >
                           {copiedKey === copyKey
-                            ? <Check sx={{ fontSize: desktopSize(14) }} />
-                            : <ContentCopy sx={{ fontSize: desktopSize(13) }} />}
+                            ? <Check sx={{ fontSize: glyphSize(14) }} />
+                            : <ContentCopy sx={{ fontSize: glyphSize(13) }} />}
                         </IconButton>
                       </Tooltip>
                     )
@@ -712,8 +712,8 @@ export function UsageLogs(
                       sx={{ mt: -0.35 }}
                     >
                       {copiedKey === entry.id
-                        ? <Check sx={{ fontSize: desktopSize(16) }} />
-                        : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
+                        ? <Check sx={{ fontSize: glyphSize(16) }} />
+                        : <ContentCopy sx={{ fontSize: glyphSize(15) }} />}
                     </IconButton>
                   </Tooltip>
                   <IconButton
@@ -725,8 +725,8 @@ export function UsageLogs(
                     sx={{ mt: -0.35 }}
                   >
                     {expanded
-                      ? <ExpandLess sx={{ fontSize: desktopSize(18) }} />
-                      : <ExpandMore sx={{ fontSize: desktopSize(18) }} />}
+                      ? <ExpandLess sx={{ fontSize: glyphSize(18) }} />
+                      : <ExpandMore sx={{ fontSize: glyphSize(18) }} />}
                   </IconButton>
                 </Stack>
                 {expanded && detailState && (

@@ -1,4 +1,4 @@
-import { desktopSize } from "../surface/desktopSize";
+import { desktopSize, glyphSize } from "../surface/desktopSize";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { CheckRounded, ContentCopyRounded, SwapHorizRounded, WrapTextRounded } from "@mui/icons-material";
@@ -75,8 +75,8 @@ export function CopyTextButton({ text, label }: { text: string; label: string })
         sx={{ width: desktopSize(44), height: desktopSize(36), "@media (pointer: coarse)": { width: 44, height: 44 } }}
       >
         {copied
-          ? <CheckRounded color="success" sx={{ fontSize: desktopSize(18) }} />
-          : <ContentCopyRounded sx={{ fontSize: desktopSize(18) }} />}
+          ? <CheckRounded color="success" sx={{ fontSize: glyphSize(18) }} />
+          : <ContentCopyRounded sx={{ fontSize: glyphSize(18) }} />}
       </IconButton>
     </Tooltip>
   );

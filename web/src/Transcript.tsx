@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 import { SessionStartSettings } from "./SessionStartSettings";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
@@ -791,10 +791,10 @@ function ConversationEmptyState({
           }}
         >
           {kind === "preparing"
-            ? <Terminal sx={{ fontSize: desktopSize(22) }} />
+            ? <Terminal sx={{ fontSize: glyphSize(22) }} />
             : kind === "cleared"
-            ? <CleaningServices sx={{ fontSize: desktopSize(22) }} />
-            : <ChatBubbleOutline sx={{ fontSize: desktopSize(22) }} />}
+            ? <CleaningServices sx={{ fontSize: glyphSize(22) }} />
+            : <ChatBubbleOutline sx={{ fontSize: glyphSize(22) }} />}
         </Box>
         <Typography
           variant="body1"
@@ -887,7 +887,7 @@ function ConversationEmptyState({
             </Typography>
             <Tune
               aria-hidden
-              sx={{ fontSize: desktopSize(16), color: "text.secondary", opacity: 0.78 }}
+              sx={{ fontSize: glyphSize(16), color: "text.secondary", opacity: 0.78 }}
             />
           </Stack>
         </ButtonBase>
@@ -1073,7 +1073,7 @@ function CompactingWidget({
     >
       {active
         ? <CircularProgress size={16} color="inherit" aria-label="Compacting" sx={{ color: accent }} />
-        : <UnfoldLess aria-hidden sx={{ fontSize: desktopSize(16), color: muted }} />}
+        : <UnfoldLess aria-hidden sx={{ fontSize: glyphSize(16), color: muted }} />}
       {active
         ? (
           <Typography
@@ -1331,7 +1331,7 @@ function CollapsibleUserBody({
               py: 0,
               opacity: 0.85,
               "& .MuiButton-endIcon": { ml: 0.25 },
-              "& .MuiButton-endIcon > svg": { fontSize: desktopSize(18) },
+              "& .MuiButton-endIcon > svg": { fontSize: glyphSize(18) },
               "&:hover": { bgcolor: "transparent", opacity: 1 },
             }}
           >
@@ -1450,7 +1450,7 @@ function OptimisticUserBubble({
           alignItems="center"
           sx={{ pr: 0.25 }}
         >
-          <CloudUpload sx={{ fontSize: desktopSize(14), color: "info.main" }} />
+          <CloudUpload sx={{ fontSize: glyphSize(14), color: "info.main" }} />
           <Typography variant="caption" sx={{ color: "info.main" }}>
             {connected ? "Waiting for Cowboy…" : "Waiting for connection…"}
           </Typography>
@@ -3206,7 +3206,7 @@ const ItemView = memo(function ItemView({
               bgcolor: alpha(theme.palette.primary.main, 0.09),
             })}
           >
-            <CleaningServices sx={{ fontSize: desktopSize(13) }} />
+            <CleaningServices sx={{ fontSize: glyphSize(13) }} />
           </Box>
           <Typography
             variant="caption"
@@ -5763,7 +5763,7 @@ export function Transcript({
                     size="small"
                     variant="contained"
                     color="error"
-                    startIcon={<Stop sx={{ fontSize: desktopSize(16) }} />}
+                    startIcon={<Stop sx={{ fontSize: glyphSize(16) }} />}
                     onClick={(): void => {
                       importantHaptic();
                       cancelTurn(sessionId);

@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { Box, CircularProgress, Typography, useTheme } from "@mui/material";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
@@ -275,7 +275,7 @@ export function MermaidDiagram({
               pointerEvents: "none",
             }}
           >
-            <OpenInFullRounded sx={{ fontSize: desktopSize(18) }} />
+            <OpenInFullRounded sx={{ fontSize: glyphSize(18) }} />
           </Box>
         </Box>
       </HintTooltip>

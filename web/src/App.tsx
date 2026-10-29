@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ChecklistOutlined } from "@mui/icons-material";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
@@ -560,13 +560,13 @@ function FolderActivityBadges({
             key: "attention",
             count: activity.attention,
             label: activity.attention === 1 ? "needs attention" : "need attention",
-            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("interrupted") }} />,
+            glyph: <Circle sx={{ fontSize: glyphSize(8), color: statusColor("interrupted") }} />,
         },
         {
             key: "live",
             count: activity.live,
             label: "ready",
-            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("running") }} />,
+            glyph: <Circle sx={{ fontSize: glyphSize(8), color: statusColor("running") }} />,
         },
     ].filter((part) => part.count > 0);
     if (parts.length === 0) return null;
@@ -627,7 +627,7 @@ function ScheduleBadgeIcon({ ms }: { ms: number }): React.JSX.Element {
     }, []);
     return (
         <Tooltip title={`定时发送 · ${fireLabel(ms, now)}（${fireRel(ms, now)}）`} enterDelay={300}>
-            <Schedule sx={{ fontSize: desktopSize(15), flexShrink: 0, color: "info.main" }} />
+            <Schedule sx={{ fontSize: glyphSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );
 }
@@ -2424,7 +2424,7 @@ function SessionList({
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
                             keeps the Apple HIG touch target stable while the
-                            1.5rem glyph follows the global font-size preference.
+                            1.25rem glyph follows the global font-size preference.
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
                         <Box
@@ -2458,7 +2458,7 @@ function SessionList({
                                             aria-label="Drag to reorder"
                                             sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
                                         >
-                                            <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                            <DragIndicator sx={{ fontSize: "1.25rem" }} />
                                         </IconButton>
                                     </HintTooltip>
                                 )
@@ -2470,11 +2470,10 @@ function SessionList({
                                         aria-label="Drag to reorder"
                                         sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
                                     >
-                                        <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                        <DragIndicator sx={{ fontSize: "1.25rem" }} />
                                     </IconButton>
                                 )}
                         </Box>
-                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 0.75 }} />
                         <ListItemText
                             sx={{ my: 0.25, minWidth: 0 }}
                             primary={
@@ -2484,12 +2483,19 @@ function SessionList({
                                     alignItems="center"
                                     sx={{ minWidth: 0 }}
                                 >
+                                    {/* Status, Provider mark and title share
+                                        the title line: the status no longer
+                                        floats to the row's middle, and the
+                                        mark keeps the title's optical size
+                                        instead of towering over it. All three
+                                        are rem, so they follow the global
+                                        font size together. */}
+                                    <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} />
                                     <ProviderIcon
                                         provider={s.provider}
                                         providerVersion={s.provider_version}
                                         providerDigest={s.provider_generation_digest}
-                                        fontSize="medium"
-                                        sx={{ flexShrink: 0 }}
+                                        sx={{ fontSize: "1.125rem", flexShrink: 0 }}
                                     />
                                     <Typography
                                         variant="body2"

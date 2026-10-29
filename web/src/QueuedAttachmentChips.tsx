@@ -4,7 +4,7 @@ import { InsertDriveFileOutlined } from "@mui/icons-material";
 import type { Attachment } from "./attachments";
 import { ProtectedImage } from "./ProtectedImage";
 import { openLightbox } from "./ResourceLightbox";
-import { desktopSize } from "./surface/desktopSize";
+import { glyphSize } from "./surface/desktopSize";
 
 // Read-only attachment preview for a parked draft / queued row: actual mini
 // thumbnails (images) + name chips (files), each tapping into the full-screen
@@ -67,7 +67,7 @@ export const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
                 cursor: "pointer",
               }}
             >
-              <InsertDriveFileOutlined sx={{ fontSize: desktopSize(15), flexShrink: 0 }} />
+              <InsertDriveFileOutlined sx={{ fontSize: glyphSize(15), flexShrink: 0 }} />
               <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
                 {a.name}
               </Typography>

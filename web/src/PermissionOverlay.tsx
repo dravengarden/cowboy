@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import type { ReactNode } from "react";
 import {
   alpha,
@@ -223,10 +223,10 @@ export function PermissionOverlay({
           })}
         >
           {isQuestion
-            ? <HelpOutlineRounded sx={{ fontSize: desktopSize(18), color: accent, flexShrink: 0 }} />
+            ? <HelpOutlineRounded sx={{ fontSize: glyphSize(18), color: accent, flexShrink: 0 }} />
             : (
               <WarningAmberRounded
-                sx={{ fontSize: desktopSize(18), color: accent, flexShrink: 0 }}
+                sx={{ fontSize: glyphSize(18), color: accent, flexShrink: 0 }}
               />
             )}
           <Typography

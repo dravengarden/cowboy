@@ -261,7 +261,7 @@ export function ReviewTabStrip({
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              {tab.pinned && <PushPinOutlined sx={{ fontSize: 14 }} />}
+              {tab.pinned && <PushPinOutlined sx={{ fontSize: "0.875rem" }} />}
               <Typography variant="caption" noWrap sx={{ flex: 1 }}>
                 {tabLabel(tab)}
               </Typography>
