@@ -217,6 +217,32 @@ def configuration_preflight():
         raise RuntimeError("Candidate rejects the Device configuration; nothing was changed:\n" + output)
 
 
+def plugin_lifecycle_preflight():
+    """Refuse while the Machine is still driving a Plugin installation. A host
+    restart during staging leaves an interrupted attempt that blocks that
+    Plugin's usage, retention and upgrades until it is reconciled; on
+    2026-10-29 this collided with a fleet Plugin convergence. Retry the
+    maintenance once the installation has finished."""
+    state = re.search(r"--state-dir (/\S+)", (RECEIPT / "previous.conf").read_text())
+    if state is None:
+        return
+    attempts = Path(state.group(1)) / "plugin-operations/install-attempts-v1"
+    if not attempts.is_dir():
+        return
+    for path in attempts.glob("*.json"):
+        try:
+            outcome = json.loads(path.read_text())["receipt"]["outcome"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise RuntimeError(f"Unreadable Plugin install attempt {path.name}; nothing was changed")
+        # A Machine lease bounds an installation to minutes; an older pending
+        # receipt is abandoned evidence that maintenance must not wait on.
+        recent = time.time() - path.stat().st_mtime < 15 * 60
+        if outcome.get("state") == "pending" and recent:
+            raise RuntimeError(
+                "A Plugin installation is in progress on this Machine; "
+                "retry maintenance after it finishes. Nothing was changed")
+
+
 def candidate_host():
     matches = re.findall(
         r"^ExecStart=(/nix/store/[a-z0-9]{32}-cowboy-machine-release)/libexec/cowboy-machine(?: |$)",
@@ -305,6 +331,7 @@ def main():
             raise RuntimeError("Host identity changed before maintenance")
         preserved()
         configuration_preflight()
+        plugin_lifecycle_preflight()
         write_atomic(RECEIPT / "started.json", b"{}", 0o600)
         if rollout:
             result = switch((RECEIPT / "candidate.conf").read_bytes(), preserve_before_start=True)

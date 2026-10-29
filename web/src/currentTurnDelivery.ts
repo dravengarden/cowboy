@@ -12,14 +12,31 @@ export interface DeliveryTarget {
 export async function captureDeliveryTarget(
   session: string,
 ): Promise<DeliveryTarget> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(session)}/delivery-options`,
-    {
-      signal: AbortSignal.timeout(5000),
-      cache: "no-store",
-    },
-  );
-  if (!response.ok) throw new Error("Delivery options are unavailable.");
+  // Captured at activation when the picker had no fresh target yet; retried
+  // like the picker's read so one slow request does not refuse the Steer.
+  let response: Response | null = null;
+  let failure: unknown = null;
+  for (const delay of [0, 400, 1200]) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      response = await fetch(
+        `/api/sessions/${encodeURIComponent(session)}/delivery-options`,
+        {
+          signal: AbortSignal.timeout(5000),
+          cache: "no-store",
+        },
+      );
+      if (response.ok) break;
+    } catch (error) {
+      failure = error;
+      response = null;
+    }
+  }
+  if (!response?.ok) {
+    throw failure instanceof Error && failure.name !== "TimeoutError"
+      ? failure
+      : new Error("Delivery options are unavailable.");
+  }
   const options = await response.json() as { target?: DeliveryTarget | null };
   if (!options.target) {
     throw new Error("The active turn is no longer available.");

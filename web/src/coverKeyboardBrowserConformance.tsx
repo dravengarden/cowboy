@@ -86,7 +86,15 @@ export async function runCoverKeyboardBrowserConformance(keepFixture = false): P
       getComputedStyle(footer()).paddingBottom === "8px",
       "overlay keyboard needs only compact spacing",
     );
-    const title = document.querySelector<HTMLInputElement>('[aria-label="Title"]')!;
+    // A cover sheet mounts its body two frames after opening (DetentSheet
+    // contentReady). Wait for that instead of a fixed delay: frames slip on a
+    // loaded host, which made this fixture fail intermittently.
+    let title: HTMLInputElement | null = null;
+    for (let attempt = 0; attempt < 100 && !title; attempt++) {
+      title = document.querySelector<HTMLInputElement>('[aria-label="Title"]');
+      if (!title) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    check(title, "cover sheet body never mounted");
     title.focus();
     title.value = "Keep my draft";
     await new Promise((resolve) => setTimeout(resolve, 40));

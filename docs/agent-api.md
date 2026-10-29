@@ -897,15 +897,29 @@ ambient variables and Machine-configured worker variables before applying the
 Provider's credential projections. A configured credential with a scrubbed
 prefix cannot survive merely because that name was absent from the broker's
 ambient environment. Explicit session projections still follow this step.
-Machine-side native-home admission checks the login profile's exact Provider
-version and release digest, not only its auth contract. Both worker startup and
-Provider host invocation carry their verified release digest into that check.
-An auth-compatible but different release cannot silently reuse the profile;
-rejection preserves the original home for reconciliation.
-Controller dormant re-pinning, explicit/automatic Provider reload and surviving
-worker release reconciliation cannot change a named session's release while
-retaining its old login binding. A release change requires a verified login
-transition; rejection leaves the session metadata and runtime status intact.
+Machine-side native-home admission checks the login profile's Provider release,
+not only its auth contract. Both worker startup and Provider host invocation
+carry their verified release digest into that check. A different release may
+use the profile only when the retained signed-in release has identical signed
+authentication (the carry-over rule above); the Machine retains every
+native-profile release for that check. Rejection preserves the original home.
+Explicit Reload, automatic idle updates and dormant re-pinning may move an
+existing named session to an installed release on its existing login only
+under that same rule: the Controller resolves the target exactly as new-session
+admission resolves the session's own login generation, requires an unchanged
+native session contract and a Machine that advertises protocol 38, and hands the
+Hub a proof bound to that session, login generation and exact release. The Hub
+change runs inside that session's runtime admission (exact stored release and
+login generation, login still admitted), and the persisted write applies only
+while the row keeps that login generation. The Machine moves the durable worker
+binding only for the same account, Provider and login generation after the
+previous worker tree exited, and only when the login's native profile admits the
+release; adopting a live worker still requires the exact binding. The native
+session and credential home are unchanged. No new login is needed. A release whose signed
+authentication changed still requires a new login and a verified login
+transition; surviving-worker release reconciliation never changes a named
+session's release. Rejection leaves the session metadata and runtime status
+intact.
 
 Native bindings use the account's last authority-change revision, independently
 of metadata CAS on the whole registry. Creating or binding another account,

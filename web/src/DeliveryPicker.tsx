@@ -21,7 +21,11 @@ import {
   SkipNext,
 } from "@mui/icons-material";
 import type { DeliveryTarget } from "./currentTurnDelivery";
-import { type DeliveryOptions, readDeliveryOptions } from "./deliveryPolicy";
+import {
+  cachedDeliveryOptions,
+  type DeliveryOptions,
+  readDeliveryOptionsRetrying,
+} from "./deliveryPolicy";
 import {
   handleDeliveryPickerKey,
   registerDeliveryPickerCommands,
@@ -38,14 +42,26 @@ export interface DeliveryPickerProps {
   onClose: () => void;
   onNextTurn: () => void;
   onQueueFront: () => void;
-  onSteer: (target: DeliveryTarget, nextCheckpoint?: boolean) => void;
+  /** `target` is the live turn this opening read; absent when the read has
+   *  not returned yet, in which case the delivery captures it on submit. */
+  onSteer: (target: DeliveryTarget | undefined, nextCheckpoint?: boolean) => void;
   onSendAndPause: () => void;
   onStop: () => void;
+  /** A message already in the Queue: it can Steer into the current turn or
+   *  move to the front; "Next turn" (it is queued) and "Send & pause" do not
+   *  apply. `queueCount` is then the number of messages ahead of it. */
+  queued?: boolean;
+  /** The client's live view (connected, busy, current-turn capable). Steer is
+   *  offered from it at once instead of waiting for the options read. */
+  steerReady?: boolean;
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
   const desktop = useSurfaceProfile().kind === "desktop";
   const [options, setOptions] = useState<DeliveryOptions | null>(null);
+  // Whether `options` came from this opening's read (authoritative) rather
+  // than the cache (policy and checkpoint support only, never a target).
+  const [fresh, setFresh] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const list = useRef<HTMLUListElement>(null);
   const position = useRef<PopoverActions>(null);
@@ -96,13 +112,16 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     let live = true;
     interacted.current = false;
     initializedFocus.current = false;
-    optionsCurrent.current = false;
-    setOptions(null);
+    // The default row comes from the best-known policy immediately; nothing
+    // waits for the network to show or move.
+    optionsCurrent.current = true;
+    setOptions(cachedDeliveryOptions(props.sessionId));
+    setFresh(false);
     setError(null);
-    void readDeliveryOptions(props.sessionId).then((value) => {
+    void readDeliveryOptionsRetrying(props.sessionId).then((value) => {
       if (!live) return;
-      optionsCurrent.current = true;
       setOptions(value);
+      setFresh(true);
     }).catch((reason: unknown) => {
       if (live) setError(String(reason));
     });
@@ -112,23 +131,30 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
       initializedFocus.current = false;
     };
   }, [open, props.sessionId]);
-  const target = props.busy ? options?.target : null;
-  const steer = target && options?.steer;
-  const checkpoint = target && options?.controls.next_checkpoint;
-  const unavailable = error
-    ? "Runtime unavailable"
-    : !options
-    ? "Checking runtime…"
-    : !props.busy
+  // A fresh read is authoritative (the turn may just have ended); until it
+  // returns, the live session view decides, and the delivery captures the
+  // turn on submit.
+  const target = fresh && props.busy ? options?.target ?? undefined : undefined;
+  const steer = fresh
+    ? Boolean(props.busy && options?.steer && target)
+    : Boolean(props.busy && props.steerReady);
+  const checkpoint = steer && Boolean(options?.controls.next_checkpoint);
+  const unavailable = !props.busy
     ? "No active turn"
-    : !options.steer
+    : fresh && !options?.steer
     ? "Not supported by this worker"
-    : "Active turn unavailable";
+    : fresh
+    ? "Active turn unavailable"
+    : error
+    ? "Runtime unavailable"
+    : "Checking runtime…";
   const mode = options?.policy.mode ?? "steer";
   const preferred = mode === "tool_boundary"
     ? "checkpoint"
     : mode === "steer"
     ? "steer"
+    : props.queued
+    ? "front"
     : "next";
   const preferredRef = useRef(preferred);
   preferredRef.current = preferred;
@@ -245,7 +271,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           },
           tabIndex: -1,
           "aria-label": "Choose delivery",
-          "aria-busy": !options && !error,
+          "aria-busy": !fresh && !error,
           disabledItemsFocusable: true,
           onKeyDownCapture: (
             event: ReactKeyboardEvent<HTMLUListElement>,
@@ -277,7 +303,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             : undefined}
         />
       </MenuItem>
-      <MenuItem
+      {!props.queued && (<MenuItem
         data-delivery-command="next"
         onClick={() => choose("next")}
       >
@@ -288,7 +314,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           primary="Next turn"
           secondary={props.paused ? "Queue stays paused" : undefined}
         />
-      </MenuItem>
+      </MenuItem>)}
       <MenuItem
         data-delivery-command="front"
         disabled={props.queueCount === 0}
@@ -300,7 +326,9 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
         <ListItemText
           primary="Queue first"
           secondary={props.queueCount === 0
-            ? "No queued messages"
+            ? props.queued ? "Already first" : "No queued messages"
+            : props.queued && !props.paused
+            ? "Runs when the current turn ends"
             : props.paused
             ? "Queue stays paused"
             : undefined}
@@ -328,7 +356,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           />
         </MenuItem>
       )}
-      <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
+      {!props.queued && <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
         <ListItemIcon>
           <PauseCircleOutline />
         </ListItemIcon>
@@ -336,7 +364,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           primary="Send & pause"
           secondary="Enqueue · current turn continues"
         />
-      </MenuItem>
+      </MenuItem>}
       {desktop && (
         <Box
           component="li"

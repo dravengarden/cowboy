@@ -1887,33 +1887,40 @@ impl Broker {
         )
     }
 
-    fn account_binding_matches(&self, session: &StartSession) -> bool {
+    /// A named session keeps its exact binding, or moves to a release its
+    /// login carries over to. Adoption keeps a live worker's exact binding;
+    /// only a `replacing` reset (which stops that worker first) may move it.
+    fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
+        let store = &self.args.provider_store;
         if !matches!(
-            self.args
-                .provider_store
-                .account_worker_binding_matches(session),
+            store.account_worker_binding_admits(session, replacing),
             Ok(true)
         ) {
             return false;
         }
+        let carries = |previous: &StartSession| {
+            account_worker::binding_matches(previous, session)
+                || (!session.provider_account_id.is_default()
+                    && store.account_launch_carries(previous, session))
+        };
         let declaration_matches = self
             .sessions
             .lock()
             .get(&session.session_id)
-            .is_none_or(|previous| account_worker::binding_matches(previous, session));
+            .is_none_or(&carries);
         declaration_matches
             && self
                 .workers
                 .lock()
                 .get(&session.session_id)
                 .is_none_or(|worker| {
-                    worker
-                        .snapshot
-                        .launch
-                        .as_ref()
-                        .map_or(session.provider_account_id.is_default(), |previous| {
+                    worker.snapshot.launch.as_ref().map_or(
+                        session.provider_account_id.is_default(),
+                        |previous| {
                             account_worker::binding_matches(previous, session)
-                        })
+                                || (replacing && carries(previous))
+                        },
+                    )
                 })
     }
 
@@ -1936,7 +1943,7 @@ impl Broker {
             );
             return;
         }
-        if !self.account_binding_matches(&session) {
+        if !self.account_binding_matches(&session, false) {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
@@ -2135,7 +2142,7 @@ impl Broker {
         session.adopt_only = false;
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
-        if !self.account_binding_matches(&session) {
+        if !self.account_binding_matches(&session, true) {
             self.command_rejected(
                 &session_id,
                 command_id,
@@ -6700,7 +6707,7 @@ mod tests {
             assert!(matches!(rx.recv().await,
                 Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
                     if reason.contains("subscription cannot change")));
-            assert!(broker.account_binding_matches(&launch));
+            assert!(broker.account_binding_matches(&launch, false));
             assert!(broker.workers.lock().contains_key("sess-1"));
             assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
             assert!(worker_rx.try_recv().is_err());

@@ -575,14 +575,35 @@ pub struct SessionMeta {
     pub owner_username: Option<String>,
 }
 
+/// Controller-verified proof that one named session's login stays valid on
+/// another release: the target's signed authentication is identical to the
+/// release the login signed in under (`provider_account::native_release_compatible`),
+/// exactly as new-session admission carries a login over. It binds the
+/// session, its login generation and the exact target release. Runtime
+/// admission (Store and Machine) still rechecks the login before any launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedReleaseCarry {
+    pub session_id: String,
+    pub auth_generation: u64,
+    pub version: String,
+    pub digest: String,
+}
+
 impl SessionMeta {
     fn require_provider_release_transition(
         &self,
         version: &str,
         digest: &str,
+        carry: Option<&NamedReleaseCarry>,
     ) -> Result<(), String> {
         if !self.provider_account_id.is_default()
             && (self.provider_version != version || self.provider_generation_digest != digest)
+            && !carry.is_some_and(|carry| {
+                carry.session_id == self.id
+                    && self.provider_auth_generation == Some(carry.auth_generation)
+                    && carry.version == version
+                    && carry.digest == digest
+            })
         {
             return Err("named account release change requires a verified login transition".into());
         }
@@ -4747,8 +4768,9 @@ impl Hub {
         version: &str,
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+        carry: Option<&NamedReleaseCarry>,
     ) -> Result<(), String> {
-        self.repin_workerless_provider(expected, version, digest, behavior, false)
+        self.repin_workerless_provider(expected, version, digest, behavior, false, carry)
     }
 
     /// A Machine rejected this session's launch because its pinned Provider
@@ -4795,7 +4817,7 @@ impl Hub {
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
     ) -> Result<(), String> {
-        self.repin_workerless_provider(expected, version, digest, behavior, true)?;
+        self.repin_workerless_provider(expected, version, digest, behavior, true, None)?;
         self.set_status(
             &expected.id,
             Status::Exited,
@@ -4872,6 +4894,7 @@ impl Hub {
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
         after_rejected_launch: bool,
+        carry: Option<&NamedReleaseCarry>,
     ) -> Result<(), String> {
         let meta = {
             let mut sessions = self.inner.sessions.lock();
@@ -4906,7 +4929,7 @@ impl Hub {
             }
             session
                 .meta
-                .require_provider_release_transition(version, digest)?;
+                .require_provider_release_transition(version, digest, carry)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -4939,6 +4962,7 @@ impl Hub {
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
         automatic: bool,
+        carry: Option<&NamedReleaseCarry>,
     ) -> Result<(), String> {
         let meta = {
             let mut sessions = self.inner.sessions.lock();
@@ -4977,7 +5001,7 @@ impl Hub {
             }
             session
                 .meta
-                .require_provider_release_transition(version, digest)?;
+                .require_provider_release_transition(version, digest, carry)?;
             if session.meta.execution_binding.is_some() {
                 let mut candidate = session.meta.clone();
                 candidate.provider_version = version.to_owned();
@@ -5056,6 +5080,7 @@ impl Hub {
                     .require_provider_release_transition(
                         &launch.provider_version,
                         &launch.provider_generation_digest,
+                        None,
                     )
                     .is_err()
                 || session.meta.require_runtime_launch().is_err()
@@ -11340,7 +11365,7 @@ mod core_tests {
         let (tx, mut rx) = mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         let (history, _) = hub.snapshot(&before.id).expect("history");
-        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, false)
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, false, None)
             .expect("reload");
         hub.submit(&before.id, "racing prompt".to_owned(), vec![], None);
         assert!(rx.try_recv().is_err(), "prompt must wait for replacement");
@@ -11382,7 +11407,7 @@ mod core_tests {
         for automatic in [false, true] {
             let before = hub.session_info(&meta.id).unwrap().meta;
             assert!(
-                hub.begin_provider_reload(&before, "new", "new-digest", &behavior, automatic)
+                hub.begin_provider_reload(&before, "new", "new-digest", &behavior, automatic, None)
                     .unwrap_err()
                     .contains("verified login transition")
             );
@@ -11394,7 +11419,7 @@ mod core_tests {
         hub.set_status(&meta.id, Status::Exited, None);
         let before = hub.session_info(&meta.id).unwrap().meta;
         assert!(
-            hub.repin_dormant_provider(&before, "new", "new-digest", &behavior)
+            hub.repin_dormant_provider(&before, "new", "new-digest", &behavior, None)
                 .unwrap_err()
                 .contains("verified login transition")
         );
@@ -11405,10 +11430,89 @@ mod core_tests {
     }
 
     #[test]
+    fn a_verified_carry_moves_one_named_session_on_its_existing_login() {
+        let (hub, meta) = provider_reload_fixture();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut(&meta.id).unwrap();
+            session.meta.provider_account_id = account.clone();
+            session.meta.provider_auth_generation = Some(7);
+        }
+        let behavior = crate::provider::legacy_behavior("codex");
+        let carry = NamedReleaseCarry {
+            session_id: meta.id.clone(),
+            auth_generation: 7,
+            version: "new".into(),
+            digest: "new-digest".into(),
+        };
+        // A proof for another session, login generation or release is refused.
+        for wrong in [
+            NamedReleaseCarry {
+                session_id: "other".into(),
+                ..carry.clone()
+            },
+            NamedReleaseCarry {
+                auth_generation: 8,
+                ..carry.clone()
+            },
+            NamedReleaseCarry {
+                digest: "other-digest".into(),
+                ..carry.clone()
+            },
+        ] {
+            let before = hub.session_info(&meta.id).unwrap().meta;
+            assert!(
+                hub.begin_provider_reload(
+                    &before,
+                    "new",
+                    "new-digest",
+                    &behavior,
+                    false,
+                    Some(&wrong)
+                )
+                .unwrap_err()
+                .contains("verified login transition")
+            );
+        }
+        let before = hub.session_info(&meta.id).unwrap().meta;
+        hub.begin_provider_reload(&before, "new", "new-digest", &behavior, false, Some(&carry))
+            .expect("verified carry reloads");
+        let moved = hub.session_info(&meta.id).unwrap().meta;
+        assert_eq!(
+            (
+                moved.provider_version.as_str(),
+                moved.provider_generation_digest.as_str()
+            ),
+            ("new", "new-digest")
+        );
+        // The login binding itself never changes.
+        assert_eq!(moved.provider_account_id, account);
+        assert_eq!(moved.provider_auth_generation, Some(7));
+
+        let (hub, meta) = provider_reload_fixture();
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut(&meta.id).unwrap();
+            session.meta.provider_account_id = account;
+            session.meta.provider_auth_generation = Some(7);
+        }
+        hub.set_status(&meta.id, Status::Exited, None);
+        let before = hub.session_info(&meta.id).unwrap().meta;
+        hub.repin_dormant_provider(&before, "new", "new-digest", &behavior, Some(&carry))
+            .expect("verified carry re-pins a dormant session");
+        assert_eq!(
+            hub.session_info(&meta.id).unwrap().meta.provider_version,
+            "new"
+        );
+    }
+
+    #[test]
     fn provider_reload_publishes_its_update_until_the_worker_settles() {
         let (hub, before) = provider_reload_fixture();
         let behavior = crate::provider::legacy_behavior("codex");
-        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true, None)
             .expect("reload");
         let starting = hub.session_info(&before.id).expect("session").meta;
         let update = starting.provider_update.clone().expect("published update");
@@ -11444,7 +11548,7 @@ mod core_tests {
         hub.set_background_tasks("provider-reload", 1);
         let working = hub.session_info("provider-reload").expect("session").meta;
         assert_eq!(
-            hub.begin_provider_reload(&working, "new-version", "new-digest", &behavior, true),
+            hub.begin_provider_reload(&working, "new-version", "new-digest", &behavior, true, None),
             Err("session has background work in progress".to_owned())
         );
         assert_eq!(
@@ -11452,8 +11556,15 @@ mod core_tests {
             Status::Running
         );
         // An explicit Reload stays the user's decision.
-        hub.begin_provider_reload(&working, "new-version", "new-digest", &behavior, false)
-            .expect("explicit reload");
+        hub.begin_provider_reload(
+            &working,
+            "new-version",
+            "new-digest",
+            &behavior,
+            false,
+            None,
+        )
+        .expect("explicit reload");
     }
 
     #[test]
@@ -11469,8 +11580,15 @@ mod core_tests {
             (true, Status::Crashed, true),
         ] {
             let (hub, before) = provider_reload_fixture();
-            hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, automatic)
-                .expect("reload");
+            hub.begin_provider_reload(
+                &before,
+                "new-version",
+                "new-digest",
+                &behavior,
+                automatic,
+                None,
+            )
+            .expect("reload");
             assert!(!failed(&hub, &before));
             hub.set_status(&before.id, outcome, None);
             assert_eq!(failed(&hub, &before), held, "{automatic} {outcome:?}");
@@ -11493,7 +11611,7 @@ mod core_tests {
         let (hub, before) = provider_reload_fixture();
         hub.set_status(&before.id, Status::Exited, None);
         assert!(
-            hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+            hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true, None)
                 .is_err()
         );
         assert_eq!(hub.status(&before.id), Some(Status::Exited));
@@ -11503,7 +11621,7 @@ mod core_tests {
     fn a_crashed_unattended_update_holds_its_session_until_it_is_used() {
         let behavior = crate::provider::legacy_behavior("codex");
         let (hub, before) = provider_reload_fixture();
-        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true, None)
             .expect("reload");
         hub.set_status(&before.id, Status::Crashed, None);
         assert!(hub.automatic_update_failed_since_activity(&before.id));
@@ -11517,12 +11635,12 @@ mod core_tests {
         assert!(!hub.automatic_update_failed_since_activity(&before.id));
         // So does an update that finishes, however it was started.
         let (hub, before) = provider_reload_fixture();
-        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true, None)
             .expect("reload");
         hub.set_status(&before.id, Status::Crashed, None);
         hub.set_status(&before.id, Status::Running, None);
         let crashed = hub.session_info(&before.id).expect("session").meta;
-        hub.begin_provider_reload(&crashed, "newer", "newer-digest", &behavior, false)
+        hub.begin_provider_reload(&crashed, "newer", "newer-digest", &behavior, false, None)
             .expect("explicit reload");
         hub.set_status(&before.id, Status::Running, None);
         assert!(!hub.automatic_update_failed_since_activity(&before.id));
@@ -11538,7 +11656,7 @@ mod core_tests {
         assert!(rx.recv().await.is_some());
         let behavior = crate::provider::legacy_behavior("codex");
         assert!(
-            hub.begin_provider_reload(&before, "new", "new", &behavior, false)
+            hub.begin_provider_reload(&before, "new", "new", &behavior, false, None)
                 .unwrap_err()
                 .contains("current turn")
         );
@@ -11556,8 +11674,15 @@ mod core_tests {
     fn provider_reload_reconciles_interrupted_reset_without_migrating_native_identity() {
         let (hub, before) = provider_reload_fixture();
         let behavior = crate::provider::legacy_behavior("codex");
-        hub.begin_provider_reload(&before, "intended", "intended-digest", &behavior, false)
-            .unwrap();
+        hub.begin_provider_reload(
+            &before,
+            "intended",
+            "intended-digest",
+            &behavior,
+            false,
+            None,
+        )
+        .unwrap();
         let mut worker =
             super::runtime_reconciliation_tests::worker_snapshot(&before.id, "surviving-worker");
         worker.agent_session_id.clone_from(&before.agent_session_id);
@@ -11627,7 +11752,7 @@ mod core_tests {
         let behavior = crate::provider::legacy_behavior("codex");
         // A live session is not dormant.
         assert!(
-            hub.repin_dormant_provider(&running, "new", "new-digest", &behavior)
+            hub.repin_dormant_provider(&running, "new", "new-digest", &behavior, None)
                 .unwrap_err()
                 .contains("dormant")
         );
@@ -11636,11 +11761,11 @@ mod core_tests {
         let mut stale = before.clone();
         stale.provider_generation_digest = "other".to_owned();
         assert!(
-            hub.repin_dormant_provider(&stale, "new", "new-digest", &behavior)
+            hub.repin_dormant_provider(&stale, "new", "new-digest", &behavior, None)
                 .unwrap_err()
                 .contains("changed")
         );
-        hub.repin_dormant_provider(&before, "new", "new-digest", &behavior)
+        hub.repin_dormant_provider(&before, "new", "new-digest", &behavior, None)
             .expect("re-pin");
         let after = hub.session_info(&before.id).unwrap().meta;
         assert_eq!(after.provider_version, "new");
@@ -11716,7 +11841,7 @@ mod core_tests {
         let behavior = crate::provider::legacy_behavior("codex");
         hub.set_status(&meta.id, Status::Exited, None);
         let exited = hub.session_info(&meta.id).unwrap().meta;
-        hub.repin_dormant_provider(&exited, "new", "new-digest", &behavior)
+        hub.repin_dormant_provider(&exited, "new", "new-digest", &behavior, None)
             .expect("re-pin");
         assert_eq!(listed(&hub), None);
 
@@ -11731,7 +11856,7 @@ mod core_tests {
         let mut stale = before.clone();
         stale.provider_generation_digest = "other".to_owned();
         assert!(
-            hub.begin_provider_reload(&stale, "new", "new", &behavior, false)
+            hub.begin_provider_reload(&stale, "new", "new", &behavior, false, None)
                 .unwrap_err()
                 .contains("changed")
         );
@@ -11749,7 +11874,7 @@ mod core_tests {
         assert!(!unsaved.provider_version_changeable(&unsaved_meta.id));
         assert!(
             unsaved
-                .begin_provider_reload(&unsaved_meta, "new", "new", &behavior, false)
+                .begin_provider_reload(&unsaved_meta, "new", "new", &behavior, false, None)
                 .unwrap_err()
                 .contains("saved native")
         );
@@ -11770,7 +11895,7 @@ mod core_tests {
         );
         assert!(hub.provider_version_changeable(&before.id));
         let cleared = hub.session_info(&before.id).unwrap().meta;
-        hub.begin_provider_reload(&cleared, "new", "new-digest", &behavior, false)
+        hub.begin_provider_reload(&cleared, "new", "new-digest", &behavior, false, None)
             .expect("reload a cleared context");
         let reloaded = hub.session_info(&before.id).unwrap().meta;
         assert_eq!(reloaded.provider_version, "new");
@@ -11782,7 +11907,7 @@ mod core_tests {
         let exited = fresh.session_info("provider-reload-fresh").unwrap().meta;
         assert!(fresh.provider_version_changeable(&exited.id));
         fresh
-            .repin_dormant_provider(&exited, "new", "new-digest", &behavior)
+            .repin_dormant_provider(&exited, "new", "new-digest", &behavior, None)
             .expect("re-pin an unprompted session");
         let after = fresh.session_info(&exited.id).unwrap().meta;
         assert_eq!(after.provider_version, "new");

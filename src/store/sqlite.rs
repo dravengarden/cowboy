@@ -4918,8 +4918,12 @@ impl SqliteStorage {
     }
 
     pub(super) async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
-        sqlx::query(
-            "UPDATE sessions SET provider_version = ?1, provider_generation_digest = ?2, provider_behavior = ?3, status = ?6, updated_at_ms = ?4 WHERE id = ?5",
+        // A named session's write applies only while the row keeps the login
+        // generation the Hub admitted it with, so a committed transition is
+        // never overwritten. Other fields of the input are never persisted.
+        let result = sqlx::query(
+            "UPDATE sessions SET provider_version = ?1, provider_generation_digest = ?2, provider_behavior = ?3, status = ?6, updated_at_ms = ?4 WHERE id = ?5 \
+             AND (?8 OR provider_auth_generation IS ?7)",
         )
         .bind(&meta.provider_version)
         .bind(&meta.provider_generation_digest)
@@ -4927,8 +4931,15 @@ impl SqliteStorage {
         .bind(now_ms())
         .bind(&meta.id)
         .bind(status_to_str(meta.status))
+        .bind(meta.provider_auth_generation.map(i64::try_from).transpose()?)
+        .bind(meta.provider_account_id.is_default())
         .execute(&self.pool)
         .await?;
+        anyhow::ensure!(
+            result.rows_affected() == 1 || meta.provider_account_id.is_default(),
+            "session {} login changed; Provider release not persisted",
+            meta.id
+        );
         Ok(())
     }
 

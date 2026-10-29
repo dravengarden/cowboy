@@ -409,12 +409,6 @@ async fn pass(
         if meta.status == Status::Starting || meta.closing || meta.trashed_at_ms.is_some() {
             continue;
         }
-        // A named subscription's session changes release only through a
-        // verified login transition; the Machine keeps each named worker on
-        // its exact release. Offering Update here would only ever fail.
-        if !meta.provider_account_id.is_default() {
-            continue;
-        }
         // A managed child serves one call and is retired after it; no Update.
         if state.hub.is_managed_child(&meta.id) {
             continue;
@@ -424,6 +418,9 @@ async fn pass(
         {
             continue;
         }
+        // A named session's target depends on its own login, so it is never
+        // shared: it moves only to a release that login carries over to.
+        let named = !meta.provider_account_id.is_default();
         let target_key = (
             meta.machine_id.clone(),
             meta.provider.clone(),
@@ -431,6 +428,7 @@ async fn pass(
             meta.provider_generation_digest.clone(),
         );
         let target = match targets.get(&target_key) {
+            _ if named => session_upgrade_target(state, &meta).await.ok(),
             Some(target) => target.clone(),
             None => {
                 let target = machines
@@ -539,7 +537,7 @@ async fn pass(
                     && !holds_worker_slot(&state.runtime_router, &meta)
                     && !state.hub.session_has_in_flight_prompt(&meta.id) =>
             {
-                repin_dormant(state, &meta, &target)
+                repin_dormant(state, &meta, &target).await
             }
             _ => false,
         };
@@ -586,7 +584,7 @@ async fn update_running(
     if !newer(&meta.provider_version, &target.version) || !still_wanted() {
         return false;
     }
-    match apply_session_provider_reload(state, meta, &target, true) {
+    match apply_session_provider_reload(state, meta, &target, true).await {
         Ok(()) => {
             tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started");
             true
@@ -600,7 +598,7 @@ async fn update_running(
 
 /// Move a dormant session's binding without starting it; the next open
 /// resumes the same native session on the new release.
-fn repin_dormant(
+async fn repin_dormant(
     state: &Arc<AppState>,
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
@@ -614,10 +612,7 @@ fn repin_dormant(
     ) else {
         return false;
     };
-    match state
-        .hub
-        .repin_dormant_provider(meta, &target.version, &target.digest, &target.behavior)
-    {
+    match super::repin_dormant_session(state, meta, target).await {
         Ok(()) => {
             tracing::info!(
                 session = %meta.id,

@@ -17,6 +17,95 @@ const DESKTOP: SurfaceProfile = {
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 
+/** The live session view offers Steer at once: a slow or failing options
+ *  read never shows it as unavailable. */
+async function checkLiveSteer(
+  root: ReturnType<typeof createRoot>,
+  check: (value: unknown, message: string) => void,
+  key: (key: string, extra?: KeyboardEventInit) => void,
+): Promise<void> {
+  const steered: string[] = [];
+  let reads = 0;
+  let mode: "hang" | "fail-once" = "hang";
+  globalThis.fetch = async () => {
+    reads++;
+    if (mode === "hang") return await new Promise<Response>(() => {});
+    if (reads === 1) throw new TypeError("network");
+    return Response.json({
+      target: { worker_epoch: "w", turn_id: "live" },
+      steer: true,
+      controls: { version: 1, next_checkpoint: false },
+      status: "busy",
+      paused: false,
+      hold: null,
+      policy: { mode: "steer", revision: 0 },
+    });
+  };
+  const open = (session: string): void => {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    flushSync(() =>
+      root.render(
+        <SurfaceContext.Provider value={DESKTOP}>
+          <DesktopWorkspaceProvider>
+            <DesktopCommandProvider>
+              <BrowserProductTheme>
+                <DeliveryPicker
+                  sessionId={session}
+                  anchor={anchor}
+                  busy
+                  steerReady
+                  paused={false}
+                  queueCount={0}
+                  onClose={() => {}}
+                  onNextTurn={() => {}}
+                  onQueueFront={() => {}}
+                  onSteer={(target) => steered.push(target?.turn_id ?? "capture")}
+                  onSendAndPause={() => {}}
+                  onStop={() => {}}
+                />
+              </BrowserProductTheme>
+            </DesktopCommandProvider>
+          </DesktopWorkspaceProvider>
+        </SurfaceContext.Provider>,
+      )
+    );
+  };
+  const steerRow = () =>
+    document.querySelector<HTMLElement>('[data-delivery-command="steer"]');
+  open("live-hang");
+  for (let attempt = 0; attempt < 50 && document.activeElement !== steerRow(); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  check(
+    steerRow()?.getAttribute("aria-disabled") !== "true" &&
+      document.activeElement === steerRow(),
+    "Steer is offered and focused while the options read is still pending",
+  );
+  check(
+    !steerRow()?.textContent?.includes("unavailable"),
+    "A pending read never reads as unavailable",
+  );
+  key("Enter");
+  check(steered.at(-1) === "capture", "Steer without a fresh target captures it on submit");
+  mode = "fail-once";
+  reads = 0;
+  flushSync(() => root.render(<></>));
+  open("live-retry");
+  for (let attempt = 0; attempt < 150 && reads < 2; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  check(reads >= 2, "a failed options read is retried");
+  check(
+    !document.querySelector("[data-delivery-picker]")?.textContent?.includes("Runtime unavailable"),
+    "a transient failure never shows Runtime unavailable",
+  );
+  key("Enter");
+  check(steered.at(-1) === "live", "after the retry Steer carries the fresh turn");
+  flushSync(() => root.render(<></>));
+}
+
 /** Any MUI menu on Desktop takes the same Vim keys, with no local handler. */
 async function checkMenuGrammar(
   root: ReturnType<typeof createRoot>,
@@ -125,7 +214,7 @@ export async function checkDeliveryPicker(): Promise<string> {
           onQueueFront={() => calls.push("front")}
           onSteer={(target, checkpoint) =>
             calls.push(
-              `${checkpoint ? "checkpoint" : "steer"}:${target.turn_id}`,
+              `${checkpoint ? "checkpoint" : "steer"}:${target?.turn_id ?? "capture"}`,
             )}
           onSendAndPause={() => calls.push("pause")}
           onStop={() => calls.push("stop")}
@@ -338,6 +427,7 @@ export async function checkDeliveryPicker(): Promise<string> {
     key("l", { code: "KeyL" });
     check(calls.at(-1) === "pause", "l activates the focused delivery");
     await checkMenuGrammar(root, check, key);
+    await checkLiveSteer(root, check, key);
     return "Delivery picker preserves exact target, IME/repeat exclusion, disabled focus, explicit next-turn selection and the Desktop Vim menu grammar";
   } finally {
     flushSync(() => root.unmount());

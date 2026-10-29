@@ -173,12 +173,13 @@ async fn session_provider_update(
     // An exited session whose worker survives is reloaded, never re-pinned:
     // the worker's release would reconcile a re-pin straight back.
     let result = if meta.status == Status::Exited && !live_worker {
-        state
-            .hub
-            .repin_dormant_provider(&meta, &target.version, &target.digest, &target.behavior)
+        repin_dormant_session(&state, &meta, &target)
+            .await
             .map(|()| "repinned")
     } else {
-        apply_session_provider_reload(&state, &meta, &target, false).map(|()| "updating")
+        apply_session_provider_reload(&state, &meta, &target, false)
+            .await
+            .map(|()| "updating")
     };
     match result {
         Ok(state_name) => {

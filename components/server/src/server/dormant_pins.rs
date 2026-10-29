@@ -107,12 +107,7 @@ pub(super) async fn repin(state: &Arc<AppState>) {
         if target.digest == meta.provider_generation_digest {
             continue;
         }
-        match state.hub.repin_dormant_provider(
-            &meta,
-            &target.version,
-            &target.digest,
-            &target.behavior,
-        ) {
+        match repin_dormant_session(state, &meta, &target).await {
             Ok(()) => tracing::info!(
                 session = %meta.id,
                 machine = %meta.machine_id,
