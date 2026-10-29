@@ -1,4 +1,4 @@
-// ACP 0.98 owns active-turn admission, UUID tracking and settlement across SDK
+// ACP 0.99 owns active-turn admission, UUID tracking and settlement across SDK
 // result cycles. Extend only its SDK input priority; never duplicate that turn
 // lifecycle. Delete this adapter when upstream accepts the priority itself.
 export function installSteeringPriority(Agent) {

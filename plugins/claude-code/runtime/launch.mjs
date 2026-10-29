@@ -136,7 +136,7 @@ export function nativeRuntimeEnvironment(environment) {
   return { [BUN_GC_TIMER]: environment[BUN_GC_TIMER] ?? "100" };
 }
 
-// ACP 0.98 implements promptRequired but only advertises generic steering.
+// ACP 0.99 implements promptRequired but only advertises generic steering.
 // Advertise the pinned adapter's explicit no-new-turn contract to Cowboy.
 export function advertiseCurrentTurn(Agent) {
   const prioritySupported = installSteeringPriority(Agent);
