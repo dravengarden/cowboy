@@ -146,7 +146,10 @@ fn content_reads_share_owner_visibility_and_never_wake_a_target() {
             "session.events",
             json!({"session_id":"mine"})
         ),
-        Err("invalid_argument".into())
+        Err(
+            "invalid_argument: session_id is not accepted; options are after, before, limit, chars, kinds"
+                .into()
+        )
     );
     hub.set_closing("mine", true);
     assert_eq!(
@@ -298,6 +301,9 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
     );
     assert_eq!(
         history(&hub, Some(&store), &parent, false, json!({"after":0})).await,
-        Err("invalid_argument".into())
+        Err(
+            "invalid_argument: after is not accepted; options are before, limit, chars, kinds"
+                .into()
+        )
     );
 }

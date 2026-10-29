@@ -138,20 +138,39 @@ const namespace = (name, methods) =>
     "",
   );
 const none = () => ({});
-const id = (id) => ({ id });
-const callId = (call_id) => ({ call_id });
 const query = (q) => q ?? {};
+// Agents often write `info({id})` or `history({session_id, limit})` for a
+// positional id. That form was always a type error, so accepting it (and
+// the obvious alias key) cannot change what a valid call means.
+const plain = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const keyed = (key, aliases, shape = (value, q) => ({ ...q, [key]: value })) =>
+(first, ...rest) => {
+  if (!plain(first)) return shape(first, ...rest);
+  const args = { ...(plain(rest[0]) ? rest[0] : {}), ...first };
+  for (const alias of aliases) {
+    if (!(key in args) && alias in args) {
+      args[key] = args[alias];
+      delete args[alias];
+    }
+  }
+  return args;
+};
+const id = keyed("id", ["session_id"]);
+const callId = keyed("call_id", ["id"]);
+const sessionId = keyed("session_id", ["id"]);
 const cowboy = strict(Object.freeze({
   control: namespace("control", {
-    list: (domain) => domain === undefined ? {} : ({ domain }),
-    describe: (name) => ({ name }),
+    list: keyed("domain", [], (domain) =>
+      domain === undefined ? {} : ({ domain })),
+    describe: keyed("name", []),
     read: (name, input, selection) => ({
       name,
       input: input ?? {},
       ...(selection === undefined ? {} : { selection }),
     }),
   }),
-  api: namespace("api", { help: (topic) => ({ topic }) }),
+  api: namespace("api", { help: keyed("topic", []) }),
   preferences: namespace("preferences", {
     schema: none,
     get: (scope) => ({ scope }),
@@ -180,30 +199,33 @@ const cowboy = strict(Object.freeze({
     list: query,
     capabilities: query,
     inspect: callId,
-    wait: (call_id, timeout_ms) => ({ call_id, timeout_ms }),
-    result: (call_id, q) => ({ ...q, call_id }),
+    wait: keyed("call_id", ["id"], (call_id, timeout_ms) =>
+      plain(timeout_ms)
+        ? ({ ...timeout_ms, call_id })
+        : ({ call_id, timeout_ms })),
+    result: callId,
     observe: (request_id) => ({ request_id }),
   }),
   sessions: namespace("sessions", {
     list: query,
     info: id,
     usage: id,
-    queue: (session_id, q) => ({ ...q, session_id }),
-    drafts: (session_id, q) => ({ ...q, session_id }),
+    queue: sessionId,
+    drafts: sessionId,
     message: (session_id, id, q) => ({ ...q, session_id, id }),
-    events: (session_id, q) => ({ ...q, session_id }),
-    history: (session_id, q) => ({ ...q, session_id }),
+    events: sessionId,
+    history: sessionId,
     event: (session_id, seq, q) => ({ ...q, session_id, seq }),
-    search: (session_id, q) => ({ ...q, session_id }),
+    search: sessionId,
   }),
   usage: namespace("usage", {
     list: query,
-    read: (account, q) => ({ ...q, account }),
+    read: keyed("account", ["account_id", "id"]),
     diagnostics: query,
   }),
   machines: namespace("machines", {
     list: query,
-    read: (id, q) => ({ ...q, id }),
+    read: keyed("id", ["machine", "machine_id"]),
   }),
   configuration: namespace("configuration", {
     schema: (scope, q) => ({ ...q, scope }),
@@ -211,7 +233,7 @@ const cowboy = strict(Object.freeze({
   }),
   documents: namespace("documents", {
     list: query,
-    read: (id, q) => ({ ...q, id }),
+    read: keyed("id", ["document_id"]),
   }),
 }), "cowboy", "; help is cowboy.api.help(topic)");
 

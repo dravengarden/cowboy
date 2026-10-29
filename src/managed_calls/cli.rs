@@ -347,8 +347,9 @@ pub struct ReviewArgs {
     /// the current Git worktree; the target validates registration.
     #[arg(long)]
     root: Option<std::path::PathBuf>,
-    /// Stable task identity. With --base, reuse the same complete review input.
-    #[arg(long, requires = "base")]
+    /// Stable task id (letters, digits, '-', '_', '.'). With --base, reuse the
+    /// same complete review input.
+    #[arg(long, requires = "base", value_parser = task_id)]
     task: Option<String>,
     /// Base commit/ref for --task; resolved to the immutable merge-base with HEAD.
     #[arg(long, requires = "task")]
@@ -379,6 +380,14 @@ pub struct ReviewArgs {
     /// its call id is printed.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=60))]
     timeout_min: u64,
+}
+
+fn task_id(value: &str) -> Result<String, String> {
+    if valid_id(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("use a stable id of up to 128 letters, digits, '-', '_' or '.'; describe the review in the focus text".into())
+    }
 }
 
 fn review_request(args: &ReviewArgs, focus: &str) -> Result<Request, String> {

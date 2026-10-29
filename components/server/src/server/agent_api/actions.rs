@@ -133,6 +133,28 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             "base must be a full 40- or 64-hex commit id, not a short or symbolic ref",
         ));
     }
+    // The review gateway reports a malformed reuse label as a context error;
+    // name the actual rule here, since callers tend to pass prose as task.
+    if input
+        .task
+        .as_deref()
+        .is_some_and(|task| !crate::managed_calls::valid_id(task))
+    {
+        return Err(refuse(
+            "task must be a stable id of up to 128 letters, digits, '-', '_' or '.' (for example f01-awaiting-merge); describe the review in focus",
+        ));
+    }
+    // The request contract reports root and file faults together; split the
+    // common mistake of attaching absolute paths instead of root-relative ones.
+    if input
+        .files
+        .iter()
+        .any(|file| !crate::managed_calls::relative_file(file))
+    {
+        return Err(refuse(
+            "files must be paths relative to root, without a leading /, '.' or '..' segments; capture files outside root into the worktree first",
+        ));
+    }
     if review && input.task.is_some() && input.root.is_none() {
         return Err(refuse("a base-bound review needs root"));
     }
@@ -930,6 +952,16 @@ mod tests {
         );
         assert!(short.contains("full 40- or 64-hex"), "{short}");
         assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
+        let prose = message(
+            "review.start",
+            json!({"root":root,"base":"a".repeat(40),"task":"Review commit abc on branch x"}),
+        );
+        assert!(prose.contains("stable id"), "{prose}");
+        let absolute = message(
+            "review.start",
+            json!({"root":root,"files":["/srv/private/source/design.md"]}),
+        );
+        assert!(absolute.contains("relative to root"), "{absolute}");
         assert!(message("calls.start", json!({"title":"x"})).contains("needs instruction"));
         assert!(
             message("calls.start", json!({"instruction":"x","base":"a"})).contains("review.start")
@@ -951,7 +983,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(context.code, "invalid_argument");
         assert!(context.message.contains("absolute directory"));
-        for value in [short, unknown, context.message] {
+        for value in [short, prose, absolute, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
     }
