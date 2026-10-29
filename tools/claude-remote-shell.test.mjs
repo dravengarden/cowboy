@@ -1191,11 +1191,12 @@ test("a background command's timeout is its deadline, up to two hours", async (t
   });
   assert.ok(started.task?.id, JSON.stringify(started));
   await tools.cancelTasks([started.task.id]);
-  const refused = await tools.dispatch("Bash", {
+  // A foreground command clamps the same request to ten minutes, as natively.
+  const clamped = await tools.dispatch("Bash", {
     command: "true",
     timeout: 1800000,
   }).catch((error) => ({ deny: error.message }));
-  assert.match(refused.deny, /Invalid tool limit/);
+  assert.equal(clamped.deny, undefined, JSON.stringify(clamped));
 });
 
 test("commands see credential-like variables, as natively", async (t) => {
