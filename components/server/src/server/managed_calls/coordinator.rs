@@ -50,6 +50,10 @@ pub(in crate::server) struct Coordinator {
     pub(super) runners: Mutex<HashSet<String>>,
     pub(super) changed: tokio::sync::Notify,
     pub(super) approvals: super::approval::Approvals,
+    /// Serializes continuation admission against child retirement.
+    pub(super) child_lifecycle: tokio::sync::Mutex<()>,
+    /// Children being retired: continuation is refused until they close.
+    pub(super) retiring: Mutex<HashSet<String>>,
 }
 
 pub(super) fn error(code: &str, admission: &str) -> Value {
@@ -1036,6 +1040,27 @@ async fn start(
         preset: target.recorded_preset(),
         selection,
     };
+    // Continuation admission holds the child lifecycle fence while it
+    // rechecks the child and inserts, so retirement cannot interleave.
+    let fence = match &request.conversation {
+        Conversation::Continue { child_session_id } => {
+            let fence = state.managed_calls.child_lifecycle.lock().await;
+            if state
+                .managed_calls
+                .retiring
+                .lock()
+                .contains(child_session_id)
+                || state
+                    .hub
+                    .session_info(child_session_id)
+                    .is_none_or(|child| child.meta.closing)
+            {
+                return error("conversation_unavailable", "not_submitted");
+            }
+            Some(fence)
+        }
+        Conversation::Fresh {} => None,
+    };
     let record = match ledger
         .admit(&target.agent, &request, &call_id, &child_id, &choice)
         .await
@@ -1054,6 +1079,9 @@ async fn start(
             return error(code, "not_submitted");
         }
     };
+    // The inserted call now protects its child; never hold the fence while
+    // waiting for the call to start.
+    drop(fence);
     state
         .managed_calls
         .approvals
@@ -1156,6 +1184,20 @@ pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str)
     None
 }
 
+/// Where a managed child lives: its parent and the Machine holding its
+/// snapshot (and a remote child's environment).
+fn child_location(meta: &crate::core::SessionMeta) -> Option<(String, String)> {
+    let binding = meta.execution_binding.as_ref()?;
+    let identity = binding.managed()?;
+    // The snapshot (and a remote child's environment) is on the execution
+    // Machine; a remote child's worker is stopped on its runtime Machine.
+    let execution_machine = match binding.managed_child() {
+        Some(local) => local.machine_id,
+        None => binding.decode().ok()?.environment.machine_id,
+    };
+    Some((identity.parent_session_id, execution_machine))
+}
+
 /// Delete one managed child conversation. An active call keeps its child; the
 /// call ledger (and its result summary) belongs to the parent and remains.
 pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Result<(), String> {
@@ -1163,68 +1205,98 @@ pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Res
         .hub
         .session_info(child)
         .ok_or("Session no longer exists")?;
-    let binding = info
-        .meta
-        .execution_binding
-        .as_ref()
-        .ok_or("Not a managed child")?;
-    let identity = binding.managed().ok_or("Not a managed child")?;
-    // The snapshot (and a remote child's environment) is on the execution
-    // Machine; a remote child's worker is stopped on its runtime Machine.
-    let execution_machine = match binding.managed_child() {
-        Some(local) => local.machine_id,
-        None => {
-            binding
-                .decode()
-                .map_err(|_| "Not a managed child")?
-                .environment
-                .machine_id
-        }
-    };
-    let store = state
-        .store
-        .clone()
-        .ok_or("Managed calls require durable storage")?;
+    child_location(&info.meta).ok_or("Not a managed child")?;
+    if state.store.is_none() {
+        return Err("Managed calls require durable storage".to_owned());
+    }
     let state = Arc::clone(state);
     let child = child.to_owned();
     // Deletion consults durable call state first, so it runs asynchronously
     // like other target-owned closures.
     tokio::spawn(async move {
-        let active = store
-            .managed_child(&identity.parent_session_id, &child)
-            .await
-            .map(|record| record.is_some_and(|record| !record.state.terminal()));
-        if !matches!(active, Ok(false)) {
+        if matches!(
+            retire_child(&state, &child, |_| true).await,
+            Retirement::Active
+        ) {
             state.hub.broadcast_error(
                 Some(child.clone()),
                 "Cancel this child's managed call before deleting it".to_owned(),
             );
-            return;
         }
-        state.supervisor.delete_session(&child);
-        state.hub.delete_session(&child);
-        // The session is gone once deleted here, so a snapshot left behind by
-        // a transient refusal (another holder of its child lock, a briefly
-        // disconnected Machine) would never be revisited. Retry boundedly.
-        for attempt in 0..CLOSE_ATTEMPTS {
-            if matches!(
-                execution_action(
-                    &state,
-                    &execution_machine,
-                    execution::Action::CloseManagedChild {
-                        child_session_id: child.clone(),
-                    },
-                )
-                .await,
-                Ok(execution::Response::Closed)
-            ) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
-        }
-        tracing::warn!(child = %child, "managed child snapshot was not closed");
     });
     Ok(())
+}
+
+enum Retirement {
+    Closed,
+    /// Its newest call is active, or not yet eligible for retirement.
+    Active,
+    /// Marked retiring; the snapshot is not confirmed closed yet.
+    Pending,
+}
+
+/// Retire one child when the eligibility check accepts its newest terminal
+/// call.
+///
+/// Under the child lifecycle fence this rechecks the newest call and marks the
+/// child retiring, so continuation admission (which holds the same fence while
+/// it inserts) either sees the mark and refuses, or wins and makes the newest
+/// call active. The session is removed only after its Machine confirms the
+/// snapshot is closed; otherwise it stays retiring and a later sweep retries.
+async fn retire_child(
+    state: &Arc<AppState>,
+    child: &str,
+    eligible: impl Fn(&Record) -> bool,
+) -> Retirement {
+    let Some(store) = state.store.clone() else {
+        return Retirement::Active;
+    };
+    let Some((parent, machine)) = state
+        .hub
+        .session_info(child)
+        .and_then(|info| child_location(&info.meta))
+    else {
+        return Retirement::Active;
+    };
+    {
+        let _fence = state.managed_calls.child_lifecycle.lock().await;
+        let retiring = state.managed_calls.retiring.lock().contains(child);
+        if !retiring {
+            match store.managed_child(&parent, child).await {
+                Ok(Some(record)) if record.state.terminal() && eligible(&record) => {}
+                Ok(None) => {}
+                _ => return Retirement::Active,
+            }
+            state.managed_calls.retiring.lock().insert(child.to_owned());
+        }
+    }
+    state.supervisor.delete_session(child);
+    // Retry only explicit refusals (another holder of the child lock). A
+    // transport error or timeout may leave the first close still queued on
+    // the Machine; adding more would only pile up behind it.
+    for attempt in 0..CLOSE_ATTEMPTS {
+        match execution_action(
+            state,
+            &machine,
+            execution::Action::CloseManagedChild {
+                child_session_id: child.to_owned(),
+            },
+        )
+        .await
+        {
+            Ok(execution::Response::Closed) => {
+                state.hub.delete_session(child);
+                state.managed_calls.retiring.lock().remove(child);
+                return Retirement::Closed;
+            }
+            Ok(_) if attempt + 1 < CLOSE_ATTEMPTS => {
+                tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+            }
+            _ => break,
+        }
+    }
+    tracing::warn!(child = %child, machine = %machine, "managed child snapshot not closed; will retry");
+    Retirement::Pending
 }
 
 /// Whether a child's newest call ended long enough ago to retire it.
@@ -1235,16 +1307,17 @@ fn child_expired(record: &Record, now_ms: i64) -> bool {
 }
 
 /// Retire child conversations whose newest call finished before the
-/// retention window. Busy or starting children and children with an active
-/// call are left alone; `delete_child` rechecks the durable call state.
+/// retention window, or whose parent is gone, one at a time so cleanup never
+/// floods a Machine. Children still marked retiring are retried as well.
 async fn reap_expired_children(state: &Arc<AppState>) {
     let Some(store) = state.store.clone() else {
         return;
     };
     let now = chrono::Utc::now().timestamp_millis();
-    let mut retired = 0;
+    let mut closed = 0;
+    let mut attempted = 0;
     for meta in state.hub.session_list() {
-        if retired >= CHILD_REAP_BATCH {
+        if attempted >= CHILD_REAP_BATCH {
             break;
         }
         if matches!(
@@ -1253,25 +1326,33 @@ async fn reap_expired_children(state: &Arc<AppState>) {
         ) {
             continue;
         }
-        let Some(identity) = meta
-            .execution_binding
-            .as_ref()
-            .and_then(crate::execution_environment::ExecutionBinding::managed)
-        else {
+        let Some((parent, _)) = child_location(&meta) else {
             continue;
         };
-        let Ok(Some(record)) = store
-            .managed_child(&identity.parent_session_id, &meta.id)
-            .await
-        else {
-            continue;
-        };
-        if child_expired(&record, now) && delete_child(state, &meta.id).is_ok() {
-            retired += 1;
+        let orphaned = state.hub.session_info(&parent).is_none();
+        let retiring = state.managed_calls.retiring.lock().contains(&meta.id);
+        if !retiring && !orphaned {
+            // Cheap prefilter; retire_child rechecks under the fence.
+            match store.managed_child(&parent, &meta.id).await {
+                Ok(Some(record)) if child_expired(&record, now) => {}
+                _ => continue,
+            }
+        }
+        attempted += 1;
+        let eligible = |record: &Record| orphaned || child_expired(record, now);
+        if matches!(
+            retire_child(state, &meta.id, eligible).await,
+            Retirement::Closed
+        ) {
+            closed += 1;
         }
     }
-    if retired > 0 {
-        tracing::info!(retired, "retired expired managed child conversations");
+    if attempted > 0 {
+        tracing::info!(
+            attempted,
+            closed,
+            "retired expired managed child conversations"
+        );
     }
 }
 
