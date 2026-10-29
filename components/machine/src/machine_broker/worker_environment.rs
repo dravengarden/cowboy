@@ -2,6 +2,31 @@
 use std::collections::{BTreeMap, BTreeSet};
 use tokio::process::Command;
 
+/// Markers with which login-shell initialization records that it already ran.
+/// A worker receives its own narrower PATH, so an inherited marker would make
+/// every agent login shell skip system initialization and miss host tools
+/// such as nix, python3 and go. Workers must start without them.
+pub(super) const SHELL_INIT_GUARDS: [&str; 3] = [
+    "__NIXOS_SET_ENVIRONMENT_DONE",
+    "__HM_SESS_VARS_SOURCED",
+    "__fish_nixos_env_preinit_sourced",
+];
+
+/// A directly spawned worker inherits the Machine's environment.
+pub(super) fn remove_shell_init_guards(command: &mut Command) {
+    for name in SHELL_INIT_GUARDS {
+        command.env_remove(name);
+    }
+}
+
+/// A transient unit starts from the user manager's environment instead.
+pub(super) fn unset_shell_init_guards_property() -> String {
+    format!(
+        "--property=UnsetEnvironment={}",
+        SHELL_INIT_GUARDS.join(" ")
+    )
+}
+
 pub(super) fn apply(
     command: &mut Command,
     configured: &BTreeMap<String, String>,
@@ -32,6 +57,21 @@ pub(super) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workers_start_without_login_shell_initialization_guards() {
+        let mut command = Command::new("unused-fixture");
+        command.env("__NIXOS_SET_ENVIRONMENT_DONE", "1");
+        remove_shell_init_guards(&mut command);
+        let environment: BTreeMap<_, _> = command.as_std().get_envs().collect();
+        for name in SHELL_INIT_GUARDS {
+            assert_eq!(environment.get(std::ffi::OsStr::new(name)), Some(&None));
+        }
+        assert_eq!(
+            unset_shell_init_guards_property(),
+            "--property=UnsetEnvironment=__NIXOS_SET_ENVIRONMENT_DONE __HM_SESS_VARS_SOURCED __fish_nixos_env_preinit_sourced"
+        );
+    }
 
     #[test]
     fn configured_credentials_are_scrubbed_before_signed_projection() {
