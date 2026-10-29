@@ -420,7 +420,19 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
                 "context_unreadable" => "context_unreadable",
                 _ => "snapshot_unavailable",
             };
-            advance(state, store, record, fail(category, Some(code))).await;
+            if advance(state, store, record, fail(category, Some(code))).await && existing.is_none()
+            {
+                // A refused fresh round may already have created its child
+                // directory, and no session will ever own or retire it.
+                let _ = execution_action(
+                    state,
+                    &record.placement.machine_id,
+                    execution::Action::CloseManagedChild {
+                        child_session_id: child.to_owned(),
+                    },
+                )
+                .await;
+            }
             return Step::Again;
         }
         Ok(_) => {
