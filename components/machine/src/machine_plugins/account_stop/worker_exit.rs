@@ -119,6 +119,65 @@ fn bound_launch_survives_restart_and_rejects_generation_changes() {
     assert!(!store.account_worker_binding_matches(&legacy).unwrap());
 }
 
+#[test]
+fn a_named_binding_carries_only_to_a_release_its_login_admits() {
+    use super::super::native_profile::tests::{package, ready};
+    let temp = tempfile::tempdir().unwrap();
+    let store = MachinePluginStore::new(
+        temp.path(),
+        crate::machine_protocol::Platform::Linux,
+        "x86_64".into(),
+    )
+    .unwrap();
+    let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let scoped = store.for_account(&account).unwrap();
+    let signed_in = package();
+    ready(&scoped, &signed_in);
+    let mut later = package();
+    later.manifest.version = "999.0.0".into();
+    let mut changed = package();
+    changed.manifest.version = "999.1.0".into();
+    changed.manifest.authentication.required = !changed.manifest.authentication.required;
+    let retained = |_: &str, digest: &str| -> Result<super::super::ProviderPackage> {
+        match digest {
+            "fixture" => Ok(signed_in.clone()),
+            "later" => Ok(later.clone()),
+            "changed" => Ok(changed.clone()),
+            _ => anyhow::bail!("not installed"),
+        }
+    };
+    let binding = |version: &str, digest: &str, generation: u64| WorkerBinding {
+        provider: "claude-code".into(),
+        version: version.into(),
+        digest: digest.into(),
+        generation,
+    };
+    let old = binding(&signed_in.manifest.version, "fixture", 1);
+    let carries = |account: &ProviderAccountId, incoming: &WorkerBinding| {
+        store.release_carries_with(account, &old, incoming, &retained)
+    };
+    assert!(carries(&account, &old));
+    assert!(carries(&account, &binding("999.0.0", "later", 1)));
+    for refused in [
+        binding("999.0.1", "later", 1), // declared version is not the retained package's
+        binding("999.1.0", "changed", 1), // signed authentication changed
+        binding("999.0.0", "later", 2), // another login generation
+        binding("999.0.0", "missing", 1), // release not installed
+    ] {
+        assert!(!carries(&account, &refused), "{refused:?}");
+    }
+    let mut other_provider = binding("999.0.0", "later", 1);
+    other_provider.provider = "codex".into();
+    assert!(!carries(&account, &other_provider));
+    assert!(!carries(
+        &ProviderAccountId::default(),
+        &binding("999.0.0", "later", 1)
+    ));
+    // A revoked login carries nowhere, while the exact binding is unaffected.
+    scoped.revoke_native_profiles("claude-code").unwrap();
+    assert!(!carries(&account, &binding("999.0.0", "later", 1)));
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SystemdWorker {
@@ -214,14 +273,92 @@ impl MachinePluginStore {
         &self,
         launch: &crate::runtime_wire::StartSession,
     ) -> Result<bool> {
+        self.account_worker_binding_admits(launch, false)
+    }
+
+    /// [`Self::account_worker_binding_matches`], also admitting a release the
+    /// same login carries over to ([`Self::account_release_carries`]). The
+    /// previous tree must have exited unless `replacing`: a reset confirms the
+    /// stop before its launch, whose journal entry rechecks the exit.
+    pub fn account_worker_binding_admits(
+        &self,
+        launch: &crate::runtime_wire::StartSession,
+        replacing: bool,
+    ) -> Result<bool> {
         let previous = self.account_worker_exit(&launch.session_id)?;
         if launch.provider_account_id.is_default() {
             return Ok(previous.is_none());
         }
         let incoming = WorkerBinding::from_launch(launch)?;
         Ok(previous.is_none_or(|old| {
-            old.account == launch.provider_account_id && old.binding.as_ref() == Some(&incoming)
+            old.account == launch.provider_account_id
+                && old.binding.as_ref().is_some_and(|binding| {
+                    *binding == incoming
+                        || ((replacing || old.tree_exited)
+                            && self.account_release_carries(&old.account, binding, &incoming))
+                })
         }))
+    }
+
+    /// A named login carries one session's worker binding to another release
+    /// in place: same account, Provider and login generation, and the login's
+    /// native profile admits the release (identical signed authentication to
+    /// its retained signed-in release; see `read_native_profile`). The native
+    /// home and session are unchanged; this is never a new login.
+    pub fn account_release_carries(
+        &self,
+        account: &ProviderAccountId,
+        previous: &WorkerBinding,
+        incoming: &WorkerBinding,
+    ) -> bool {
+        self.release_carries_with(account, previous, incoming, &|provider, digest| {
+            self.package_for_generation(provider, digest)
+                .map(|(package, _)| package)
+        })
+    }
+
+    /// [`Self::account_release_carries`] with an explicit retained-package
+    /// lookup (the verified installed generations in production).
+    pub(super) fn release_carries_with(
+        &self,
+        account: &ProviderAccountId,
+        previous: &WorkerBinding,
+        incoming: &WorkerBinding,
+        retained: &dyn Fn(&str, &str) -> Result<super::super::ProviderPackage>,
+    ) -> bool {
+        if *previous == *incoming {
+            return true;
+        }
+        !account.is_default()
+            && previous.provider == incoming.provider
+            && previous.generation == incoming.generation
+            && retained(&incoming.provider, &incoming.digest)
+                .ok()
+                .filter(|package| {
+                    package.manifest.id == incoming.provider
+                        && package.manifest.version == incoming.version
+                })
+                .is_some_and(|package| {
+                    self.for_account(account).is_ok_and(|scoped| {
+                        scoped
+                            .native_profile_home_with(&package, incoming.generation, retained)
+                            .is_ok()
+                    })
+                })
+    }
+
+    /// [`Self::account_release_carries`] for two launch declarations.
+    pub fn account_launch_carries(
+        &self,
+        previous: &crate::runtime_wire::StartSession,
+        incoming: &crate::runtime_wire::StartSession,
+    ) -> bool {
+        let account = &incoming.provider_account_id;
+        previous.provider_account_id == *account
+            && matches!(
+                (WorkerBinding::from_launch(previous), WorkerBinding::from_launch(incoming)),
+                (Ok(old), Ok(new)) if self.account_release_carries(account, &old, &new)
+            )
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -290,7 +427,9 @@ impl MachinePluginStore {
                 "previous worker tree exit unconfirmed"
             );
             ensure!(
-                old.binding == binding,
+                old.binding == binding
+                    || matches!((&old.binding, &binding), (Some(previous), Some(incoming))
+                        if self.account_release_carries(account, previous, incoming)),
                 "worker native binding changed without readmission"
             );
         }

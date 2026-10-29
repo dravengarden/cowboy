@@ -27,7 +27,11 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 37;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 38;
+/// Machines move an existing named session's worker binding to a release its
+/// login carries over to (identical signed authentication), keeping the
+/// native session and login generation.
+pub const NAMED_RELEASE_CARRY_PROTOCOL_VERSION: u16 = 38;
 /// Read-only quota collection in a verified named native profile.
 pub const NATIVE_USAGE_PROTOCOL_VERSION: u16 = 37;
 /// Closed diagnostics for native observations; arbitrary subprocess output is

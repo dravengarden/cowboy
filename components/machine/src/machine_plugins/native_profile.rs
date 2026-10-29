@@ -526,6 +526,19 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         generation: u64,
     ) -> Result<(PathBuf, Profile)> {
+        self.read_native_profile_with(package, generation, &|provider, digest| {
+            self.package_for_generation(provider, digest)
+                .map(|(package, _)| package)
+        })
+    }
+
+    /// [`Self::read_native_profile`] with an explicit retained-package lookup.
+    fn read_native_profile_with(
+        &self,
+        package: &ProviderPackage,
+        generation: u64,
+        retained: &dyn Fn(&str, &str) -> Result<ProviderPackage>,
+    ) -> Result<(PathBuf, Profile)> {
         let (directory, profile) =
             self.read_native_profile_metadata(&package.manifest.id, generation)?;
         ensure!(
@@ -535,8 +548,7 @@ impl MachinePluginStore {
         // A later release may use this login's home in place only when its
         // signed authentication is identical to the retained signed-in release.
         if profile.version != package.manifest.version {
-            let (signed_in, _) = self
-                .package_for_generation(&package.manifest.id, &profile.digest)
+            let signed_in = retained(&package.manifest.id, &profile.digest)
                 .context("native profile release is not retained")?;
             ensure!(
                 signed_in.manifest.version == profile.version
@@ -600,7 +612,20 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         generation: u64,
     ) -> Result<PathBuf> {
-        let (directory, profile) = self.read_native_profile(package, generation)?;
+        self.native_profile_home_with(package, generation, &|provider, digest| {
+            self.package_for_generation(provider, digest)
+                .map(|(package, _)| package)
+        })
+    }
+
+    /// [`Self::native_profile_home`] with an explicit retained-package lookup.
+    pub(super) fn native_profile_home_with(
+        &self,
+        package: &ProviderPackage,
+        generation: u64,
+        retained: &dyn Fn(&str, &str) -> Result<ProviderPackage>,
+    ) -> Result<PathBuf> {
+        let (directory, profile) = self.read_native_profile_with(package, generation, retained)?;
         ensure!(
             profile.leader_exited && profile.process_tree_exited && profile.login_succeeded,
             "native login success is unconfirmed"
@@ -711,7 +736,7 @@ fn validate_reservation(root: &Path, request: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::machine_plugins) mod tests {
     use super::*;
 
     #[test]
@@ -996,7 +1021,7 @@ mod tests {
         assert!(ensure_revoked(&root, id.as_str(), "claude-code").is_ok());
     }
 
-    pub(super) fn package() -> ProviderPackage {
+    pub(in crate::machine_plugins) fn package() -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
             include_str!("../../../../plugins/claude-code/provider.json"),
         )
@@ -1064,7 +1089,10 @@ mod tests {
         );
     }
 
-    pub(super) fn ready(store: &MachinePluginStore, package: &ProviderPackage) -> PathBuf {
+    pub(in crate::machine_plugins) fn ready(
+        store: &MachinePluginStore,
+        package: &ProviderPackage,
+    ) -> PathBuf {
         let root = store.native_profile_root("claude-code");
         let directory = root.join("generations/1");
         fs::create_dir_all(directory.join("home")).unwrap();
