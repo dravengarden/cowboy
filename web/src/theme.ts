@@ -198,6 +198,16 @@ export function useThemeMode(): ThemeControls {
           // own focus-visible class only for keys it observed; a row focused by
           // a captured Vim key or a scoped picker command must still show the
           // cursor. Fine pointers only: touch keeps no latched fill.
+          // A menu (every Menu/Select is a Popover) is opened by the user on
+          // top of whatever is showing. MUI ranks snackbars above modals, so an
+          // undo or error notice still on screen covered the lower rows of a
+          // freshly opened session menu. Lift popovers just above snackbars;
+          // dialogs and sheets keep the default modal layer under the notice.
+          MuiPopover: {
+            styleOverrides: {
+              root: ({ theme }) => ({ zIndex: theme.zIndex.snackbar + 1 }),
+            },
+          },
           MuiMenuItem: {
             styleOverrides: {
               root: ({ theme }) => ({
