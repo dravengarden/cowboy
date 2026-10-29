@@ -57,6 +57,7 @@ primary phone/desktop product path.
 - [`releases/session-extension-plugins-2026-10-16.md`](releases/session-extension-plugins-2026-10-16.md) — matrix and review as session extension Plugins, component release 3.53.0, OVH rollout and the pending Hawk worker pin
 - [`releases/agent-runtimes-2026-10-11.md`](releases/agent-runtimes-2026-10-11.md) — Claude 2.1.296, Codex 0.160.1 with ACP 2.2.2, Gemini 0.63.0 and Grok 1.0.50; component release 3.49.0, native difference table and remote acceptance
 - [`releases/agent-runtimes-2026-10-28.md`](releases/agent-runtimes-2026-10-28.md) — Claude Code 2.1.312, Codex 0.164.0 with ACP 2.3.0 and Grok 1.0.70 upgrades
+- [`releases/steer-native-cycle-2026-10-29.md`](releases/steer-native-cycle-2026-10-29.md) — Steer joins a cycle Claude starts on its own after a background task
 - [`releases/agent-runtimes-send-2026-10-18.md`](releases/agent-runtimes-send-2026-10-18.md) — runtime upgrade candidates, compatibility constraints and explicit send delivery design
 - [`releases/bun-toolchain-2026-10-10.md`](releases/bun-toolchain-2026-10-10.md) — Bun toolchain, component release 3.45.0, six Agent Plugins republished with byte-identical runtimes; Zed 1.20.6 built but not published
 - [`releases/remote-parity-2026-10-05.md`](releases/remote-parity-2026-10-05.md) — OVH Claude 3.4.8 output/cancellation fixes, exact acceptance and retained parity gaps
