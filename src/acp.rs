@@ -39,13 +39,15 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ClientNotification, ClientSessionCapabilities,
-    CompactionCapabilities, ContentBlock, ExtNotification, InitializeRequest, LoadSessionRequest,
-    Meta, NewSessionRequest, NoticeCapabilities, PermissionOption, PermissionOptionId,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest,
+    CompactionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
+    ElicitationAction, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode,
+    ElicitationScope, ElicitationUrlCapabilities, ExtNotification, InitializeRequest,
+    LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities, PermissionOption,
+    PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
@@ -1002,14 +1004,110 @@ fn projected_auth_error(
 /// presentation-specific transcript text or tool calls whose identifying
 /// `_meta` is reserved for other clients, leaving Cowboy unable to tell a
 /// compaction's lifecycle apart from ordinary agent output.
+///
+/// It also answers form and URL elicitations. Without them, Claude disables
+/// `AskUserQuestion` and Codex answers every `request_user_input` with nothing.
 fn initialize_request() -> InitializeRequest {
     InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
-        ClientCapabilities::new().session(
-            ClientSessionCapabilities::new()
-                .compaction(CompactionCapabilities::new())
-                .notices(NoticeCapabilities::new()),
-        ),
+        ClientCapabilities::new()
+            .session(
+                ClientSessionCapabilities::new()
+                    .compaction(CompactionCapabilities::new())
+                    .notices(NoticeCapabilities::new()),
+            )
+            .elicitation(
+                ElicitationCapabilities::new()
+                    .form(ElicitationFormCapabilities::new())
+                    .url(ElicitationUrlCapabilities::new()),
+            ),
     )
+}
+
+/// Answer options of an elicitation presented as a Cowboy permission request.
+/// Clients that recognize the `_cowboy.elicitation` payload render the form and
+/// answer `accept:<content JSON>`; older clients still offer these two choices.
+const ELICITATION_ACCEPT: &str = "accept";
+const ELICITATION_DECLINE: &str = "decline";
+
+/// Present an elicitation through the permission channel every Cowboy surface
+/// already answers: the request appears as a permission request whose
+/// tool call carries the original elicitation under `_cowboy.elicitation`.
+fn elicitation_permission(
+    request_id: &str,
+    request: &CreateElicitationRequest,
+) -> (serde_json::Value, serde_json::Value) {
+    let tool_call_id = match &request.mode {
+        ElicitationMode::Form(form) => elicitation_tool_call_id(&form.scope),
+        ElicitationMode::Url(url) => elicitation_tool_call_id(&url.scope),
+        _ => None,
+    };
+    let url = matches!(request.mode, ElicitationMode::Url(_));
+    let mut tool_call = serde_json::json!({
+        "title": request.message,
+        "_cowboy": {
+            "elicitation": serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+        },
+    });
+    // A permission request names a tool call. A request-scoped elicitation has
+    // none, so it gets one of its own that no update ever settles.
+    tool_call["toolCallId"] = serde_json::Value::String(
+        tool_call_id.unwrap_or_else(|| format!("elicitation:{request_id}")),
+    );
+    let options = serde_json::json!([
+        {
+            "optionId": ELICITATION_ACCEPT,
+            "name": if url { "Done" } else { "Submit" },
+            "kind": "allow_once",
+        },
+        {
+            "optionId": ELICITATION_DECLINE,
+            "name": "Decline",
+            "kind": "reject_once",
+        },
+    ]);
+    (tool_call, options)
+}
+
+fn elicitation_tool_call_id(scope: &ElicitationScope) -> Option<String> {
+    match scope {
+        ElicitationScope::Session(session) => {
+            session.tool_call_id.as_ref().map(|id| id.0.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Translate a Cowboy answer into the elicitation response. An absent answer
+/// (the request was abandoned) and anything unparseable cancel; a form answer
+/// is `accept:` followed by its content object.
+fn elicitation_response(answer: Option<&str>) -> CreateElicitationResponse {
+    let action = match answer {
+        Some(ELICITATION_ACCEPT) => serde_json::json!({ "action": "accept" }),
+        Some(ELICITATION_DECLINE) => serde_json::json!({ "action": "decline" }),
+        Some(answer) => match answer
+            .strip_prefix("accept:")
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        {
+            Some(content @ serde_json::Value::Object(_)) => {
+                serde_json::json!({ "action": "accept", "content": content })
+            }
+            _ => serde_json::json!({ "action": "cancel" }),
+        },
+        None => serde_json::json!({ "action": "cancel" }),
+    };
+    serde_json::from_value(action)
+        .unwrap_or_else(|_| CreateElicitationResponse::new(ElicitationAction::Cancel))
+}
+
+/// The transcript records only the outcome of an elicitation, never its
+/// content: forms may ask for secrets, and the agent reports the answers it
+/// uses through its own tool calls.
+fn elicitation_outcome(answer: Option<&str>) -> Option<String> {
+    match elicitation_response(answer).action {
+        ElicitationAction::Accept(_) => Some(ELICITATION_ACCEPT.to_owned()),
+        ElicitationAction::Decline => Some(ELICITATION_DECLINE.to_owned()),
+        _ => None,
+    }
 }
 
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
@@ -1043,9 +1141,10 @@ mod startup_mode_tests {
         GrokSessionInfoRequest, GrokSessionInfoResponse, ProviderBackoff, ResumeMethod,
         StartupPhase, StartupTimeout, backoff_verdict, codex_full_access_available,
         codex_full_access_selected, current_model_label, deepseek_session_environment,
-        grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
-        initialize_request, is_empty_stream_message_update, is_turn_progress_update,
-        load_session_request, new_session_request, note_tool_liveness, parse_provider_backoff,
+        elicitation_outcome, elicitation_permission, elicitation_response, grok_cowboy_options,
+        grok_model_request, grok_permission_notification, grok_session_usage, initialize_request,
+        is_empty_stream_message_update, is_turn_progress_update, load_session_request,
+        new_session_request, note_tool_liveness, parse_provider_backoff,
         permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
         resume_session_request, run_serial_config_queue, select_resume_method,
         session_config_value, startup_full_access_mode, turn_is_wedged,
@@ -1063,12 +1162,100 @@ mod startup_mode_tests {
     use tokio::sync::{Notify, mpsc};
 
     #[test]
-    fn initialize_advertises_typed_compaction_and_notices() {
+    fn initialize_advertises_typed_compaction_notices_and_elicitation() {
         let request = serde_json::to_value(initialize_request()).unwrap();
         assert_eq!(request["protocolVersion"], 1);
         assert_eq!(
             request["clientCapabilities"]["session"],
             serde_json::json!({ "compaction": {}, "notices": {} })
+        );
+        assert_eq!(
+            request["clientCapabilities"]["elicitation"],
+            serde_json::json!({ "form": {}, "url": {} })
+        );
+    }
+
+    #[test]
+    fn a_form_elicitation_is_presented_and_answered_as_a_permission() {
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "mode": "form",
+                "sessionId": "s",
+                "toolCallId": "call-1",
+                "message": "Codex needs your input to continue.",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "q1": {
+                            "type": "string",
+                            "title": "Which database?",
+                            "oneOf": [
+                                { "const": "Postgres", "title": "Postgres" },
+                                { "const": "SQLite", "title": "SQLite" }
+                            ]
+                        }
+                    },
+                    "required": ["q1"]
+                }
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("1", &request);
+        assert_eq!(tool_call["toolCallId"], "call-1");
+        assert_eq!(tool_call["title"], "Codex needs your input to continue.");
+        assert_eq!(tool_call["_cowboy"]["elicitation"]["mode"], "form");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["required"],
+            serde_json::json!(["q1"])
+        );
+        assert_eq!(options[0]["optionId"], "accept");
+        assert_eq!(options[1]["optionId"], "decline");
+
+        let answer = r#"accept:{"q1":"SQLite"}"#;
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some(answer))).unwrap(),
+            serde_json::json!({ "action": "accept", "content": { "q1": "SQLite" } })
+        );
+        // Only the outcome reaches the transcript.
+        assert_eq!(elicitation_outcome(Some(answer)).as_deref(), Some("accept"));
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("decline"))).unwrap(),
+            serde_json::json!({ "action": "decline" })
+        );
+        assert_eq!(
+            elicitation_outcome(Some("decline")).as_deref(),
+            Some("decline")
+        );
+        for abandoned in [None, Some("accept:[1]"), Some("accept:{"), Some("other")] {
+            assert_eq!(
+                serde_json::to_value(elicitation_response(abandoned)).unwrap(),
+                serde_json::json!({ "action": "cancel" }),
+                "{abandoned:?}"
+            );
+            assert_eq!(elicitation_outcome(abandoned), None);
+        }
+    }
+
+    #[test]
+    fn a_url_elicitation_offers_done_and_accepts_without_content() {
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "mode": "url",
+                "requestId": 7,
+                "elicitationId": "e-1",
+                "url": "https://example.com/oauth",
+                "message": "Sign in to the MCP server",
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("7", &request);
+        assert_eq!(tool_call["toolCallId"], "elicitation:7");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["url"],
+            "https://example.com/oauth"
+        );
+        assert_eq!(options[0]["name"], "Done");
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("accept"))).unwrap(),
+            serde_json::json!({ "action": "accept" })
         );
     }
 
@@ -2138,6 +2325,9 @@ struct ClientState {
     /// id. The connection's permission handler inserts a sender; the command
     /// loop resolves exactly one (first-response-wins).
     pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
+    /// The subset of `pending` that are elicitations, whose answers carry form
+    /// content and are recorded only as an outcome.
+    elicitations: Mutex<HashSet<String>>,
     /// Serialize `session/prompt` RPCs while leaving the outer command loop
     /// responsive to Cancel, permission answers, and config changes.
     prompt_lock: tokio::sync::Mutex<()>,
@@ -2484,6 +2674,7 @@ async fn agent_main(
         provider_id: spec.id.clone(),
         service_auth_projected,
         pending: Mutex::new(HashMap::new()),
+        elicitations: Mutex::new(HashSet::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         steering_gate: tokio::sync::Mutex::new(()),
@@ -2504,6 +2695,7 @@ async fn agent_main(
     let notif_state = state.clone();
     let activity_state = state.clone();
     let perm_state = state.clone();
+    let elicit_state = state.clone();
     let main_state = state.clone();
 
     // `run_session` advances this marker before every startup request. The
@@ -2633,6 +2825,63 @@ async fn agent_main(
                         None => RequestPermissionOutcome::Cancelled,
                     };
                     responder.respond(RequestPermissionResponse::new(outcome))?;
+                    Ok(())
+                })?;
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |req: CreateElicitationRequest,
+                        responder,
+                        cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                // Nobody answers a system or managed session, and a managed
+                // call must not wait on a person.
+                if elicit_state.sink.session_is_system(&elicit_state.session_id)
+                    || elicit_state
+                        .sink
+                        .session_is_managed_read_only(&elicit_state.session_id)
+                {
+                    return responder.respond(elicitation_response(None));
+                }
+                if let Some(prompt) = elicit_state.current_prompt() {
+                    prompt.visible_update.store(true, Ordering::SeqCst);
+                }
+                let request_id = serde_json::to_string(responder.id())
+                    .unwrap_or_else(|_| responder.id().to_string());
+                let (tool_call, options) = elicitation_permission(&request_id, &req);
+                let (tx, rx) = oneshot::channel::<Option<String>>();
+                elicit_state.pending.lock().insert(request_id.clone(), tx);
+                elicit_state.elicitations.lock().insert(request_id.clone());
+                elicit_state.sink.push(
+                    &elicit_state.session_id,
+                    Event::PermissionRequest {
+                        request_id: request_id.clone(),
+                        tool_call,
+                        options,
+                    },
+                );
+                let cancellation = responder.cancellation();
+                let cancelled_state = Arc::clone(&elicit_state);
+                cx.spawn(async move {
+                    let answer = tokio::select! {
+                        answer = rx => answer.unwrap_or(None),
+                        () = cancellation.cancelled() => {
+                            cancelled_state.pending.lock().remove(&request_id);
+                            cancelled_state.elicitations.lock().remove(&request_id);
+                            cancelled_state.sink.push(
+                                &cancelled_state.session_id,
+                                Event::PermissionResolved {
+                                    request_id,
+                                    option_id: None,
+                                },
+                            );
+                            responder.respond_with_error(Error::request_cancelled())?;
+                            return Ok(());
+                        }
+                    };
+                    responder.respond(elicitation_response(answer.as_deref()))?;
                     Ok(())
                 })?;
                 Ok(())
@@ -4105,6 +4354,11 @@ async fn run_session(
                 if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
+                let option_id = if state.elicitations.lock().remove(&request_id) {
+                    elicitation_outcome(option_id.as_deref())
+                } else {
+                    option_id
+                };
                 state.sink.push(
                     &session_id,
                     Event::PermissionResolved {

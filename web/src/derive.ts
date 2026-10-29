@@ -5,6 +5,7 @@
 
 import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
+import { type Elicitation, elicitationOf } from "./elicitation";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import { isTurnActivityUpdate } from "./turnWaiting";
@@ -768,6 +769,8 @@ export interface PendingPermission {
   requestKind: "permission" | "question";
   title: string;
   options: PermissionOption[];
+  /** The form or link an elicitation asks for; null for a tool permission. */
+  elicitation: Elicitation | null;
 }
 /// Every request still waiting for an answer, oldest first: parallel tool
 /// calls each block on their own answer, so the surface answers them in
@@ -800,6 +803,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         requestKind: permissionRequestKind(env.tool_call),
         title: titleOfToolCall(env.tool_call),
         options: env.options,
+        elicitation: elicitationOf(env.tool_call),
       });
       const tool = toolCallIdOf(env.tool_call);
       if (tool !== null) byTool.set(tool, env.request_id);
@@ -939,6 +943,7 @@ function titleOfToolCall(tc: unknown): string {
 }
 
 function permissionRequestKind(tc: unknown): "permission" | "question" {
+  if (elicitationOf(tc)) return "question";
   if (!tc || typeof tc !== "object" || !("rawInput" in tc)) return "permission";
   const input = (tc as { rawInput?: unknown }).rawInput;
   if (!input || typeof input !== "object") return "permission";

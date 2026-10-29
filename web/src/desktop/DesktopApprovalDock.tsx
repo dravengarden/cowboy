@@ -26,6 +26,11 @@ import {
 } from "../composerTimelineSlice";
 import type { PendingPermission } from "../derive";
 import { usePermissionResponse } from "../permissionResponse";
+import {
+  elicitationChoiceOf,
+  ElicitationFields,
+  useElicitationForm,
+} from "../ElicitationFields";
 import { useStoreSelector } from "../store";
 import { desktopSize } from "../surface/desktopSize";
 import {
@@ -43,6 +48,8 @@ interface DockChoice extends DesktopApprovalChoice {
   /** A refusal is outlined in the error colour, never the primary fill. */
   reject: boolean;
   primary: boolean;
+  /** An incomplete form's Submit stays visible but cannot answer yet. */
+  disabled?: boolean;
 }
 
 /**
@@ -92,16 +99,26 @@ export function DesktopPermissionDock({
 }): React.JSX.Element {
   const response = usePermissionResponse(sessionId, item.requestId);
   const question = item.requestKind === "question";
+  const form = useElicitationForm(item.requestId, item.elicitation, response.respond);
   const firstAllow = item.options.findIndex((option) =>
     !option.kind.toLowerCase().startsWith("reject")
   );
-  const choices: DockChoice[] = item.options.map((option, index) => ({
-    id: option.optionId,
-    label: option.name,
-    reject: option.kind.toLowerCase().startsWith("reject"),
-    primary: index === firstAllow,
-    run: () => response.respond(option.optionId),
-  }));
+  const choices: DockChoice[] = item.elicitation
+    ? form.choices.map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+      reject: choice.reject,
+      primary: !choice.reject,
+      disabled: choice.disabled,
+      run: choice.run,
+    }))
+    : item.options.map((option, index) => ({
+      id: option.optionId,
+      label: option.name,
+      reject: option.kind.toLowerCase().startsWith("reject"),
+      primary: index === firstAllow,
+      run: () => response.respond(option.optionId),
+    }));
   return (
     <ApprovalDock
       kind="permission"
@@ -112,10 +129,22 @@ export function DesktopPermissionDock({
       title={question ? "Answer needed" : "Permission required"}
       detail={waiting > 1 ? `1 of ${String(waiting)} waiting` : null}
       choices={choices}
-      busyId={response.busy ? response.optionId : null}
+      busyId={response.busy
+        ? item.elicitation ? elicitationChoiceOf(response.optionId) : response.optionId
+        : null}
       notice={response.notice}
       noticeTone={response.phase === "unsent" ? "error" : "warning"}
     >
+      {item.elicitation
+        ? (
+          <ElicitationFields
+            elicitation={item.elicitation}
+            values={form.values}
+            setValue={form.setValue}
+            disabled={response.busy}
+          />
+        )
+        : (
       <Box
         component="pre"
         data-desktop-approval-subject
@@ -138,6 +167,7 @@ export function DesktopPermissionDock({
       >
         {item.title}
       </Box>
+        )}
     </ApprovalDock>
   );
 }
@@ -316,7 +346,7 @@ function ApprovalDock({
             key={choice.id}
             size="small"
             disableElevation
-            disabled={busy}
+            disabled={busy || choice.disabled === true}
             variant={choice.primary ? "contained" : "outlined"}
             color={choice.reject ? "error" : "primary"}
             data-desktop-approval-choice={String(index + 1)}

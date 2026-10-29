@@ -12,6 +12,11 @@ import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
 import type { PendingPermission } from "./derive";
 import { usePermissionResponse } from "./permissionResponse";
+import {
+  elicitationChoiceOf,
+  ElicitationFields,
+  useElicitationForm,
+} from "./ElicitationFields";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
 import { haptic } from "./haptic";
@@ -69,6 +74,19 @@ export function PermissionOverlay({
     haptic();
     response.respond(optionId);
   };
+  // An elicitation draws its own form and Submit/Decline (or Done/Decline);
+  // a tool permission keeps the agent's options.
+  const form = useElicitationForm(item.requestId, item.elicitation, respond);
+  const choices = item.elicitation ? form.choices : item.options.map((option) => ({
+    id: option.optionId,
+    label: option.name,
+    reject: option.kind.startsWith("reject"),
+    disabled: false,
+    run: () => respond(option.optionId),
+  }));
+  const busyChoice = item.elicitation
+    ? elicitationChoiceOf(response.optionId)
+    : response.optionId;
 
   return (
     <Box
@@ -92,10 +110,7 @@ export function PermissionOverlay({
       }}
     >
       {desktop?.commands(
-        item.options.map((option) => ({
-          label: option.name,
-          run: () => respond(option.optionId),
-        })),
+        choices.map((choice) => ({ label: choice.label, run: choice.run })),
         !response.busy,
       )}
       {expanded ? (
@@ -140,6 +155,18 @@ export function PermissionOverlay({
               </Typography>
             )}
           </Stack>
+          {item.elicitation
+            ? (
+              <Box sx={{ mb: 1.5 }}>
+                <ElicitationFields
+                  elicitation={item.elicitation}
+                  values={form.values}
+                  setValue={form.setValue}
+                  disabled={response.busy}
+                />
+              </Box>
+            )
+            : (
           <Box
             component="pre"
             sx={{
@@ -157,22 +184,23 @@ export function PermissionOverlay({
           >
             {item.title}
           </Box>
+            )}
           <Stack spacing={1}>
-            {item.options.map((opt, index) => {
-              const reject = opt.kind.startsWith("reject");
+            {choices.map((choice, index) => {
+              const reject = choice.reject;
               return (
                 <Button
-                  key={opt.optionId}
+                  key={choice.id}
                   fullWidth
                   disableElevation
-                  disabled={response.busy}
+                  disabled={response.busy || choice.disabled}
                   variant={reject ? "outlined" : "contained"}
                   color={reject ? "error" : "primary"}
-                  startIcon={response.busy && response.optionId === opt.optionId
+                  startIcon={response.busy && busyChoice === choice.id
                     ? <CircularProgress size={desktopSize(14)} thickness={5} color="inherit" />
                     : undefined}
                   endIcon={desktop?.keycap(index, !response.busy)}
-                  onClick={(): void => respond(opt.optionId)}
+                  onClick={choice.run}
                   sx={{
                     minHeight: { xs: 48, sm: 40 },
                     py: 0.75,
@@ -181,7 +209,7 @@ export function PermissionOverlay({
                     lineHeight: 1.35,
                   }}
                 >
-                  {opt.name}
+                  {choice.label}
                 </Button>
               );
             })}

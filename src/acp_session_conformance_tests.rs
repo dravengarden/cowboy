@@ -127,6 +127,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         provider_id: "fixture-provider".to_owned(),
         service_auth_projected: true,
         pending: Mutex::new(HashMap::new()),
+        elicitations: Mutex::new(HashSet::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
