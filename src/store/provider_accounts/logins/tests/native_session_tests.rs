@@ -291,6 +291,54 @@ async fn abandoned_replacement_falls_back(
         .await
         .unwrap();
     transport_contract(store, hub, meta, true).await;
+    Box::pin(named_release_write_keeps_its_login(store, &fallback)).await;
+}
+
+async fn stored_release(store: &Store, id: &str) -> (String, Option<i64>) {
+    let query = "SELECT provider_version, provider_auth_generation FROM sessions WHERE id=$1";
+    match &store.backend {
+        StorageBackend::Postgres(db) => sqlx::query_as(query).bind(id).fetch_one(&db.pool).await,
+        StorageBackend::Sqlite(db) => sqlx::query_as(query).bind(id).fetch_one(&db.pool).await,
+    }
+    .unwrap()
+}
+
+/// A named row's release write applies only on the login generation it was
+/// admitted with, so a concurrently committed transition is never overwritten.
+async fn named_release_write_keeps_its_login(store: &Store, meta: &crate::core::SessionMeta) {
+    let generation = i64::try_from(meta.provider_auth_generation.unwrap()).unwrap();
+    let mut moved = meta.clone();
+    moved.provider_version = "carried-version".into();
+    store.reload_provider(&moved).await.unwrap();
+    assert_eq!(
+        stored_release(store, &meta.id).await,
+        ("carried-version".into(), Some(generation))
+    );
+    let query = "UPDATE sessions SET provider_auth_generation=$1 WHERE id=$2";
+    match &store.backend {
+        StorageBackend::Postgres(db) => {
+            sqlx::query(query)
+                .bind(generation + 1)
+                .bind(&meta.id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        StorageBackend::Sqlite(db) => {
+            sqlx::query(query)
+                .bind(generation + 1)
+                .bind(&meta.id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+    }
+    moved.provider_version = "stale-version".into();
+    assert!(store.reload_provider(&moved).await.is_err());
+    assert_eq!(
+        stored_release(store, &meta.id).await,
+        ("carried-version".into(), Some(generation + 1))
+    );
 }
 
 async fn durable_binding_changes(

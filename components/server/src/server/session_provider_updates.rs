@@ -537,7 +537,7 @@ async fn pass(
                     && !holds_worker_slot(&state.runtime_router, &meta)
                     && !state.hub.session_has_in_flight_prompt(&meta.id) =>
             {
-                repin_dormant(state, &meta, &target)
+                repin_dormant(state, &meta, &target).await
             }
             _ => false,
         };
@@ -584,7 +584,7 @@ async fn update_running(
     if !newer(&meta.provider_version, &target.version) || !still_wanted() {
         return false;
     }
-    match apply_session_provider_reload(state, meta, &target, true) {
+    match apply_session_provider_reload(state, meta, &target, true).await {
         Ok(()) => {
             tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started");
             true
@@ -598,7 +598,7 @@ async fn update_running(
 
 /// Move a dormant session's binding without starting it; the next open
 /// resumes the same native session on the new release.
-fn repin_dormant(
+async fn repin_dormant(
     state: &Arc<AppState>,
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
@@ -612,13 +612,7 @@ fn repin_dormant(
     ) else {
         return false;
     };
-    match state.hub.repin_dormant_provider(
-        meta,
-        &target.version,
-        &target.digest,
-        &target.behavior,
-        target.named_carry.as_ref(),
-    ) {
+    match super::repin_dormant_session(state, meta, target).await {
         Ok(()) => {
             tracing::info!(
                 session = %meta.id,

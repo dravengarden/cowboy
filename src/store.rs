@@ -5927,16 +5927,25 @@ impl PostgresStorage {
     }
 
     pub async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
-        sqlx::query(
-            "UPDATE sessions SET provider_version = $1, provider_generation_digest = $2, provider_behavior = $3, status = $5, updated_at = now() WHERE id = $4",
+        // A named row moves release only on the login generation it was
+        // admitted with; a committed transition is never overwritten.
+        let result = sqlx::query(
+            "UPDATE sessions SET provider_version = $1, provider_generation_digest = $2, provider_behavior = $3, status = $5, updated_at = now() WHERE id = $4 \
+             AND (COALESCE(provider_account_id, '') IN ('', 'default') OR provider_auth_generation IS NOT DISTINCT FROM $6)",
         )
         .bind(&meta.provider_version)
         .bind(&meta.provider_generation_digest)
         .bind(meta.provider_behavior.as_ref().map(serde_json::to_value).transpose()?)
         .bind(&meta.id)
         .bind(status_to_str(meta.status))
+        .bind(meta.provider_auth_generation.map(i64::try_from).transpose()?)
         .execute(&self.pool)
         .await?;
+        anyhow::ensure!(
+            result.rows_affected() == 1 || meta.provider_account_id.is_default(),
+            "session {} login changed; Provider release not persisted",
+            meta.id
+        );
         Ok(())
     }
 

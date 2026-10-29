@@ -16633,12 +16633,20 @@ async fn named_upgrade_target(
     state: &Arc<AppState>,
     meta: &crate::core::SessionMeta,
 ) -> Result<ResolvedProviderGeneration, String> {
+    if !state.machine_control.machine_supports(
+        &meta.machine_id,
+        crate::machine_protocol::NAMED_RELEASE_CARRY_PROTOCOL_VERSION,
+    ) {
+        return Err(
+            "this session's Machine needs a Cowboy update to move it to another release".to_owned(),
+        );
+    }
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
     let owner = meta
         .owner_user_id
         .as_deref()
         .ok_or("named session has no owner")?;
-    let (_, completion) = store
+    let (operation, completion) = store
         .native_login_for_registered_session(owner, &meta.id)
         .await
         .map_err(|error| error.to_string())?
@@ -16678,11 +16686,15 @@ async fn named_upgrade_target(
     {
         return Err("Provider authentication or native session contract changed; sign in again and move the session explicitly".to_owned());
     }
-    target.named_carry = Some(crate::core::NamedReleaseCarry {
-        session_id: meta.id.clone(),
-        auth_generation,
-        version: target.version.clone(),
-        digest: target.digest.clone(),
+    target.named_carry = Some(NamedReleaseMove {
+        carry: crate::core::NamedReleaseCarry {
+            session_id: meta.id.clone(),
+            auth_generation,
+            version: target.version.clone(),
+            digest: target.digest.clone(),
+        },
+        operation,
+        completion,
     });
     Ok(target)
 }
@@ -16790,32 +16802,37 @@ async fn api_session_reload_plan(
     }
 }
 
-fn apply_session_provider_reload(
+async fn apply_session_provider_reload(
     state: &AppState,
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
     automatic: bool,
 ) -> Result<(), String> {
+    let reload = |carry: Option<&crate::core::NamedReleaseCarry>| {
+        state.supervisor.reload_session_provider(
+            meta,
+            crate::supervisor::ProviderGeneration {
+                account_id: Some(&meta.provider_account_id),
+                version: &target.version,
+                digest: &target.digest,
+                auth_generation: meta.provider_auth_generation,
+                behavior: Some(&target.behavior),
+            },
+            automatic,
+            carry,
+        )
+    };
+    // A named login is admitted by the Store, not by Service authentication.
+    if target.named_carry.is_some() {
+        return with_release_admission(state, meta, target, reload).await;
+    }
     state
         .provider_auth
         .with_scheduling_generation(
             &meta.provider,
             target.auth_generation.is_some(),
             target.auth_generation,
-            || {
-                state.supervisor.reload_session_provider(
-                    meta,
-                    crate::supervisor::ProviderGeneration {
-                        account_id: Some(&meta.provider_account_id),
-                        version: &target.version,
-                        digest: &target.digest,
-                        auth_generation: meta.provider_auth_generation,
-                        behavior: Some(&target.behavior),
-                    },
-                    automatic,
-                    target.named_carry.as_ref(),
-                )
-            },
+            || reload(None),
         )
         .map_err(|error| error.to_string())?
 }
@@ -16851,7 +16868,7 @@ async fn api_session_reload(
             )
                 .into_response();
         }
-        return match apply_session_provider_reload(&state, &info.meta, &target, false) {
+        return match apply_session_provider_reload(&state, &info.meta, &target, false).await {
             Ok(()) => {
                 (StatusCode::ACCEPTED, "reloading installed Provider version").into_response()
             }
@@ -17160,7 +17177,70 @@ struct ResolvedProviderGeneration {
     behavior: cowboy_provider_sdk::ProviderBehaviorContract,
     /// Set only by [`named_upgrade_target`]: authorizes moving one named
     /// session to this release on its existing login.
-    named_carry: Option<crate::core::NamedReleaseCarry>,
+    named_carry: Option<NamedReleaseMove>,
+}
+
+/// A verified move of one named session to another release: the Hub proof
+/// and the exact login whose runtime admission must hold around the change.
+#[derive(Clone)]
+struct NamedReleaseMove {
+    carry: crate::core::NamedReleaseCarry,
+    operation: String,
+    completion: crate::store::provider_accounts::logins::NativeCompletion,
+}
+
+/// Run one session's release change. A named session's change runs inside its
+/// login's runtime admission: the session row must still hold this exact
+/// release and login generation, and the login must still be admitted (not
+/// cancelled, revoked, disabled or re-enrolled). Without a verified move, a
+/// named session never changes release here.
+async fn with_release_admission<T>(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    target: &ResolvedProviderGeneration,
+    action: impl FnOnce(Option<&crate::core::NamedReleaseCarry>) -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(named) = target.named_carry.as_ref() else {
+        return action(None);
+    };
+    let store = state.store.as_ref().ok_or("account_store_unavailable")?;
+    let owner = meta
+        .owner_user_id
+        .as_deref()
+        .ok_or("named session has no owner")?;
+    let mut outcome = None;
+    store
+        .with_native_session_release_binding(
+            owner,
+            &named.operation,
+            &named.completion,
+            meta,
+            || {
+                outcome = Some(action(Some(&named.carry)));
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    outcome.unwrap_or_else(|| Err("release admission did not run".to_owned()))
+}
+
+/// Re-pin a dormant session through [`with_release_admission`].
+async fn repin_dormant_session(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    target: &ResolvedProviderGeneration,
+) -> Result<(), String> {
+    with_release_admission(state, meta, target, |carry| {
+        state.hub.repin_dormant_provider(
+            meta,
+            &target.version,
+            &target.digest,
+            &target.behavior,
+            carry,
+        )
+    })
+    .await
 }
 
 fn resolve_scheduling_auth_generation(
