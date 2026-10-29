@@ -9,7 +9,19 @@ all-features = true
 # broad <1.0.10 range also matches this harmless compatibility crate. The bans
 # below keep this exception bounded to that exact shim plus patched 1.x.
 # Delete the exception and bans when SQLx stops depending on 0.26.11.
-ignore = [{ id = "RUSTSEC-2026-0381", reason = "Exact 0.26.11 re-export shim uses patched webpki-roots >=1.0.10; all other affected versions are denied below" }]
+# RUSTSEC-2026-0387 is a retained timing-side-channel risk, not a false positive.
+# web-push-native's latest maintained release (0.5.0) requires p256 ^0.13.2,
+# whose elliptic-curve 0.13 dependency requires crypto-bigint 0.5. There is no
+# compatible patched release: RustSec identifies >=0.7.6 as fixed.
+# https://docs.rs/crate/web-push-native/0.5.0
+# https://rustsec.org/advisories/RUSTSEC-2026-0387.html
+# Keep this exception limited to the existing locked 0.5.5 via the bans below.
+# Remove it and those bans when Web Push supports a stack using >=0.7.6, or
+# when the affected Web Push/signing stack is replaced with a patched backend.
+ignore = [
+  { id = "RUSTSEC-2026-0381", reason = "Exact 0.26.11 re-export shim uses patched webpki-roots >=1.0.10; all other affected versions are denied below" },
+  { id = "RUSTSEC-2026-0387", reason = "Upstream web-push-native 0.5.0 requires p256 0.13 / crypto-bigint 0.5; no compatible fixed release. Retain only locked 0.5.5 until Web Push supports >=0.7.6 or its backend is replaced; timing risk remains." },
+]
 
 [licenses]
 allow = [
@@ -36,6 +48,8 @@ multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 deny = [
+  { name = "crypto-bigint", version = "<0.5.5" },
+  { name = "crypto-bigint", version = ">0.5.5, <0.7.6" },
   { name = "webpki-roots", version = "<0.26.11" },
   { name = "webpki-roots", version = ">0.26.11, <1.0.10" },
 ]
