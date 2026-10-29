@@ -77,6 +77,14 @@ language, while both DeepSeek Providers render API-key missing/configured and
 add/replace/clear actions without any Provider-ID branch in Web. Their common
 `deepseek-api-key-v1` authentication scope means the API key is entered once;
 each lane receives its own encrypted projection and keeps its own Provider card.
+A Provider that joins a scope later, such as DeepSeek Harness installed after
+the key was entered, adopts the scope's current credential: after every Catalog
+refresh, at Controller start and on the periodic retention pass, the Service
+re-seals the newest ready generation for scope members with no durable state,
+validates it against their own contract and distributes it. Adoption keeps the
+source generation, so refresh and logout remain one lineage; a newer logout
+tombstone or any existing member state is never overridden, and named accounts
+are excluded.
 
 DeepSeek Harness (`dsh --profile acp`) reaches DeepSeek only through its
 session-owned gateway sidecar, for chat and for its server-side web search
