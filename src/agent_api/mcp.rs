@@ -15,7 +15,7 @@ use super::{
     EXECUTE_DESCRIPTION, INSTRUCTIONS, READ_DESCRIPTION, RECEIPT_DESCRIPTION, STATUS_DESCRIPTION,
 };
 use crate::managed_calls::cli::{exchange, wiring};
-use crate::managed_calls::protocol::Action;
+use crate::managed_calls::protocol::{Action, MAX_WAIT_MS};
 
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SDK_URI: &str = "cowboy://sdk/v1";
@@ -179,10 +179,44 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
         // Serde names the offending field or type, never another caller's data.
         format!("invalid arguments: {error}")
     })?;
-    action
-        .validate()
-        .map_err(|error| format!("invalid arguments: {error}"))?;
+    if let Err(error) = action.validate() {
+        return Err(read_problem(&action)
+            .map_or_else(|| format!("invalid arguments: {error}"), str::to_owned));
+    }
     Ok(action)
+}
+
+/// Name the rule a rejected read broke; "invalid_contract" alone made agents
+/// guess (a timeout_ms above the maximum was the usual cause).
+fn read_problem(action: &Action) -> Option<&'static str> {
+    let Action::AgentRead {
+        code,
+        language,
+        format,
+        timeout_ms,
+    } = action
+    else {
+        return None;
+    };
+    Some(
+        if timeout_ms.is_some_and(|ms| ms == 0 || ms > MAX_WAIT_MS) {
+            "invalid arguments: timeout_ms must be an integer from 1 to 60000"
+        } else if language
+            .as_deref()
+            .is_some_and(|l| !matches!(l, "ts" | "js"))
+        {
+            "invalid arguments: language must be ts or js"
+        } else if format
+            .as_deref()
+            .is_some_and(|f| !matches!(f, "body" | "module"))
+        {
+            "invalid arguments: format must be body or module"
+        } else if code.trim().is_empty() {
+            "invalid arguments: code is empty"
+        } else {
+            "invalid arguments: code is too large or contains a NUL byte"
+        },
+    )
 }
 
 const HELP_USAGE: &str =
@@ -571,6 +605,17 @@ mod tests {
                 .unwrap(),
             json!({"resourceTemplates":[]})
         );
+    }
+
+    #[test]
+    fn rejected_reads_name_the_broken_rule() {
+        let message = |arguments: Value| action("cowboy_read", &arguments).unwrap_err();
+        assert!(
+            message(json!({"code": "return 1", "timeout_ms": 65000}))
+                .contains("timeout_ms must be an integer from 1 to 60000")
+        );
+        assert!(message(json!({"code": "return 1", "language": "py"})).contains("ts or js"));
+        assert!(message(json!({"code": "  "})).contains("code is empty"));
     }
 
     #[test]
