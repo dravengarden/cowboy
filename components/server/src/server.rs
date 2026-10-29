@@ -13897,28 +13897,13 @@ async fn api_provider_auth_logout(
                 .into_response();
         }
     };
-    let provider_ids: Vec<_> = state
+    let mut provider_ids = state
         .provider_catalog
         .provider_ids_for_authentication_scope(&scope);
-    let provider_ids: Vec<_> = provider_ids
-        .into_iter()
-        .filter(|candidate| state.provider_auth.status(candidate).is_some())
-        .collect();
-    if provider_ids.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "authentication scope has no durable Provider state",
-        )
-            .into_response();
+    if !provider_ids.contains(&provider_id) {
+        provider_ids.push(provider_id.clone());
     }
-    let statuses = match if provider_ids.len() == 1 {
-        state
-            .provider_auth
-            .logout(&provider_ids[0])
-            .map(|status| vec![status])
-    } else {
-        state.provider_auth.logout_shared(&provider_ids)
-    } {
+    let statuses = match state.provider_auth.logout_scope(&provider_ids) {
         Ok(statuses) => statuses,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };

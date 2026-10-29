@@ -930,6 +930,32 @@ impl ProviderAuthService {
             "authentication scope has no Providers"
         );
         let mut providers = self.providers.write();
+        self.logout_locked(&mut providers, provider_ids)
+    }
+
+    /// Log out every scope member that holds durable state, choosing them
+    /// under the same lock as the wipe. Selecting members before locking
+    /// could miss one that adopted the shared credential in between and
+    /// leave it authenticated after the user logged out.
+    pub fn logout_scope(&self, candidates: &[String]) -> Result<Vec<ProviderAuthenticationStatus>> {
+        let mut providers = self.providers.write();
+        let present: Vec<String> = candidates
+            .iter()
+            .filter(|provider_id| providers.contains_key(*provider_id))
+            .cloned()
+            .collect();
+        ensure!(
+            !present.is_empty(),
+            "authentication scope has no durable Provider state"
+        );
+        self.logout_locked(&mut providers, &present)
+    }
+
+    fn logout_locked(
+        &self,
+        providers: &mut BTreeMap<String, StoredProviderAuthentication>,
+        provider_ids: &[String],
+    ) -> Result<Vec<ProviderAuthenticationStatus>> {
         let current: Vec<_> = provider_ids
             .iter()
             .map(|provider_id| {
@@ -955,7 +981,7 @@ impl ProviderAuthService {
                 None,
             )?;
             statuses.push(self.replace_locked(
-                &mut providers,
+                providers,
                 StoredProviderAuthentication {
                     promotion_commitment: None,
                     vault_schema: self.vault_schema(),
@@ -2544,6 +2570,42 @@ mod tests {
         assert!(empty.adopt_shared_scope(&scope).unwrap().is_empty());
         assert!(service.adopt_shared_scope(&[harness]).unwrap().is_empty());
         fs::remove_dir_all(other_root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scope_logout_selects_members_under_its_own_lock() {
+        let (root, service) = service();
+        let claude = package("claude-deepseek");
+        let codex = package("codex-deepseek");
+        let harness = harness(&codex);
+        let bundle = bundle(&claude);
+        service
+            .commit_shared(
+                &[claude.clone(), codex.clone()],
+                &bundle,
+                None,
+                "claude-deepseek",
+                None,
+            )
+            .unwrap();
+        // A caller that listed members before this adoption still wipes it.
+        service
+            .adopt_shared_scope(&[claude.clone(), codex.clone(), harness.clone()])
+            .unwrap();
+        let ids = vec![
+            "claude-deepseek".to_owned(),
+            "codex-deepseek".to_owned(),
+            "deepseek-harness".to_owned(),
+            "gemini".to_owned(),
+        ];
+        let logged_out = service.logout_scope(&ids).unwrap();
+        assert_eq!(logged_out.len(), 3);
+        assert!(logged_out.iter().all(|status| {
+            status.auth_generation == 2
+                && status.authentication_state == ServiceAuthenticationState::SignedOut
+        }));
+        assert!(service.logout_scope(&["gemini".to_owned()]).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }
