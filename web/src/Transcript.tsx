@@ -48,6 +48,7 @@ import {
   Bedtime,
   ChatBubbleOutline,
   CheckCircleOutline,
+  ChevronRight,
   CleaningServices,
   Close,
   CloudUpload,
@@ -1612,6 +1613,19 @@ function MessageBubble({
   );
 }
 
+/** Lifecycle notes (recovered, interrupted, crashed) are caption text with a
+ * glyph sized from that text, so both follow the global font size together and
+ * the glyph centres on the first line instead of towering over it. */
+const LIFECYCLE_ROW_SX = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "0.5em",
+  typography: "caption",
+  lineHeight: 1.5,
+} as const;
+// 1.5em equals the 1.5 line height, so the glyph spans the first line exactly.
+const LIFECYCLE_ICON_SX = { fontSize: "1.5em", flexShrink: 0 } as const;
+
 function ToolCard({
   item,
   desktop,
@@ -3083,15 +3097,36 @@ const ItemView = memo(function ItemView({
     case "lifecycle": {
       if (item.recovered) {
         return (
-          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ color: "text.secondary" }}>
-            <CheckCircleOutline fontSize="medium" />
-            <Box component="details" data-runtime-recovered sx={{ minWidth: 0, fontSize: "0.75rem" }}>
-              <Box component="summary" sx={{ cursor: "pointer" }}>Session recovered</Box>
-              <Typography variant="caption" component="div" sx={{ mt: 0.5, overflowWrap: "anywhere", whiteSpace: "pre-wrap", maxHeight: "30vh", overflow: "auto" }}>
+          <Box sx={{ ...LIFECYCLE_ROW_SX, color: "text.secondary" }}>
+            <CheckCircleOutline sx={LIFECYCLE_ICON_SX} />
+            <Box
+              component="details"
+              data-runtime-recovered
+              sx={{
+                minWidth: 0,
+                // The disclosure is ours, sized with the caption: the native
+                // marker ignored the font scale and the theme font.
+                "& > summary": {
+                  cursor: "pointer",
+                  listStyle: "none",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.25em",
+                  "&::-webkit-details-marker": { display: "none" },
+                },
+                "& > summary > svg": { fontSize: "1.25em", transition: "transform 120ms ease" },
+                "&[open] > summary > svg": { transform: "rotate(90deg)" },
+              }}
+            >
+              <Box component="summary">
+                Session recovered
+                <ChevronRight />
+              </Box>
+              <Box sx={{ mt: 0.5, overflowWrap: "anywhere", whiteSpace: "pre-wrap", maxHeight: "30vh", overflow: "auto" }}>
                 Earlier error: {item.detail ?? "The session stopped unexpectedly."}
-              </Typography>
+              </Box>
             </Box>
-          </Stack>
+          </Box>
         );
       }
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
@@ -3108,14 +3143,14 @@ const ItemView = memo(function ItemView({
         ? "warning.main"
         : "text.secondary";
       return (
-        <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ color }}>
+        <Box sx={{ ...LIFECYCLE_ROW_SX, color }}>
           {interrupted
-            ? <WarningAmberRounded fontSize="medium" />
-            : <ErrorOutline fontSize="medium" />}
+            ? <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />
+            : <ErrorOutline sx={LIFECYCLE_ICON_SX} />}
           <Box sx={{ minWidth: 0 }}>
-            <Typography variant="caption" sx={{ fontWeight: interrupted ? 600 : 400 }}>
+            <Box component="span" sx={{ fontWeight: interrupted ? 600 : 400 }}>
               {label}
-            </Typography>
+            </Box>
             {item.turnFailure && (
               <TurnFailureRecovery
                 itemKey={item.key}
@@ -3129,7 +3164,7 @@ const ItemView = memo(function ItemView({
               <ErrorDetails detail={item.detail} />
             )}
           </Box>
-        </Stack>
+        </Box>
       );
     }
     case "cleared":

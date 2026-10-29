@@ -1,4 +1,4 @@
-import { History } from "@mui/icons-material";
+import { Close, History } from "@mui/icons-material";
 import { Alert, Button, IconButton, Snackbar, Tooltip } from "@mui/material";
 import { useState, useSyncExternalStore } from "react";
 import { UNDO_NOTICE_MS } from "../undoHistory";
@@ -68,7 +68,20 @@ export function DocumentNotifications(
     >
       <Alert
         severity="info"
-        sx={mobile ? { width: "100%", alignItems: "center" } : undefined}
+        sx={{
+          ...(mobile && { width: "100%" }),
+          alignItems: "center",
+          // MUI tops the action area with 4px padding and flex-start: center
+          // Undo, history and Close on the message instead.
+          "& .MuiAlert-message": { py: 0.5 },
+          "& .MuiAlert-action": {
+            alignItems: "center",
+            alignSelf: "center",
+            pt: 0,
+            mr: -0.5,
+            gap: 0.25,
+          },
+        }}
         onClose={busy ? undefined : close}
         action={undoId
           ? (
@@ -100,6 +113,19 @@ export function DocumentNotifications(
                   }}
                 >
                   <History fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              {/* An Alert with an action drops its own close button; keep a
+                  visible way to dismiss the notice before it times out. */}
+              <Tooltip title="Dismiss">
+                <IconButton
+                  aria-label="Dismiss"
+                  color="inherit"
+                  size="small"
+                  disabled={busy}
+                  onClick={close}
+                >
+                  <Close fontSize="small" />
                 </IconButton>
               </Tooltip>
             </>
