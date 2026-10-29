@@ -139,7 +139,11 @@ directories to the worker-only `PATH`. Claude Providers additionally bind
 `component_command` value. Codex ACP finds its packaged Codex CLI through the
 same generation-local path. Neither variant refers to a Nix profile, `/etc`
 catalog, managed Node package, host adapter, or ambient CLI to complete an exact
-package launch.
+package launch. `codex-deepseek` therefore ships DeepSeek's Codex model
+catalog inside its gateway artifact (the `files` of its `git_go_static` recipe,
+taken from the same digest-pinned source) and points `model_catalog_json` at it
+through a `component_file` binding; every Machine and platform reads the same
+catalog bytes.
 
 For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
 forwarded only to the gateway sidecar; it is not added to the ACP adapter's

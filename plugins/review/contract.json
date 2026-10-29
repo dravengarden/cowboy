@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "review",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "display_name": "Review",
   "description": "Read-only code reviews, design reviews and analyses by another agent family through Cowboy managed calls.",
   "supported_platforms": [

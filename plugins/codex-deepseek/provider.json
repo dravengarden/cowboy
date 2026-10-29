@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.46",
+  "version": "3.1.47",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.15",
+  "sdk_version": "3.1.16",
   "display": {
     "name": "Codex \u00b7 DeepSeek",
     "vendor": "DeepSeek",
@@ -133,7 +133,16 @@
       "-c",
       "model_reasoning_effort=\"max\"",
       "-c",
-      "model_catalog_json=\"/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json\"",
+      {
+        "source": "component_file",
+        "component": {
+          "kind": "provider_gateway",
+          "slot": "codex-deepseek"
+        },
+        "file": "codex-models.json",
+        "prefix": "model_catalog_json=\"",
+        "suffix": "\""
+      },
       "-c",
       "web_search=\"disabled\"",
       "-c",

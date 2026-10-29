@@ -57,6 +57,7 @@ interface GitGoRecipe {
   revision: string;
   subdir: string;
   source_archive_sha256: string;
+  files?: string[];
 }
 
 type ComponentRecipe = NpmArchiveRecipe | NodeNpmRecipe | GitGoRecipe;
@@ -191,6 +192,13 @@ for (const pluginRoot of pluginRoots) {
           assert(
             target.startsWith("linux-") || target === "macos-aarch64",
             `${providerId}: ${dependencyId} cannot build for ${target}`,
+          );
+          assert(
+            (recipe.files ?? []).every((file) =>
+              /^[a-z0-9][a-z0-9._-]*$/.test(file)
+            ) &&
+              new Set(recipe.files ?? []).size === (recipe.files ?? []).length,
+            `${providerId}: ${dependencyId} component files must be distinct plain names`,
           );
           break;
       }

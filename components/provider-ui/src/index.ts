@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.15" as const;
+export const PROVIDER_SDK_VERSION = "3.1.16" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -254,6 +254,15 @@ export type RuntimeValue =
   | {
     source: "credential_directory";
     bundle_key: string;
+    prefix?: string;
+    suffix?: string;
+  }
+  /** Read-only data file shipped beside a private component's command in the
+   * same signed runtime artifact; never a host-provided path. */
+  | {
+    source: "component_file";
+    component: RuntimeComponentReference;
+    file: string;
     prefix?: string;
     suffix?: string;
   };
@@ -2635,6 +2644,13 @@ function isRuntimeValue(value: unknown): value is RuntimeValue {
       isIdentifier(value.bundle_key) &&
       Object.keys(value).every((key) =>
         ["source", "bundle_key", "prefix", "suffix"].includes(key)
+      );
+  }
+  if (value.source === "component_file") {
+    return isRuntimeComponentReference(value.component) &&
+      typeof value.file === "string" && isIdentifier(value.file) &&
+      Object.keys(value).every((key) =>
+        ["source", "component", "file", "prefix", "suffix"].includes(key)
       );
   }
   return value.source === "component_command" &&

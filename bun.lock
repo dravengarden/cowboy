@@ -14,7 +14,7 @@
     },
     "components/app-shell": {
       "name": "@cowboy/app-shell",
-      "version": "1.1.32",
+      "version": "1.1.33",
       "peerDependencies": {
         "@emotion/react": "^11.13.0",
         "@emotion/styled": "^11.13.0",
@@ -26,14 +26,14 @@
     },
     "components/provider-authoring": {
       "name": "@cowboy/provider-authoring",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "peerDependencies": {
         "@cowboy/provider-ui": "3.1.21",
       },
     },
     "components/provider-ui": {
       "name": "@cowboy/provider-ui",
-      "version": "3.1.21",
+      "version": "3.1.22",
     },
     "components/state-store": {
       "name": "@cowboy/state-store",

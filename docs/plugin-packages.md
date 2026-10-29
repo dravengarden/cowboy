@@ -110,7 +110,9 @@ does not trust a Provider's build receipt.
 
 Runtime values form another closed DSL. A Provider argument or non-secret
 environment value is either a bounded literal, a `component_command` binding
-to a declared kind/slot, or a `sidecar_url` binding to a declared sidecar. A
+to a declared kind/slot, a `component_file` binding to a plain-named data file
+shipped beside that component's command in the same signed artifact (Provider
+SDK 3.1.16+), or a `sidecar_url` binding to a declared sidecar. A
 binding may add bounded prefix and suffix text for configuration formats, but
 it cannot invoke a shell, read ambient state, or name an undeclared resource.
 

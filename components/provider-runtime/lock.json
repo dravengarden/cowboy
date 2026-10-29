@@ -154,6 +154,9 @@
       "binary": "codex-deepseek",
       "probe": [
         "--help"
+      ],
+      "files": [
+        "codex-models.json"
       ]
     }
   }

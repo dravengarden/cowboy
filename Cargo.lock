@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "cowboy-plugin-sdk"
-version = "1.12.2"
+version = "1.12.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "cowboy-provider-sdk"
-version = "3.1.15"
+version = "3.1.16"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

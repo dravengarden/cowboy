@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "gemini",
-  "version": "3.1.44",
+  "version": "3.1.45",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.15",
+  "sdk_version": "3.1.16",
   "display": {
     "name": "Gemini",
     "vendor": "Google",

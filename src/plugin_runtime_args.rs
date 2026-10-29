@@ -1430,6 +1430,13 @@ fn config_assignments(
     for argument in arguments {
         if expect_assignment {
             expect_assignment = false;
+            // Package-less launches have no signed artifact to hold component
+            // data; their host-side equivalents (e.g. `loopback_catalog` for
+            // `model_catalog_json`) are written by the legacy config itself.
+            if argument.get("source").and_then(serde_json::Value::as_str) == Some("component_file")
+            {
+                continue;
+            }
             assignments.push(assignment_from_runtime_value(
                 plugin_id,
                 argument,
