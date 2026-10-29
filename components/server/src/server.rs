@@ -3177,6 +3177,7 @@ async fn run_generation_retention(state: Arc<AppState>) {
             dormant_pins::repin(&state).await;
             generation_retention_pass(&state, None).await;
             catalog_retention_pass(&state).await;
+            adopt_shared_provider_authentication(&state).await;
         } else {
             let cooldown = state
                 .service_config
@@ -11093,6 +11094,10 @@ async fn serve_axum(
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
+    let adoption_state = Arc::clone(&state);
+    let shared_authentication_task = tokio::spawn(async move {
+        adopt_shared_provider_authentication(&adoption_state).await;
+    });
     let trash_retention_task = tokio::spawn(session_trash::run_retention(Arc::clone(&state)));
     let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
@@ -11110,6 +11115,7 @@ async fn serve_axum(
     convergence_task.abort();
     provider_update_task.abort();
     generation_retention_task.abort();
+    shared_authentication_task.abort();
     trash_retention_task.abort();
     account_recovery_task.abort();
     usage_broadcast_task.abort();
@@ -13352,6 +13358,7 @@ async fn api_plugin_catalog_refresh(State(state): State<Arc<AppState>>) -> Respo
             if let Err(error) = state.provider_catalog.refresh_external() {
                 return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
             }
+            adopt_shared_provider_authentication(&state).await;
             Json(serde_json::json!({ "external_releases": count })).into_response()
         }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -13365,7 +13372,10 @@ async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Res
         .await
     {
         Ok(_) => match state.provider_catalog.refresh_external() {
-            Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+            Ok(count) => {
+                adopt_shared_provider_authentication(&state).await;
+                Json(serde_json::json!({ "external_releases": count })).into_response()
+            }
             Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         },
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -14333,6 +14343,30 @@ struct ProviderDistributionOutcome {
     pending: usize,
     #[serde(skip)]
     synchronized_generations: BTreeMap<String, u64>,
+}
+
+/// Give Providers that joined a shared credential scope after its secret was
+/// entered the scope's current Service credential, then distribute it. Runs
+/// after every Provider Catalog refresh and periodically; it never overwrites
+/// a Provider that already has durable authentication state.
+async fn adopt_shared_provider_authentication(state: &Arc<AppState>) {
+    let mut adopted = Vec::new();
+    for scope in state.provider_catalog.authentication_scopes() {
+        let packages = state
+            .provider_catalog
+            .packages_for_authentication_scope(&scope);
+        match state.provider_auth.adopt_shared_scope(&packages) {
+            Ok(statuses) => adopted.extend(statuses),
+            Err(error) => {
+                tracing::warn!(%error, %scope, "cannot extend shared Provider authentication");
+            }
+        }
+    }
+    if adopted.is_empty() {
+        return;
+    }
+    let (statuses, replicas) = distribute_and_mark_provider_auth(state, adopted).await;
+    recover_failed_provider_sessions(state, &statuses, &replicas);
 }
 
 async fn distribute_and_mark_provider_auth(

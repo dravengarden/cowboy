@@ -691,6 +691,115 @@ impl ProviderAuthService {
         Ok(statuses)
     }
 
+    /// Extend the current shared credential of one public authentication scope
+    /// to scope members that have never held Service authentication, such as a
+    /// Provider installed after the user entered the scope's secret.
+    ///
+    /// Only the default Service vault participates; named accounts stay bound
+    /// to their own native identity. The source is the scope's newest
+    /// generation and must be a ready credential: a newer logout or failure
+    /// tombstone means there is nothing to inherit. A member with any durable
+    /// state, including a tombstone, is never overwritten. Adopted entries keep
+    /// the source generation, so shared refresh and logout stay one lineage.
+    pub fn adopt_shared_scope(
+        &self,
+        packages: &[ProviderPackage],
+    ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        if !self.account_id.is_default() || packages.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut providers = self.providers.write();
+        if packages
+            .iter()
+            .all(|package| providers.contains_key(&package.manifest.id))
+        {
+            return Ok(Vec::new());
+        }
+        let generation = maximum_auth_generation(packages, &providers);
+        let Some(source) = packages
+            .iter()
+            .filter_map(|package| providers.get(&package.manifest.id))
+            .find(|stored| stored.auth_generation == generation)
+            .filter(|stored| {
+                generation > 0
+                    && stored.action == ProviderAuthAction::Apply
+                    && stored.authentication_state == ServiceAuthenticationState::Ready
+                    && stored.promotion_commitment.is_none()
+            })
+            .cloned()
+        else {
+            return Ok(Vec::new());
+        };
+        // Every member at this generation must agree; a partially written
+        // scope is not a single credential to extend.
+        ensure!(
+            packages
+                .iter()
+                .filter_map(|package| providers.get(&package.manifest.id))
+                .filter(|stored| stored.auth_generation == generation)
+                .all(|stored| stored.action == ProviderAuthAction::Apply
+                    && stored.authentication_state == ServiceAuthenticationState::Ready),
+            "shared authentication scope is inconsistent at its newest generation"
+        );
+        let plaintext = self.open_vault(&source)?;
+        let bundle: PortableCredentialBundle =
+            serde_json::from_slice(&plaintext).context("decoding shared credential bundle")?;
+        let mut stored_values = Vec::new();
+        for package in packages
+            .iter()
+            .filter(|package| !providers.contains_key(&package.manifest.id))
+        {
+            let provider_id = &package.manifest.id;
+            let auth = &package.manifest.authentication;
+            if auth.portable_schema != source.portable_schema {
+                continue;
+            }
+            self.require_portable_packages(std::slice::from_ref(package))?;
+            if let Err(error) = validate_bundle(&portable_contract::contract(package), &bundle) {
+                tracing::warn!(
+                    %error,
+                    provider_id,
+                    source_provider_id = source.provider_id,
+                    "shared credential does not satisfy this Provider's contract"
+                );
+                continue;
+            }
+            let fingerprint = portable_contract::fingerprint(package)?;
+            let (nonce, ciphertext) =
+                self.seal_vault(provider_id, generation, &fingerprint, &plaintext, None)?;
+            stored_values.push(StoredProviderAuthentication {
+                promotion_commitment: None,
+                vault_schema: self.vault_schema(),
+                recipient_key: self.recipient_key.clone(),
+                provider_id: provider_id.clone(),
+                account_id: self.account_id.clone(),
+                auth_generation: generation,
+                authentication_state: ServiceAuthenticationState::Ready,
+                distribution_state: ServiceDistributionState::Pending,
+                auth_contract_fingerprint: fingerprint,
+                portable_schema: auth.portable_schema.clone(),
+                projection_schema: auth.projection_schema.clone(),
+                action: ProviderAuthAction::Apply,
+                nonce,
+                ciphertext,
+                account_label: source.account_label.clone(),
+                updated_at_ms: now_ms(),
+            });
+        }
+        let mut statuses = Vec::with_capacity(stored_values.len());
+        for stored in stored_values {
+            tracing::info!(
+                provider_id = stored.provider_id,
+                source_provider_id = source.provider_id,
+                auth_generation = generation,
+                scope = source.portable_schema,
+                "Provider adopted its scope's shared Service credential"
+            );
+            statuses.push(self.replace_locked(&mut providers, stored)?);
+        }
+        Ok(statuses)
+    }
+
     /// Atomically promote credentials refreshed inside one Machine projection.
     ///
     /// The Machine must name the exact Service generation it refreshed. Only
@@ -2321,6 +2430,120 @@ mod tests {
             status.auth_generation == 2
                 && status.authentication_state == ServiceAuthenticationState::SignedOut
         }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn harness(codex: &ProviderPackage) -> ProviderPackage {
+        let mut harness = codex.clone();
+        harness.manifest.id = "deepseek-harness".to_owned();
+        harness.manifest.authentication.projection_schema =
+            "deepseek-harness-gateway-v1".to_owned();
+        harness
+    }
+
+    #[test]
+    fn later_scope_member_adopts_the_ready_shared_credential_once() {
+        let (root, service) = service();
+        let claude = package("claude-deepseek");
+        let codex = package("codex-deepseek");
+        let harness = harness(&codex);
+        let bundle = bundle(&claude);
+        service
+            .commit_shared(
+                &[claude.clone(), codex.clone()],
+                &bundle,
+                Some("Mole".into()),
+                "claude-deepseek",
+                None,
+            )
+            .unwrap();
+        // A refresh advances the shared lineage before the new member exists.
+        service
+            .commit_shared(
+                &[claude.clone(), codex.clone()],
+                &bundle,
+                Some("Mole".into()),
+                "codex-deepseek",
+                Some(1),
+            )
+            .unwrap();
+        let scope = [claude.clone(), codex.clone(), harness.clone()];
+
+        let adopted = service.adopt_shared_scope(&scope).unwrap();
+        assert_eq!(adopted.len(), 1);
+        let status = &adopted[0];
+        assert_eq!(status.provider_id, "deepseek-harness");
+        assert_eq!(status.auth_generation, 2);
+        assert_eq!(
+            status.authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        assert_eq!(status.distribution_state, ServiceDistributionState::Pending);
+        assert_eq!(status.projection_schema, "deepseek-harness-gateway-v1");
+        assert_eq!(status.account_label.as_deref(), Some("Mole"));
+        let machine_secret = StaticSecret::from(random_bytes::<32>().unwrap());
+        let machine = base64::engine::general_purpose::STANDARD
+            .encode(PublicKey::from(&machine_secret).as_bytes());
+        let sealed = service
+            .seal_for_machine("deepseek-harness", &machine)
+            .unwrap();
+        assert_eq!(sealed.action, ProviderAuthAction::Apply);
+        assert_eq!(sealed.auth_generation, 2);
+        assert!(service.adopt_shared_scope(&scope).unwrap().is_empty());
+
+        // The adopted member joins the one shared lineage for logout.
+        let ids: Vec<_> = scope
+            .iter()
+            .map(|package| package.manifest.id.clone())
+            .collect();
+        let logged_out = service.logout_shared(&ids).unwrap();
+        assert!(logged_out.iter().all(|status| status.auth_generation == 3));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scope_adoption_never_revives_a_logout_or_overwrites_member_state() {
+        let (other_root, empty) = service();
+        let (root, service) = service();
+        let claude = package("claude-deepseek");
+        let codex = package("codex-deepseek");
+        let harness = harness(&codex);
+        let bundle = bundle(&claude);
+        service
+            .commit_shared(
+                &[claude.clone(), codex.clone()],
+                &bundle,
+                None,
+                "claude-deepseek",
+                None,
+            )
+            .unwrap();
+        service
+            .logout_shared(&["claude-deepseek".to_owned(), "codex-deepseek".to_owned()])
+            .unwrap();
+        let scope = [claude.clone(), codex.clone(), harness.clone()];
+        assert!(service.adopt_shared_scope(&scope).unwrap().is_empty());
+        assert!(service.status("deepseek-harness").is_none());
+
+        // A member logged out on its own keeps its tombstone.
+        service
+            .commit_shared(
+                &[claude.clone(), codex.clone(), harness.clone()],
+                &bundle,
+                None,
+                "claude-deepseek",
+                Some(2),
+            )
+            .unwrap();
+        service.logout("deepseek-harness").unwrap();
+        let before = service.status("deepseek-harness").unwrap();
+        assert!(service.adopt_shared_scope(&scope).unwrap().is_empty());
+        assert_eq!(service.status("deepseek-harness").unwrap(), before);
+
+        // Nothing to adopt from an unauthenticated scope or a lone Provider.
+        assert!(empty.adopt_shared_scope(&scope).unwrap().is_empty());
+        assert!(service.adopt_shared_scope(&[harness]).unwrap().is_empty());
+        fs::remove_dir_all(other_root).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

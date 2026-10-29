@@ -253,6 +253,15 @@ mod service_catalog {
                 .collect()
         }
 
+        /// Every public credential scope declared by a signed Catalog release.
+        pub fn authentication_scopes(&self) -> std::collections::BTreeSet<String> {
+            self.external
+                .read()
+                .values()
+                .map(|artifact| artifact.entry.authentication_scope.clone())
+                .collect()
+        }
+
         pub fn provider_ids_for_authentication_scope(&self, scope: &str) -> Vec<String> {
             self.packages_for_authentication_scope(scope)
                 .into_iter()
