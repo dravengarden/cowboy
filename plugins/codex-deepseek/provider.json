@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.41",
+  "version": "3.1.42",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.15",
   "display": {
@@ -132,6 +132,8 @@
       "model_provider=\"deepseek-local\"",
       "-c",
       "model_reasoning_effort=\"max\"",
+      "-c",
+      "model_catalog_json=\"/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json\"",
       "-c",
       "web_search=\"disabled\"",
       "-c",
