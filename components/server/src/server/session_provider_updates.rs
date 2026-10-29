@@ -409,12 +409,6 @@ async fn pass(
         if meta.status == Status::Starting || meta.closing || meta.trashed_at_ms.is_some() {
             continue;
         }
-        // A named subscription's session changes release only through a
-        // verified login transition; the Machine keeps each named worker on
-        // its exact release. Offering Update here would only ever fail.
-        if !meta.provider_account_id.is_default() {
-            continue;
-        }
         // A managed child serves one call and is retired after it; no Update.
         if state.hub.is_managed_child(&meta.id) {
             continue;
@@ -424,6 +418,9 @@ async fn pass(
         {
             continue;
         }
+        // A named session's target depends on its own login, so it is never
+        // shared: it moves only to a release that login carries over to.
+        let named = !meta.provider_account_id.is_default();
         let target_key = (
             meta.machine_id.clone(),
             meta.provider.clone(),
@@ -431,6 +428,7 @@ async fn pass(
             meta.provider_generation_digest.clone(),
         );
         let target = match targets.get(&target_key) {
+            _ if named => session_upgrade_target(state, &meta).await.ok(),
             Some(target) => target.clone(),
             None => {
                 let target = machines
@@ -614,10 +612,13 @@ fn repin_dormant(
     ) else {
         return false;
     };
-    match state
-        .hub
-        .repin_dormant_provider(meta, &target.version, &target.digest, &target.behavior)
-    {
+    match state.hub.repin_dormant_provider(
+        meta,
+        &target.version,
+        &target.digest,
+        &target.behavior,
+        target.named_carry.as_ref(),
+    ) {
         Ok(()) => {
             tracing::info!(
                 session = %meta.id,

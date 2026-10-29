@@ -175,7 +175,13 @@ async fn session_provider_update(
     let result = if meta.status == Status::Exited && !live_worker {
         state
             .hub
-            .repin_dormant_provider(&meta, &target.version, &target.digest, &target.behavior)
+            .repin_dormant_provider(
+                &meta,
+                &target.version,
+                &target.digest,
+                &target.behavior,
+                target.named_carry.as_ref(),
+            )
             .map(|()| "repinned")
     } else {
         apply_session_provider_reload(&state, &meta, &target, false).map(|()| "updating")

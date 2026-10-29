@@ -112,6 +112,7 @@ pub(super) async fn repin(state: &Arc<AppState>) {
             &target.version,
             &target.digest,
             &target.behavior,
+            target.named_carry.as_ref(),
         ) {
             Ok(()) => tracing::info!(
                 session = %meta.id,
