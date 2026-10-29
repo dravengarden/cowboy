@@ -2,6 +2,7 @@ import { desktopSize } from "./surface/desktopSize";
 import Schedule from "@mui/icons-material/Schedule";
 import Upgrade from "@mui/icons-material/Upgrade";
 import {
+  Alert,
   Box,
   Button,
   CircularProgress,
@@ -12,6 +13,7 @@ import {
 import { useEffect, useState } from "react";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { useNetworkActionState } from "./NetworkActionFeedback";
+import { actionErrorMessage } from "./actionErrorMessage";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { SessionMeta } from "./protocol";
 import { providerName } from "./providerPresentation";
@@ -42,6 +44,12 @@ export function ProviderUpdateDialog({
   const repinOnly = providerUpdateRepinsOnly(session);
   const scheduled = offer?.when_idle === true;
   const [now, setNow] = useState(() => Date.now());
+  // A refused update keeps the sheet open; say why inside it, where the
+  // user is looking, not only in a toast the sheet may cover.
+  const [refusal, setRefusal] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) setRefusal(null);
+  }, [open]);
   useEffect(() => {
     if (!open) return undefined;
     setNow(Date.now());
@@ -63,15 +71,21 @@ export function ProviderUpdateDialog({
     : "";
   const confirm = (): void => {
     if (!session || !offer) return;
+    setRefusal(null);
     void action.run(async () => {
-      if (scheduled) {
-        await requestProviderUpdateWhenIdle(session.id, false);
-      } else if (waits || repinOnly) {
-        await requestProviderUpdateWhenIdle(session.id, true);
-      } else {
-        await reloadSession(session.id, {
-          providerGenerationDigest: offer.digest,
-        });
+      try {
+        if (scheduled) {
+          await requestProviderUpdateWhenIdle(session.id, false);
+        } else if (waits || repinOnly) {
+          await requestProviderUpdateWhenIdle(session.id, true);
+        } else {
+          await reloadSession(session.id, {
+            providerGenerationDigest: offer.digest,
+          });
+        }
+      } catch (error) {
+        setRefusal(actionErrorMessage(error, "The update could not start"));
+        throw error;
       }
       onClose();
     });
@@ -129,6 +143,11 @@ export function ProviderUpdateDialog({
       }
     >
       <Stack spacing={1.5}>
+        {refusal && (
+          <Alert severity="error" data-provider-update-refusal>
+            {refusal}
+          </Alert>
+        )}
         <Stack
           direction="row"
           spacing={1}
