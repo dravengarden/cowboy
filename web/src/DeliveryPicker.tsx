@@ -41,6 +41,10 @@ export interface DeliveryPickerProps {
   onSteer: (target: DeliveryTarget, nextCheckpoint?: boolean) => void;
   onSendAndPause: () => void;
   onStop: () => void;
+  /** A message already in the Queue: it can Steer into the current turn or
+   *  move to the front; "Next turn" (it is queued) and "Send & pause" do not
+   *  apply. `queueCount` is then the number of messages ahead of it. */
+  queued?: boolean;
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
@@ -129,6 +133,8 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
     ? "checkpoint"
     : mode === "steer"
     ? "steer"
+    : props.queued
+    ? "front"
     : "next";
   const preferredRef = useRef(preferred);
   preferredRef.current = preferred;
@@ -277,7 +283,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
             : undefined}
         />
       </MenuItem>
-      <MenuItem
+      {!props.queued && (<MenuItem
         data-delivery-command="next"
         onClick={() => choose("next")}
       >
@@ -288,7 +294,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           primary="Next turn"
           secondary={props.paused ? "Queue stays paused" : undefined}
         />
-      </MenuItem>
+      </MenuItem>)}
       <MenuItem
         data-delivery-command="front"
         disabled={props.queueCount === 0}
@@ -300,7 +306,9 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
         <ListItemText
           primary="Queue first"
           secondary={props.queueCount === 0
-            ? "No queued messages"
+            ? props.queued ? "Already first" : "No queued messages"
+            : props.queued && !props.paused
+            ? "Runs when the current turn ends"
             : props.paused
             ? "Queue stays paused"
             : undefined}
@@ -328,7 +336,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           />
         </MenuItem>
       )}
-      <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
+      {!props.queued && <MenuItem data-delivery-command="pause" onClick={() => choose("pause")}>
         <ListItemIcon>
           <PauseCircleOutline />
         </ListItemIcon>
@@ -336,7 +344,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element {
           primary="Send & pause"
           secondary="Enqueue · current turn continues"
         />
-      </MenuItem>
+      </MenuItem>}
       {desktop && (
         <Box
           component="li"
