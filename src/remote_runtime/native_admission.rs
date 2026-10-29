@@ -230,27 +230,48 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     {
         return Ok(false);
     }
-    let started = AtomicBool::new(false);
-    let result = store
-        .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
-            anyhow::ensure!(
-                !shared.shutdown.load(Ordering::Acquire),
-                "runtime_disconnected"
-            );
-            let current = shared
-                .hub
-                .session_info(&meta.id)
-                .context("session_unavailable")?
-                .meta;
-            anyhow::ensure!(!current.closing, "session_closing");
-            anyhow::ensure!(unchanged(&meta, &current), "native_session_binding_changed");
-            started.store(true, Ordering::Release);
-            write_broker_frame(writer, &Frame::CoreCommand { command }).await
-        })
-        .await;
-    match result {
-        Ok(()) => Ok(true),
-        Err(error) if started.load(Ordering::Acquire) => Err(error),
-        Err(_) => Ok(false),
+    // A Provider reload persists the session's new release through the
+    // asynchronous store writer, and its launch can reach admission first:
+    // the stored binding then still names the previous release. Give the
+    // writer a moment instead of refusing the launch and stranding the
+    // session in Starting.
+    for attempt in 1..=BINDING_ATTEMPTS {
+        let started = AtomicBool::new(false);
+        let command = command.clone();
+        let result = store
+            .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
+                anyhow::ensure!(
+                    !shared.shutdown.load(Ordering::Acquire),
+                    "runtime_disconnected"
+                );
+                let current = shared
+                    .hub
+                    .session_info(&meta.id)
+                    .context("session_unavailable")?
+                    .meta;
+                anyhow::ensure!(!current.closing, "session_closing");
+                anyhow::ensure!(unchanged(&meta, &current), "native_session_binding_changed");
+                started.store(true, Ordering::Release);
+                write_broker_frame(writer, &Frame::CoreCommand { command }).await
+            })
+            .await;
+        match result {
+            Ok(()) => return Ok(true),
+            Err(error) if started.load(Ordering::Acquire) => return Err(error),
+            Err(error)
+                if attempt < BINDING_ATTEMPTS
+                    && error
+                        .chain()
+                        .any(|cause| cause.to_string() == "native_session_binding_changed") =>
+            {
+                tokio::time::sleep(BINDING_RETRY).await;
+            }
+            Err(_) => return Ok(false),
+        }
     }
+    Ok(false)
 }
+
+/// How long admission waits for a just-reloaded session's stored binding.
+const BINDING_ATTEMPTS: u32 = 40;
+const BINDING_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
