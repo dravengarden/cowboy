@@ -279,9 +279,10 @@ pub async fn prepare(
             false,
         )
     } else {
-        let remote_head = git_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
-            .await
-            .context("resolving origin default branch")?;
+        let remote_head =
+            git_remote_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
+                .await
+                .context("resolving origin default branch")?;
         let head_ref = parse_remote_head(&remote_head)?;
         let remote_branch = head_ref
             .strip_prefix("refs/heads/")
@@ -290,7 +291,7 @@ pub async fn prepare(
             .await
             .context("validating origin default branch")?;
         let refspec = format!("+{head_ref}:{base_ref}");
-        git_output(&repository, ["fetch", "origin", refspec.as_str()])
+        git_remote_output(&repository, ["fetch", "origin", refspec.as_str()])
             .await
             .context("fetching origin default branch for isolated session")?;
         let revision_spec = format!("{base_ref}^{{commit}}");
@@ -1535,6 +1536,54 @@ where
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
+/// Delays before retrying a remote Git operation that failed in transport.
+const GIT_REMOTE_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
+
+/// A remote operation (`ls-remote`, idempotent `fetch`) retried across a brief
+/// network or SSH interruption, so one dropped connection does not crash a new
+/// session. Repository or permission failures are returned at once.
+async fn git_remote_output<const N: usize>(repository: &Path, args: [&str; N]) -> Result<String> {
+    let mut delays = GIT_REMOTE_RETRY_DELAYS.iter();
+    loop {
+        match git_output(repository, args).await {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                let Some(delay) = delays
+                    .next()
+                    .filter(|_| is_transient_git_transport_failure(&format!("{error:#}")))
+                else {
+                    return Err(error);
+                };
+                tracing::warn!(
+                    repository = %repository.display(),
+                    operation = args[0],
+                    retry_in_ms = delay.as_millis(),
+                    error = %format!("{error:#}"),
+                    "remote Git operation failed in transport; retrying"
+                );
+                tokio::time::sleep(*delay).await;
+            }
+        }
+    }
+}
+
+fn is_transient_git_transport_failure(message: &str) -> bool {
+    const TRANSIENT: [&str; 11] = [
+        "git timed out in",
+        "Could not resolve hostname",
+        "Temporary failure in name resolution",
+        "Connection closed by",
+        "Connection reset by",
+        "Connection timed out",
+        "Operation timed out",
+        "kex_exchange_identification",
+        "Network is unreachable",
+        "the remote end hung up unexpectedly",
+        "early EOF",
+    ];
+    TRANSIENT.iter().any(|needle| message.contains(needle))
+}
+
 async fn git_command<I, S>(repository: &Path, args: I) -> Result<std::process::Output>
 where
     I: IntoIterator<Item = S>,
@@ -1560,6 +1609,28 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn only_transport_failures_are_retried() {
+        for transient in [
+            "resolving origin default branch: git timed out in /work: deadline has elapsed",
+            "git failed in /work: ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+            "git failed in /work: Connection closed by 140.82.112.3 port 22\nfatal: Could not read from remote repository.",
+            "git failed in /work: fatal: the remote end hung up unexpectedly",
+        ] {
+            assert!(is_transient_git_transport_failure(transient), "{transient}");
+        }
+        for permanent in [
+            "git failed in /work: fatal: 'origin' does not appear to be a git repository",
+            "git failed in /work: git@github.com: Permission denied (publickey).",
+            "git failed in /work: fatal: couldn't find remote ref refs/heads/main",
+        ] {
+            assert!(
+                !is_transient_git_transport_failure(permanent),
+                "{permanent}"
+            );
+        }
+    }
 
     struct TestDir(PathBuf);
 
