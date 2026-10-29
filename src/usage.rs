@@ -271,7 +271,11 @@ impl UsageService {
             });
         align_snapshot_bindings(&mut snapshot, &initial_bindings);
         Self {
-            native: native::Cache::default(),
+            native: cache_path
+                .as_ref()
+                .map_or_else(native::Cache::default, |path| {
+                    native::Cache::persistent(path.with_file_name("usage-named.json"))
+                }),
             limiter: limiter::Limiter::new(
                 cache_path
                     .as_ref()
