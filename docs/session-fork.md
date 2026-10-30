@@ -22,7 +22,7 @@ keeps the complete model context and can reuse the Provider prompt cache.
 - `sessions.fork` in Cowboy MCP and `POST /api/sessions/:id/fork` expose the
   same operation to agents and scripts.
 
-The fork keeps its source's Provider, release, subscription, runtime Machine,
+The fork keeps its source's Provider, subscription and login, runtime Machine,
 execution Machine, project and supported settings (model, reasoning,
 permissions, Memory, Calls, send policy and automatic Provider updates). Its
 title is the source title with a ` (fork)` suffix, it is placed directly after
@@ -45,7 +45,11 @@ not copied. The source worktree is never written. Non-Git roots remain shared,
 as for every session.
 
 If the source worktree no longer exists, the fork is refused instead of
-silently starting from the default branch.
+silently starting from the default branch. Copying refuses any path that
+crosses a symlinked directory in either tree. A Machine records each fork
+copy in progress and refuses to reuse a worktree whose copy was interrupted,
+so a partial copy is never presented as the source state. Untracked files
+above 512 MiB in total refuse the fork; ignore build output first.
 
 ## Admission
 
@@ -58,8 +62,11 @@ names its reason and creates nothing.
   native background work, because the adapter copies the native transcript as
   it is on disk. **Fork from here** may target a completed turn while a later
   turn is running.
-- The message, when given, is an assistant message in the source transcript
-  that belongs to a completed turn.
+- The message, when given, is the last assistant message of a completed turn
+  in the source transcript. A message steered into a running turn does not
+  end it. A message older than the Controller's loaded transcript tail is
+  validated by the adapter at the fork's first launch instead.
+- The source is not in Trash.
 - The Provider is one whose adapter fork has been verified (`claude-code`,
   `codex`). Other Providers refuse until their adapters are verified.
 - The runtime Machine speaks Machine protocol 39 or later, which carries the
@@ -69,7 +76,10 @@ The destination is created through ordinary session admission with the
 source's account, Provider, Machines and project, and then checked again: the
 admitted account, login generation and runtime Machine must equal the
 source's, because the adapter reads the source thread from that account's
-native home on that Machine.
+native home on that Machine. The fork uses that login's currently admitted
+release of the same Provider; inheritance keeps only settings that release
+declares. If the admitted session no longer matches, it is kept but marked so
+that it never forks, and the request reports it for deletion.
 
 ## Native contract
 
@@ -95,15 +105,28 @@ session. Clearing context discards the fork like any other history.
 ## Persistence and retries
 
 `POST /api/sessions/:id/fork` takes an `operation` ID and an optional
-`message_id`. The source records the receipt as the DB-backed
-`session_fork_operation:<source>:<operation>` preference; the same operation
-with the same request returns the existing destination, and a different
-request under the same operation is refused. The destination stores
-`session_fork:<id>` (source session, source native ID, message ID) until its
-native thread exists. A Controller restart before the first worker launch
-therefore still forks rather than starting a blank thread. A restart after the
-adapter forked but before the new native ID was saved at most leaves one
-unused native thread behind; it never sends a prompt twice.
+`message_id`. The destination's DB-backed `session_fork:<id>` record (source
+session, source native ID, requested message, fork point, operation and
+state) is committed before the destination is created, so a restart never
+restores the destination without its fork intent, and workspace preparation
+reads its base from it. The same operation with the same request returns the
+existing destination while it exists; a different request under the same
+operation is refused.
+
+A whole fork pins the source's newest answer at admission as its fork point,
+so turns the source completes before the fork's first launch are not copied.
+The record stays `pending` until the worker reports the forked native ID. That
+ID is saved before the record becomes `forked`; from then on the session
+resumes it like any other, even before its first prompt. A restart after the
+adapter forked but before the new ID was saved at most leaves one unused
+native thread behind; it never sends a prompt twice. Clearing the fork's
+context marks the record `discarded`, before or after its first launch, so a
+cleared fork never brings the source conversation back.
+
+Controllers send a fork launch only to a Machine connection at protocol 39 or
+later and refuse it otherwise; an older Machine would ignore the field and
+open an empty thread. Execution Machines before protocol 39 reject the fork
+base in workspace preparation.
 
 ## Deletion
 

@@ -55,6 +55,18 @@ test("a fork opens with its origin and offers only turn-final answers", () => {
   expect([...forkableAnswerKeys(items, true).values()]).toEqual(["a2"]);
 });
 
+test("a message steered into a turn does not end it", () => {
+  seq = 0;
+  const items = derive([
+    update("user_message_chunk"),
+    update("agent_message_chunk", { messageId: "a1" }),
+    update("user_message_chunk", { _meta: { cowboyDelivery: "current_turn" } }),
+    update("agent_message_chunk", { messageId: "a2" }),
+    update("user_message_chunk"),
+  ]);
+  expect([...forkableAnswerKeys(items, false).values()]).toEqual(["a2"]);
+});
+
 test("answers without a Provider message ID are never fork points", () => {
   seq = 0;
   const items = derive([

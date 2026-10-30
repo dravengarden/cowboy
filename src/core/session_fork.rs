@@ -18,14 +18,24 @@ pub enum ForkState {
     Pending,
     /// The forked thread exists; later launches resume it like any other.
     Forked,
+    /// The fork's context was cleared; it is an ordinary session now.
+    Discarded,
+    /// Creation was admitted but its result could not carry the fork. The
+    /// destination never forks, and its operation reports the refusal.
+    Refused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForkRecord {
     pub source_session_id: String,
     pub source_agent_session_id: String,
+    /// The message the caller asked to fork from; `None` asked for all of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// The answer the native fork ends at. A whole fork pins the source's last
+    /// answer at admission, so later source turns never leak into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
     /// Caller operation that created this destination; a retry with the same
     /// operation and request observes this destination instead of forking twice.
     pub operation: String,
@@ -61,8 +71,18 @@ fn update_kind(envelope: &crate::core::Envelope) -> Option<(&str, Option<&str>)>
     let Event::Update { update } = &envelope.event else {
         return None;
     };
+    let kind = update.get("sessionUpdate")?.as_str()?;
+    // A message steered into the running turn does not end that turn.
+    if kind == "user_message_chunk"
+        && update
+            .pointer("/_meta/cowboyDelivery")
+            .and_then(serde_json::Value::as_str)
+            == Some("current_turn")
+    {
+        return Some(("steering", None));
+    }
     Some((
-        update.get("sessionUpdate")?.as_str()?,
+        kind,
         update.get("messageId").and_then(serde_json::Value::as_str),
     ))
 }
@@ -98,6 +118,21 @@ impl Hub {
         } else {
             ForkPoint::Completed
         }
+    }
+
+    /// The source's newest answer in its current context, if the agent named it.
+    #[must_use]
+    pub fn last_answer_id(&self, source: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(source)?;
+        for envelope in session.log.iter().rev() {
+            match update_kind(envelope) {
+                Some(("agent_message_chunk", Some(id))) => return Some(id.to_owned()),
+                Some(("context_cleared", _)) => return None,
+                _ => {}
+            }
+        }
+        None
     }
 
     #[must_use]
@@ -149,6 +184,40 @@ impl Hub {
         );
     }
 
+    pub(super) fn native_fork_pending(&self, destination: &str) -> bool {
+        self.session_fork(destination)
+            .is_some_and(|record| record.state == ForkState::Pending)
+    }
+
+    /// The fork's own thread exists and has not been cleared since.
+    pub(super) fn native_fork_settled(&self, destination: &str) -> bool {
+        self.session_fork(destination)
+            .is_some_and(|record| record.state == ForkState::Forked)
+    }
+
+    pub(super) fn discard_native_fork(&self, destination: &str) {
+        self.set_fork_state(destination, ForkState::Discarded);
+    }
+
+    /// Keep the lineage but never fork this destination.
+    pub fn refuse_native_fork(&self, destination: &str) {
+        self.set_fork_state(destination, ForkState::Refused);
+    }
+
+    fn set_fork_state(&self, destination: &str, state: ForkState) {
+        let Some(mut record) = self.session_fork(destination) else {
+            return;
+        };
+        if record.state == state {
+            return;
+        }
+        record.state = state;
+        self.set_setting(
+            key(destination),
+            serde_json::to_value(record).expect("fork record serializes"),
+        );
+    }
+
     /// The fork the destination's next worker must perform, if it has no
     /// native thread yet.
     #[must_use]
@@ -168,24 +237,15 @@ impl Hub {
             .is_some_and(|session| session.meta.agent_session_id.is_some());
         (!has_thread).then_some(crate::runtime_wire::NativeFork {
             agent_session_id: record.source_agent_session_id,
-            message_id: record.message_id,
+            message_id: record.point.or(record.message_id),
         })
     }
 
-    /// The destination now has its own thread (or discarded the fork): never
-    /// fork it again, even after its context is cleared.
+    /// The destination now has its own thread: later launches resume it.
     pub(super) fn settle_native_fork(&self, destination: &str) {
-        let Some(mut record) = self.session_fork(destination) else {
-            return;
-        };
-        if record.state == ForkState::Forked {
-            return;
+        if self.native_fork_pending(destination) {
+            self.set_fork_state(destination, ForkState::Forked);
         }
-        record.state = ForkState::Forked;
-        self.set_setting(
-            key(destination),
-            serde_json::to_value(record).expect("fork record serializes"),
-        );
     }
 
     /// Mark `session_id` as a fork of `source` (or restore that mark).
@@ -246,6 +306,7 @@ mod tests {
             source_session_id: "source".to_owned(),
             source_agent_session_id: "native-source".to_owned(),
             message_id: message_id.map(str::to_owned),
+            point: None,
             operation: "op-1".to_owned(),
             state: ForkState::Pending,
         }
@@ -311,13 +372,78 @@ mod tests {
         chunk(&hub, "agent_message_chunk", Some("a2"));
         chunk(&hub, "user_message_chunk", None);
         chunk(&hub, "agent_message_chunk", Some("b1"));
+        hub.push(
+            "source",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "_meta": {"cowboyDelivery": "current_turn"},
+                    "content": {"type": "text", "text": "steer"},
+                }),
+            },
+        );
+        chunk(&hub, "agent_message_chunk", Some("b2"));
+        assert_eq!(hub.fork_point("source", "b1"), ForkPoint::NotTurnFinal);
         assert_eq!(hub.fork_point("source", "a1"), ForkPoint::NotTurnFinal);
         assert_eq!(hub.fork_point("source", "a2"), ForkPoint::Completed);
         assert_eq!(hub.fork_point("source", "zz"), ForkPoint::Missing);
-        assert_eq!(hub.fork_point("source", "b1"), ForkPoint::Completed);
+        assert_eq!(hub.fork_point("source", "b2"), ForkPoint::Completed);
         hub.set_status("source", crate::agent_model::Status::Busy, None);
-        assert_eq!(hub.fork_point("source", "b1"), ForkPoint::Running);
+        assert_eq!(hub.fork_point("source", "b2"), ForkPoint::Running);
         assert_eq!(hub.fork_point("source", "a2"), ForkPoint::Completed);
+    }
+
+    #[test]
+    fn clearing_a_fork_discards_its_source_before_and_after_the_first_launch() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        session(&hub, "fork");
+        hub.stage_fork("fork", &record(None));
+        hub.prepare_context_reset("fork");
+        hub.mark_context_cleared("fork");
+        assert_eq!(hub.pending_native_fork("fork"), None);
+        assert_eq!(
+            hub.session_fork("fork").unwrap().state,
+            ForkState::Discarded
+        );
+        // A fresh thread after the clear is not resumable before a prompt.
+        hub.set_agent_session_id("fork", "fresh".to_owned());
+        assert_eq!(hub.agent_session_id_for_resume("fork"), None);
+
+        session(&hub, "fork-2");
+        hub.stage_fork("fork-2", &record(None));
+        hub.set_agent_session_id("fork-2", "native-fork".to_owned());
+        assert_eq!(
+            hub.agent_session_id_for_resume("fork-2").as_deref(),
+            Some("native-fork")
+        );
+        hub.prepare_context_reset("fork-2");
+        hub.mark_context_cleared("fork-2");
+        hub.set_agent_session_id("fork-2", "fresh".to_owned());
+        assert_eq!(hub.agent_session_id_for_resume("fork-2"), None);
+    }
+
+    #[test]
+    fn a_fork_without_its_marker_still_resumes_its_thread() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        session(&hub, "fork");
+        hub.stage_fork("fork", &record(None));
+        hub.set_agent_session_id("fork", "native-fork".to_owned());
+        assert_eq!(
+            hub.agent_session_id_for_resume("fork").as_deref(),
+            Some("native-fork")
+        );
+    }
+
+    #[test]
+    fn a_refused_fork_never_launches_its_source() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        session(&hub, "fork");
+        hub.stage_fork("fork", &record(None));
+        hub.refuse_native_fork("fork");
+        assert_eq!(hub.pending_native_fork("fork"), None);
     }
 
     #[test]

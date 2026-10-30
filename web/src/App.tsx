@@ -880,8 +880,13 @@ function SessionList({
             .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
             .catch((error: Error) => documentNotice(error.message));
     };
-    const menuFork = menuAnchor && !isManagedChild(menuAnchor.row)
-        ? forkAvailability(menuAnchor.row, sessionMachines)
+    // The anchor keeps the row captured when the menu opened; a turn can end
+    // while it stays open, so read the live session.
+    const menuLiveSession = useStoreSelector((snapshot) =>
+        menuAnchor ? snapshot.sessions.find((session) => session.id === menuAnchor.row.id) : undefined
+    );
+    const menuFork = menuLiveSession && !isManagedChild(menuLiveSession)
+        ? forkAvailability(menuLiveSession, sessionMachines)
         : null;
     const forkMenuSession = (): void => {
         if (!menuAnchor || menuFork !== "ready") return;

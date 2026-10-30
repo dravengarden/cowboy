@@ -89,6 +89,9 @@ pub struct Shared {
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
     current_turn_protocol: bool,
     delivery_controls_protocol: bool,
+    /// The Machine starts a `native_fork` launch with `session/fork`; an
+    /// older one would ignore the field and open an empty thread.
+    native_fork_protocol: bool,
     account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
@@ -219,6 +222,8 @@ impl RemoteRuntime {
                     >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
                 delivery_controls_protocol: machine_protocol
                     >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
+                native_fork_protocol: machine_protocol
+                    >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
@@ -273,6 +278,7 @@ impl RemoteRuntime {
                 steering: Mutex::new(HashMap::new()),
                 current_turn_protocol: true,
                 delivery_controls_protocol: true,
+                native_fork_protocol: true,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
@@ -1715,6 +1721,14 @@ fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
 }
 
 fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
+    let forking = match command {
+        CoreCommand::EnsureSession { session } => session.native_fork.is_some(),
+        CoreCommand::RecoverExecutionSession { session, .. } => session.native_fork.is_some(),
+        _ => false,
+    };
+    if forking && !shared.native_fork_protocol {
+        return false;
+    }
     if shared.protocol.load(Ordering::Acquire)
         >= crate::runtime_wire::PROVIDER_ACCOUNT_PROTOCOL_VERSION
     {

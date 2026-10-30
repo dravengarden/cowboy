@@ -222,6 +222,13 @@ pub async fn prepare(
         }
     }
     let _session_lock = acquire_session_lock(worktree_root, &request.session_id).await?;
+    let fork_marker = worktree_root.join(".forks").join(&request.session_id);
+    if tokio::fs::try_exists(&fork_marker).await? {
+        // A worktree or branch alone does not prove its copied state is complete.
+        bail!(
+            "copying the fork's source files was interrupted; delete this session and fork again"
+        );
+    }
     let source = PathBuf::from(&request.root)
         .canonicalize()
         .with_context(|| format!("canonicalizing session workspace {:?}", request.root))?;
@@ -330,6 +337,14 @@ pub async fn prepare(
     tokio::fs::create_dir_all(worktree_root)
         .await
         .with_context(|| format!("creating worktree root {}", worktree_root.display()))?;
+    if fork_base.is_some() {
+        tokio::fs::create_dir_all(fork_marker.parent().expect("marker has a parent"))
+            .await
+            .context("creating fork marker directory")?;
+        tokio::fs::write(&fork_marker, b"")
+            .await
+            .context("recording fork preparation")?;
+    }
     if branch_existed {
         remove_stale_destination_registration(&repository, &destination).await?;
     }
@@ -375,6 +390,9 @@ pub async fn prepare(
     let validated = async {
         if let Some(base) = &fork_base {
             copy_fork_state(base, &destination).await?;
+            tokio::fs::remove_file(&fork_marker)
+                .await
+                .context("completing fork preparation")?;
         }
         let checkout = destination
             .canonicalize()
@@ -504,12 +522,12 @@ async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
             }
             let from = source.join(relative);
             let to = destination.join(relative);
+            // Neither tree may route a path through a symlinked directory: a
+            // copy must stay inside the destination and read only the source.
+            real_ancestors(&source, relative, false)?;
+            real_ancestors(&destination, relative, true)?;
             let metadata = std::fs::symlink_metadata(&from)
                 .with_context(|| format!("reading {}", from.display()))?;
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
-            }
             if metadata.file_type().is_symlink() {
                 std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)
                     .with_context(|| format!("copying symlink {}", relative.display()))?;
@@ -521,7 +539,7 @@ async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
                         FORK_UNTRACKED_LIMIT_BYTES / 1024 / 1024
                     );
                 }
-                std::fs::copy(&from, &to)
+                copy_no_follow(&from, &to, metadata.permissions())
                     .with_context(|| format!("copying {}", relative.display()))?;
             }
         }
@@ -529,6 +547,47 @@ async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
     })
     .await
     .context("joining fork file copy")?
+}
+
+/// Require every directory above `relative` in `root` to be a real directory,
+/// creating missing ones one level at a time when `create` is set.
+fn real_ancestors(root: &Path, relative: &Path, create: bool) -> Result<()> {
+    let mut current = root.to_path_buf();
+    let Some(parent) = relative.parent() else {
+        return Ok(());
+    };
+    for part in parent.components() {
+        current.push(part);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => bail!("{} is not a real directory", current.display()),
+            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)
+                    .with_context(|| format!("creating {}", current.display()))?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy one regular file without following a symlink at either end.
+fn copy_no_follow(from: &Path, to: &Path, permissions: std::fs::Permissions) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut input = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(to)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.set_permissions(permissions)?;
+    Ok(())
 }
 
 async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<File> {
@@ -3470,6 +3529,25 @@ mod tests {
             git_output(&parent_path, ["stash", "list"]).await.unwrap(),
             ""
         );
+
+        // An interrupted copy is never mistaken for a complete fork.
+        std::fs::create_dir_all(managed.join(".forks")).unwrap();
+        std::fs::write(managed.join(".forks").join("sess-fork"), b"").unwrap();
+        assert!(
+            prepare(request("sess-fork", Some("sess-parent")), &managed)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("interrupted")
+        );
+
+        // Neither tree may route an untracked copy through a symlinked directory.
+        let outside = temp.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, fork_path.join("linked")).unwrap();
+        assert!(real_ancestors(&fork_path, Path::new("linked/file.txt"), true).is_err());
+        assert!(real_ancestors(&fork_path, Path::new("fresh/dir/file.txt"), true).is_ok());
+        assert!(fork_path.join("fresh/dir").is_dir());
 
         // A missing source worktree refuses rather than starting elsewhere.
         assert!(

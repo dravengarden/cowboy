@@ -51,6 +51,8 @@ export type RenderItem = { key: string } & (
     cmid?: string | undefined;
     /** Provider message ID of an assistant message, when the agent sends one. */
     messageId?: string | undefined;
+    /** A user message steered into the running turn; it does not end it. */
+    steered?: boolean | undefined;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -150,6 +152,7 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
     case "message":
       return b.kind === "message" && a.role === b.role &&
         a.cmid === b.cmid && a.messageId === b.messageId &&
+        a.steered === b.steered &&
         samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
@@ -459,6 +462,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                   ? { cmid: userCmid }
                   : {}),
                 ...(role === "assistant" && messageId ? { messageId } : {}),
+                ...(role === "user" && isSteeringEcho(u) ? { steered: true } : {}),
               });
               cursor = { kind: "message", role, ...(messageId ? { messageId } : {}) };
             }
@@ -993,11 +997,17 @@ export function forkableAnswerKeys(
     if (item.kind === "cleared") {
       last = null;
     } else if (item.kind === "message" && item.role === "user") {
-      settle();
+      if (!item.steered) settle();
     } else if (item.kind === "message" && item.role === "assistant") {
       last = { key: item.key, messageId: item.messageId };
     }
   }
   if (!working) settle();
   return keys;
+}
+
+function isSteeringEcho(update: Record<string, unknown>): boolean {
+  const meta = update["_meta"];
+  return meta !== null && typeof meta === "object" &&
+    (meta as Record<string, unknown>)["cowboyDelivery"] === "current_turn";
 }

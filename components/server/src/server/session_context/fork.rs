@@ -83,7 +83,15 @@ async fn fork_session(
         if record.message_id != request.message_id {
             return Err("This operation already forked another point".into());
         }
+        if record.state == ForkState::Refused {
+            return Err(format!(
+                "The new session {destination} could not fork this conversation; delete it and fork again"
+            ));
+        }
         return Ok((destination, false));
+    }
+    if state.hub.session_is_trashed(&id) {
+        return Err("Restore this session from Trash before forking it".into());
     }
     let source = info.meta.clone();
     if !FORKABLE_PROVIDERS.contains(&source.provider.as_str()) {
@@ -137,9 +145,29 @@ async fn fork_session(
         source_session_id: id.clone(),
         source_agent_session_id: source_thread,
         message_id: request.message_id.clone(),
+        point: request
+            .message_id
+            .is_none()
+            .then(|| state.hub.last_answer_id(&id))
+            .flatten(),
         operation: request.operation.clone(),
         state: ForkState::Pending,
     };
+    // Durable before the destination exists: a restart must never restore it
+    // without its fork intent, and its workspace preparation reads the base.
+    let store = state.store.as_ref().ok_or("Fork storage unavailable")?;
+    let key = format!(
+        "{}{destination}",
+        crate::core::settings_keys::SESSION_FORK_PREFIX
+    );
+    let value = serde_json::to_value(&record).expect("fork record serializes");
+    if !store
+        .compare_and_put_setting(&key, None, &value)
+        .await
+        .map_err(|_| "Fork storage unavailable")?
+    {
+        return Err("Fork storage changed; retry".into());
+    }
     state.hub.stage_fork(&destination, &record);
     let create = NewSessionRequest {
         provider: source.provider.clone(),
@@ -167,6 +195,7 @@ async fn fork_session(
         || created.machine_id != source.machine_id
         || created.provider_auth_generation != source.provider_auth_generation
     {
+        state.hub.refuse_native_fork(&destination);
         return Err(format!(
             "The new session {destination} was admitted on another login or Machine and cannot fork this conversation; delete it and retry"
         ));

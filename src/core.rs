@@ -4711,21 +4711,26 @@ impl Hub {
     /// current context receives its first user turn; only then is it safe to
     /// persist for a future `session/load`. Unknown ids are ignored.
     pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
+        // A fork's first thread holds the copied conversation before any prompt.
+        let forking = self.native_fork_pending(session_id);
         let persist = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             s.meta.agent_session_id = Some(agent_session_id.clone());
-            current_context_has_user_message(s)
+            forking || current_context_has_user_message(s)
         };
-        // A fork's first thread exists now; later launches resume it.
-        self.settle_native_fork(session_id);
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
                 session_id: session_id.to_owned(),
                 agent_session_id: Some(agent_session_id),
             });
+        }
+        // Queued after the native ID on the same writer: a crash between the two
+        // leaves a pending fork whose ID is already saved, which never re-forks.
+        if forking {
+            self.settle_native_fork(session_id);
         }
     }
 
@@ -4742,9 +4747,10 @@ impl Hub {
     }
 
     pub fn agent_session_id_for_resume(&self, session_id: &str) -> Option<String> {
+        let forked = self.native_fork_settled(session_id);
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
-        current_context_has_user_message(session)
+        (forked || current_context_has_user_message(session))
             .then(|| session.meta.agent_session_id.clone())
             .flatten()
     }
@@ -5309,6 +5315,8 @@ impl Hub {
     /// dormant session has no worker snapshot to re-seed it, so leaving them
     /// here would keep the old context ring and Usage panel after Clear.
     pub fn prepare_context_reset(&self, session_id: &str) {
+        // Clearing a fork, even before its first launch, discards the copy.
+        self.discard_native_fork(session_id);
         let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
             sessions.get_mut(session_id).is_some_and(|s| {
