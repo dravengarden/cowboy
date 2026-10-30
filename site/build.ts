@@ -70,7 +70,6 @@ export interface SitePlugin {
 const PLUGIN_ORDER = [
   "codex",
   "claude-code",
-  "gemini",
   "grok",
   "codex-deepseek",
   "claude-deepseek",

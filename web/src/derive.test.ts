@@ -115,9 +115,9 @@ test("derive collapses equivalent crash JSON dumps onto one row", () => {
 });
 
 test("derive collapses repeated terminal lifecycle projections", () => {
-  const detail = "Gemini personal access retired";
+  const detail = "Provider personal access retired";
   const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({
-    session_id: "gemini-session",
+    session_id: "grok-session",
     seq: index + 1,
     kind: "lifecycle",
     status: "crashed",

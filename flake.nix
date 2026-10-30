@@ -814,7 +814,7 @@
         test ! -e ${machine-src}/contracts/code-buffer-sync-budget.fixture.json
         test ! -e ${machine-src}/contracts/code-buffer-navigation.fixture.json
         test ! -e ${machine-src}/contracts/code-buffer-destination.fixture.json
-        test -e ${machine-src}/plugins/gemini/provider.json
+        test -e ${machine-src}/plugins/grok/provider.json
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml

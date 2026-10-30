@@ -1194,8 +1194,8 @@ kbd {
   --node-accent: #b85f43;
 }
 
-.control-machine-gemini {
-  --node-accent: #4285f4;
+.control-machine-deepseek {
+  --node-accent: #4d6bfe;
 }
 
 .control-machine-grok {
@@ -1255,10 +1255,6 @@ kbd {
 
 .control-agent-claude {
   color: #b85f43;
-}
-
-.control-agent-gemini {
-  color: #4285f4;
 }
 
 .control-agent-deepseek {

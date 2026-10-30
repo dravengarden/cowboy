@@ -68,7 +68,7 @@ const zhMessages = {
   "appearance.imageAlt": "Cowboy 五十套图标配色中的部分方案",
   "meta.title": "Cowboy — 远程 Agent IDE",
   "meta.description":
-    "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek runtime。",
+    "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Grok 与 DeepSeek runtime。",
   "meta.socialDescription":
     "在一个自托管控制平面中管理你的 Agent 与 Machine，由独立版本、签名并固定的插件驱动。",
   "meta.twitterDescription":
@@ -104,7 +104,7 @@ const zhMessages = {
   "hero.workspace": "一个工作区。",
   "hero.hosted": "由你托管。",
   "hero.lede":
-    "在你的基础设施上自托管 Cowboy，调度每台已加入 Machine 上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek；稍后重新连接时，worker 仍持续运行在原 Machine 上。",
+    "在你的基础设施上自托管 Cowboy，调度每台已加入 Machine 上的 Codex、Claude Code、Grok 与 DeepSeek；稍后重新连接时，worker 仍持续运行在原 Machine 上。",
   "hero.ownership": "你的控制平面。你的数据。你的凭据。永远属于你。",
   "hero.run": "运行 Cowboy",
   "hero.explore": "探索插件",
@@ -195,7 +195,6 @@ const zhMessages = {
   "plugins.component": "组件",
   "plugins.summary.codex": "采用标准 OpenAI 账户与配置的 Codex",
   "plugins.summary.claude-code": "采用标准 Anthropic 账户与配置的 Claude Code",
-  "plugins.summary.gemini": "支持 Google、API key 或 Vertex 认证的 Gemini CLI",
   "plugins.summary.grok": "使用标准 xAI 认证的官方 Grok Build Agent",
   "plugins.summary.codex-deepseek":
     "运行于隔离 DeepSeek runtime、支持 V4 Flash 与 V4 Pro 的 Codex",

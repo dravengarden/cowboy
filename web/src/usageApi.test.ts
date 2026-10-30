@@ -93,7 +93,6 @@ test("session refresh and displayed usage share the declared account identity", 
     "codex",
     "claude-code",
     "grok",
-    "gemini",
     "claude-deepseek",
     "codex-deepseek",
   ];

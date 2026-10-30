@@ -175,6 +175,8 @@ test("activated host inventory replaces usage account mapping", () => {
 });
 
 test("usage cards keep first-party product order and unknown cards stable", () => {
+  // "gemini" is a retired Provider account: its historical card stays visible
+  // and keeps its arrival order among the unknown cards.
   const snapshot = {
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -202,8 +204,8 @@ test("usage cards keep first-party product order and unknown cards stable", () =
       "openai",
       "xai",
       "deepseek",
-      "gemini",
       "future-b",
+      "gemini",
       "future-a",
     ],
   );

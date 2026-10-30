@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.16",
+  "sdk_version": "3.1.17",
   "display": {
     "name": "DeepSeek Harness",
     "vendor": "DeepSeek",

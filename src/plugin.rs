@@ -432,6 +432,22 @@ mod tests {
         registry
     }
 
+    /// Migration snapshots keep every historical identity; a retired Plugin
+    /// has no current source manifest to rebind, so it is skipped explicitly.
+    fn historical_plugin_ids(release: &ComponentRelease) -> Vec<&String> {
+        let retired: BTreeSet<&str> = component_registry()
+            .releases
+            .iter()
+            .flat_map(|release| release.plugin_removals.iter().flatten())
+            .map(String::as_str)
+            .collect();
+        release
+            .plugins
+            .keys()
+            .filter(|id| !retired.contains(id.as_str()))
+            .collect()
+    }
+
     fn migration_manifest(id: &str) -> PluginManifest {
         let registry = migration_registry();
         let active = registry.releases.last().unwrap();
@@ -475,7 +491,7 @@ mod tests {
     fn web_component_release_preserves_historical_plugin_bindings() {
         let registry = migration_registry();
         assert_eq!(registry.schema_version, 3);
-        for id in registry.releases.last().unwrap().plugins.keys() {
+        for id in historical_plugin_ids(registry.releases.last().unwrap()) {
             let manifest = migration_manifest(id);
             assert_ne!(manifest.component_release, registry.active_release);
             validate_against_registry(&manifest, &registry).unwrap();
@@ -490,7 +506,7 @@ mod tests {
             .retain(|release| release.closure.is_none());
         registry.active_release = registry.releases.last().unwrap().version.clone();
         registry.schema_version = 2;
-        for id in registry.releases.last().unwrap().plugins.keys() {
+        for id in historical_plugin_ids(registry.releases.last().unwrap()) {
             validate_against_registry(&migration_manifest(id), &registry).unwrap();
         }
     }
@@ -560,6 +576,73 @@ mod tests {
                 validate_against_registry(&first_party_plugins()[0], &registry).is_err(),
                 "{case}"
             );
+        }
+    }
+
+    #[test]
+    fn retirement_registry_reader_requires_an_exact_removal_that_never_returns() {
+        let retired = |registry: &mut ComponentRegistry| -> usize {
+            registry
+                .releases
+                .iter()
+                .position(|release| release.plugin_removals.is_some())
+                .unwrap()
+        };
+        let mut registry = component_registry().clone();
+        let index = retired(&mut registry);
+        assert_eq!(
+            registry.releases[index].plugin_removals.as_deref(),
+            Some(["gemini".to_owned()].as_slice())
+        );
+        assert!(registry.releases[index - 1].plugins.contains_key("gemini"));
+        assert!(!registry.releases[index].plugins.contains_key("gemini"));
+        validate_against_registry(&first_party_plugins()[0], &registry).unwrap();
+        for case in [
+            "undeclared",
+            "empty",
+            "absent",
+            "duplicate",
+            "kept",
+            "reintroduced",
+        ] {
+            let mut registry = component_registry().clone();
+            let index = retired(&mut registry);
+            match case {
+                "undeclared" => registry.releases[index].plugin_removals = None,
+                "empty" => registry.releases[index].plugin_removals = Some(vec![]),
+                "absent" => registry.releases[index]
+                    .plugin_removals
+                    .as_mut()
+                    .unwrap()
+                    .push("missing".to_owned()),
+                "duplicate" => registry.releases[index]
+                    .plugin_removals
+                    .as_mut()
+                    .unwrap()
+                    .push("gemini".to_owned()),
+                "kept" => {
+                    registry.releases[index]
+                        .plugins
+                        .insert("gemini".to_owned(), "3.1.46".to_owned());
+                }
+                _ => {
+                    let mut later = registry.releases.last().unwrap().clone();
+                    later.version = "99.0.0".to_owned();
+                    later.plugin_removals = None;
+                    later
+                        .plugins
+                        .insert("gemini".to_owned(), "99.0.0".to_owned());
+                    later.plugin_additions = Some(vec!["gemini".to_owned()]);
+                    registry.releases.push(later);
+                    registry.active_release = "99.0.0".to_owned();
+                }
+            }
+            let error = validate_against_registry(&first_party_plugins()[0], &registry)
+                .expect_err(case)
+                .to_string();
+            if case == "reintroduced" {
+                assert!(error.contains("reuses an identity"), "{error}");
+            }
         }
     }
 

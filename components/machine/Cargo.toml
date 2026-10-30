@@ -68,9 +68,9 @@ semver = "1"
 shell-words = "1"
 notify = "8"
 rand = "0.8"
-cowboy-provider-sdk = { version = "=3.1.16", path = "../provider-sdk" }
+cowboy-provider-sdk = { version = "=3.1.17", path = "../provider-sdk" }
 tempfile = { version = "3" }
-cowboy-plugin-sdk = { version = "=1.12.3", path = "../plugin-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.4", path = "../plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fs2 = "0.4"

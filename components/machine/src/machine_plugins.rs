@@ -5601,26 +5601,26 @@ mod tests {
         let store =
             MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
         let digest = format!("sha256:{}", "a".repeat(64));
-        let active = store.plugin_root("gemini").join("active");
+        let active = store.plugin_root("grok").join("active");
         restore_generation_link(&active, Some(&"a".repeat(64))).unwrap();
         store
             .operations
             .installations
-            .enable(&[("gemini".to_owned(), digest.clone())])
+            .enable(&[("grok".to_owned(), digest.clone())])
             .unwrap();
         let revision = store
             .operations
             .installations
-            .revision("gemini", &digest)
+            .revision("grok", &digest)
             .unwrap();
         store
-            .validate_host_observation("gemini", &digest, None, revision.as_ref())
+            .validate_host_observation("grok", &digest, None, revision.as_ref())
             .unwrap();
         let pending = store
             .operations
             .installations
             .begin(
-                "gemini",
+                "grok",
                 Some(&digest),
                 Some(&digest),
                 operations::installations::Effect::Install,
@@ -5630,21 +5630,21 @@ mod tests {
         store.operations.installations.finish(pending).unwrap();
         assert!(
             store
-                .validate_host_observation("gemini", &digest, None, revision.as_ref())
+                .validate_host_observation("grok", &digest, None, revision.as_ref())
                 .is_err()
         );
         let revision = store
             .operations
             .installations
-            .revision("gemini", &digest)
+            .revision("grok", &digest)
             .unwrap();
         store
-            .validate_host_observation("gemini", &digest, None, revision.as_ref())
+            .validate_host_observation("grok", &digest, None, revision.as_ref())
             .unwrap();
         restore_generation_link(&active, None).unwrap();
         assert!(
             store
-                .validate_host_observation("gemini", &digest, None, revision.as_ref())
+                .validate_host_observation("grok", &digest, None, revision.as_ref())
                 .is_err()
         );
     }
@@ -6553,7 +6553,7 @@ mod tests {
         });
 
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let runtime_artifacts: Vec<PlatformRuntimeArtifacts> = package
             .manifest
@@ -6585,7 +6585,7 @@ mod tests {
             })
             .collect();
         let manifest: PluginManifest =
-            serde_json::from_str(include_str!("../../../plugins/gemini/plugin.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/plugin.json")).unwrap();
         let component_release = manifest.component_release.clone();
         let plugin_package = PluginPackage::new(
             manifest,
@@ -6601,7 +6601,7 @@ mod tests {
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             package_digest: PluginPackage::artifact_digest(&bytes),
             artifact_digest: String::new(),
-            artifact_url: "https://example.invalid/gemini.cowboy-plugin".to_owned(),
+            artifact_url: "https://example.invalid/grok.cowboy-plugin".to_owned(),
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: plugin_package.contract_fingerprint.clone(),
             component_release,
@@ -6668,12 +6668,12 @@ mod tests {
             files: BTreeMap::from([
                 (
                     "host.json".to_owned(),
-                    r#"{"schema_version":1,"adapter_slot":"gemini","usage":{"account":"fixture","collector":"command","collector_argv":["@plugin-js","run","--allow-env=COWBOY_PLUGIN_COMMAND_GEMINI,HOME","--allow-run=${ENV:COWBOY_PLUGIN_COMMAND_GEMINI}","${PLUGIN_DIR}/collector/index.js"]}}"#
+                    r#"{"schema_version":1,"adapter_slot":"grok","usage":{"account":"fixture","collector":"command","collector_argv":["@plugin-js","run","--allow-env=COWBOY_PLUGIN_COMMAND_GROK,HOME","--allow-run=${ENV:COWBOY_PLUGIN_COMMAND_GROK}","${PLUGIN_DIR}/collector/index.js"]}}"#
                         .to_owned(),
                 ),
                 (
                     "collector/index.js".to_owned(),
-                    r"const request = JSON.parse(await Bun.stdin.text()); if (request.delay_ms) await new Promise(resolve => setTimeout(resolve, request.delay_ms)); console.log(JSON.stringify({operation: request.operation, command: process.env.COWBOY_PLUGIN_COMMAND_GEMINI, home: process.env.HOME}));"
+                    r"const request = JSON.parse(await Bun.stdin.text()); if (request.delay_ms) await new Promise(resolve => setTimeout(resolve, request.delay_ms)); console.log(JSON.stringify({operation: request.operation, command: process.env.COWBOY_PLUGIN_COMMAND_GROK, home: process.env.HOME}));"
                         .to_owned(),
                 ),
             ]),
@@ -6735,7 +6735,7 @@ mod tests {
         let verifications = store.runtime_verifications.load(Ordering::Relaxed);
         let collected = store
             .invoke_host_for_test(
-                "gemini",
+                "grok",
                 &package.manifest.version,
                 &release.artifact_digest,
                 Some(1),
@@ -6753,7 +6753,7 @@ mod tests {
         // An untracked legacy slot has no incarnation fence and must keep
         // its original serialization across same-bytes reinstallations.
         let slow = store.invoke_host_for_test(
-            "gemini",
+            "grok",
             &package.manifest.version,
             &release.artifact_digest,
             Some(1),
@@ -6772,7 +6772,7 @@ mod tests {
         let (slow, ()) = tokio::join!(slow, serialized_legacy);
         assert_eq!(slow.unwrap()["operation"], "collect");
         let reset = store.invoke_host_for_test(
-            "gemini",
+            "grok",
             &package.manifest.version,
             &release.artifact_digest,
             Some(1),
@@ -6802,7 +6802,7 @@ mod tests {
         );
         let wrong_auth = store
             .invoke_host_for_test(
-                "gemini",
+                "grok",
                 &package.manifest.version,
                 &release.artifact_digest,
                 Some(2),
@@ -6813,13 +6813,13 @@ mod tests {
             .unwrap_err();
         assert!(!wrong_auth.started);
         let installed_collector = root
-            .join("machine/plugins/gemini/generations")
+            .join("machine/plugins/grok/generations")
             .join(digest_generation_name(&release.artifact_digest).unwrap())
             .join("content/host/collector/index.js");
         fs::write(&installed_collector, b"console.log('{}')").unwrap();
         let tampered = store
             .invoke_host_for_test(
-                "gemini",
+                "grok",
                 &package.manifest.version,
                 &release.artifact_digest,
                 Some(1),
@@ -6837,13 +6837,13 @@ mod tests {
         .unwrap();
         let replayed_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(!replayed_receipt.auth_generation_advanced);
-        let auth_root = root.join("machine/provider-auth/providers/gemini");
+        let auth_root = root.join("machine/provider-auth/providers/grok");
         fs::remove_dir_all(auth_root.join("materialized/generations/1")).unwrap();
         fs::remove_dir_all(auth_root.join("runtime/generations/1")).unwrap();
         let context = store
-            .launch_context("gemini", &release.artifact_digest, Some(1))
+            .launch_context("grok", &release.artifact_digest, Some(1))
             .unwrap();
-        assert_eq!(context.environment["GEMINI_API_KEY"], "fixture-api-key");
+        assert_eq!(context.environment["XAI_API_KEY"], "fixture-api-key");
         assert!(context.home.unwrap().is_dir());
         assert!(
             auth_root
@@ -6851,7 +6851,7 @@ mod tests {
                 .is_file()
         );
         let legacy_session =
-            auth_root.join("materialized/generations/1/home/.gemini/sessions/native-session.json");
+            auth_root.join("materialized/generations/1/home/.grok/sessions/native-session.json");
         let refreshed_bundle = PortableCredentialBundle {
             portable_schema: bundle.portable_schema.clone(),
             method_id: bundle.method_id.clone(),
@@ -6878,10 +6878,10 @@ mod tests {
         );
         fs::remove_dir_all(auth_root.join("runtime/generations/1")).unwrap();
         let historical = store
-            .launch_context("gemini", &release.artifact_digest, Some(1))
+            .launch_context("grok", &release.artifact_digest, Some(1))
             .unwrap();
         assert_eq!(
-            historical.environment["GEMINI_API_KEY"],
+            historical.environment["XAI_API_KEY"],
             "refreshed-fixture-api-key"
         );
         let historical_home = historical.home.clone().unwrap();
@@ -6902,13 +6902,13 @@ mod tests {
         };
         let historical_directories = shared_credentials(&historical);
         assert_eq!(
-            historical_directories["oauth_creds_json"],
+            historical_directories["auth_json"],
             auth_root
-                .join("runtime/generations/1/home/.gemini")
+                .join("runtime/generations/1/home/.grok")
                 .to_string_lossy()
         );
         let current = store
-            .launch_context("gemini", &release.artifact_digest, Some(2))
+            .launch_context("grok", &release.artifact_digest, Some(2))
             .unwrap();
         assert_eq!(
             current.home.as_ref().unwrap(),
@@ -6916,16 +6916,14 @@ mod tests {
         );
         assert_eq!(shared_credentials(&current), historical_directories);
         assert_eq!(
-            fs::read(historical_home.join(".gemini/sessions/native-session.json")).unwrap(),
+            fs::read(historical_home.join(".grok/sessions/native-session.json")).unwrap(),
             b"legacy-native-session"
         );
         assert!(
-            fs::symlink_metadata(
-                auth_root.join("materialized/generations/1/home/.gemini/sessions")
-            )
-            .unwrap()
-            .file_type()
-            .is_symlink()
+            fs::symlink_metadata(auth_root.join("materialized/generations/1/home/.grok/sessions"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
         assert_eq!(
             read_link_name(&auth_root.join("materialized/current")).as_deref(),
@@ -6933,40 +6931,40 @@ mod tests {
         );
         let command = store
             .authentication_component_command(
-                "gemini",
+                "grok",
                 &cowboy_provider_sdk::AuthComponent {
                     kind: cowboy_provider_sdk::PrivateComponentKind::ProviderCli,
-                    slot: "gemini".to_owned(),
+                    slot: "grok".to_owned(),
                 },
             )
             .unwrap();
-        assert!(command.starts_with(root.join("machine/plugins/gemini/generations")));
+        assert!(command.starts_with(root.join("machine/plugins/grok/generations")));
         assert!(command.is_file());
         store.install(&desired).await.unwrap();
         atomic_write(&command, b"#!/bin/sh\nexit 0\n# tampered\n", 0o700).unwrap();
         // Credential observation authenticates declarations without inspecting
         // executable archives; execution admission still rejects these bytes.
-        assert!(store.active_auth_package("gemini").unwrap().is_some());
+        assert!(store.active_auth_package("grok").unwrap().is_some());
         assert!(
             store
-                .launch_context("gemini", &release.artifact_digest, Some(2))
+                .launch_context("grok", &release.artifact_digest, Some(2))
                 .is_err()
         );
         let error = store.install(&desired).await.unwrap_err();
         assert!(error.to_string().contains("integrity verification"));
         atomic_write(&command, &script, 0o700).unwrap();
         let descriptor = store
-            .plugin_root("gemini")
+            .plugin_root("grok")
             .join("active/content/package.cowboy-plugin");
         let original_descriptor = fs::read(&descriptor).unwrap();
         let mut tampered_descriptor = original_descriptor.clone();
         tampered_descriptor.push(b' ');
         fs::write(&descriptor, tampered_descriptor).unwrap();
-        assert!(store.active_auth_package("gemini").is_err());
+        assert!(store.active_auth_package("grok").is_err());
         fs::write(&descriptor, original_descriptor).unwrap();
         let named_projection = store
             .auth_base
-            .join("accounts/11111111-1111-4111-8111-111111111111/providers/gemini/runtime");
+            .join("accounts/11111111-1111-4111-8111-111111111111/providers/grok/runtime");
         fs::create_dir_all(&named_projection).unwrap();
         fs::write(
             named_projection.join("synthetic-credential"),
@@ -6975,44 +6973,44 @@ mod tests {
         .unwrap();
         assert!(
             store
-                .uninstall("gemini", &release.artifact_digest)
+                .uninstall("grok", &release.artifact_digest)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("Revoke named")
         );
-        assert!(store.plugin_root("gemini").join("active").exists());
+        assert!(store.plugin_root("grok").join("active").exists());
         assert!(named_projection.join("synthetic-credential").is_file());
         fs::remove_dir_all(named_projection).unwrap();
         store
-            .uninstall("gemini", &release.artifact_digest)
+            .uninstall("grok", &release.artifact_digest)
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
         atomic_write(&command, b"#!/bin/sh\nexit 0\n# tampered again\n", 0o700).unwrap();
         let error = store
-            .reactivate("gemini", &release.artifact_digest)
+            .reactivate("grok", &release.artifact_digest)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("integrity verification"));
         assert!(store.inventory().unwrap().is_empty());
         atomic_write(&command, &script, 0o700).unwrap();
         let restored = store
-            .reactivate("gemini", &release.artifact_digest)
+            .reactivate("grok", &release.artifact_digest)
             .await
             .unwrap();
         assert_eq!(restored.generation_digest, release.artifact_digest);
         store
-            .uninstall("gemini", &release.artifact_digest)
+            .uninstall("grok", &release.artifact_digest)
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
         store.install(&desired).await.unwrap();
         store.enable_installation_tracking().await.unwrap();
-        let tracked = store.inventory_one("gemini").unwrap().unwrap();
+        let tracked = store.inventory_one("grok").unwrap().unwrap();
         assert!(tracked.installation_revision.is_some());
         let slow = store.invoke_host_for_test(
-            "gemini",
+            "grok",
             &package.manifest.version,
             &release.artifact_digest,
             Some(2),
@@ -7028,7 +7026,7 @@ mod tests {
         let (slow, ()) = tokio::join!(slow, unlocked);
         assert_eq!(slow.unwrap()["operation"], "collect");
         let reset = store.invoke_host_for_test(
-            "gemini",
+            "grok",
             &package.manifest.version,
             &release.artifact_digest,
             Some(2),
@@ -7049,7 +7047,7 @@ mod tests {
         let next_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 3, &refreshed_bundle);
         let slow = store.invoke_host_for_test(
-            "gemini",
+            "grok",
             &package.manifest.version,
             &release.artifact_digest,
             Some(2),
@@ -7779,10 +7777,10 @@ mod tests {
         let envelope = |generation, action| SealedProviderAuth {
             envelope_schema: 1,
             account_id: crate::provider_account::ProviderAccountId::default(),
-            provider_id: "gemini".to_owned(),
+            provider_id: "grok".to_owned(),
             auth_generation: generation,
             auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
-            projection_schema: "gemini-auth-v1".to_owned(),
+            projection_schema: "grok-auth-v1".to_owned(),
             action,
             ephemeral_public_key: String::new(),
             nonce: String::new(),
@@ -8276,10 +8274,10 @@ mod tests {
         let non_contributory = SealedProviderAuth {
             envelope_schema: 1,
             account_id: crate::provider_account::ProviderAccountId::default(),
-            provider_id: "gemini".to_owned(),
+            provider_id: "grok".to_owned(),
             auth_generation: 1,
             auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
-            projection_schema: "gemini-auth-v1".to_owned(),
+            projection_schema: "grok-auth-v1".to_owned(),
             action: ProviderAuthAction::Apply,
             ephemeral_public_key: base64::engine::general_purpose::STANDARD.encode([0_u8; 32]),
             nonce: base64::engine::general_purpose::STANDARD.encode([0_u8; 24]),

@@ -267,7 +267,7 @@ async fn login_stop_requires_scoped_typed_evidence_on_current_connection() {
         let (executor, mut commands) = fixture(&root, &control, "stop-machine", 7);
         let request = LoginStopRequest {
             account_id: executor.account_id.clone(),
-            provider_id: "gemini".into(),
+            provider_id: "grok".into(),
             login_request_id: "original".into(),
         };
         let mut pending =
@@ -565,11 +565,11 @@ fn fixture(
             account_id,
             machine_id: machine.into(),
             connection,
-            provider_id: "gemini".into(),
+            provider_id: "grok".into(),
             provider_version: "fixture".into(),
             generation_digest: "sha256:fixture".into(),
             auth_contract_fingerprint: "fixture".into(),
-            auth_method: "code-assist".into(),
+            auth_method: "xai-account".into(),
             expected_generation: 0,
             promotion_started: false,
             expires_at_ms: i64::MAX,
@@ -579,10 +579,8 @@ fn fixture(
 }
 
 fn package() -> cowboy_provider_sdk::ProviderPackage {
-    let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(include_str!(
-        "../../../../../../plugins/gemini/provider.json"
-    ))
-    .unwrap();
+    let source: cowboy_provider_sdk::StandardProviderSource =
+        serde_json::from_str(include_str!("../../../../../../plugins/grok/provider.json")).unwrap();
     cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
 }
 
@@ -796,7 +794,7 @@ fn one_subscription_can_login_independently_on_two_machines() {
     assert!(second_commands.try_recv().is_err());
     // Default login reconciliation cannot reap or resume a named request.
     let result =
-        reconcile_provider_auth_executors(&mut requests.lock(), "gemini", i64::MAX, &control);
+        reconcile_provider_auth_executors(&mut requests.lock(), "grok", i64::MAX, &control);
     assert!(result.active.is_none());
     assert!(result.expired.is_empty());
     assert_eq!(requests.lock().len(), 2);

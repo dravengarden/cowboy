@@ -205,7 +205,7 @@ fn a_plugin_without_a_catalog_release_is_named_not_silently_ignored() {
 fn convergence_installs_nothing_the_machine_does_not_already_run() {
     // A Plugin the Machine never installed is not "behind"; installing it is a
     // separate decision with its own confirmation.
-    let releases = vec![release("gemini", "3.1.19", "ready")];
+    let releases = vec![release("grok", "3.1.19", "ready")];
     let plan = plan_machine(
         &hawk(),
         &releases,
@@ -222,11 +222,11 @@ fn convergence_installs_nothing_the_machine_does_not_already_run() {
 fn a_plugin_filter_bounds_the_run() {
     let releases = vec![
         release("codex", "3.1.22", "ready"),
-        release("gemini", "3.1.19", "ready"),
+        release("grok", "3.1.19", "ready"),
     ];
     let installed = vec![
         installed("codex", "3.1.3", 0),
-        installed("gemini", "3.1.0", 0),
+        installed("grok", "3.1.0", 0),
     ];
     let plan = plan_machine(&hawk(), &releases, &installed, &["codex".to_owned()], None);
     assert_eq!(plan.steps.len(), 1);
@@ -365,7 +365,7 @@ fn an_unmanaged_machine_gains_and_loses_nothing() {
     // convergence only keeps what is already installed current.
     let releases = vec![
         release("codex", "3.1.22", "ready"),
-        release("gemini", "3.1.19", "ready"),
+        release("grok", "3.1.19", "ready"),
     ];
     let plan = plan_machine(
         &hawk(),
@@ -411,7 +411,7 @@ fn a_declared_plugin_that_is_current_needs_nothing() {
 fn a_plugin_filter_also_bounds_membership_changes() {
     let releases = vec![
         release("codex", "3.1.22", "ready"),
-        release("gemini", "3.1.19", "ready"),
+        release("grok", "3.1.19", "ready"),
     ];
     let plan = plan_machine(
         &hawk(),

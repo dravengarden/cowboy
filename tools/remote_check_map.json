@@ -153,7 +153,6 @@
     "plugins/codex/runtime/README.md",
     "tools/remote_impact.py",
     "tools/remote_check_map.json",
-    "components/provider-runtime/packages/gemini/",
     "components/provider-runtime/packages/deepseek-harness/",
     "components/provider-runtime/check.ts",
     "plugins/codex/runtime/resume_conformance.py"

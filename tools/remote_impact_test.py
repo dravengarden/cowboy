@@ -138,7 +138,7 @@ class PinnedChangesTest(unittest.TestCase):
 
     def test_each_lock_component_marks_its_own_native_set(self):
         base = {"node": {"version": "1"}, "components": {"anthropic-claude-code": {"url": "a"},
-                "openai-codex": {"url": "a"}, "google-gemini-cli": {"url": "a"}}}
+                "openai-codex": {"url": "a"}, "xai-grok": {"url": "a"}}}
 
         def changed(*keys):
             after = json.loads(json.dumps(base))
@@ -150,7 +150,7 @@ class PinnedChangesTest(unittest.TestCase):
         self.assertEqual(changed("components", "anthropic-claude-code"), ["claude"])
         self.assertEqual(changed("components", "openai-codex"), ["codex"])
         self.assertEqual(changed("node"), ["node"])
-        self.assertEqual(changed("components", "google-gemini-cli"), [])
+        self.assertEqual(changed("components", "xai-grok"), [])
 
     def test_manifest_pins_are_native_and_inert_keys_are_ignored(self):
         path = "plugins/codex/provider.json"

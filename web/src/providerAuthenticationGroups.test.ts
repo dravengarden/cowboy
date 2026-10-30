@@ -16,7 +16,7 @@ test("credential families remain one group when a future Provider joins", () => 
       provider_id: "deepseek-harness",
       authentication_scope: "deepseek-api-key-v1",
     },
-    { provider_id: "gemini", authentication_scope: "gemini-auth-v1" },
+    { provider_id: "grok", authentication_scope: "grok-auth-v1" },
   ]);
 
   assertEquals(groups, [
@@ -38,9 +38,9 @@ test("credential families remain one group when a future Provider joins", () => 
       ],
     },
     {
-      authenticationScope: "gemini-auth-v1",
+      authenticationScope: "grok-auth-v1",
       entries: [
-        { provider_id: "gemini", authentication_scope: "gemini-auth-v1" },
+        { provider_id: "grok", authentication_scope: "grok-auth-v1" },
       ],
     },
   ]);

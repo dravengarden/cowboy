@@ -1384,7 +1384,7 @@ test("Provider SDK links session sidecars, components, and auth projections", ()
 
 test("Machine Provider inventory uses the exact Rust protocol state union", () => {
   const inventory = [{
-    provider_id: "gemini",
+    provider_id: "grok",
     provider_version: "1.0.0",
     generation_digest: `sha256:${"4".repeat(64)}`,
     contract_fingerprint: `sha256:${"5".repeat(64)}`,

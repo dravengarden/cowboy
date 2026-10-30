@@ -451,12 +451,12 @@ async fn real_sealed_replicas_preserve_replay_and_generation_advance() {
     )
     .unwrap();
     let source: cowboy_provider_sdk::StandardProviderSource =
-        serde_json::from_str(include_str!("../../../../../plugins/gemini/provider.json")).unwrap();
+        serde_json::from_str(include_str!("../../../../../plugins/grok/provider.json")).unwrap();
     let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
     let bundle = PortableCredentialBundle {
         portable_schema: package.manifest.authentication.portable_schema.clone(),
-        method_id: "code-assist".into(),
-        values: ["settings_json", "oauth_creds_json"]
+        method_id: "xai-account".into(),
+        values: ["auth_json"]
             .map(|key| {
                 (
                     key.into(),
@@ -477,13 +477,13 @@ async fn real_sealed_replicas_preserve_replay_and_generation_advance() {
         if generation == 2 {
             service.commit(&package, &bundle, None, Some(1)).unwrap();
         } else if generation == 3 && advanced {
-            service.logout("gemini").unwrap();
+            service.logout("grok").unwrap();
         }
         let sealed = service
-            .seal_for_machine("gemini", machine.encryption_public_key())
+            .seal_for_machine("grok", machine.encryption_public_key())
             .unwrap();
         let resealed = service
-            .seal_for_machine("gemini", machine.encryption_public_key())
+            .seal_for_machine("grok", machine.encryption_public_key())
             .unwrap();
         assert_ne!(sealed.nonce, resealed.nonce);
         assert_ne!(sealed.ciphertext, resealed.ciphertext);
@@ -518,7 +518,7 @@ async fn real_sealed_replicas_preserve_replay_and_generation_advance() {
         assert_eq!(follower.await, Ok(generation));
         assert!(rx.try_recv().is_err());
     }
-    let status = service.status("gemini").unwrap();
+    let status = service.status("grok").unwrap();
     assert_eq!(status.auth_generation, 3);
     assert_eq!(
         status.authentication_state,

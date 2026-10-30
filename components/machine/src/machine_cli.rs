@@ -5151,6 +5151,8 @@ mod tests {
 
     #[test]
     fn disabled_provider_aliases_are_normalized() {
+        // A retired Provider identity (Gemini) remains an exact pass-through, so
+        // an older configuration that still disables it stays valid.
         assert_eq!(
             disabled_provider_slots_from("claude-code, claude-deepseek, gemini, codex-deepseek"),
             ["claude", "claude-deepseek", "gemini", "codex-deepseek"]
@@ -5168,17 +5170,16 @@ mod tests {
             environment["COWBOY_ACP_GROK_ARGS"],
             detected_cli_args("grok")
         );
+
+        // Disabling another Provider leaves Grok's pinned arguments in place.
+        pin_cli_runtime_args(&mut environment, &["codex".to_owned()]);
         assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
+            environment["COWBOY_ACP_GROK_ARGS"],
+            detected_cli_args("grok")
         );
 
         pin_cli_runtime_args(&mut environment, &["grok".to_owned()]);
         assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
-        assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
-        );
     }
 
     #[test]
@@ -5389,10 +5390,6 @@ mod tests {
                 component(ComponentKind::ProviderCli, "claude"),
             ),
             (
-                "provider_cli-gemini",
-                component(ComponentKind::ProviderCli, "gemini"),
-            ),
-            (
                 "provider_cli-grok",
                 component(ComponentKind::ProviderCli, "grok"),
             ),
@@ -5423,11 +5420,6 @@ mod tests {
                 .and_then(std::ffi::OsStr::to_str),
             Some("bash" | "zsh")
         ));
-        assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
-        assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
-        );
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],

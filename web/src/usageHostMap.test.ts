@@ -76,7 +76,7 @@ test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("xai"), "grok");
   assertEquals(usagePluginId("anthropic"), "claude-code");
   assertEquals(usagePluginId("deepseek"), "claude-deepseek");
-  assertEquals(usagePluginId("gemini"), "gemini");
+  assertEquals(usagePluginId("future-account"), "future-account");
   assertEquals(usagePluginId("future-b"), "future-b");
 });
 
@@ -159,10 +159,10 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   }
   assertEquals(usageLimitParser("xai"), "generic-buckets");
   assertEquals(usageLimitParser("anthropic"), "generic-buckets");
-  assertEquals(usageLimitParser("gemini"), "generic-buckets");
+  assertEquals(usageLimitParser("future-account"), "generic-buckets");
   assertEquals(usageErrorKind("openai"), "raw");
   assertEquals(usageErrorKind("xai"), "raw");
-  assertEquals(usageErrorKind("gemini"), "raw");
+  assertEquals(usageErrorKind("future-account"), "raw");
   assertEquals(usageCardOrder("anthropic"), 0);
   assertEquals(usageCardOrder("openai"), 1);
   assertEquals(usageCardOrder("xai"), 2);
@@ -172,15 +172,12 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   assertEquals(usageWidgetKind("anthropic"), "anthropic-weekly");
   assertEquals(usageWidgetKind("xai"), "xai-included");
   assertEquals(usageWidgetKind("deepseek"), "deepseek-balance");
-  assertEquals(usageWidgetKind("gemini"), "none");
+  assertEquals(usageWidgetKind("future-account"), "none");
   assertEquals(
     usageEmptyMessage("anthropic"),
     "Plan usage is unavailable. Refresh to try again.",
   );
-  assertEquals(
-    usageEmptyMessage("gemini"),
-    "Account quota is not exposed by this Provider.",
-  );
+  assertEquals(usageEmptyMessage("future-account"), undefined);
   assertEquals(usageEmptyMessage("openai"), undefined);
   assertEquals(usageAvailableStatus("deepseek"), "API");
   assertEquals(usageAvailableStatus("openai"), undefined);
@@ -190,7 +187,7 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   assertEquals(usageWidgetShape("anthropic"), "percent");
   assertEquals(usageWidgetShape("xai"), "percent");
   assertEquals(usageWidgetShape("deepseek"), "balance");
-  assertEquals(usageWidgetShape("gemini"), "none");
+  assertEquals(usageWidgetShape("future-account"), "none");
   assertEquals(usageWidgetWindow("openai"), 10080);
   assertEquals(usageWidgetWindow("anthropic"), 10080);
   assertEquals(usageWidgetWindow("xai"), undefined);
@@ -202,7 +199,7 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
     usageErrorAuth("xai"),
     "Sign in to Grok Build in Machines, then refresh xAI usage.",
   );
-  assertEquals(usageErrorAuth("gemini"), undefined);
+  assertEquals(usageErrorAuth("future-account"), undefined);
   assertEquals(
     usageErrorConfig("xai"),
     "Grok Build usage is not configured on this Machine.",
@@ -224,17 +221,17 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   assertEquals(usageWidgetBalanceLabel("openai"), "Balance");
   assertEquals(usageActivityAgentIds(), ["codex", "claude", "deepseek-harness"]);
   assertEquals(usageActivityAgentLabel("claude"), "Claude Code");
-  assertEquals(usageActivityAgents("gemini"), []);
+  assertEquals(usageActivityAgents("future-account"), []);
   assertEquals(usageActivityModelIds(), ["flash", "pro"]);
   assertEquals(usageActivityModelLabel("flash"), "Flash");
-  assertEquals(usageActivityModels("gemini"), []);
+  assertEquals(usageActivityModels("future-account"), []);
   assertEquals(usageCacheMinHitTokens(), 64_000);
   assertEquals(usageCacheMinHitLabel(), "64K");
   assertEquals(usageCacheIntervalMs(), 28_800_000);
   assertEquals(usageCacheIntervalLabel(), "8h");
   assertEquals(usageCacheOptionName(), "Cache protection");
-  assertEquals(usageCacheMinHitTokens("gemini"), 0);
-  assertEquals(usageCacheOptionName("gemini"), "");
+  assertEquals(usageCacheMinHitTokens("future-account"), 0);
+  assertEquals(usageCacheOptionName("future-account"), "");
 });
 
 test("host usage specs overlay cache-protection thresholds", () => {
@@ -293,5 +290,5 @@ test("reset ids index the plugin-keyed schedule map", () => {
   };
   assertEquals(schedules[usageResetId("openai") ?? ""]?.fire_at_ms, 100);
   assertEquals(schedules[usageResetId("xai") ?? ""]?.fire_at_ms, 200);
-  assertEquals(schedules[usageResetId("gemini") ?? ""], undefined);
+  assertEquals(schedules[usageResetId("future-account") ?? ""], undefined);
 });

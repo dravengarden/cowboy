@@ -1766,42 +1766,42 @@ mod tests {
         ));
         assert!(first.machine_grant(&second_key).is_err());
         assert!(service.machine_grant(&first_key).is_err());
-        let package = package("gemini");
+        let package = package("grok");
         let bundle = bundle(&package);
         // A named native login must never enter a portable, multi-writer vault.
         assert!(account.commit(&package, &bundle, None, Some(0)).is_err());
         first.commit(&package, &bundle, None, Some(0)).unwrap();
         let mut second_bundle = bundle.clone();
         second_bundle.values.insert(
-            "oauth_creds_json".into(),
+            "auth_json".into(),
             base64::engine::general_purpose::STANDARD.encode(br#"{"token":"second-native-login"}"#),
         );
         second
             .commit(&package, &second_bundle, None, Some(0))
             .unwrap();
-        let stored = first.providers.read()["gemini"].clone();
+        let stored = first.providers.read()["grok"].clone();
         assert_eq!(stored.vault_schema, 3);
         assert!(second.open_vault(&stored).is_err());
         let mut swapped = stored;
         swapped.recipient_key = Some(second_key.clone());
         assert!(second.open_vault(&swapped).is_err());
-        assert!(first.seal_for_machine("gemini", &first_key).is_ok());
-        assert!(second.seal_for_machine("gemini", &second_key).is_ok());
-        assert!(first.seal_for_machine("gemini", &second_key).is_err());
-        assert!(second.seal_for_machine("gemini", &first_key).is_err());
-        assert!(account.status("gemini").is_none());
+        assert!(first.seal_for_machine("grok", &first_key).is_ok());
+        assert!(second.seal_for_machine("grok", &second_key).is_ok());
+        assert!(first.seal_for_machine("grok", &second_key).is_err());
+        assert!(second.seal_for_machine("grok", &first_key).is_err());
+        assert!(account.status("grok").is_none());
         let mut refreshed = bundle;
         refreshed.values.insert(
-            "oauth_creds_json".into(),
+            "auth_json".into(),
             base64::engine::general_purpose::STANDARD.encode(br#"{"token":"first-refreshed"}"#),
         );
         assert!(matches!(
             first
-                .compare_and_swap_refresh(std::slice::from_ref(&package), &refreshed, "gemini", 1)
+                .compare_and_swap_refresh(std::slice::from_ref(&package), &refreshed, "grok", 1)
                 .unwrap(),
             ProviderAuthRefreshResult::Updated(_)
         ));
-        let second_stored = second.providers.read()["gemini"].clone();
+        let second_stored = second.providers.read()["grok"].clone();
         let first_inventory = service
             .machine_account_replica_statuses(&first_key)
             .unwrap();
@@ -1822,11 +1822,11 @@ mod tests {
         let unchanged: PortableCredentialBundle =
             serde_json::from_slice(&second.open_vault(&second_stored).unwrap()).unwrap();
         assert_eq!(unchanged, second_bundle);
-        first.logout("gemini").unwrap();
-        assert_eq!(first.status("gemini").unwrap().auth_generation, 3);
-        assert_eq!(second.status("gemini").unwrap().auth_generation, 1);
+        first.logout("grok").unwrap();
+        assert_eq!(first.status("grok").unwrap().auth_generation, 3);
+        assert_eq!(second.status("grok").unwrap().auth_generation, 1);
         assert_eq!(
-            second.status("gemini").unwrap().authentication_state,
+            second.status("grok").unwrap().authentication_state,
             ServiceAuthenticationState::Ready
         );
         drop(first);
@@ -1839,7 +1839,7 @@ mod tests {
             account
                 .machine_grant(&first_key)
                 .unwrap()
-                .status("gemini")
+                .status("grok")
                 .unwrap()
                 .authentication_state,
             ServiceAuthenticationState::SignedOut
@@ -1848,7 +1848,7 @@ mod tests {
             account
                 .machine_grant(&second_key)
                 .unwrap()
-                .status("gemini")
+                .status("grok")
                 .unwrap()
                 .authentication_state,
             ServiceAuthenticationState::Ready
@@ -1857,7 +1857,7 @@ mod tests {
             account
                 .machine_grant(&first_key)
                 .unwrap()
-                .seal_for_machine("gemini", &second_key)
+                .seal_for_machine("grok", &second_key)
                 .is_err()
         );
         drop(account);
@@ -1959,7 +1959,7 @@ mod tests {
 
     fn package(id: &str) -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(match id {
-            "gemini" => include_str!("../plugins/gemini/provider.json"),
+            "grok" => include_str!("../plugins/grok/provider.json"),
             "claude-deepseek" => include_str!("../plugins/claude-deepseek/provider.json"),
             "codex-deepseek" => include_str!("../plugins/codex-deepseek/provider.json"),
             _ => panic!("unsupported fixture"),
@@ -1991,7 +1991,7 @@ mod tests {
                 })
                 .collect()
         } else {
-            ["settings_json", "oauth_creds_json"]
+            ["auth_json"]
                 .map(|key| {
                     (
                         key.to_owned(),
@@ -2007,7 +2007,7 @@ mod tests {
                 if package.manifest.authentication.portable_schema == "deepseek-api-key-v1" {
                     "api-key"
                 } else {
-                    "code-assist"
+                    "xai-account"
                 }
                 .to_owned(),
             values,
@@ -2017,7 +2017,7 @@ mod tests {
     #[test]
     fn transient_login_state_is_service_wide_but_not_replicated() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let authenticating = service
             .begin_authentication(&package, "first-login")
             .unwrap();
@@ -2026,11 +2026,11 @@ mod tests {
             authenticating.authentication_state,
             ServiceAuthenticationState::Authenticating
         );
-        assert!(service.status("gemini").is_none());
+        assert!(service.status("grok").is_none());
         assert!(service.replica_statuses().is_empty());
         assert_eq!(service.statuses(), vec![authenticating]);
         assert_eq!(
-            service.active_authentication_request("gemini").as_deref(),
+            service.active_authentication_request("grok").as_deref(),
             Some("first-login")
         );
         assert!(
@@ -2040,15 +2040,15 @@ mod tests {
                 .to_string()
                 .contains("already in progress")
         );
-        service.fail_authentication("gemini", "first-login");
+        service.fail_authentication("grok", "first-login");
         assert_eq!(
             service.statuses()[0].authentication_state,
             ServiceAuthenticationState::Error
         );
-        assert!(service.active_authentication_request("gemini").is_none());
-        service.cancel_authentication("gemini", "wrong-login");
+        assert!(service.active_authentication_request("grok").is_none());
+        service.cancel_authentication("grok", "wrong-login");
         assert_eq!(service.statuses().len(), 1);
-        service.cancel_authentication("gemini", "first-login");
+        service.cancel_authentication("grok", "first-login");
         assert!(service.statuses().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
@@ -2056,7 +2056,7 @@ mod tests {
     #[test]
     fn concurrent_native_login_has_one_owner_and_stale_cancel_cannot_remove_it() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let barrier = std::sync::Barrier::new(2);
         let results = std::thread::scope(|scope| {
             let handles: Vec<_> = ["login-a", "login-b"]
@@ -2082,19 +2082,19 @@ mod tests {
         assert_eq!(results.iter().filter(|(_, accepted)| *accepted).count(), 1);
         let winner = results.iter().find(|(_, accepted)| *accepted).unwrap().0;
         let loser = results.iter().find(|(_, accepted)| !*accepted).unwrap().0;
-        service.cancel_authentication("gemini", loser);
+        service.cancel_authentication("grok", loser);
         assert_eq!(
-            service.active_authentication_request("gemini").as_deref(),
+            service.active_authentication_request("grok").as_deref(),
             Some(winner)
         );
-        service.cancel_authentication("gemini", winner);
-        assert!(service.active_authentication_request("gemini").is_none());
+        service.cancel_authentication("grok", winner);
+        assert!(service.active_authentication_request("grok").is_none());
         service
             .begin_authentication(&package, "next-login")
             .unwrap();
-        service.cancel_authentication("gemini", winner);
+        service.cancel_authentication("grok", winner);
         assert_eq!(
-            service.active_authentication_request("gemini").as_deref(),
+            service.active_authentication_request("grok").as_deref(),
             Some("next-login")
         );
         drop(service);
@@ -2104,7 +2104,7 @@ mod tests {
     #[test]
     fn service_generation_is_durable_cas_and_sealed_per_machine() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let bundle = bundle(&package);
         let status = service
             .commit(&package, &bundle, Some("account".to_owned()), None)
@@ -2116,7 +2116,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .with_scheduling_generation("gemini", true, Some(1), || 7)
+                .with_scheduling_generation("grok", true, Some(1), || 7)
                 .unwrap(),
             7
         );
@@ -2138,7 +2138,7 @@ mod tests {
         let first_machine_public = PublicKey::from(&first_machine_secret);
         let first_envelope = service
             .seal_for_machine(
-                "gemini",
+                "grok",
                 &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
             )
             .unwrap();
@@ -2146,7 +2146,7 @@ mod tests {
         let second_machine_public = PublicKey::from(&second_machine_secret);
         let second_envelope = service
             .seal_for_machine(
-                "gemini",
+                "grok",
                 &base64::engine::general_purpose::STANDARD.encode(second_machine_public.as_bytes()),
             )
             .unwrap();
@@ -2154,18 +2154,18 @@ mod tests {
         assert_eq!(second_envelope.auth_generation, 1);
         assert_eq!(first_envelope.action, ProviderAuthAction::Apply);
         assert_ne!(first_envelope.ciphertext, second_envelope.ciphertext);
-        assert!(!first_envelope.ciphertext.contains("settings_json"));
+        assert!(!first_envelope.ciphertext.contains("auth_json"));
 
         let non_contributory = base64::engine::general_purpose::STANDARD.encode([0_u8; 32]);
         assert!(
             service
-                .seal_for_machine("gemini", &non_contributory)
+                .seal_for_machine("grok", &non_contributory)
                 .unwrap_err()
                 .to_string()
                 .contains("non-contributory")
         );
 
-        let logged_out = service.logout("gemini").unwrap();
+        let logged_out = service.logout("grok").unwrap();
         assert_eq!(logged_out.auth_generation, 2);
         assert_eq!(
             logged_out.authentication_state,
@@ -2173,21 +2173,21 @@ mod tests {
         );
         assert!(
             service
-                .with_scheduling_generation("gemini", true, Some(1), || ())
+                .with_scheduling_generation("grok", true, Some(1), || ())
                 .unwrap_err()
                 .to_string()
                 .contains("not ready")
         );
         assert!(
             service
-                .mark_distribution("gemini", 1, ServiceDistributionState::Current)
+                .mark_distribution("grok", 1, ServiceDistributionState::Current)
                 .unwrap_err()
                 .to_string()
                 .contains("stale Provider distribution receipt")
         );
         let wipe = service
             .seal_for_machine(
-                "gemini",
+                "grok",
                 &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
             )
             .unwrap();
@@ -2196,7 +2196,7 @@ mod tests {
 
         drop(service);
         let reopened = ProviderAuthService::open(&root).unwrap();
-        let reopened = reopened.status("gemini").unwrap();
+        let reopened = reopened.status("grok").unwrap();
         assert_eq!(reopened.auth_generation, 2);
         assert_eq!(
             reopened.authentication_state,
@@ -2208,14 +2208,14 @@ mod tests {
     #[test]
     fn rejected_generation_expires_durably_without_overwriting_a_new_login() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let bundle = bundle(&package);
         service
             .commit(&package, &bundle, Some("account".to_owned()), None)
             .unwrap();
 
         let expired = service
-            .mark_expired("gemini", 1)
+            .mark_expired("grok", 1)
             .unwrap()
             .expect("matching ready generation");
         assert_eq!(
@@ -2224,7 +2224,7 @@ mod tests {
         );
         assert!(
             service
-                .with_scheduling_generation("gemini", true, Some(1), || ())
+                .with_scheduling_generation("grok", true, Some(1), || ())
                 .unwrap_err()
                 .to_string()
                 .contains("not ready")
@@ -2232,7 +2232,7 @@ mod tests {
         drop(service);
         let service = ProviderAuthService::open(&root).unwrap();
         assert_eq!(
-            service.status("gemini").unwrap().authentication_state,
+            service.status("grok").unwrap().authentication_state,
             ServiceAuthenticationState::Expired
         );
 
@@ -2240,9 +2240,9 @@ mod tests {
             .commit(&package, &bundle, Some("account".to_owned()), Some(1))
             .unwrap();
         assert_eq!(refreshed.auth_generation, 2);
-        assert!(service.mark_expired("gemini", 1).unwrap().is_none());
+        assert!(service.mark_expired("grok", 1).unwrap().is_none());
         assert_eq!(
-            service.status("gemini").unwrap().authentication_state,
+            service.status("grok").unwrap().authentication_state,
             ServiceAuthenticationState::Ready
         );
         fs::remove_dir_all(root).unwrap();
@@ -2307,7 +2307,7 @@ mod tests {
     #[test]
     fn runtime_refresh_is_a_single_service_generation_cas() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let initial = bundle(&package);
         service
             .commit(&package, &initial, Some("account".to_owned()), None)
@@ -2315,11 +2315,11 @@ mod tests {
 
         let mut winner = initial.clone();
         winner.values.insert(
-            "oauth_creds_json".to_owned(),
+            "auth_json".to_owned(),
             base64::engine::general_purpose::STANDARD.encode(br#"{"token":"winner"}"#),
         );
         let updated = service
-            .compare_and_swap_refresh(std::slice::from_ref(&package), &winner, "gemini", 1)
+            .compare_and_swap_refresh(std::slice::from_ref(&package), &winner, "grok", 1)
             .unwrap();
         let ProviderAuthRefreshResult::Updated(statuses) = updated else {
             panic!("first valid refresh did not advance the Service generation");
@@ -2337,24 +2337,24 @@ mod tests {
 
         let mut loser = initial;
         loser.values.insert(
-            "oauth_creds_json".to_owned(),
+            "auth_json".to_owned(),
             base64::engine::general_purpose::STANDARD.encode(br#"{"token":"loser"}"#),
         );
         assert_eq!(
             service
-                .compare_and_swap_refresh(std::slice::from_ref(&package), &loser, "gemini", 1,)
+                .compare_and_swap_refresh(std::slice::from_ref(&package), &loser, "grok", 1,)
                 .unwrap(),
             ProviderAuthRefreshResult::Stale {
                 current_generation: 2
             }
         );
 
-        let stored = service.providers.read().get("gemini").cloned().unwrap();
+        let stored = service.providers.read().get("grok").cloned().unwrap();
         let stored_bundle: PortableCredentialBundle =
             serde_json::from_slice(&service.open_vault(&stored).unwrap()).unwrap();
         assert_eq!(stored_bundle, winner);
         let ProviderAuthRefreshResult::Unchanged(statuses) = service
-            .compare_and_swap_refresh(&[package], &winner, "gemini", 2)
+            .compare_and_swap_refresh(&[package], &winner, "grok", 2)
             .unwrap()
         else {
             panic!("replaying the winning credential should be idempotent");
@@ -2366,20 +2366,20 @@ mod tests {
     #[test]
     fn valid_runtime_refresh_can_rescue_the_exact_expired_generation() {
         let (root, service) = service();
-        let package = package("gemini");
+        let package = package("grok");
         let initial = bundle(&package);
         service
             .commit(&package, &initial, Some("account".to_owned()), None)
             .unwrap();
-        service.mark_expired("gemini", 1).unwrap().unwrap();
+        service.mark_expired("grok", 1).unwrap().unwrap();
         let mut refreshed = initial;
         refreshed.values.insert(
-            "oauth_creds_json".to_owned(),
+            "auth_json".to_owned(),
             base64::engine::general_purpose::STANDARD.encode(br#"{"token":"recovered"}"#),
         );
 
         let ProviderAuthRefreshResult::Updated(statuses) = service
-            .compare_and_swap_refresh(&[package], &refreshed, "gemini", 1)
+            .compare_and_swap_refresh(&[package], &refreshed, "grok", 1)
             .unwrap()
         else {
             panic!("the exact expired generation was not rescued");
@@ -2597,7 +2597,7 @@ mod tests {
             "claude-deepseek".to_owned(),
             "codex-deepseek".to_owned(),
             "deepseek-harness".to_owned(),
-            "gemini".to_owned(),
+            "grok".to_owned(),
         ];
         let logged_out = service.logout_scope(&ids).unwrap();
         assert_eq!(logged_out.len(), 3);
@@ -2605,7 +2605,7 @@ mod tests {
             status.auth_generation == 2
                 && status.authentication_state == ServiceAuthenticationState::SignedOut
         }));
-        assert!(service.logout_scope(&["gemini".to_owned()]).is_err());
+        assert!(service.logout_scope(&["grok".to_owned()]).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

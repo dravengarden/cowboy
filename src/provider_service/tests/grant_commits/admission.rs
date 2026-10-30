@@ -21,7 +21,7 @@ async fn contract(store: &Store, service: &ProviderAuthService) {
         .unwrap()
         .machine_grant(&key)
         .unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     grant.commit_grant(&package, &credentials, &intent).unwrap();
     assert!(
@@ -33,7 +33,7 @@ async fn contract(store: &Store, service: &ProviderAuthService) {
     );
     assert!(
         grant
-            .seal_current_grant(store, "machine-a", "gemini")
+            .seal_current_grant(store, "machine-a", "grok")
             .await
             .is_err()
     );
@@ -49,7 +49,7 @@ async fn contract(store: &Store, service: &ProviderAuthService) {
         .await
         .unwrap();
     let sealed = grant
-        .seal_current_grant(store, "machine-a", "gemini")
+        .seal_current_grant(store, "machine-a", "grok")
         .await
         .unwrap();
     assert_eq!(sealed.account_id, intent.account_id);
@@ -74,7 +74,7 @@ async fn contract(store: &Store, service: &ProviderAuthService) {
     grant.commit(&package, &credentials, None, Some(2)).unwrap();
     assert!(
         grant
-            .seal_current_grant(store, "machine-a", "gemini")
+            .seal_current_grant(store, "machine-a", "grok")
             .await
             .is_err()
     );
@@ -96,7 +96,7 @@ async fn replace_grant(
     key: &str,
     intent: &Receipt,
 ) {
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     let Outcome::Applied(next) = store
         .prepare_provider_grant(
@@ -134,7 +134,7 @@ async fn replace_grant(
         .unwrap();
     assert_eq!(
         grant
-            .seal_current_grant(store, "machine-a", "gemini")
+            .seal_current_grant(store, "machine-a", "grok")
             .await
             .unwrap()
             .auth_generation,
@@ -157,12 +157,12 @@ async fn refresh_keeps_lineage(
     wrong.subject = "other-account".into();
     let mut first = original.clone();
     first.values.insert(
-        "oauth_creds_json".into(),
+        "auth_json".into(),
         base64::engine::general_purpose::STANDARD.encode(br#"{"token":"first"}"#),
     );
     let mut second = original.clone();
     second.values.insert(
-        "oauth_creds_json".into(),
+        "auth_json".into(),
         base64::engine::general_purpose::STANDARD.encode(br#"{"token":"second"}"#),
     );
     assert!(
@@ -198,7 +198,7 @@ async fn refresh_keeps_lineage(
     };
     assert_eq!(
         grant
-            .seal_current_grant(store, "machine-a", "gemini")
+            .seal_current_grant(store, "machine-a", "grok")
             .await
             .unwrap()
             .auth_generation,
@@ -213,7 +213,7 @@ async fn refresh_keeps_lineage(
     ));
     assert!(
         grant
-            .seal_for_machine("gemini", grant.recipient_key.as_ref().unwrap())
+            .seal_for_machine("grok", grant.recipient_key.as_ref().unwrap())
             .is_err()
     );
 }

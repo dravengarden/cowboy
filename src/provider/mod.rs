@@ -104,12 +104,6 @@ impl LaunchSpec {
 /// - `codex`: the `@agentclientprotocol/codex-acp` adapter, run via `npx`.
 ///   Built on Codex App Server. Requires Codex auth (`ChatGPT` subscription
 ///   login in `~/.codex`, or `CODEX_API_KEY` / `OPENAI_API_KEY`).
-/// - `gemini`: the Gemini CLI's own ACP mode — `@google/gemini-cli --acp`, run via
-///   `npx` (the CLI is the adapter; no separate package). Requires Gemini auth (a
-///   `GEMINI_API_KEY`, Vertex AI, or a Code Assist Standard/Enterprise Google
-///   Login with `GOOGLE_CLOUD_PROJECT`. Consumer Google Login is retired and
-///   belongs to Antigravity, which does not currently expose Cowboy's ACP
-///   session transport.
 /// - `grok`: the official Grok Build CLI's own ACP stdio agent —
 ///   `@xai-official/grok agent stdio`. Requires a prior `grok login` or
 ///   `XAI_API_KEY`.
@@ -1402,10 +1396,8 @@ mod tests {
                 .copied(),
         );
         assert_eq!(codex.args, codex_npx_args);
-        assert_eq!(
-            lookup_with(&[], "gemini").map(|s| s.command),
-            Some("npx".to_owned())
-        );
+        // The retired Gemini Provider has no launch recipe.
+        assert!(lookup_with(&[], "gemini").is_none());
         let grok = lookup_with(&[], "grok").expect("grok registered");
         assert_eq!(grok.command, "npx");
         let mut grok_npx_args = vec!["-y", "@xai-official/grok"];
@@ -1671,7 +1663,7 @@ mod tests {
             assert!(!claude_deepseek.removes_inherited_env(preserved));
         }
 
-        // _ARGS overrides independently (e.g. gemini's `--acp`).
+        // _ARGS overrides independently of the command override.
         assert_eq!(
             lookup_with(
                 &[

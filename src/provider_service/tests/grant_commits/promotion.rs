@@ -29,11 +29,11 @@ pub(super) async fn fixture() -> (
 #[tokio::test]
 async fn candidate_substitution_is_rejected_before_the_first_vault_write() {
     let (_dir, store, _service, grant, intent) = fixture().await;
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     let mut changed = credentials.clone();
     changed.values.insert(
-        "settings_json".into(),
+        "auth_json".into(),
         base64::engine::general_purpose::STANDARD.encode(b"changed"),
     );
     assert!(grant.commit_grant(&package, &changed, &intent).is_err());
@@ -57,7 +57,7 @@ async fn candidate_substitution_is_rejected_before_the_first_vault_write() {
             .commit_grant(&package, &credentials, &other_identity)
             .is_err()
     );
-    assert!(grant.status("gemini").is_none());
+    assert!(grant.status("grok").is_none());
     let original = store
         .provider_grant_receipt("owner", "login")
         .await
@@ -74,13 +74,13 @@ async fn candidate_substitution_is_rejected_before_the_first_vault_write() {
             .await
             .is_err()
     );
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 1);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 1);
 }
 
 #[tokio::test]
 async fn promotion_checks_db_intent_and_retries_never_overwrite_new_credentials() {
     let (_dir, store, _service, grant, intent) = fixture().await;
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     assert!(
         grant
@@ -96,7 +96,7 @@ async fn promotion_checks_db_intent_and_retries_never_overwrite_new_credentials(
             .await
             .is_err()
     );
-    assert!(grant.status("gemini").is_none());
+    assert!(grant.status("grok").is_none());
     let first = grant
         .promote_prepared_grant(&store, "owner", &intent, &package, &credentials)
         .await
@@ -105,7 +105,7 @@ async fn promotion_checks_db_intent_and_retries_never_overwrite_new_credentials(
     assert!(!first.cleanup_applied);
     assert_eq!(
         grant
-            .seal_current_grant(&store, "machine-a", "gemini")
+            .seal_current_grant(&store, "machine-a", "grok")
             .await
             .unwrap()
             .auth_generation,
@@ -118,10 +118,10 @@ async fn promotion_checks_db_intent_and_retries_never_overwrite_new_credentials(
         .await
         .unwrap();
     assert_eq!(replay, first);
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 2);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 2);
     assert!(
         grant
-            .seal_current_grant(&store, "machine-a", "gemini")
+            .seal_current_grant(&store, "machine-a", "grok")
             .await
             .is_err()
     );
@@ -131,14 +131,14 @@ async fn promotion_checks_db_intent_and_retries_never_overwrite_new_credentials(
 async fn cancellation_before_promotion_never_writes_credentials() {
     let (_dir, store, _service, grant, intent) = fixture().await;
     store.cancel_provider_grant("owner", &intent).await.unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     let result = grant
         .promote_prepared_grant(&store, "owner", &intent, &package, &bundle(&package))
         .await
         .unwrap();
     assert_eq!(result.receipt.phase, Phase::Cancelled);
     assert!(!result.cleanup_applied);
-    assert!(grant.status("gemini").is_none());
+    assert!(grant.status("grok").is_none());
 }
 
 #[tokio::test]
@@ -158,7 +158,7 @@ async fn metadata_change_during_promotion_cleans_only_its_own_vault_write() {
         )
         .await
         .unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     let result = grant
         .promote_prepared_grant(&store, "owner", &intent, &package, &credentials)
@@ -166,9 +166,9 @@ async fn metadata_change_during_promotion_cleans_only_its_own_vault_write() {
         .unwrap();
     assert_eq!(result.receipt.phase, Phase::Cancelled);
     assert!(result.cleanup_applied);
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 2);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 2);
     assert_eq!(
-        grant.status("gemini").unwrap().authentication_state,
+        grant.status("grok").unwrap().authentication_state,
         ServiceAuthenticationState::SignedOut
     );
     let replay = grant
@@ -176,5 +176,5 @@ async fn metadata_change_during_promotion_cleans_only_its_own_vault_write() {
         .await
         .unwrap();
     assert!(!replay.cleanup_applied);
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 2);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 2);
 }

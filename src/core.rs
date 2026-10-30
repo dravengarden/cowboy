@@ -1416,7 +1416,7 @@ pub enum Inbound {
     OpenSession { session_id: String },
 
     /// Reset a session's agent context ("clear conversation"). Over ACP, clearing
-    /// is the CLIENT's job — Claude/Codex/Gemini expose no `clear` agent command
+    /// is the CLIENT's job — Claude/Codex expose no `clear` agent command
     /// (only `compact`), so this can't be a slash command. The daemon tears the
     /// agent down and respawns it with a FRESH `session/new` (dropping the prior
     /// `agent_session_id` so it does NOT `session/load`), then drops a

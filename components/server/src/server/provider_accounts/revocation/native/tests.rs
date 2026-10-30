@@ -22,7 +22,7 @@ fn native_logout_missing_generation_is_not_permission_to_clean_up() {
     login.native_generation = Some(7);
     assert_eq!(native_generation(&login).unwrap(), Some(7));
     login.native_generation = None;
-    login.provider_id = "gemini".into();
+    login.provider_id = "grok".into();
     assert_eq!(native_generation(&login).unwrap(), None);
 }
 

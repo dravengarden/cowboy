@@ -4366,7 +4366,6 @@ mod tests {
         let sources = [
             include_str!("../../../plugins/claude-code/provider.json"),
             include_str!("../../../plugins/codex/provider.json"),
-            include_str!("../../../plugins/gemini/provider.json"),
             include_str!("../../../plugins/grok/provider.json"),
             include_str!("../../../plugins/claude-deepseek/provider.json"),
             include_str!("../../../plugins/codex-deepseek/provider.json"),
@@ -4376,7 +4375,6 @@ mod tests {
             ("claude-deepseek", ThoughtVariant::Timeline),
             ("codex", ThoughtVariant::Workcell),
             ("codex-deepseek", ThoughtVariant::Workcell),
-            ("gemini", ThoughtVariant::Signal),
             ("grok", ThoughtVariant::Signal),
         ]);
         let expected_auth_presentations = BTreeMap::from([
@@ -4384,7 +4382,6 @@ mod tests {
             ("claude-deepseek", AuthenticationPresentation::ApiKey),
             ("codex", AuthenticationPresentation::Account),
             ("codex-deepseek", AuthenticationPresentation::ApiKey),
-            ("gemini", AuthenticationPresentation::Account),
             ("grok", AuthenticationPresentation::Account),
         ]);
         let mut ids = BTreeSet::new();
@@ -4446,8 +4443,7 @@ mod tests {
                     .is_empty()
             );
         }
-        assert_eq!(ids.len(), 6);
-        assert!(ids.contains("gemini"));
+        assert_eq!(ids.len(), 5);
     }
 
     #[test]
@@ -4641,7 +4637,7 @@ mod tests {
     #[test]
     fn downloaded_artifact_rejects_contract_and_ui_link_tampering() {
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let mut bad_contract = package.clone();
         bad_contract.contract_fingerprint = format!("sha256:{}", "0".repeat(64));
@@ -4660,7 +4656,7 @@ mod tests {
 
     #[test]
     fn release_requires_a_complete_exact_runtime_binding() {
-        let package = first_party_package("../../../plugins/gemini/provider.json");
+        let package = first_party_package("../../../plugins/grok/provider.json");
         let bytes = package.canonical_bytes().unwrap();
         let release = complete_release(&package, &bytes);
         release.validate_bytes(&bytes).unwrap();
@@ -4712,7 +4708,7 @@ mod tests {
     #[test]
     fn lifecycle_effects_cannot_escape_their_typed_ui_surface() {
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let mut manifest = source.compile().unwrap();
         let service_auth = manifest
             .ui
@@ -4851,8 +4847,8 @@ mod tests {
 
     fn first_party_package(path: &str) -> ProviderPackage {
         let source = match path {
-            "../../../plugins/gemini/provider.json" => {
-                include_str!("../../../plugins/gemini/provider.json")
+            "../../../plugins/grok/provider.json" => {
+                include_str!("../../../plugins/grok/provider.json")
             }
             other => panic!("unknown test Provider source {other}"),
         };
@@ -4928,7 +4924,7 @@ mod tests {
 
     #[test]
     fn machine_contract_inventory_rejects_new_host_schema_before_install() {
-        let package = first_party_package("../../../plugins/gemini/provider.json");
+        let package = first_party_package("../../../plugins/grok/provider.json");
         let bytes = package.canonical_bytes().unwrap();
         let release = complete_release(&package, &bytes);
         let target = release.supported_platforms[0].clone();

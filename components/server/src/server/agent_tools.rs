@@ -1028,7 +1028,7 @@ mod tests {
         });
         assert!(!invalid.validate());
         invalid = AgentTools::builtin("codex");
-        invalid.calls.targets[0].agent = "gemini".into();
+        invalid.calls.targets[0].agent = "grok".into();
         assert!(!invalid.validate());
         invalid = AgentTools::builtin("codex");
         invalid.calls.max_concurrent = 0;

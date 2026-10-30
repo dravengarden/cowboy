@@ -1269,7 +1269,8 @@ mod startup_mode_tests {
             startup_full_access_mode("claude-deepseek"),
             Some("bypassPermissions")
         );
-        assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
+        // A retired package-less Provider identity resolves to portable behavior.
+        assert_eq!(startup_full_access_mode("gemini"), None);
         assert_eq!(startup_full_access_mode("codex"), None);
     }
 
@@ -3676,7 +3677,8 @@ async fn run_session(
 
     // Open every provider at its own full-access session mode when advertised.
     // Codex exposes this as the config option handled above; Claude calls it
-    // `bypassPermissions`, while Gemini calls the equivalent mode `yolo`.
+    // `bypassPermissions`; a package selecting `acp_session_mode_yolo_v1` names
+    // the equivalent mode `yolo`.
     if !state.sink.session_is_managed_read_only(&session_id)
         && let (Some(modes), Some(want)) = (modes.as_ref(), startup_full_access_mode(provider_id))
     {
@@ -3708,16 +3710,17 @@ async fn run_session(
         }
     }
 
-    // Gemini (unlike codex) exposes its APPROVAL options as session MODES
-    // (`availableModes` + `session/set_mode`), NOT config_options — so the codex
-    // push above renders nothing for it. Translate those modes into a synthetic
-    // "mode" select chip (matching Zed, which surfaces `session_modes` as its own
-    // selector) so gemini gets an Approval dropdown like the others. Gated to
-    // gemini: claude ALSO ships session modes, but advertises its mode as a real
+    // A Provider selecting the `acp_session_mode_yolo_v1` permission contract
+    // exposes its APPROVAL options as session MODES (`availableModes` +
+    // `session/set_mode`), NOT config_options — so the codex push above renders
+    // nothing for it. Translate those modes into a synthetic "mode" select chip
+    // (matching Zed, which surfaces `session_modes` as its own selector) so it
+    // gets an Approval dropdown like the others. Gated to that contract: claude
+    // ALSO ships session modes, but advertises its mode as a real
     // `config_option` (via a later notification) that this must not shadow. The
-    // chip's SET is routed to `session/set_mode` in the command loop below —
-    // gemini implements no `session/set_config_option`. `Some` here also marks the
-    // session as mode-via-session-modes for that routing.
+    // chip's SET is routed to `session/set_mode` in the command loop below — such
+    // a Provider implements no `session/set_config_option`. `Some` here also
+    // marks the session as mode-via-session-modes for that routing.
     // Grok also has ordinary ACP session modes, but its model + reasoning
     // choices arrive in `x.ai/sessionConfig`; use a distinct id so both menus
     // remain independently selectable.
@@ -3779,7 +3782,7 @@ async fn run_session(
         ));
     }
     // Surface every startup option in one authoritative array. This includes
-    // standard config options (Codex), synthesized ACP modes (Gemini/Grok), and
+    // standard config options (Codex), synthesized ACP modes (session-mode Providers and Grok), and
     // Grok's pre-standard model/effort metadata.
     // An empty list is authoritative too: a replacement may remove all the
     // old release's options. Publish this before Running so the Controller can
@@ -4370,9 +4373,10 @@ async fn run_session(
             AgentCommand::SetConfigOption { config_id, value }
                 if mode_config_id == Some(config_id.as_str()) && mode_select.is_some() =>
             {
-                // gemini's synthesized "mode" chip maps to ACP `session/set_mode` —
-                // it implements no `session/set_config_option` (it never advertised
-                // config options; cowboy built this chip from its session modes).
+                // A synthesized "mode" chip maps to ACP `session/set_mode` — the
+                // Provider implements no `session/set_config_option` (it never
+                // advertised config options; cowboy built this chip from its
+                // session modes).
                 let Some(mode_id) = value.as_str().map(str::to_owned) else {
                     tracing::warn!(?value, "set mode: non-string value");
                     continue;
@@ -4399,8 +4403,8 @@ async fn run_session(
                         Ok(_) => {
                             *current_session_mode.lock() = Some(mode_id.clone());
                             // Re-push the chip with the new current so the dropdown
-                            // sticks (gemini emits no current_mode_update for an
-                            // explicit set).
+                            // sticks (a session-mode Provider may emit no
+                            // current_mode_update for an explicit set).
                             let config = grok_config.lock().clone();
                             let published = if is_grok {
                                 grok_cowboy_options(
