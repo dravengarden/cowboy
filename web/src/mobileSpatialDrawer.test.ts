@@ -140,18 +140,27 @@ test("interrupted drawer settle restores rest state instead of leaking open", ()
   assert(drawerSource.includes("pendingSettle"));
   assert(drawerSource.includes("currentOffset > width / 2"));
   assert(drawerSource.includes("restoreInterruptedSettle();"));
-  const abandonAt = drawerSource.indexOf("obsidianDrawerAbandonsToScroll");
-  const abandonRestore = drawerSource.indexOf(
+  // Every unclaimed exit (scroll abandon, unlocked end, cancel, selection)
+  // shares one helper, which lands the interrupted settle.
+  const helperAt = drawerSource.indexOf("const abandonUnclaimed = (): void => {");
+  const helperRestore = drawerSource.indexOf(
     "restoreInterruptedSettle();",
-    abandonAt,
+    helperAt,
+  );
+  assert(helperAt >= 0 && helperRestore > helperAt);
+  assert(helperRestore < drawerSource.indexOf("};", helperAt));
+  const abandonAt = drawerSource.indexOf(
+    "obsidianDrawerAbandonsToScroll(deltaX, deltaY)",
   );
   const unlockedEnd = drawerSource.indexOf("if (!gesture.locked) {");
-  const unlockedRestore = drawerSource.indexOf(
-    "restoreInterruptedSettle();",
-    unlockedEnd,
+  assert(
+    abandonAt >= 0 &&
+      drawerSource.indexOf("abandonUnclaimed();", abandonAt) > abandonAt,
   );
-  assert(abandonAt >= 0 && abandonRestore > abandonAt);
-  assert(unlockedEnd >= 0 && unlockedRestore > unlockedEnd);
+  assert(
+    unlockedEnd >= 0 &&
+      drawerSource.indexOf("abandonUnclaimed();", unlockedEnd) > unlockedEnd,
+  );
 });
 
 test("settled drawers retain declarative depth and pager ownership", () => {
@@ -231,4 +240,45 @@ test("a second contact cannot restart or strand a claimed drawer swipe", () => {
   // healed, and it lands the open state React still believes in.
   assert(restore.indexOf("if (gesture || pendingSettle) return;") >= 0);
   assert(restore.indexOf("const open = getOpen();") > 0);
+});
+
+test("an iOS long-press selection releases an unclaimed drawer and pager", () => {
+  // Finger tremor during a long-press prepares the drawer (moving freeze +
+  // store hold) before iOS expands the selection. Every unclaimed exit must
+  // release what the recognizer published, or the transcript stays
+  // overflow-hidden with pointer-events none and cannot scroll.
+  const move = drawerSource.slice(
+    drawerSource.indexOf("const onTouchMove = (event: TouchEvent): void => {"),
+  );
+  const selection = move.indexOf("expandedSelection(");
+  assert(selection >= 0);
+  assert(
+    move.indexOf("abandonUnclaimed();", selection) <
+      move.indexOf("return;", selection),
+  );
+  const helper = drawerSource.slice(
+    drawerSource.indexOf("const abandonUnclaimed = (): void => {"),
+  );
+  assert(helper.indexOf("releaseDirectManipulation();") >= 0);
+  assert(helper.indexOf("disarmPresentation();") >= 0);
+  for (const exit of ["const onTouchEnd", "const onTouchCancel"]) {
+    const body = drawerSource.slice(drawerSource.indexOf(exit));
+    assert(body.indexOf("abandonUnclaimed();") >= 0);
+  }
+  // Defence in depth: a prepared recognizer that lost its stream is healed
+  // on the next touch even though it never translated a peek.
+  const restore = drawerSource.slice(
+    drawerSource.indexOf("const restoreWedgedPeek = (): void => {"),
+  );
+  assert(restore.indexOf("directManipulationActive && releaseFrame === 0") > 0);
+  const pagerMove = productShellSource.slice(
+    productShellSource.indexOf(
+      "const onTouchMove = (event: TouchEvent): void => {",
+    ),
+  );
+  const pagerSelection = pagerMove.indexOf("expandedSelection(");
+  assert(
+    pagerMove.indexOf("else disarmPagerPresentation();", pagerSelection) <
+      pagerMove.indexOf("return;", pagerSelection),
+  );
 });

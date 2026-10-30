@@ -218,8 +218,10 @@ export function bindMobileSpatialDrawer({
     releasePresentation = undefined;
   };
   const beginDirectManipulation = (): void => {
-    if (directManipulationActive) return;
+    // A release still queued from the previous stream must not land under
+    // this one: cancel it before deciding the freeze is already owned.
     if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
+    releaseFrame = 0;
     if (releaseIdle !== undefined) {
       if (typeof globalThis.cancelIdleCallback === "function") {
         globalThis.cancelIdleCallback(releaseIdle);
@@ -228,6 +230,7 @@ export function bindMobileSpatialDrawer({
       }
       releaseIdle = undefined;
     }
+    if (directManipulationActive) return;
     settleGen += 1;
     globalThis.clearTimeout(settleTimer);
     armPresentation();
@@ -297,6 +300,17 @@ export function bindMobileSpatialDrawer({
         releaseIdle = globalThis.setTimeout(finish, 32);
       }
     });
+  };
+  // Drop a recognizer that never claimed the swipe, together with every
+  // ownership signal it published: the finger-down store hold, or the 2 px
+  // prepare's moving freeze (`overflow: hidden` + `pointer-events: none` on
+  // the transcript). Every unclaimed exit must come through here.
+  const abandonUnclaimed = (): void => {
+    if (gesture?.prepared === true) releaseDirectManipulation();
+    else disarmPresentation();
+    restoreInterruptedSettle();
+    gesture = null;
+    commit = false;
   };
   const settle: MobileSpatialDrawerSettle = (
     open,
@@ -376,6 +390,12 @@ export function bindMobileSpatialDrawer({
   // yielding. Land the rest state on the next touch.
   const restoreWedgedPeek = (): void => {
     if (gesture || pendingSettle) return;
+    // A prepared recognizer that lost its stream before claiming translated
+    // nothing, so there is no peek to land; release its moving freeze alone.
+    if (
+      directManipulationActive && releaseFrame === 0 &&
+      releaseIdle === undefined
+    ) releaseDirectManipulation();
     const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
     const open = getOpen();
     if (Math.abs(currentOffset - (open ? width : 0)) <= 0.5) return;
@@ -464,17 +484,16 @@ export function bindMobileSpatialDrawer({
       !gesture.locked &&
       expandedSelection(globalThis.getSelection?.() ?? null)
     ) {
-      gesture = null;
-      commit = false;
+      // iOS long-press text selection: finger tremor can prepare the drawer
+      // before the selection appears. Returning without releasing left the
+      // transcript frozen and unscrollable until a later claimed swipe.
+      abandonUnclaimed();
       return;
     }
     const deltaX = touch.clientX - gesture.x;
     const deltaY = touch.clientY - gesture.y;
     if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
-      if (gesture.prepared) releaseDirectManipulation();
-      else disarmPresentation();
-      restoreInterruptedSettle();
-      gesture = null;
+      abandonUnclaimed();
       // Preserve the transcript's native vertical scroll while preventing a
       // parent horizontal recognizer from seeing the same touch stream.
       event.stopPropagation();
@@ -546,11 +565,7 @@ export function bindMobileSpatialDrawer({
     stopFollowingDetachedStream();
     if (!gesture) return;
     if (!gesture.locked) {
-      if (gesture.prepared) releaseDirectManipulation();
-      else disarmPresentation();
-      restoreInterruptedSettle();
-      gesture = null;
-      commit = false;
+      abandonUnclaimed();
       return;
     }
     const width = gesture.width;
@@ -566,18 +581,14 @@ export function bindMobileSpatialDrawer({
   };
   const onTouchCancel = (): void => {
     stopFollowingDetachedStream();
-    const wasLocked = gesture?.locked === true;
-    const wasPrepared = gesture?.prepared === true;
-    const startOpen = gesture?.startOpen ?? getOpen();
-    const width = gesture?.width;
+    if (gesture?.locked !== true) {
+      abandonUnclaimed();
+      return;
+    }
+    const { startOpen, width } = gesture;
     gesture = null;
     commit = false;
-    if (wasLocked) settle(startOpen, 0, releaseDirectManipulation, width);
-    else {
-      if (wasPrepared) releaseDirectManipulation();
-      else disarmPresentation();
-      restoreInterruptedSettle();
-    }
+    settle(startOpen, 0, releaseDirectManipulation, width);
   };
   const onResize = (): void => {
     presentationWidth = drawerWidth();
