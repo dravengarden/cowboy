@@ -17485,6 +17485,8 @@ fn resolve_provider_generation(
 }
 
 enum SchedulingAuthentication<'a> {
+    /// Installation discovery only; never use this result to launch a session.
+    Discovery,
     Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
     Native(&'a crate::provider_account::NativeProfileReceipt),
 }
@@ -17539,6 +17541,7 @@ fn resolve_provider_generation_with_auth(
         );
     }
     let auth_generation = match authentication {
+        SchedulingAuthentication::Discovery => None,
         SchedulingAuthentication::Service(service_auth) => resolve_scheduling_auth_generation(
             installed,
             package.manifest.authentication.required,

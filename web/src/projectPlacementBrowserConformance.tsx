@@ -31,6 +31,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   entry.publisher = entry.manifest.publisher;
   const claude = managementEntryFixture("claude-code");
   claude.manifest.display.name = "Claude Code";
+  claude.manifest.authentication.required = true;
   claude.publisher = claude.manifest.publisher;
   const entries = [entry, claude];
   const machines = ["hawk", "falcon", "ovh"].map((id) => ({
@@ -58,7 +59,9 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         generation_digest: entry.artifact_digest,
         contract_fingerprint: entry.contract_fingerprint,
         state: "active",
-        materialization_state: "current",
+        // A signed-out Service account must not hide this installation:
+        // another subscription may authenticate independently on this Machine.
+        materialization_state: entry.provider_id === "claude-code" ? "not_installed" : "current",
         replica_state: "current",
         active_session_leases: 0,
       }))

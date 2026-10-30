@@ -2,8 +2,8 @@
 //! preparation and a storage compare-and-set. Recovery reuses the same identity.
 
 use super::super::{
-    AppState, AuthenticatedProductRequest, product_session_owner, provider_accounts,
-    resolve_machine_workspace, resolve_provider_generation,
+    AppState, AuthenticatedProductRequest, SchedulingAuthentication, product_session_owner,
+    provider_accounts, resolve_machine_workspace, resolve_provider_generation_with_auth,
 };
 use crate::core::Status;
 use crate::execution_environment::{BindingV1, ExecutionBinding, PreparationV1};
@@ -110,13 +110,12 @@ pub(in crate::server) async fn availability(
             {
                 continue;
             }
-            let authentication = state.provider_auth.status(&installed.plugin_id);
-            if let Ok(generation) = resolve_provider_generation(
+            if let Ok(generation) = resolve_provider_generation_with_auth(
                 &state.provider_catalog,
                 &state.plugin_catalog,
                 &inventory,
                 &installed.plugin_id,
-                authentication.as_ref(),
+                SchedulingAuthentication::Discovery,
             ) && accepts(&generation.behavior, &executor)
             {
                 compatible.push(installed.plugin_id.clone());

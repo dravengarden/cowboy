@@ -126,9 +126,7 @@ export function useProjectPlacement(
       const row = joinProviderInstallations(catalog?.providers ?? [], inventory)
         .find((row) => row.providerId === placement.provider);
       if (
-        !row?.installedEntry || !row.installed ||
-        (row.installedEntry.manifest.authentication.required &&
-          row.installed.materialization_state !== "current")
+        !row?.installedEntry || !row.installed
       ) return [];
       return [{
         value: JSON.stringify([machine.id, placement.provider]),

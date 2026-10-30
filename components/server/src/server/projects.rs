@@ -143,13 +143,15 @@ pub(super) async fn placements(
             {
                 continue;
             }
-            let auth = state.provider_auth.status(&installed.plugin_id);
-            if let Ok(generation) = resolve_provider_generation(
+            // Accounts are selected after installation discovery. The default
+            // Service credential says nothing about a named native account.
+            // Session creation still resolves the selected account's authority.
+            if let Ok(generation) = resolve_provider_generation_with_auth(
                 &state.provider_catalog,
                 &state.plugin_catalog,
                 &inventory,
                 &installed.plugin_id,
-                auth.as_ref(),
+                SchedulingAuthentication::Discovery,
             ) && (!remote
                 || remote_executor
                     .as_ref()
