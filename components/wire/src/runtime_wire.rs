@@ -348,7 +348,7 @@ pub struct StartSession {
     /// with `agent_session_id`; only Machines at
     /// `NATIVE_FORK_PROTOCOL_VERSION` or later receive it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_fork: Option<NativeFork>,
+    pub native_fork: Option<Box<NativeFork>>,
 }
 
 /// Source of a native fork. Both identities belong to the same account and

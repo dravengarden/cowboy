@@ -443,7 +443,7 @@ impl Supervisor {
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
         let native_fork = if resume.is_none() {
-            self.hub.pending_native_fork(session_id)
+            self.hub.pending_native_fork(session_id).map(Box::new)
         } else {
             None
         };
@@ -848,7 +848,7 @@ impl Supervisor {
         let extensions = Some(crate::controller_hooks::launch_extensions(&self.hub, &meta));
         let agent_session_id = self.hub.agent_session_id_for_resume(session_id);
         let native_fork = if agent_session_id.is_none() {
-            self.hub.pending_native_fork(session_id)
+            self.hub.pending_native_fork(session_id).map(Box::new)
         } else {
             None
         };

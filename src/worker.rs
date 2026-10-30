@@ -601,7 +601,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         adopt_only: false,
         execution_binding: args.execution_binding.clone(),
         extensions: None,
-        native_fork: args.native_fork.clone(),
+        native_fork: args.native_fork.clone().map(Box::new),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
     let mut managed_round = None;

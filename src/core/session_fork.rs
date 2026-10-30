@@ -166,7 +166,7 @@ impl Hub {
             .lock()
             .get(destination)
             .is_some_and(|session| session.meta.agent_session_id.is_some());
-        (!has_thread).then(|| crate::runtime_wire::NativeFork {
+        (!has_thread).then_some(crate::runtime_wire::NativeFork {
             agent_session_id: record.source_agent_session_id,
             message_id: record.message_id,
         })
