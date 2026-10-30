@@ -34,7 +34,7 @@ const manifest = JSON.parse(
 if (
   manifest.runtime.dependencies.find((item: { id: string }) =>
     item.id === "anthropic-claude-code"
-  )?.version !== "2.1.312"
+  )?.version !== "2.1.314"
 ) {
   throw new Error(
     "Claude execution requires the accepted exact native version",
@@ -165,7 +165,7 @@ try {
       JSON.stringify(
         {
           schema: "cowboy.claude-execution/v1",
-          native_version: "2.1.312",
+          native_version: "2.1.314",
           sources: digests,
         },
         null,
