@@ -89,7 +89,9 @@ Component release 3.72.0 retires the Gemini Agent Provider, sunset on
 records it stays unchanged. Removing the Gemini CLI pin and package from the
 shared runtime records provider-runtime 1.1.25, and replacing the Gemini
 fixtures in the SDK's own tests records provider-sdk 3.1.17 with its exact
-Cargo consumer plugin-sdk 1.12.4. Every remaining Plugin pins plugin-sdk, so
+Cargo consumer plugin-sdk 1.12.4. provider-ui 3.1.23 accepts that SDK version
+for package validation, and provider-authoring 1.0.11 follows its exact peer
+pin. Every remaining Plugin pins plugin-sdk, so
 all ten advance one patch version without changing their upstream executable
 pins; the Zed adapter package follows its Plugin identity. Because a package
 requires a Machine whose Plugin and Provider SDK are at least its pins, a

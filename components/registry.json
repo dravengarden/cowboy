@@ -35828,12 +35828,12 @@
         },
         {
           "id": "cowboy.provider-ui",
-          "version": "3.1.22",
+          "version": "3.1.23",
           "publisher": "cowboy",
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:cd40cfe04ad8e1827c6cbe2f7a605bc67d724ca5d638764356a01e0f21dbbb59",
+          "digest": "sha256:792e4bf41cfb32e87b9c302229cdc5d8727239f463553dcb3e567cf861af96fd",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",
@@ -35870,12 +35870,12 @@
         },
         {
           "id": "cowboy.provider-authoring",
-          "version": "1.0.10",
+          "version": "1.0.11",
           "publisher": "cowboy",
           "sources": [
             "components/provider-authoring"
           ],
-          "digest": "sha256:e43263856a7018e710dfb29709dc5fe3b35c2d0e63ad9fe4549b708aaf8d4e7b",
+          "digest": "sha256:baeb65c33c15c91e826d2f5d5253e85f581161d6f5d1a9d12965291153dc7724",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-authoring",
@@ -35959,7 +35959,7 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
@@ -35970,7 +35970,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:e597df97e0a550792439ea7904e0098c8179ee077a457f5ae248cfcfda78ff0f"
+            "source_digest": "sha256:f5c76233ce19978ef8ada12fc7990354f46cba74d4ce7cc64f7de73daa0e5853"
           },
           "claude-deepseek": {
             "component_release": "3.72.0",
@@ -35993,14 +35993,14 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
                 "version": "1.1.25"
               }
             ],
-            "source_digest": "sha256:15c8b4682f9fd4d74c49ee05c8d378dad7dcd29f88c50912444a74d28a39c67c"
+            "source_digest": "sha256:e74bfa79ae588787a1fa940d046e363409b9c450d82360bfb2047fa488385c35"
           },
           "codex": {
             "component_release": "3.72.0",
@@ -36023,7 +36023,7 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
@@ -36034,7 +36034,7 @@
                 "version": "0.2.0"
               }
             ],
-            "source_digest": "sha256:096aec68aac016a726e299039b5e4adedc0213927a14d89af4ab4adcaa4a4759"
+            "source_digest": "sha256:c872bd712f23c74f5e6d9dfb2020ffe01f3d918ac6b0aa86937143e25c3d6bbf"
           },
           "codex-deepseek": {
             "component_release": "3.72.0",
@@ -36057,14 +36057,14 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
                 "version": "1.1.25"
               }
             ],
-            "source_digest": "sha256:f836ffad001c235e3e994f5b66285f64668eb23869f744471aa34ae20a6d685e"
+            "source_digest": "sha256:3817ea2e409849a8aeee43e31f32b205df96662484e72340d685a5e5222ab6c3"
           },
           "deepseek-harness": {
             "component_release": "3.72.0",
@@ -36087,14 +36087,14 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
                 "version": "1.1.25"
               }
             ],
-            "source_digest": "sha256:b96b37d898c498f274a5aa246f352de24ac338989cb1c1e663a8ac2f73167c07"
+            "source_digest": "sha256:4e2ca81617c5c435d538a29ce9727f1abb239fe8a7ab584825c56b7d8024cb78"
           },
           "github": {
             "component_release": "3.72.0",
@@ -36131,14 +36131,14 @@
               },
               {
                 "id": "cowboy.provider-ui",
-                "version": "3.1.22"
+                "version": "3.1.23"
               },
               {
                 "id": "cowboy.provider-runtime",
                 "version": "1.1.25"
               }
             ],
-            "source_digest": "sha256:5647b132ab4ee9afed51232eb78528fc1c55393925123aed00aeb0f3e2c668f6"
+            "source_digest": "sha256:117361f2de00902cb339f1ef35616ed8db453c24b7a301f02a60209a45a520f4"
           },
           "matrix": {
             "component_release": "3.72.0",
