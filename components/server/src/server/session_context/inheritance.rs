@@ -76,6 +76,21 @@ pub(super) async fn preflight(
     if !selection.inherit_settings {
         return Ok(());
     }
+    let generation = target_generation(state, auth, selection).await?;
+    let mut target = source.clone();
+    target.provider.clone_from(&selection.provider);
+    target.provider_version = generation.version;
+    target.provider_generation_digest = generation.digest;
+    target.provider_behavior = Some(generation.behavior);
+    configuration(state, source, &target, selection).map(|_| ())
+}
+
+/// The release and login generation that creation would admit for `selection`.
+pub(super) async fn target_generation(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    selection: &NextAgent,
+) -> Result<ResolvedProviderGeneration, String> {
     let machine_id = selection
         .runtime_machine_id
         .as_deref()
@@ -105,7 +120,7 @@ pub(super) async fn preflight(
     )
     .await
     .map_err(str::to_owned)?;
-    let generation = provider_accounts::registration::generation(
+    provider_accounts::registration::generation(
         state,
         &inventory,
         &selection.provider,
@@ -113,13 +128,7 @@ pub(super) async fn preflight(
         &account,
         machine_id,
     )
-    .await?;
-    let mut target = source.clone();
-    target.provider.clone_from(&selection.provider);
-    target.provider_version = generation.version;
-    target.provider_generation_digest = generation.digest;
-    target.provider_behavior = Some(generation.behavior);
-    configuration(state, source, &target, selection).map(|_| ())
+    .await
 }
 
 pub(super) fn apply(

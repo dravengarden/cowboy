@@ -291,6 +291,11 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/context/send",
             post(web::session_context::send),
         ),
+        "sessions.fork" => (
+            "POST",
+            "/api/sessions/{session_id}/fork",
+            post(web::session_context::fork),
+        ),
         "queue.policy_set" => (
             "PUT",
             "/api/sessions/{session_id}/delivery-policy",

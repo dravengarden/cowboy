@@ -11061,6 +11061,7 @@ async fn serve_axum(
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
+        .route("/api/sessions/{id}/fork", post(session_context::fork))
         .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
         .route("/api/sessions/{id}/delivery-options", get(send_delivery::options))
         .route("/api/sessions/{id}/delivery-policy", put(send_delivery::set_policy))

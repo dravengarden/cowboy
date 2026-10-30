@@ -43,7 +43,63 @@ pub(super) fn is_fork_origin(update: &serde_json::Value) -> bool {
         == Some(FORK_ORIGIN_UPDATE)
 }
 
+/// Where a requested fork point stands in the source's loaded transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkPoint {
+    /// The last assistant message of a turn that has ended.
+    Completed,
+    /// The message ends a turn that is still running.
+    Running,
+    /// Another assistant message follows it in the same turn.
+    NotTurnFinal,
+    /// Older than the loaded tail; the adapter validates it.
+    NotLoaded,
+    Missing,
+}
+
+fn update_kind(envelope: &crate::core::Envelope) -> Option<(&str, Option<&str>)> {
+    let Event::Update { update } = &envelope.event else {
+        return None;
+    };
+    Some((
+        update.get("sessionUpdate")?.as_str()?,
+        update.get("messageId").and_then(serde_json::Value::as_str),
+    ))
+}
+
 impl Hub {
+    /// Locate a Provider message ID in the source's loaded transcript.
+    #[must_use]
+    pub fn fork_point(&self, source: &str, message_id: &str) -> ForkPoint {
+        let sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get(source) else {
+            return ForkPoint::Missing;
+        };
+        let Some(index) = session.log.iter().rposition(|envelope| {
+            update_kind(envelope) == Some(("agent_message_chunk", Some(message_id)))
+        }) else {
+            return if session.reached_start {
+                ForkPoint::Missing
+            } else {
+                ForkPoint::NotLoaded
+            };
+        };
+        for envelope in &session.log[index + 1..] {
+            match update_kind(envelope) {
+                Some(("user_message_chunk", _)) => return ForkPoint::Completed,
+                Some(("agent_message_chunk", Some(other))) if other != message_id => {
+                    return ForkPoint::NotTurnFinal;
+                }
+                _ => {}
+            }
+        }
+        if session.meta.status == crate::agent_model::Status::Busy {
+            ForkPoint::Running
+        } else {
+            ForkPoint::Completed
+        }
+    }
+
     #[must_use]
     pub fn session_fork(&self, destination: &str) -> Option<ForkRecord> {
         self.setting(&key(destination))
@@ -60,13 +116,25 @@ impl Hub {
         })
     }
 
-    /// Record a newly admitted destination before its first worker launch, and
-    /// open its transcript with the fork marker.
-    pub fn record_fork(&self, destination: &str, record: &ForkRecord, source_title: &str) {
+    /// Record a reserved destination before it is created, so its workspace
+    /// preparation already sees the fork base.
+    pub fn stage_fork(&self, destination: &str, record: &ForkRecord) {
         self.set_setting(
             key(destination),
             serde_json::to_value(record).expect("fork record serializes"),
         );
+    }
+
+    /// Discard a staged fork whose destination was never created.
+    pub fn unstage_fork(&self, destination: &str) {
+        if self.session_info(destination).is_none() && self.setting(&key(destination)).is_some() {
+            self.set_setting(key(destination), serde_json::Value::Null);
+        }
+    }
+
+    /// Open the created destination's transcript with the fork marker before
+    /// its first worker launch.
+    pub fn open_fork(&self, destination: &str, record: &ForkRecord, source_title: &str) {
         self.set_forked_from(destination, Some(record.source_session_id.clone()));
         self.push(
             destination,
@@ -188,7 +256,8 @@ mod tests {
         let hub = Hub::new();
         session(&hub, "source");
         session(&hub, "fork");
-        hub.record_fork("fork", &record(Some("msg-1")), "Source");
+        hub.stage_fork("fork", &record(Some("msg-1")));
+        hub.open_fork("fork", &record(Some("msg-1")), "Source");
 
         assert_eq!(
             hub.pending_native_fork("fork"),
@@ -217,12 +286,46 @@ mod tests {
         );
     }
 
+    fn chunk(hub: &Hub, kind: &str, message_id: Option<&str>) {
+        hub.push(
+            "source",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": kind,
+                    "messageId": message_id,
+                    "content": {"type": "text", "text": "x"},
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn only_the_last_answer_of_an_ended_turn_is_a_fork_point() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        hub.set_status("source", crate::agent_model::Status::Running, None);
+        chunk(&hub, "user_message_chunk", None);
+        chunk(&hub, "agent_message_chunk", Some("a1"));
+        chunk(&hub, "tool_call", None);
+        chunk(&hub, "agent_message_chunk", Some("a2"));
+        chunk(&hub, "agent_message_chunk", Some("a2"));
+        chunk(&hub, "user_message_chunk", None);
+        chunk(&hub, "agent_message_chunk", Some("b1"));
+        assert_eq!(hub.fork_point("source", "a1"), ForkPoint::NotTurnFinal);
+        assert_eq!(hub.fork_point("source", "a2"), ForkPoint::Completed);
+        assert_eq!(hub.fork_point("source", "zz"), ForkPoint::Missing);
+        assert_eq!(hub.fork_point("source", "b1"), ForkPoint::Completed);
+        hub.set_status("source", crate::agent_model::Status::Busy, None);
+        assert_eq!(hub.fork_point("source", "b1"), ForkPoint::Running);
+        assert_eq!(hub.fork_point("source", "a2"), ForkPoint::Completed);
+    }
+
     #[test]
     fn an_operation_names_its_destination() {
         let hub = Hub::new();
         session(&hub, "source");
         session(&hub, "fork");
-        hub.record_fork("fork", &record(None), "Source");
+        hub.stage_fork("fork", &record(None));
         assert_eq!(
             hub.fork_by_operation("source", "op-1").map(|(id, _)| id),
             Some("fork".to_owned())

@@ -28,6 +28,41 @@ impl Hub {
         inherit_settings: bool,
         actor: &FolderActor,
     ) -> Result<(), String> {
+        let title = self.place_beside(source, destination, inherit_settings, actor)?;
+        self.set_setting(
+            format!(
+                "{}{destination}",
+                super::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            ),
+            json!(source),
+        );
+        self.set_continued_from(destination, Some(source.to_owned()));
+        self.rename_session(destination, title);
+        Ok(())
+    }
+
+    /// Place an admitted fork beside its source, like a continuation, under
+    /// the source title marked as a fork.
+    pub fn place_fork(
+        &self,
+        source: &str,
+        destination: &str,
+        actor: &FolderActor,
+    ) -> Result<(), String> {
+        let title = self.place_beside(source, destination, true, actor)?;
+        self.rename_session(destination, format!("{title} (fork)"));
+        Ok(())
+    }
+
+    /// Folder, both sidebar orders and the review directory; returns the
+    /// source title.
+    fn place_beside(
+        &self,
+        source: &str,
+        destination: &str,
+        inherit_settings: bool,
+        actor: &FolderActor,
+    ) -> Result<String, String> {
         let _guard = self.inner.sync_apply_gate.lock();
         let source_meta = self.session_info(source).ok_or("Source unavailable")?.meta;
         let target = self
@@ -128,16 +163,7 @@ impl Hub {
                 )?;
             }
         }
-        self.set_setting(
-            format!(
-                "{}{destination}",
-                super::settings_keys::SESSION_CONTINUED_FROM_PREFIX
-            ),
-            json!(source),
-        );
-        self.set_continued_from(destination, Some(source.to_owned()));
-        self.rename_session(destination, source_meta.title);
-        Ok(())
+        Ok(source_meta.title)
     }
 }
 

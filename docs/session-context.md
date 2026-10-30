@@ -5,6 +5,11 @@ or a new session. Provider and subscription changes create a new native agent.
 Reasoning, permissions and other supported live settings keep their existing
 configuration path.
 
+To branch the same agent with its complete native conversation instead, use
+**Fork** ([session fork](session-fork.md)). A fork stays on the source's
+subscription and runtime Machine; links never copy native transcripts across
+accounts.
+
 ## User flow
 
 New Session has an optional **Context from sessions** multiselect. Existing

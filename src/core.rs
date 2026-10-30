@@ -30,7 +30,7 @@ mod code_scope;
 mod review_defaults;
 mod session_continuation;
 mod session_fork;
-pub use session_fork::{FORK_ORIGIN_UPDATE, ForkRecord, ForkState};
+pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
