@@ -1,6 +1,6 @@
 # Typed compaction, notices and elicitation — 2026-10-29
 
-Status: Controller, Web and Hawk Machine deployed; OVH and Falcon not yet.
+Status: Controller, Web and every Machine (Hawk, OVH, Falcon) deployed.
 
 ## Change
 
@@ -34,11 +34,13 @@ was not exercised before activation.
 | Web | `002e101c`, Hawk component activator, success |
 | Controller | `002e101c`, Hawk component activator, success; `/healthz` ok |
 | Hawk Machine | `cowboy-machine-release` `ifcdwqhd…`, `--maintenance`, `succeeded`/`committed`, generation `worker-4e08ffcc509b571bad02` |
+| Worker pin | `bd57e210` advances `cowboy-workers` to `14e6425b`; its host release `qgdgwn2i…` retains the same generation |
+| OVH Machine | `tools/ovh-machine-host-release.sh --workers` with `qgdgwn2i…`, receipt `/var/lib/columbus/ovh-machine-bd57e210df2b-20261030T000406Z` accepted; 7 idle sessions hibernated first, 1 busy worker retained, 2 native generation handoffs |
+| Falcon Machine | `qgdgwn2i…` through Falcon's component activator, `succeeded`/`committed`, same generation |
 
 Existing Hawk workers keep their generation until their session revives; new
 launches use the new generation. Until a session runs this worker, its adapter
 keeps the previous presentation.
 
-The change touches `Cargo.toml` and `Cargo.lock`, so host-only Machine releases
-refuse to build until the `cowboy-workers` pin advances to a revision that
-contains it.
+The change touches `Cargo.toml` and `Cargo.lock`; the pin advance above keeps
+host-only Machine releases buildable.
