@@ -14,7 +14,7 @@ The repository auditor queried npm on 2026-10-30.
 | Codex ACP | 2.3.0 | 2.5.0 | Owned patch rebased (see `plugins/codex/runtime/README.md`) |
 | DeepSeek Harness (dsh) | 0.2.1-rc.2 | 0.2.1-rc.5 | Packaged lifecycle |
 | Grok | 1.0.70 | 1.0.70 | Current |
-| Gemini CLI | 0.64.0 | 0.64.0 | Gemini is disabled for this Service; not upgraded |
+| Gemini CLI | 0.64.0 | 0.64.0 | Gemini was sunset on 2026-10-20 (removed from every Machine, `plugins.disabled`); not upgraded |
 
 Component release 3.71.0 records provider-runtime 1.1.24:
 
@@ -25,7 +25,7 @@ Component release 3.71.0 records provider-runtime 1.1.24:
 | codex | 3.5.11 | 3.5.13 |
 | codex-deepseek | 3.1.46 | 3.1.48 |
 | grok | 3.1.46 | 3.1.48 |
-| gemini | 3.1.44 | 3.1.46 (published, not advertised) |
+| gemini | 3.1.44 | 3.1.46 (sunset; carried only by the shared component closure, published but not advertised or installed) |
 | deepseek-harness | 1.0.3 | 1.0.5 |
 
 These also carry main's unpublished 3.70.0 changes, including Provider SDK
