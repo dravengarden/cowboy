@@ -885,8 +885,8 @@ only explicitly scoped developer diagnostics may name those internals.
 
 ### CR-2: Plugin is the product and installation unit
 
-`claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
-`codex-deepseek` are independent Agent Provider Plugins; `zed` is an independent
+`claude-code`, `codex`, `grok`, `claude-deepseek`, and `codex-deepseek` are
+independent Agent Provider Plugins; `zed` is an independent
 code-intelligence Plugin. Each builds, versions, signs, publishes, installs,
 upgrades, rolls back, and uninstalls through the same Plugin lifecycle.
 

@@ -52,7 +52,7 @@ control plane, while the web files remain an independently replaceable release.
 | `POST /api/admin/users/{id}/password` | admin owner set password |
 | `GET /api/metrics` | admin operator+ diagnostic JSON (not the scrape path) |
 | `GET /metrics` | scrape-only: loopback peer and no forwarded headers, else 404 |
-| `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Refresh metadata is provider-local so clients can distinguish fresh, stale, and retry-scheduled values. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
+| `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Refresh metadata is provider-local so clients can distinguish fresh, stale, and retry-scheduled values. Cowboy never reuses provider OAuth credentials against private endpoints. |
 | `POST /api/usage` | manually refresh official provider account usage; all callers share a persisted five-minute account cooldown and one in-process single-flight |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
 | `GET /api/plugins` | Plugin Catalog plus the Agent Provider/auth capability projection |

@@ -55,7 +55,7 @@
 
 Cowboy 让长时间运行的编码 Agent 始终贴近实际工作。自托管一个 Hub，加入
 Linux 和 macOS Machine，再从键盘优先的桌面工作区或触控优先的移动工作区调度
-Codex、Claude Code、Gemini、Grok、DeepSeek 或你自己的插件。稍后重新连接时，
+Codex、Claude Code、Grok、DeepSeek 或你自己的插件。稍后重新连接时，
 无需把 worktree、凭据或 Agent 进程移出它最初运行的 Machine。
 
 > [!IMPORTANT]
@@ -201,7 +201,7 @@ Cowboy 负责目标绑定、传输、重连、取消与目标 worktree；各 Pro
 
 | 类型              | 第一方插件                                                          |
 | ----------------- | ------------------------------------------------------------------- |
-| Agent Provider    | Codex、Claude Code、Gemini、Grok、Codex + DeepSeek、Claude + DeepSeek |
+| Agent Provider    | Codex、Claude Code、Grok、Codex + DeepSeek、Claude + DeepSeek         |
 | 代码智能          | Zed                                                                 |
 
 扩展边界被刻意限制在很小的范围内：

@@ -16,8 +16,8 @@ Distinguish four independent facts before proposing changes:
 | Installed generation | Machine inventory and session's exact Plugin identity | What actually runs; a new Catalog entry does not prove installation |
 
 Resolve names to package IDs: Claude → `claude-code`, Codex → `codex`,
-DeepSeek → `claude-deepseek` and/or `codex-deepseek`, Gemini → `gemini`,
-Grok → `grok`. Discover other Agents from `plugins/*/provider.json`.
+DeepSeek → `claude-deepseek` and/or `codex-deepseek`, Grok → `grok`. Gemini was
+retired in component release 3.72.0 and has no Plugin. Discover other Agents from `plugins/*/provider.json`.
 For an unqualified DeepSeek audit inspect both variants; for a change, use the
 variant(s) and Machine targets established by the request and inventory. Ask
 only if choosing between them would materially change the requested outcome.

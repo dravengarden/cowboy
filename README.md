@@ -54,7 +54,7 @@
 <p align="center"><sub>Clients control. The Hub remembers. Your Machines execute.</sub></p>
 
 Cowboy keeps long-running coding agents close to the work. Self-host one Hub,
-enroll Linux and macOS Machines, and direct Codex, Claude Code, Gemini, Grok,
+enroll Linux and macOS Machines, and direct Codex, Claude Code, Grok,
 DeepSeek, or your own Plugin from a keyboard-first desktop or touch-first mobile
 workspace. Reconnect later without moving the worktree, credentials, or agent
 process away from the Machine where it started.
@@ -217,7 +217,7 @@ source → signed .cowboy-plugin → Catalog → stage + probe → atomic activa
 
 | Kind              | First-party Plugins                                                   |
 | ----------------- | --------------------------------------------------------------------- |
-| Agent Provider    | Codex, Claude Code, Gemini, Grok, Codex + DeepSeek, Claude + DeepSeek |
+| Agent Provider    | Codex, Claude Code, Grok, Codex + DeepSeek, Claude + DeepSeek         |
 | Code intelligence | Zed                                                                   |
 
 The extension boundary is deliberately narrow:

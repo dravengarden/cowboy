@@ -37,7 +37,7 @@ flowchart TB
     HUB --> STORE[("PostgreSQL / SQLite")]
     HUB <-->|"local UDS or outbound WSS"| MACHINE["cowboy-machine"]
     MACHINE --> WORKER["detached ACP worker<br/>one per session"]
-    WORKER --> PROVIDER["Claude Code / Codex /<br/>Gemini / Grok"]
+    WORKER --> PROVIDER["Claude Code / Codex /<br/>Grok / DeepSeek"]
 
     style HUB fill:#eef2ff,stroke:#6366f1
     style MACHINE fill:#fef9c3,stroke:#ca8a04

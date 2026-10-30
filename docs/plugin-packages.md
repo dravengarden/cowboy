@@ -62,8 +62,8 @@ gateway, a model wire protocol, or any other transport implementation as a
 separately selectable product concept. Developer diagnostics may reveal those
 facts only through an explicitly scoped diagnostic surface.
 
-`claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
-`codex-deepseek` are Agent Provider Plugins; `zed` is a code-intelligence
+`claude-code`, `codex`, `grok`, `claude-deepseek`, and `codex-deepseek` are
+Agent Provider Plugins; `zed` is a code-intelligence
 Plugin; `github` is a workspace extension. All use the same package, Catalog, signature, Machine generation,
 activation, rollback, and uninstall lifecycle. Private runtime artifacts are
 staged inside the owning Plugin generation and
@@ -207,7 +207,7 @@ semantics without a Provider-ID branch. The live-turn loading slot is a compact
 status line: Cowboy owns mark size, gap, caption weight, and pulse geometry so a
 Provider mark stays a quiet signal rather than a brand stamp. Asset pulses
 breathe opacity only and do not scale. This restores distinct Claude, Codex,
-Gemini, and Grok activity language without allowing executable Provider UI.
+and Grok activity language without allowing executable Provider UI.
 
 Transcript thought presentation is a sibling host contract rather than a
 Provider-authored free-form surface because its content and lifecycle come from

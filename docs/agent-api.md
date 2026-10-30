@@ -1542,7 +1542,7 @@ running worker reports `supports_current_turn` through a Machine connection
 negotiated at protocol 34 or later. The connection's immutable protocol gate
 also refuses a capable worker behind an older host. Native Codex uses `turn/steer`;
 Claude uses its ACP steering extension with `idleBehavior: "promptRequired"`.
-Neither path falls back to a detached new prompt. Gemini, Grok, isolated
+Neither path falls back to a detached new prompt. Grok, isolated
 variants and retained workers without that contract keep queue/interrupt
 available. Claude may preempt generation through native priority `now`, so this
 is not a cross-provider promise to wait for the next tool call.

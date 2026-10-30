@@ -1,6 +1,6 @@
 ---
 name: release-cowboy-plugin
-description: Audit and upgrade Cowboy Agent Providers (Claude, Codex, DeepSeek, Gemini, Grok), update Recommended model presets through configuration, and build, sign, publish, and verify Plugins through the immutable release lifecycle.
+description: Audit and upgrade Cowboy Agent Providers (Claude, Codex, DeepSeek, Grok), update Recommended model presets through configuration, and build, sign, publish, and verify Plugins through the immutable release lifecycle.
 ---
 
 # Release Cowboy Plugin
@@ -41,10 +41,10 @@ not itself request an upstream upgrade or production Plugin publication.
 
 ## Plugin kinds
 
-The first-party Plugins live under `plugins/<id>/`. Six Agent Plugins use
+The first-party Plugins live under `plugins/<id>/`. Agent Plugins use
 `plugins/<id>/provider.json` payloads:
-`claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
-`codex-deepseek`; `zed` uses `contract.json` plus its isolated adapter. Each
+`claude-code`, `codex`, `grok`, `claude-deepseek`, `codex-deepseek`, and
+`deepseek-harness`; `zed` uses `contract.json` plus its isolated adapter. Each
 source builds independently even though this repository owns their common SDK
 and release tooling.
 

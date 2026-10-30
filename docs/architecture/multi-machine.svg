@@ -57,7 +57,6 @@
       .chip-text { font: 650 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       .codex { fill: #343039; }
       .claude { fill: #b87052; }
-      .gemini { fill: #438dcf; }
       .deepseek { fill: #5870d8; }
       .grok { fill: #343039; }
       .custom { fill: #7658cf; }
@@ -89,7 +88,6 @@
         .platform-detail { stroke: #b4aabd; }
         .codex, .grok { fill: #eee9f3; }
         .claude { fill: #e59a78; }
-        .gemini { fill: #72b9f2; }
         .deepseek { fill: #8799ff; }
         .custom { fill: #b096ff; }
         .invariant-bar { fill: #211b2b; stroke: #443b54; }
@@ -189,7 +187,7 @@
     <text class="body" x="454" y="592">isolated worktree · detached ACP worker</text>
     <g transform="translate(454 610)">
       <rect class="chip" width="108" height="28" rx="9"/>
-      <text class="chip-text gemini" x="16" y="19">✦  Gemini</text>
+      <text class="chip-text codex" x="16" y="19">›_  Codex</text>
       <rect class="chip" x="118" width="124" height="28" rx="9"/>
       <text class="chip-text deepseek" x="134" y="19">D  DeepSeek</text>
     </g>
