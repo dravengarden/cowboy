@@ -171,6 +171,10 @@ async fn prepare(
             serde_json::json!({
                 "root": source_path,
                 "session_id": session_id,
+                "base_session_id": state
+                    .hub
+                    .session_fork(session_id)
+                    .map(|record| record.source_session_id),
             }),
         )
         .await

@@ -207,6 +207,7 @@ async fn native_managed_execution(images: bool) {
                     session_id: "child".into(),
                     workspace_id: "fixture".into(),
                     runtime: binding.runtime.clone(),
+                    base_session_id: None,
                 }),
                 &workspaces,
             )

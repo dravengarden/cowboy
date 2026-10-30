@@ -26,6 +26,7 @@ primary phone/desktop product path.
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
+- [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
 - [`tool-results.md`](tool-results.md) — Provider-independent MCP result retention, Cowboy/Matrix tool presentation and Desktop/Mobile inspection
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries

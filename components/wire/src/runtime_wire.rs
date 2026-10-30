@@ -239,8 +239,14 @@ impl WorkerSnapshot {
             } => {
                 self.agent_session_id = Some(agent_session_id.clone());
             }
-            RuntimeEvent::AgentSessionId { agent_session_id } => {
-                if self.agent_session_id.as_deref() != Some(agent_session_id.as_str()) {
+            RuntimeEvent::AgentSessionId {
+                agent_session_id,
+                materialized,
+            } => {
+                if *materialized {
+                    // `session/fork` wrote the copied history already.
+                    self.native_thread_materialized = Some(true);
+                } else if self.agent_session_id.as_deref() != Some(agent_session_id.as_str()) {
                     // `session/new` announced a fresh thread; the Provider
                     // writes nothing for it until the first prompt.
                     self.native_thread_materialized = Some(false);
@@ -337,6 +343,24 @@ pub struct StartSession {
     /// enrollment; current ones write the session's private descriptor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extensions: Option<SessionExtensions>,
+    /// Create this session's first native thread with ACP `session/fork` of
+    /// another session's thread instead of `session/new`. Mutually exclusive
+    /// with `agent_session_id`; only Machines at
+    /// `NATIVE_FORK_PROTOCOL_VERSION` or later receive it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_fork: Option<NativeFork>,
+}
+
+/// Source of a native fork. Both identities belong to the same account and
+/// runtime Machine as the session being started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFork {
+    /// Native session ID of the source thread.
+    pub agent_session_id: String,
+    /// Provider message ID of a turn-final assistant message. The fork keeps
+    /// the conversation through this message; `None` forks all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 pub const SESSION_EXTENSIONS_SCHEMA: u16 = 1;
@@ -651,6 +675,10 @@ pub enum RuntimeEvent {
     },
     AgentSessionId {
         agent_session_id: String,
+        /// The thread already holds history, as a forked one does. A fresh
+        /// `session/new` thread is not materialized until its first prompt.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        materialized: bool,
     },
     ScheduleWakeup {
         delay_seconds: i64,
@@ -955,6 +983,7 @@ mod tests {
         let mut fresh = native_snapshot(None, Some(false));
         fresh.observe_native_thread(&RuntimeEvent::AgentSessionId {
             agent_session_id: "thread-new".to_owned(),
+            materialized: false,
         });
         assert_eq!(fresh.agent_session_id.as_deref(), Some("thread-new"));
         assert_eq!(fresh.resumable_agent_session_id(), None);
@@ -971,6 +1000,7 @@ mod tests {
         let mut resumed = native_snapshot(Some("thread-old"), Some(true));
         resumed.observe_native_thread(&RuntimeEvent::AgentSessionId {
             agent_session_id: "thread-old".to_owned(),
+            materialized: false,
         });
         assert_eq!(
             resumed.resumable_agent_session_id().as_deref(),
@@ -978,8 +1008,40 @@ mod tests {
         );
         resumed.observe_native_thread(&RuntimeEvent::AgentSessionId {
             agent_session_id: "thread-cleared".to_owned(),
+            materialized: false,
         });
         assert_eq!(resumed.resumable_agent_session_id(), None);
+    }
+
+    #[test]
+    fn a_forked_thread_is_resumable_before_its_first_prompt() {
+        let mut forked = native_snapshot(None, Some(false));
+        let event = RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-fork".to_owned(),
+            materialized: true,
+        };
+        forked.observe_native_thread(&event);
+        assert_eq!(
+            forked.resumable_agent_session_id().as_deref(),
+            Some("thread-fork")
+        );
+        // The flag is additive: an older peer decodes the event unchanged and
+        // a fresh thread does not serialize it.
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(wire["materialized"], true);
+        let fresh = serde_json::to_value(RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-new".to_owned(),
+            materialized: false,
+        })
+        .unwrap();
+        assert!(fresh.get("materialized").is_none());
+        assert_eq!(
+            serde_json::from_value::<RuntimeEvent>(fresh).unwrap(),
+            RuntimeEvent::AgentSessionId {
+                agent_session_id: "thread-new".to_owned(),
+                materialized: false,
+            }
+        );
     }
 
     #[test]

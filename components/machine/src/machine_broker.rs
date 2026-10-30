@@ -3706,6 +3706,11 @@ impl Broker {
         }
         if let Some(resume) = &session.agent_session_id {
             command.arg("--resume").arg(resume);
+        } else if let Some(fork) = &session.native_fork {
+            command.arg("--fork-from").arg(&fork.agent_session_id);
+            if let Some(message_id) = &fork.message_id {
+                command.arg("--fork-message-id").arg(message_id);
+            }
         }
         if session.system {
             command.arg("--system");
@@ -5448,6 +5453,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
         let mut configuration = cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1;
         assert_eq!(
@@ -5587,6 +5593,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         broker
@@ -5666,6 +5673,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         // An old launch is still in flight, so the reset has to wait for it.
@@ -5885,6 +5893,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
 
         let error = tokio::time::timeout(
@@ -6034,6 +6043,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -6136,6 +6146,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -6226,6 +6237,7 @@ mod tests {
         // a strict resume of a cleared, still-empty session would crash it.
         let resume = provider_roll_resume_after(&[RuntimeEvent::AgentSessionId {
             agent_session_id: "thread-empty".to_owned(),
+            materialized: false,
         }])
         .await;
         assert_eq!(resume, None);
@@ -6236,6 +6248,7 @@ mod tests {
         let resume = provider_roll_resume_after(&[
             RuntimeEvent::AgentSessionId {
                 agent_session_id: "thread-used".to_owned(),
+                materialized: false,
             },
             RuntimeEvent::TurnStarted {
                 turn_id: "turn-1".to_owned(),
@@ -6299,6 +6312,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    native_fork: None,
                 },
             );
             let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
@@ -6390,6 +6404,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
         broker.update_snapshot(
             WorkerSnapshot {
@@ -6453,6 +6468,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
         broker
             .sessions
@@ -8594,6 +8610,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    native_fork: None,
                 },
             );
             broker.pin_fallback(session_id, "gen-1", "gen-2");
@@ -8660,6 +8677,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         let (late_tx, _late_rx) = mpsc::unbounded_channel();
@@ -8744,6 +8762,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         broker.sessions.lock().insert(
@@ -8767,6 +8786,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         broker.pin_fallback("sess-fallback", "gen-1", "gen-2");
@@ -8873,6 +8893,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
         broker
             .sessions
@@ -8933,6 +8954,7 @@ mod tests {
                 adopt_only: true,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             })
             .await;
 
@@ -9004,6 +9026,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             })
             .await;
 
@@ -9092,6 +9115,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             })
             .await;
 
@@ -9162,6 +9186,7 @@ mod tests {
                 adopt_only: true,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             })
             .await;
 
@@ -9223,6 +9248,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
 
@@ -9290,6 +9316,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -9755,6 +9782,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         };
 
         let replacement_exit = broker
@@ -9922,6 +9950,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
 
@@ -10006,6 +10035,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -10153,6 +10183,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             },
         );
     }
@@ -10459,6 +10490,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    native_fork: None,
                 },
                 Some("gen-1".to_owned()),
             )

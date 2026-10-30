@@ -506,6 +506,11 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
             session_id: session_id.into(),
             workspace_id: intent.workspace_id.clone(),
             runtime: intent.runtime.clone(),
+            // A fork's new worktree starts from its source's worktree state.
+            base_session_id: state
+                .hub
+                .session_fork(session_id)
+                .map(|record| record.source_session_id),
         },
     )
     .await?;

@@ -11,6 +11,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 const SESSION: &str = "reload-fixture";
 const NATIVE: &str = "retained-native-thread";
 const CWD: &str = "/fixture/workspace";
+const FORKED: &str = "forked-native-thread";
 
 struct HubSink {
     hub: Hub,
@@ -238,7 +239,10 @@ async fn run_peer(
             continue;
         }
         assert!(
-            matches!(method, "session/resume" | "session/load" | "session/new"),
+            matches!(
+                method,
+                "session/resume" | "session/load" | "session/new" | "session/fork"
+            ),
             "startup unexpectedly requested {method}"
         );
         let replay_count = if method == "session/load" {
@@ -269,10 +273,10 @@ async fn run_peer(
             .await;
             continue;
         }
-        let result = if method == "session/new" {
-            json!({"sessionId": "new-native-thread"})
-        } else {
-            json!({})
+        let result = match method {
+            "session/new" => json!({"sessionId": "new-native-thread"}),
+            "session/fork" => json!({"sessionId": FORKED}),
+            _ => json!({}),
         };
         send_json(
             &mut peer_write,
@@ -286,10 +290,10 @@ async fn run_peer(
         send_json(
             &mut peer_write,
             notification(
-                if method == "session/new" {
-                    "new-native-thread"
-                } else {
-                    NATIVE
+                match method {
+                    "session/new" => "new-native-thread",
+                    "session/fork" => FORKED,
+                    _ => NATIVE,
                 },
                 "agent_message_chunk",
                 "after resume",
@@ -306,7 +310,16 @@ async fn run_peer(
 }
 
 async fn exercise(resume: bool, capabilities: Value, reject: bool) -> Observation {
-    let (state, sink) = fixture_state(resume);
+    exercise_start(
+        resume.then(|| NATIVE.to_owned()).into(),
+        capabilities,
+        reject,
+    )
+    .await
+}
+
+async fn exercise_start(start: NativeStart, capabilities: Value, reject: bool) -> Observation {
+    let (state, sink) = fixture_state(matches!(start, NativeStart::Resume(_)));
     let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
@@ -333,7 +346,7 @@ async fn exercise(resume: bool, capabilities: Value, reject: bool) -> Observatio
                 run_session(
                     &main_state,
                     cx,
-                    resume.then(|| NATIVE.to_owned()),
+                    start,
                     PathBuf::from(CWD),
                     &mut command_rx,
                     "fixture-provider",
@@ -364,6 +377,77 @@ async fn exercise(resume: bool, capabilities: Value, reject: bool) -> Observatio
 
 fn resume_and_load() -> Value {
     json!({"loadSession": true, "sessionCapabilities": {"resume": {}}})
+}
+
+fn native_fork(message_id: Option<&str>) -> NativeStart {
+    NativeStart::Fork(crate::runtime_wire::NativeFork {
+        agent_session_id: NATIVE.to_owned(),
+        message_id: message_id.map(str::to_owned),
+    })
+}
+
+#[tokio::test]
+async fn a_fork_copies_the_source_thread_at_its_message_into_the_destination_cwd() {
+    let observed = exercise_start(
+        native_fork(Some("msg-1")),
+        json!({"sessionCapabilities": {"resume": {}, "fork": {}}}),
+        false,
+    )
+    .await;
+    observed.result.as_ref().expect("fork starts the session");
+    assert_eq!(observed.methods(), ["initialize", "session/fork"]);
+    let fork = &observed.requests[1]["params"];
+    assert_eq!(fork["sessionId"], NATIVE);
+    assert_eq!(fork["cwd"], CWD);
+    assert_eq!(
+        fork["_meta"]["jetbrains"]["air"]["fork"],
+        json!({"version": 1, "messageId": "msg-1"})
+    );
+    let meta = observed.sink.hub.session_info(SESSION).unwrap().meta;
+    assert_eq!(meta.agent_session_id.as_deref(), Some(FORKED));
+    assert_eq!(observed.texts(), ["after resume"]);
+}
+
+#[tokio::test]
+async fn a_whole_fork_sends_no_fork_point() {
+    let observed = exercise_start(
+        native_fork(None),
+        json!({"sessionCapabilities": {"fork": {}}}),
+        false,
+    )
+    .await;
+    observed.result.as_ref().expect("fork starts the session");
+    assert!(
+        observed.requests[1]["params"]["_meta"]
+            .get("jetbrains")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_fork_never_falls_back_to_an_empty_session() {
+    let unsupported = exercise_start(native_fork(None), resume_and_load(), false).await;
+    assert!(
+        unsupported
+            .result
+            .as_ref()
+            .unwrap_err()
+            .contains("does not support session/fork"),
+        "{:?}",
+        unsupported.result
+    );
+    assert_eq!(unsupported.methods(), ["initialize"]);
+
+    let rejected = exercise_start(
+        native_fork(None),
+        json!({"sessionCapabilities": {"fork": {}}}),
+        true,
+    )
+    .await;
+    assert!(rejected.result.is_err());
+    assert_eq!(rejected.methods(), ["initialize", "session/fork"]);
+    let meta = rejected.sink.hub.session_info(SESSION).unwrap().meta;
+    assert_eq!(meta.agent_session_id, None);
 }
 
 fn fixture_options(model: &str, effort: &str) -> Value {
@@ -412,7 +496,7 @@ async fn exercise_managed_read_only(provider: &str) {
                 run_session(
                     &main_state,
                     cx,
-                    None,
+                    None.into(),
                     PathBuf::from(CWD),
                     &mut command_rx,
                     provider,
@@ -547,7 +631,7 @@ async fn exercise_configured_resume(reject: bool, cancel: bool) {
             run_session(
                 &main_state,
                 cx,
-                Some(NATIVE.to_owned()),
+                Some(NATIVE.to_owned()).into(),
                 PathBuf::from(CWD),
                 &mut command_rx,
                 "fixture-provider",
@@ -1012,7 +1096,7 @@ async fn native_background_resume_restores_busy_after_prompt_response_over_acp()
                 run_session(
                     &main_state,
                     cx,
-                    None,
+                    None.into(),
                     PathBuf::from(CWD),
                     &mut command_rx,
                     "claude-code",
@@ -1143,7 +1227,7 @@ async fn current_turn_injects_without_cancel_or_new_prompt_and_refuses_idle() {
             run_session(
                 &main_state,
                 cx,
-                None,
+                None.into(),
                 PathBuf::from(CWD),
                 &mut command_rx,
                 "claude-code",
@@ -1329,7 +1413,7 @@ async fn partial_stream_failure_keeps_native_session_without_replaying_completed
                 run_session(
                     &main_state,
                     cx,
-                    None,
+                    None.into(),
                     PathBuf::from(CWD),
                     &mut command_rx,
                     "claude-code",
@@ -1525,7 +1609,7 @@ async fn a_self_started_cycle_is_steerable_only_by_its_exact_name() {
             run_session(
                 &main_state,
                 cx,
-                None,
+                None.into(),
                 PathBuf::from(CWD),
                 &mut command_rx,
                 "claude-code",

@@ -28,6 +28,10 @@ pub enum Action {
         session_id: String,
         workspace_id: String,
         runtime: RuntimeLocation,
+        /// A fork starts its worktree from this session's worktree state.
+        /// Machines before `NATIVE_FORK_PROTOCOL_VERSION` refuse the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_session_id: Option<String>,
     },
     Call {
         session_id: String,

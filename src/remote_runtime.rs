@@ -2673,7 +2673,9 @@ fn update_snapshot_from_event(
                 worker.current_turn_id = None;
             }
         }
-        RuntimeEvent::AgentSessionId { agent_session_id } => {
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
             worker.agent_session_id = Some(agent_session_id.clone());
         }
         RuntimeEvent::PermissionRequest { request_id, .. } => {
@@ -2857,7 +2859,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             // trailing idle status cannot release the next prompt's guard.
             hub.complete_turn(session_id);
         }
-        RuntimeEvent::AgentSessionId { agent_session_id } => {
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
             hub.set_agent_session_id(session_id, agent_session_id);
         }
         RuntimeEvent::ScheduleWakeup {
@@ -3971,6 +3975,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             }),
             state: WorkerState::Busy,
             agent_session_id: Some("agent-1".to_owned()),

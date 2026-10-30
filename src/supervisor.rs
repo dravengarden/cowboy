@@ -442,6 +442,11 @@ impl Supervisor {
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
+        let native_fork = if resume.is_none() {
+            self.hub.pending_native_fork(session_id)
+        } else {
+            None
+        };
         runtime.ensure(StartSession {
             session_id: session_id.to_owned(),
             provider: spec.id.clone(),
@@ -461,6 +466,7 @@ impl Supervisor {
             adopt_only: false,
             execution_binding: meta.execution_binding,
             extensions: None,
+            native_fork,
         });
         Ok(())
     }
@@ -840,6 +846,12 @@ impl Supervisor {
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
         let extensions = Some(crate::controller_hooks::launch_extensions(&self.hub, &meta));
+        let agent_session_id = self.hub.agent_session_id_for_resume(session_id);
+        let native_fork = if agent_session_id.is_none() {
+            self.hub.pending_native_fork(session_id)
+        } else {
+            None
+        };
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
@@ -849,7 +861,7 @@ impl Supervisor {
             provider_auth_generation: meta.provider_auth_generation,
             provider_behavior: meta.provider_behavior,
             cwd: meta.cwd,
-            agent_session_id: self.hub.agent_session_id_for_resume(session_id),
+            agent_session_id,
             system: meta.system,
             context_window: budget.map(|value| value.context_window),
             auto_compact_token_limit: budget.map(|value| value.auto_compact_token_limit),
@@ -859,6 +871,7 @@ impl Supervisor {
             adopt_only: false,
             execution_binding: meta.execution_binding,
             extensions,
+            native_fork,
         })
     }
 
@@ -1445,6 +1458,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             }),
             state: WorkerState::Crashed,
             agent_session_id: Some("codex-thread-1".to_owned()),

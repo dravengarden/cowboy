@@ -22,6 +22,11 @@ pub trait AgentSink: Send + Sync + 'static {
     fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>);
     fn set_config_options(&self, session_id: &str, options: serde_json::Value);
     fn set_agent_session_id(&self, session_id: &str, agent_session_id: String);
+    /// A thread created by `session/fork`, which already holds history and is
+    /// resumable before its first prompt.
+    fn set_forked_agent_session_id(&self, session_id: &str, agent_session_id: String) {
+        self.set_agent_session_id(session_id, agent_session_id);
+    }
     fn set_session_usage(&self, session_id: &str, usage: SessionUsage);
     /// Live native background tasks that count as activity. A level, not an
     /// edge: every call replaces the previous count.

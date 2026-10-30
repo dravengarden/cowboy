@@ -29,6 +29,8 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 mod code_scope;
 mod review_defaults;
 mod session_continuation;
+mod session_fork;
+pub use session_fork::{FORK_ORIGIN_UPDATE, ForkRecord, ForkState};
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
@@ -220,6 +222,11 @@ pub const MODEL_REFUSAL_DETAIL: &str = "The model declined this request. Review 
 fn current_context_has_user_message(session: &Session) -> bool {
     for envelope in session.log.iter().rev() {
         if is_user_message_chunk(envelope) {
+            return true;
+        }
+        if matches!(&envelope.event, Event::Update { update } if session_fork::is_fork_origin(update))
+        {
+            // A forked native thread holds the copied conversation.
             return true;
         }
         if is_context_cleared(envelope) {
@@ -448,6 +455,10 @@ pub struct SessionMeta {
     /// `session_continued_from:` setting and restored onto the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_from: Option<String>,
+    /// The session this one forks natively. Persisted in the `session_fork:`
+    /// setting and restored onto the projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
     /// Resolved once at creation; independent of runtime Machine and auth generation.
     #[serde(default)]
     pub provider_account_id: crate::provider_account::ProviderAccountId,
@@ -3509,6 +3520,7 @@ impl Hub {
         } = registration;
         SessionMeta {
             continued_from: None,
+            forked_from: None,
             id: id.clone(),
             provider,
             provider_account_id,
@@ -3666,6 +3678,7 @@ impl Hub {
                 settings_keys::SESSION_CONTEXT_PREFIX,
                 settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
                 settings_keys::SESSION_CONTINUED_FROM_PREFIX,
+                settings_keys::SESSION_FORK_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -4706,6 +4719,8 @@ impl Hub {
             s.meta.agent_session_id = Some(agent_session_id.clone());
             current_context_has_user_message(s)
         };
+        // A fork's first thread exists now; later launches resume it.
+        self.settle_native_fork(session_id);
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
                 session_id: session_id.to_owned(),
@@ -7521,6 +7536,7 @@ mod managed_call_tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         });
         // An owner on another placement is neither adopted nor reconciled.
         hub.reconcile_provider_release(&worker);
@@ -7592,6 +7608,7 @@ mod managed_call_tests {
             adopt_only: false,
             execution_binding: binding,
             extensions: None,
+            native_fork: None,
         });
 
         hub.reconcile_provider_release(&worker);
@@ -8377,6 +8394,7 @@ mod runtime_reconciliation_tests {
         RestoredSession {
             meta: SessionMeta {
                 continued_from: None,
+                forked_from: None,
                 id: id.to_owned(),
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
@@ -11804,6 +11822,7 @@ mod core_tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         });
         let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();
         for mismatch in ["native", "home", "cwd", "placeholder"] {

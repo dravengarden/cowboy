@@ -3662,11 +3662,18 @@ async fn run_adapter_request(
             return durable_state_reply(&payload, &durable_state);
         }
         if adapter == "workspace" {
-            let request: crate::session_workspace::PrepareWorkspaceRequest =
+            let mut request: crate::session_workspace::PrepareWorkspaceRequest =
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
             let root = worktree_roots.for_source(&request.session_id, Path::new(&request.root))?.to_path_buf();
+            if let Some(base) = &request.base_session_id {
+                request.base_worktree = Some(
+                    worktree_roots
+                        .for_source(base, Path::new(&request.root))?
+                        .join(base),
+                );
+            }
             return serde_json::to_value(
                 crate::session_workspace::prepare(request, &root).await?,
             )
@@ -5463,6 +5470,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    native_fork: None,
                 },
             },
         };

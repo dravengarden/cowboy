@@ -178,11 +178,22 @@ impl WorktreeRoots {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct PrepareWorkspaceRequest {
     pub root: String,
     pub session_id: String,
+    /// A fork starts its new worktree from this session's worktree state.
+    #[serde(default)]
+    pub base_session_id: Option<String>,
+    /// The base session's worktree, resolved by the caller from
+    /// `base_session_id` against its own worktree roots.
+    #[serde(skip)]
+    pub base_worktree: Option<PathBuf>,
 }
+
+/// Untracked files a fork copies are bounded: a large untracked tree is build
+/// output that belongs in `.gitignore`, not branch state.
+const FORK_UNTRACKED_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedWorkspace {
@@ -204,6 +215,12 @@ pub async fn prepare(
     worktree_root: &Path,
 ) -> Result<PreparedWorkspace> {
     validate_session_id(&request.session_id)?;
+    if let Some(base) = &request.base_session_id {
+        validate_session_id(base)?;
+        if *base == request.session_id || request.base_worktree.is_none() {
+            bail!("invalid fork base session {base:?}");
+        }
+    }
     let _session_lock = acquire_session_lock(worktree_root, &request.session_id).await?;
     let source = PathBuf::from(&request.root)
         .canonicalize()
@@ -259,6 +276,10 @@ pub async fn prepare(
 
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
     let branch_existed = git_ref_exists(&repository, &session_branch_ref).await?;
+    let fork_base = match (&request.base_worktree, branch_existed) {
+        (Some(base), false) => Some(fork_base(&repository, base).await?),
+        _ => None,
+    };
     let (revision, head_ref, base_ref_created) = if branch_existed {
         (
             git_output(
@@ -270,6 +291,8 @@ pub async fn prepare(
             None,
             false,
         )
+    } else if let Some(base) = &fork_base {
+        (base.revision.clone(), None, false)
     } else if git_output(&repository, ["remote"]).await?.is_empty() {
         (
             git_output(&repository, ["rev-parse", "--verify", "HEAD^{commit}"])
@@ -350,6 +373,9 @@ pub async fn prepare(
         return Err(error);
     }
     let validated = async {
+        if let Some(base) = &fork_base {
+            copy_fork_state(base, &destination).await?;
+        }
         let checkout = destination
             .canonicalize()
             .with_context(|| format!("canonicalizing new worktree {}", destination.display()))?;
@@ -395,6 +421,114 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
+}
+
+/// The committed and uncommitted state of a fork's source worktree.
+struct ForkBase {
+    worktree: PathBuf,
+    revision: String,
+    /// `git stash create` commit of staged and unstaged tracked changes.
+    stash: Option<String>,
+}
+
+/// Read the source worktree without writing it. `git stash create` stores a
+/// dangling commit and leaves the worktree, index and stash list unchanged.
+async fn fork_base(repository: &Path, worktree: &Path) -> Result<ForkBase> {
+    let worktree = worktree
+        .canonicalize()
+        .with_context(|| format!("fork source worktree {} is unavailable", worktree.display()))?;
+    let common = |path: PathBuf| async move {
+        let dir = git_output(
+            &path,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .await?;
+        PathBuf::from(dir)
+            .canonicalize()
+            .context("canonicalizing Git common directory")
+    };
+    if common(worktree.clone()).await? != common(repository.to_path_buf()).await? {
+        bail!(
+            "fork source worktree {} belongs to another repository",
+            worktree.display()
+        );
+    }
+    let revision = git_output(&worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
+        .await
+        .context("resolving fork source HEAD")?;
+    let stash = git_output(&worktree, ["stash", "create"])
+        .await
+        .context("capturing fork source changes")?;
+    Ok(ForkBase {
+        worktree,
+        revision,
+        stash: (!stash.is_empty()).then_some(stash),
+    })
+}
+
+/// Apply the source's tracked changes (keeping what was staged) and copy its
+/// untracked, non-ignored files into the new worktree.
+async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
+    if let Some(stash) = &base.stash {
+        git_output(destination, ["stash", "apply", "--index", stash.as_str()])
+            .await
+            .context("applying fork source changes")?;
+    }
+    let listed = git_command(
+        &base.worktree,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .await?;
+    if !listed.status.success() {
+        bail!(
+            "listing fork source untracked files: {}",
+            String::from_utf8_lossy(&listed.stderr).trim()
+        );
+    }
+    let source = base.worktree.clone();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut copied = 0_u64;
+        for relative in listed.stdout.split(|byte| *byte == 0) {
+            if relative.is_empty() {
+                continue;
+            }
+            let relative = Path::new(OsStr::from_bytes(relative));
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                bail!("unexpected untracked path {}", relative.display());
+            }
+            let from = source.join(relative);
+            let to = destination.join(relative);
+            let metadata = std::fs::symlink_metadata(&from)
+                .with_context(|| format!("reading {}", from.display()))?;
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            if metadata.file_type().is_symlink() {
+                std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)
+                    .with_context(|| format!("copying symlink {}", relative.display()))?;
+            } else if metadata.is_file() {
+                copied += metadata.len();
+                if copied > FORK_UNTRACKED_LIMIT_BYTES {
+                    bail!(
+                        "the source worktree has more than {} MiB of untracked files; ignore build output or commit it before forking",
+                        FORK_UNTRACKED_LIMIT_BYTES / 1024 / 1024
+                    );
+                }
+                std::fs::copy(&from, &to)
+                    .with_context(|| format!("copying {}", relative.display()))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .context("joining fork file copy")?
 }
 
 async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<File> {
@@ -2958,6 +3092,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-1".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3000,6 +3135,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: unpublished.display().to_string(),
                 session_id: "sess-missing-subdir".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3051,6 +3187,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: selected.display().to_string(),
                 session_id: "sess-nested".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3068,6 +3205,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-1".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3081,6 +3219,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-recoverable".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3103,6 +3242,7 @@ mod tests {
         let restore_request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-recoverable".to_owned(),
+            ..Default::default()
         };
         let (restored, concurrent) = tokio::join!(
             prepare(restore_request(), &managed),
@@ -3137,6 +3277,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-legacy".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3177,6 +3318,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-divergent".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3200,6 +3342,7 @@ mod tests {
         let request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-local".to_owned(),
+            ..Default::default()
         };
         assert!(
             prepare(request(), &managed)
@@ -3237,11 +3380,104 @@ mod tests {
         let remote_request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-remote".to_owned(),
+            ..Default::default()
         };
         assert!(prepare(remote_request(), &managed).await.is_err());
         git(&source, &["remote", "rename", "origin", "upstream"]);
         assert!(prepare(remote_request(), &managed).await.is_err());
         assert!(!managed.join("sess-remote").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_fork_worktree_starts_from_its_source_state_without_writing_it() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
+        std::fs::write(source.join(".gitignore"), "build/\n").unwrap();
+        std::fs::write(source.join("tracked.txt"), "base").unwrap();
+        std::fs::write(source.join("staged.txt"), "base").unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-m", "initial"]);
+        let request = |id: &str, base: Option<&str>| PrepareWorkspaceRequest {
+            root: source.display().to_string(),
+            session_id: id.to_owned(),
+            base_session_id: base.map(str::to_owned),
+            base_worktree: base.map(|base| managed.join(base)),
+        };
+
+        let parent = prepare(request("sess-parent", None), &managed)
+            .await
+            .unwrap();
+        let parent_path = PathBuf::from(&parent.path);
+        std::fs::write(parent_path.join("committed.txt"), "on branch").unwrap();
+        git(&parent_path, &["add", "committed.txt"]);
+        git(&parent_path, &["commit", "-m", "session work"]);
+        std::fs::write(parent_path.join("tracked.txt"), "unstaged edit").unwrap();
+        std::fs::write(parent_path.join("staged.txt"), "staged edit").unwrap();
+        git(&parent_path, &["add", "staged.txt"]);
+        std::fs::create_dir_all(parent_path.join("notes")).unwrap();
+        std::fs::write(parent_path.join("notes/new.txt"), "untracked").unwrap();
+        std::fs::create_dir_all(parent_path.join("build")).unwrap();
+        std::fs::write(parent_path.join("build/out.bin"), "ignored").unwrap();
+        let status = || {
+            std::process::Command::new("git")
+                .args(["status", "--porcelain=v1", "--untracked-files=all"])
+                .current_dir(&parent_path)
+                .output()
+                .unwrap()
+                .stdout
+        };
+        let parent_status = status();
+
+        let fork = prepare(request("sess-fork", Some("sess-parent")), &managed)
+            .await
+            .unwrap();
+        let fork_path = PathBuf::from(&fork.path);
+        assert!(fork.isolated && fork.created);
+        assert_eq!(
+            fork.revision,
+            Some(
+                git_output(&parent_path, ["rev-parse", "HEAD"])
+                    .await
+                    .unwrap()
+            )
+        );
+        let read = |name: &str| std::fs::read_to_string(fork_path.join(name)).unwrap();
+        assert_eq!(read("committed.txt"), "on branch");
+        assert_eq!(read("tracked.txt"), "unstaged edit");
+        assert_eq!(read("staged.txt"), "staged edit");
+        assert_eq!(read("notes/new.txt"), "untracked");
+        assert!(!fork_path.join("build").exists());
+        assert_eq!(
+            git_output(&fork_path, ["diff", "--cached", "--name-only"])
+                .await
+                .unwrap(),
+            "staged.txt"
+        );
+        assert_eq!(
+            git_output(&fork_path, ["branch", "--show-current"])
+                .await
+                .unwrap(),
+            "cowboy/sess-fork"
+        );
+        // The source worktree, its index and its stash list are untouched.
+        assert_eq!(status(), parent_status);
+        assert_eq!(
+            git_output(&parent_path, ["stash", "list"]).await.unwrap(),
+            ""
+        );
+
+        // A missing source worktree refuses rather than starting elsewhere.
+        assert!(
+            prepare(request("sess-orphan", Some("sess-gone")), &managed)
+                .await
+                .is_err()
+        );
+        assert!(!managed.join("sess-orphan").exists());
     }
 
     #[tokio::test]
@@ -3266,6 +3502,7 @@ mod tests {
         let request = |root: &Path, id: &str| PrepareWorkspaceRequest {
             root: root.display().to_string(),
             session_id: id.to_owned(),
+            ..Default::default()
         };
         let error = prepare(request(&source.join("nested"), "sess-new"), &managed)
             .await
@@ -3341,6 +3578,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: temp.0.display().to_string(),
                 session_id: "sess-2".to_owned(),
+                ..Default::default()
             },
             &temp.0.join("managed"),
         )
@@ -3358,6 +3596,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: temp.0.display().to_string(),
                 session_id: "sess-3".to_owned(),
+                ..Default::default()
             },
             &temp.0.join("managed"),
         )

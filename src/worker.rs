@@ -42,6 +42,8 @@ pub struct WorkerArgs {
     pub provider_account_id: crate::provider_account::ProviderAccountId,
     pub cwd: PathBuf,
     pub resume: Option<String>,
+    /// First native thread forks this source instead of `session/new`.
+    pub native_fork: Option<crate::runtime_wire::NativeFork>,
     pub system: bool,
     pub generation: String,
     pub worker_epoch: Option<String>,
@@ -401,8 +403,17 @@ impl AgentSink for RemoteSink {
     }
 
     fn set_agent_session_id(&self, _session_id: &str, agent_session_id: String) {
-        self.shared
-            .emit(RuntimeEvent::AgentSessionId { agent_session_id });
+        self.shared.emit(RuntimeEvent::AgentSessionId {
+            agent_session_id,
+            materialized: false,
+        });
+    }
+
+    fn set_forked_agent_session_id(&self, _session_id: &str, agent_session_id: String) {
+        self.shared.emit(RuntimeEvent::AgentSessionId {
+            agent_session_id,
+            materialized: true,
+        });
     }
 
     fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
@@ -590,6 +601,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         adopt_only: false,
         execution_binding: args.execution_binding.clone(),
         extensions: None,
+        native_fork: args.native_fork.clone(),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
     let mut managed_round = None;
@@ -707,7 +719,11 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     let thread_shared = Arc::clone(&shared);
     let session_id = args.session_id.clone();
     let cwd = args.cwd;
-    let resume = args.resume;
+    let start = match (args.resume, args.native_fork) {
+        (Some(resume), _) => acp::NativeStart::Resume(resume),
+        (None, Some(fork)) => acp::NativeStart::Fork(fork),
+        (None, None) => acp::NativeStart::New,
+    };
     let service_auth_projected = args.provider_auth_generation.is_some();
     std::thread::Builder::new()
         .name(format!("acp-worker-{session_id}"))
@@ -719,7 +735,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 &spec,
                 &session_id,
                 cwd,
-                resume,
+                start,
                 service_auth_projected,
                 cmd_rx,
                 &sink,
@@ -1993,6 +2009,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         });
         let sink = RemoteSink {
             shared: Arc::clone(&shared),

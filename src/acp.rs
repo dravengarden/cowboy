@@ -41,13 +41,14 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ClientNotification, ClientSessionCapabilities,
     CompactionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
     ElicitationAction, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode,
-    ElicitationScope, ElicitationUrlCapabilities, ExtNotification, InitializeRequest,
-    LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities, PermissionOption,
-    PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
-    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    ElicitationScope, ElicitationUrlCapabilities, ExtNotification, ForkSessionRequest,
+    InitializeRequest, LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities,
+    PermissionOption, PermissionOptionId, PermissionOptionKind, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
+    SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
@@ -880,6 +881,7 @@ enum StartupPhase {
     Initialize,
     Resume,
     Load,
+    Fork,
     New,
     Configure,
     Ready,
@@ -891,6 +893,7 @@ impl StartupPhase {
             Self::Initialize => "initialize",
             Self::Resume => "session/resume",
             Self::Load => "session/load",
+            Self::Fork => "session/fork",
             Self::New => "session/new",
             Self::Configure => "startup configuration",
             Self::Ready => "ready",
@@ -1120,6 +1123,51 @@ fn resume_session_request(
     cwd: PathBuf,
 ) -> ResumeSessionRequest {
     ResumeSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
+}
+
+/// How a worker establishes its native thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeStart {
+    /// `session/new`.
+    New,
+    /// Strict `session/resume` (or `session/load`) of this native thread.
+    Resume(String),
+    /// Strict `session/fork` of another session's native thread.
+    Fork(crate::runtime_wire::NativeFork),
+}
+
+impl From<Option<String>> for NativeStart {
+    fn from(resume: Option<String>) -> Self {
+        resume.map_or(Self::New, Self::Resume)
+    }
+}
+
+impl NativeStart {
+    /// A thread that already holds history: a new one can lose nothing by
+    /// re-authenticating.
+    const fn has_history(&self) -> bool {
+        !matches!(self, Self::New)
+    }
+}
+
+/// `session/fork` with the same Provider metadata as `session/new`. A message
+/// fork adds the `jetbrains.air.fork` point that both pinned adapters read
+/// (Claude: SDK `upToMessageId`; Codex: `thread/fork.lastTurnId`).
+fn fork_session_request(
+    provider_id: &str,
+    fork: &crate::runtime_wire::NativeFork,
+    cwd: PathBuf,
+) -> ForkSessionRequest {
+    let mut meta = provider_session_meta(provider_id);
+    if let Some(message_id) = &fork.message_id {
+        meta.get_or_insert_with(Meta::new).insert(
+            "jetbrains".to_owned(),
+            serde_json::json!({
+                "air": {"fork": {"version": 1, "messageId": message_id}},
+            }),
+        );
+    }
+    ForkSessionRequest::new(SessionId::new(fork.agent_session_id.as_str()), cwd).meta(meta)
 }
 
 fn load_session_request(
@@ -2451,7 +2499,7 @@ pub fn run_agent_with_sink(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
-    resume: Option<String>,
+    start: NativeStart,
     service_auth_projected: bool,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     sink: &Arc<dyn AgentSink>,
@@ -2484,7 +2532,7 @@ pub fn run_agent_with_sink(
             spec,
             session_id,
             cwd.clone(),
-            resume.clone(),
+            start.clone(),
             service_auth_projected,
             &mut cmd_rx,
             Arc::clone(sink),
@@ -2511,7 +2559,7 @@ pub fn run_agent_with_sink(
                 spec,
                 session_id,
                 cwd,
-                resume,
+                start,
                 service_auth_projected,
                 &mut cmd_rx,
                 Arc::clone(sink),
@@ -2564,7 +2612,7 @@ async fn agent_main(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
-    resume: Option<String>,
+    start: NativeStart,
     service_auth_projected: bool,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     sink: Arc<dyn AgentSink>,
@@ -2893,7 +2941,7 @@ async fn agent_main(
             run_session(
                 &main_state,
                 cx,
-                resume,
+                start,
                 cwd,
                 cmd_rx,
                 &spec.id,
@@ -3486,7 +3534,7 @@ fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
 async fn run_session(
     state: &Arc<ClientState>,
     cx: ConnectionTo<Agent>,
-    resume: Option<String>,
+    start: NativeStart,
     cwd: PathBuf,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     provider_id: &str,
@@ -3500,7 +3548,12 @@ async fn run_session(
         .block_task()
         .await
         .map_err(|error| {
-            projected_auth_error(provider_id, service_auth_projected, resume.is_none(), error)
+            projected_auth_error(
+                provider_id,
+                service_auth_projected,
+                !start.has_history(),
+                error,
+            )
         })?;
     let initialize_meta = init.meta.clone();
     let supports_current_turn = initialize_meta
@@ -3535,6 +3588,12 @@ async fn run_session(
         .resume
         .is_some();
     let resume_method = select_resume_method(agent_can_resume, agent_can_load);
+    let agent_can_fork = init.agent_capabilities.session_capabilities.fork.is_some();
+    let (resume, fork) = match start {
+        NativeStart::New => (None, None),
+        NativeStart::Resume(id) => (Some(id), None),
+        NativeStart::Fork(fork) => (None, Some(fork)),
+    };
 
     // Establish the agent session. Prefer `session/resume`: unlike
     // `session/load`, ACP defines it to restore native state without replaying
@@ -3549,6 +3608,14 @@ async fn run_session(
     // `config_option_update` notification (claude does that). We capture + surface
     // both, so codex's Model / approval chips render like claude's.
     let mut config_options = None;
+    if fork.is_some() && !agent_can_fork {
+        // A fork is strict too: `session/new` would present an empty thread
+        // as a copy of the source conversation.
+        return Err(anyhow::anyhow!(
+            "agent does not support session/fork; refusing to start the fork as an empty session"
+        )
+        .into());
+    }
     if resume.is_some() && resume_method.is_none() {
         return Err(anyhow::anyhow!(
             "agent supports neither session/resume nor session/load; refusing to replace the existing native thread"
@@ -3611,6 +3678,32 @@ async fn run_session(
                 }
             }
         }
+    }
+    if let Some(fork) = fork {
+        startup_phase.send_replace(StartupPhase::Fork);
+        let forked = cx
+            .send_request(fork_session_request(provider_id, &fork, cwd.clone()))
+            .block_task()
+            .await
+            .map_err(|error| {
+                projected_auth_error(provider_id, service_auth_projected, false, error)
+            })?;
+        // The fork holds the copied history already: persist it as a
+        // resumable thread before any prompt.
+        state
+            .sink
+            .set_forked_agent_session_id(&session_id, forked.session_id.0.to_string());
+        tracing::info!(
+            session = %session_id,
+            source_acp_id = %fork.agent_session_id,
+            acp_id = %forked.session_id.0,
+            at_message = fork.message_id.is_some(),
+            "session forked via session/fork"
+        );
+        acp_id = Some(forked.session_id);
+        modes = forked.modes;
+        config_options = forked.config_options;
+        session_meta = forked.meta;
     }
     let acp_id = if let Some(id) = acp_id {
         id
