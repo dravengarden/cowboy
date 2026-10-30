@@ -1112,7 +1112,7 @@
     "argc=1\narg1=cat > <ROOT>/hooks.log.Stop.stdin; printf 'Stop\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
     "argc=1\narg1=cat > <ROOT>/hooks.log.UserPromptSubmit.stdin; printf 'UserPromptSubmit\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
     "argc=1\narg1=printf '%s' \"${CLAUDE_PROJECT_DIR}\" > /dev/null # BRACED\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
-    "argc=1\narg1=source <ROOT>/home/claude/shell-snapshots/snapshot-bash-SNAPSHOT.sh 2>/dev/null || true && { shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo bash-ran' < /dev/null && pwd -P >| <ROOT>/home/claude-CWD-cwd\nproject_dir=\nstdin_is_tty=no\n"
+    "argc=1\narg1=source <ROOT>/home/claude/shell-snapshots/snapshot-bash-SNAPSHOT.sh 2>/dev/null || true && { shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo bash-ran' < /dev/null && pwd -P >| <ROOT>/home/claude-CWD-cwd\nproject_dir=\nstdin_is_tty=no\n"
    ],
    "stdin_keys": {},
    "api_requests": 3
