@@ -39,6 +39,10 @@ struct ComponentRelease {
     component_additions: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_component_additions")]
     plugin_additions: Option<Vec<String>>,
+    /// Explicit retirement of first-party Plugin identities. A retired identity
+    /// never returns, and earlier releases that recorded it stay immutable.
+    #[serde(default, deserialize_with = "deserialize_component_additions")]
+    plugin_removals: Option<Vec<String>>,
 }
 
 fn deserialize_component_additions<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -269,31 +273,44 @@ fn validate_dependency_graph(release: &ComponentRelease, graph: &ComponentClosur
 /// Build metadata only. The additive migration does not grant Plugin/runtime
 /// authority, rewrite old component identities or bypass exact closure checks.
 fn validate_component_identity_history(registry: &ComponentRegistry) -> Result<()> {
+    let mut seen_plugins: BTreeSet<&str> = BTreeSet::new();
     for (index, release) in registry.releases.iter().enumerate() {
         let previous = index.checked_sub(1).map(|index| &registry.releases[index]);
-        if let Some(additions) = &release.plugin_additions {
-            ensure!(
-                registry.schema_version == 3
-                    && release.closure.is_some()
-                    && previous.is_some_and(|old| old.closure.is_some())
-                    && !additions.is_empty(),
-                "Plugin additions require a nonempty post-baseline migration"
-            );
+        for (migration, label) in [
+            (&release.plugin_additions, "Plugin additions"),
+            (&release.plugin_removals, "Plugin removals"),
+        ] {
+            if let Some(ids) = migration {
+                ensure!(
+                    registry.schema_version == 3
+                        && release.closure.is_some()
+                        && previous.is_some_and(|old| old.closure.is_some())
+                        && !ids.is_empty(),
+                    "{label} require a nonempty post-baseline migration"
+                );
+            }
         }
         if let Some(previous) = previous {
             let mut expected: BTreeSet<&str> =
                 previous.plugins.keys().map(String::as_str).collect();
+            for id in release.plugin_removals.as_deref().unwrap_or_default() {
+                ensure!(
+                    expected.remove(id.as_str()),
+                    "Plugin removal duplicates or names an absent identity"
+                );
+            }
             for id in release.plugin_additions.as_deref().unwrap_or_default() {
                 ensure!(
-                    expected.insert(id),
+                    !seen_plugins.contains(id.as_str()) && expected.insert(id),
                     "Plugin addition duplicates or reuses an identity"
                 );
             }
             ensure!(
                 expected == release.plugins.keys().map(String::as_str).collect(),
-                "Plugin identity change needs exact additive migration; removal is forbidden"
+                "Plugin identity change needs an exact declared addition or removal"
             );
         }
+        seen_plugins.extend(release.plugins.keys().map(String::as_str));
         if let Some(additions) = &release.component_additions {
             ensure!(
                 registry.schema_version == 3

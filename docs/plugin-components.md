@@ -513,7 +513,10 @@ the complete tree in the pinned shell (Cargo metadata inherits that shell).
 
 An explicit `plugin_additions` list permits new first-party Plugin identities in
 a post-baseline closure release. It must exactly account for the additional
-nodes; removal, identity reuse, duplicates and undeclared additions are refused.
+nodes; identity reuse, duplicates and undeclared additions are refused.
+An explicit `plugin_removals` list likewise retires existing identities: each
+must be present in the previous release and absent from the new one, and a
+retired identity can never be added back. Undeclared removals are refused.
 Existing release snapshots and component-change version rules remain immutable.
 
 ## Owned preference state
