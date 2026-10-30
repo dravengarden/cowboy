@@ -49,6 +49,8 @@ export type RenderItem = { key: string } & (
     origin?: PromptOrigin | undefined;
     /** Originating client id on the first `user_message_chunk` of a prompt. */
     cmid?: string | undefined;
+    /** Provider message ID of an assistant message, when the agent sends one. */
+    messageId?: string | undefined;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -94,6 +96,8 @@ export type RenderItem = { key: string } & (
   // An advisory `notice` (`session.notices` client capability), e.g. a model
   // fallback or a rate-limit warning. Not part of the agent's reply.
   | { kind: "notice"; severity: string; title: string; description: string | null }
+  // First row of a fork: the agent natively continues this source conversation.
+  | { kind: "forked"; sourceSessionId: string; sourceTitle: string; atMessage: boolean }
 );
 
 // Store timelines are immutable arrays. Transcript and Composer often derive
@@ -145,7 +149,7 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
   switch (a.kind) {
     case "message":
       return b.kind === "message" && a.role === b.role &&
-        a.cmid === b.cmid &&
+        a.cmid === b.cmid && a.messageId === b.messageId &&
         samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
@@ -171,6 +175,9 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
     case "notice":
       return b.kind === "notice" && a.severity === b.severity &&
         a.title === b.title && a.description === b.description;
+    case "forked":
+      return b.kind === "forked" && a.sourceSessionId === b.sourceSessionId &&
+        a.sourceTitle === b.sourceTitle && a.atMessage === b.atMessage;
   }
 }
 
@@ -451,6 +458,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 ...(role === "user" && userCmid !== undefined
                   ? { cmid: userCmid }
                   : {}),
+                ...(role === "assistant" && messageId ? { messageId } : {}),
               });
               cursor = { kind: "message", role, ...(messageId ? { messageId } : {}) };
             }
@@ -557,6 +565,20 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               severity: typeof u["severity"] === "string" ? u["severity"] : "info",
               title,
               description: description || null,
+            });
+            cursor = null;
+            break;
+          }
+          case "cowboy_fork_origin": {
+            const source = u["sourceSessionId"];
+            if (typeof source !== "string" || !source) break;
+            const title = u["sourceTitle"];
+            items.push({
+              kind: "forked",
+              key: String(env.seq),
+              sourceSessionId: source,
+              sourceTitle: typeof title === "string" ? title : "",
+              atMessage: typeof u["messageId"] === "string",
             });
             cursor = null;
             break;
@@ -950,4 +972,32 @@ function permissionRequestKind(tc: unknown): "permission" | "question" {
   const question = (input as { question?: unknown }).question;
   const options = (input as { options?: unknown }).options;
   return typeof question === "string" && Array.isArray(options) ? "question" : "permission";
+}
+
+/**
+ * Keys of assistant messages a fork may start from: the last assistant
+ * message of each turn that has ended, when the agent sent its message ID.
+ * The newest turn counts only once the session is no longer working.
+ */
+export function forkableAnswerKeys(
+  items: readonly RenderItem[],
+  working: boolean,
+): Map<string, string> {
+  const keys = new Map<string, string>();
+  let last: { key: string; messageId?: string | undefined } | null = null;
+  const settle = (): void => {
+    if (last?.messageId) keys.set(last.key, last.messageId);
+    last = null;
+  };
+  for (const item of items) {
+    if (item.kind === "cleared") {
+      last = null;
+    } else if (item.kind === "message" && item.role === "user") {
+      settle();
+    } else if (item.kind === "message" && item.role === "assistant") {
+      last = { key: item.key, messageId: item.messageId };
+    }
+  }
+  if (!working) settle();
+  return keys;
 }

@@ -831,6 +831,10 @@ impl MachineSnapshots {
                             &machine_id,
                             crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
                         ),
+                        native_fork: self.machine_control.machine_supports(
+                            &machine_id,
+                            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+                        ),
                     },
                     pending_updates,
                     convergence: Vec::new(),

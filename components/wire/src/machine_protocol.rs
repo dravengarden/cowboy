@@ -353,6 +353,9 @@ pub struct MachineCapabilities {
     /// Accepts non-destructive session hibernation.
     #[serde(default)]
     pub hibernation: bool,
+    /// Starts sessions with a native `session/fork` and forked worktrees.
+    #[serde(default)]
+    pub native_fork: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

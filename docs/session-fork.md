@@ -12,10 +12,13 @@ keeps the complete model context and can reuse the Provider prompt cache.
 
 - **Fork** in the session menu (mobile menu, Desktop session actions with `F`)
   forks the whole conversation in one step. It does not open a form: the new
-  session opens at once with the composer focused.
-- **Fork from here** on an assistant message that ends a turn forks the
-  conversation up to and including that message. Later turns are not part of
-  the fork.
+  session opens at once (on Desktop with the composer focused; Mobile keeps
+  the keyboard down until the user taps the composer). While the source is
+  working, the item waits for the turn to end.
+- **Fork from here**, shown under each assistant message that ends a turn,
+  forks the conversation up to and including that message. Later turns are
+  not part of the fork. It needs the Provider message ID that Claude Code and
+  Codex attach to their answers.
 - `sessions.fork` in Cowboy MCP and `POST /api/sessions/:id/fork` expose the
   same operation to agents and scripts.
 
