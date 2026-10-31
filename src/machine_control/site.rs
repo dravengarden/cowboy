@@ -78,7 +78,7 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::ProviderUsageAck { .. }
         // A reply completes an existing waiter on this connection only.
         | MachineCommand::ManagedCallReply { .. }
-        | MachineCommand::MemoryRelayReply { .. } 
+        | MachineCommand::MemoryRelayReply { .. }
         // The Controller selects the home Machine from its own configuration.
         | MachineCommand::MemoryRelay { .. } => return None,
     };

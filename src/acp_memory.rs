@@ -87,7 +87,8 @@ impl Segment {
         }
         self.bytes += text.len();
         let id = format!("e{}", self.events.len());
-        self.events.push(json!({"id": id, "role": role, "text": text}));
+        self.events
+            .push(json!({"id": id, "role": role, "text": text}));
     }
 
     fn close_message(&mut self) {
@@ -149,7 +150,10 @@ fn queued(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
-        if path.extension().is_some_and(|extension| extension == "json") {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
             paths.push(path);
         }
     }
@@ -347,7 +351,9 @@ impl AcpMemory {
             context.push_str(found["text"].as_str()?);
         }
         if self.tools
-            && let Some(events) = receipt.as_ref().and_then(|receipt| receipt["events"].as_array())
+            && let Some(events) = receipt
+                .as_ref()
+                .and_then(|receipt| receipt["events"].as_array())
         {
             let cited = events
                 .iter()
@@ -599,7 +605,12 @@ mod tests {
 
     #[test]
     fn only_packages_without_an_adapter_are_bridged() {
-        for provider in ["grok", "deepseek-harness", "claude-deepseek", "codex-deepseek"] {
+        for provider in [
+            "grok",
+            "deepseek-harness",
+            "claude-deepseek",
+            "codex-deepseek",
+        ] {
             assert!(bridged(provider));
         }
         for provider in ["claude-code", "codex", "gemini"] {
@@ -614,14 +625,14 @@ mod tests {
         let path = root.path().join("session.json");
         for (body, memory) in [
             (json!({"schema": 1, "memory": null}), false),
-            (json!({"schema": 1, "memory": {"protocol": "matrix_http_v1"}}), false),
+            (
+                json!({"schema": 1, "memory": {"protocol": "matrix_http_v1"}}),
+                false,
+            ),
             (json!({"schema": 1, "memory": {"protocol": "other"}}), false),
         ] {
             std::fs::write(&path, body.to_string()).unwrap();
-            assert_eq!(
-                AcpMemory::from_descriptor(&path).unwrap().is_some(),
-                memory
-            );
+            assert_eq!(AcpMemory::from_descriptor(&path).unwrap().is_some(), memory);
         }
         let foreign = json!({"schema": 1, "memory": {
             "protocol": "matrix_http_v1",
@@ -720,7 +731,10 @@ mod tests {
         let service = service().await;
         let memory = open(root.path(), &service.endpoint);
         for prompt in ["/compact", "   "] {
-            assert_eq!(memory.prepare(vec![ContentBlock::from(prompt)]).await.len(), 1);
+            assert_eq!(
+                memory.prepare(vec![ContentBlock::from(prompt)]).await.len(),
+                1
+            );
         }
         assert!(service.requests.lock().is_empty());
     }
@@ -728,24 +742,16 @@ mod tests {
     #[tokio::test]
     async fn tools_follow_the_switch_and_the_agent_capability() {
         let root = tempfile::tempdir().unwrap();
-        let on = AcpMemory::from_descriptor(&descriptor(
-            root.path(),
-            "http://127.0.0.1:1",
-            true,
-            false,
-        ))
-        .unwrap()
-        .unwrap();
+        let on =
+            AcpMemory::from_descriptor(&descriptor(root.path(), "http://127.0.0.1:1", true, false))
+                .unwrap()
+                .unwrap();
         assert_eq!(on.mcp_servers(true).len(), 1);
         assert!(on.mcp_servers(false).is_empty());
-        let off = AcpMemory::from_descriptor(&descriptor(
-            root.path(),
-            "http://127.0.0.1:1",
-            false,
-            true,
-        ))
-        .unwrap()
-        .unwrap();
+        let off =
+            AcpMemory::from_descriptor(&descriptor(root.path(), "http://127.0.0.1:1", false, true))
+                .unwrap()
+                .unwrap();
         assert!(off.mcp_servers(true).is_empty());
     }
 

@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 /// Largest request or response body carried over the Machine link.
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// The only request headers relayed: the MCP protocol binds them to the body.
+pub const MCP_HEADERS: [&str; 3] = ["mcp-protocol-version", "mcp-method", "mcp-name"];
+const MAX_HEADER_BYTES: usize = 1024;
+
 /// Status the relay answers with when the backend could not be reached. It is
 /// indistinguishable from a backend outage on purpose: every client must
 /// already treat both as "continue without memory".
@@ -24,6 +28,8 @@ pub struct Request {
     pub path: String,
     /// JSON text; the relay never interprets it beyond its binding.
     pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(String, String)>,
 }
 
 impl Request {
@@ -42,6 +48,12 @@ impl Request {
         ensure!(
             self.body.len() <= MAX_BODY_BYTES,
             "memory request exceeds its limit"
+        );
+        ensure!(
+            self.headers.iter().all(|(name, value)| {
+                MCP_HEADERS.contains(&name.as_str()) && value.len() <= MAX_HEADER_BYTES
+            }),
+            "unsupported memory header"
         );
         Ok(())
     }
@@ -84,7 +96,18 @@ mod tests {
         Request {
             path: path.to_owned(),
             body: "{}".to_owned(),
+            headers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn only_protocol_headers_are_relayed() {
+        let mut allowed = request("/mcp");
+        allowed.headers = vec![("mcp-method".to_owned(), "tools/call".to_owned())];
+        allowed.validate().unwrap();
+        let mut refused = request("/mcp");
+        refused.headers = vec![("authorization".to_owned(), "Bearer x".to_owned())];
+        assert!(refused.validate().is_err());
     }
 
     #[test]

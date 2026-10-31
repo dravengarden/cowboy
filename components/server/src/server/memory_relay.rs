@@ -91,7 +91,12 @@ pub(super) async fn handle(
     match relay(state, machine_id, session_id, request).await {
         Ok(response) => response,
         Err(reason) => {
-            tracing::debug!(machine = machine_id, session = session_id, reason, "memory relay refused");
+            tracing::debug!(
+                machine = machine_id,
+                session = session_id,
+                reason,
+                "memory relay refused"
+            );
             Response::unavailable()
         }
     }
@@ -120,13 +125,11 @@ async fn relay(
         state.memory_relay.next.fetch_add(1, Ordering::Relaxed)
     );
     let (sender, receiver) = oneshot::channel();
-    state.memory_relay.pending.lock().insert(
-        request_id.clone(),
-        Waiter {
-            home,
-            sender,
-        },
-    );
+    state
+        .memory_relay
+        .pending
+        .lock()
+        .insert(request_id.clone(), Waiter { home, sender });
     let sent = state.machine_control.send_on_connection(
         &connection,
         MachineCommand::MemoryRelay {
@@ -136,7 +139,10 @@ async fn relay(
         },
     );
     let response = if sent.is_ok() {
-        tokio::time::timeout(DEADLINE, receiver).await.ok().and_then(Result::ok)
+        tokio::time::timeout(DEADLINE, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
     } else {
         None
     };

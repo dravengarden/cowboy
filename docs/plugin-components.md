@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.76.0 records memory-client 0.2.1, which uses the session's
+Machine relay and never fails a launch or holds a turn beyond its budget. Claude
+Code and Codex advance one patch version. Native pins are unchanged.
+
 Component release 3.75.0 records provider-runtime 1.1.27 for
 claude-deepseek-gateway 0.1.5. The 0.1.4 gateway reported fetches under an
 operation the Controller's usage table refuses, which stalled that producer's

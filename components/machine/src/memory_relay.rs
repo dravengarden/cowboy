@@ -33,7 +33,9 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::machine_protocol::MachineEvent;
-use crate::machine_protocol::memory_relay::{Identity, MAX_BODY_BYTES, Request, Response};
+use crate::machine_protocol::memory_relay::{
+    Identity, MAX_BODY_BYTES, MCP_HEADERS, Request, Response,
+};
 
 /// A `/v1` request is part of a turn; MCP tools may run a bounded program.
 const TURN_DEADLINE: Duration = Duration::from_secs(8);
@@ -271,6 +273,13 @@ async fn serve(
     let request = Request {
         path: uri.path().to_owned(),
         body: text,
+        headers: MCP_HEADERS
+            .iter()
+            .filter_map(|name| {
+                let value = headers.get(*name)?.to_str().ok()?;
+                Some(((*name).to_owned(), value.to_owned()))
+            })
+            .collect(),
     };
     if request.validate().is_err() {
         return StatusCode::NOT_FOUND.into_response();
@@ -313,9 +322,7 @@ fn config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 }
 
 fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -413,16 +420,19 @@ async fn home_request(identity: &Identity, request: &Request) -> Result<Response
     } else {
         TURN_DEADLINE
     };
-    let client = HOME_CLIENT.as_ref().map_err(|error| anyhow::anyhow!("{error}"))?;
-    let mut response = client
+    let client = HOME_CLIENT
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut outgoing = client
         .post(url)
         .timeout(deadline)
         .bearer_auth(&binding.token)
         .header(header::CONTENT_TYPE, "application/json")
-        .header("X-Matrix-Binding", selected.to_string())
-        .body(body)
-        .send()
-        .await?;
+        .header("X-Matrix-Binding", selected.to_string());
+    for (name, value) in &request.headers {
+        outgoing = outgoing.header(name, value);
+    }
+    let mut response = outgoing.body(body).send().await?;
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
@@ -491,8 +501,10 @@ mod tests {
     }
 
     fn binding(projects: Value) -> HomeBinding {
-        serde_json::from_value(json!({"endpoint":"http://127.0.0.1:1","token":"t","projects":projects}))
-            .unwrap()
+        serde_json::from_value(
+            json!({"endpoint":"http://127.0.0.1:1","token":"t","projects":projects}),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -520,6 +532,7 @@ mod tests {
             path: "/v1/context".to_owned(),
             body: r#"{"binding":{"project":"secret","machine":"x","session":"y"},"payload":1}"#
                 .to_owned(),
+            headers: Vec::new(),
         };
         let bound: Value = serde_json::from_str(&bind_body(&claimed, &selected).unwrap()).unwrap();
         assert_eq!(bound["binding"]["project"], "p");
@@ -550,8 +563,14 @@ mod tests {
         let token = access["token"].as_str().unwrap();
         assert_eq!(first.authenticate(token).unwrap(), "sess-a.b");
         assert!(first.authenticate("cbm1.sess-a.b.00").is_none());
-        assert!(first.authenticate(&token.replace("sess-a", "sess-c")).is_none());
-        let second = MemoryRelay::start(root.path()).await.unwrap_or_else(|_| first.clone());
+        assert!(
+            first
+                .authenticate(&token.replace("sess-a", "sess-c"))
+                .is_none()
+        );
+        let second = MemoryRelay::start(root.path())
+            .await
+            .unwrap_or_else(|_| first.clone());
         assert_eq!(second.authenticate(token).unwrap(), "sess-a.b");
     }
 
@@ -562,6 +581,7 @@ mod tests {
         let request = Request {
             path: "/v1/context".to_owned(),
             body: "{}".to_owned(),
+            headers: Vec::new(),
         };
         // Never attached.
         let response = relay.forward("s".to_owned(), request.clone()).await;
@@ -595,6 +615,10 @@ mod tests {
                 panic!("expected a relay request");
             };
             assert_eq!((session_id.as_str(), request.path.as_str()), ("s1", "/mcp"));
+            assert_eq!(
+                request.headers,
+                [("mcp-method".to_owned(), "tools/list".to_owned())]
+            );
             answering.reply(
                 &request_id,
                 Response {
@@ -612,6 +636,8 @@ mod tests {
         let answered = client
             .post(&url)
             .bearer_auth(access["token"].as_str().unwrap())
+            .header("Mcp-Method", "tools/list")
+            .header("X-Other", "dropped")
             .body("{}")
             .send()
             .await

@@ -16727,10 +16727,11 @@ async fn handle_machine_ws(
                         let _ = queue_machine_json(
                             &outgoing,
                             &crate::machine_protocol::MachineFrame::Command {
-                                command: crate::machine_protocol::MachineCommand::MemoryRelayReply {
-                                    request_id,
-                                    response,
-                                },
+                                command:
+                                    crate::machine_protocol::MachineCommand::MemoryRelayReply {
+                                        request_id,
+                                        response,
+                                    },
                             },
                         );
                     }

@@ -55,8 +55,7 @@ pub const SESSIONS_MEMORY_RECLAIM_UNTIL: Key<u64> =
 pub const SESSIONS_MEMORY_RECLAIM_MIN_IDLE: Key<Duration> =
     Key::new(Scope::Service, "sessions.memory_reclaim_min_idle");
 
-pub const MEMORY_HOME_MACHINES: Key<Vec<String>> =
-    Key::new(Scope::Service, "memory.home_machines");
+pub const MEMORY_HOME_MACHINES: Key<Vec<String>> = Key::new(Scope::Service, "memory.home_machines");
 
 pub static SERVICE_FIELDS: &[Field] = &[
     Field {
