@@ -66,24 +66,31 @@ parent's turn ended (`QUIET_AFTER`, checked once a minute). A child waiting on
 the person (`requires_action`) is never quiet. Any later traffic of the child
 publishes it as reporting again. Clients also treat a working row as not
 reporting after a worker exit, crash or a new worker's `starting` lifecycle,
-until a newer snapshot arrives. The row then reads "No longer reporting" in a
+until a newer snapshot arrives. The row then reads "Not reporting" in a
 neutral tone: Cowboy claims neither success nor failure, and Stop is offered
-only while the worker still grants it.
+only while the worker still grants it. An `idle` snapshot without a stop
+reason reads "Ended: outcome unreported", never Done
+([background-tasks.md](background-tasks.md#32-display-groups-presentation-only)).
 
 ## Persistence and presentation
 
 The Controller's `EventReducer` keeps one durable row per `(session, child)`:
 a later snapshot reuses the first row's seq (an UPSERT), survives turn ends,
-and does not split a parent message that streams around it. Clients render the
-highest `revision` at the row's first position (`web/src/derive.ts`), so live
-intermediate snapshots, a Controller restart (new row) or an older Controller
-(one row per snapshot) all converge.
+and does not split a parent message that streams around it. That position is
+the child's durable transcript anchor (`transcript_anchors`), shared by the Hub
+and the store writer across restarts and eviction. The Controller stamps each
+snapshot with `observedSeq` and the worker `incarnation`; clients render the
+snapshot with the highest `observedSeq` (else `revision`) at the row's first
+position (`web/src/derive.ts`), and the focused bootstrap plus a lookup repair
+any cached row whose terminal snapshot the reconnect tail did not carry. See
+[background-tasks.md](background-tasks.md) §4.
 
-`web/src/SubagentCard.tsx` draws the row on Desktop and Mobile: title, state,
-model, counts and a one-line preview, a Stop button while `cancellable`, and a
-collapsed activity list with the prompt, the bounded activity and the result.
-Its expand toggle is the row's Desktop default action and a Conversation
-widget (`Tab` selects it). Stop asks first with the same `ConfirmSheet` as the
+`web/src/TaskRow.tsx` draws one compact row on Desktop and Mobile: title,
+model and counts, a Stop button while `cancellable`, and the state chip last.
+The row never expands: its default action (a Desktop Conversation widget,
+`Tab` selects it) opens the Background tasks inspector, where
+`SubagentDetail` (`web/src/SubagentCard.tsx`) shows the prompt, the bounded
+activity and the result. Stop asks first with the same `ConfirmSheet` as the
 session's Stop (Mobile's inset card, Desktop's centered dialog); `Keep running`
 sends nothing. On Desktop, `x` on the selected row opens that confirmation
 (`conversation.stopSubagent`, see `web/src/desktop/FOCUS.md`).
