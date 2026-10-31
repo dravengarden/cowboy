@@ -47,41 +47,60 @@ struct TextSlot {
     envelope: Envelope,
 }
 
-/// Subagent rows remembered across all sessions before the oldest are
-/// forgotten. A forgotten child's next snapshot simply starts a new row,
-/// which clients merge by its child session id.
-const MAX_SUBAGENT_ROWS: usize = 4096;
-
 #[derive(Default)]
 pub struct EventReducer {
     text: HashMap<String, TextSlot>,
     tools: HashMap<(String, String), Envelope>,
-    /// `(session, child session)` → seq of that subagent's row.
-    subagents: HashMap<(String, String), u64>,
+    /// `(session, anchor key)` -> seq of that subagent's or Call's row. A
+    /// bounded LRU: eviction forgets one entry, never the whole map, and the
+    /// store writer resolves a miss through `transcript_anchors` before it
+    /// treats a key as new (docs/background-tasks.md#durable-anchors).
+    anchors: crate::transcript_anchors::AnchorIndex,
 }
 
 impl EventReducer {
+    /// A reducer whose anchor index forgets beyond `capacity` keys (tests).
+    #[must_use]
+    pub fn with_anchor_capacity(capacity: usize) -> Self {
+        Self {
+            anchors: crate::transcript_anchors::AnchorIndex::with_capacity(capacity),
+            ..Self::default()
+        }
+    }
+
     pub fn clear_session(&mut self, session_id: &str) {
         self.text.remove(session_id);
         self.tools.retain(|(session, _), _| session != session_id);
-        self.subagents
-            .retain(|(session, _), _| session != session_id);
+        self.anchors.remove_session(session_id);
         self.shrink_tools_if_sparse();
     }
 
-    /// A subagent snapshot is complete, so its row is replaced in place. It
-    /// survives turn ends (a subagent can outlive the prompt that launched
-    /// it) and never interrupts the parent's streamed message.
-    fn reduce_subagent(&mut self, mut env: Envelope, child: &str) -> Envelope {
-        let key = (env.session_id.clone(), child.to_owned());
-        if let Some(seq) = self.subagents.get(&key) {
-            env.seq = *seq;
+    /// Whether this reducer already knows the anchor, without counting a hit.
+    #[must_use]
+    pub fn knows_anchor(&self, session_id: &str, key: &str) -> bool {
+        self.anchors.contains(session_id, key)
+    }
+
+    /// Adopt a durable anchor resolved outside the reducer (the store, or the
+    /// table rows warmed at start). Later snapshots replace that row.
+    pub fn adopt_anchor(&mut self, session_id: &str, key: &str, seq: u64) {
+        self.anchors.insert(session_id, key, seq);
+    }
+
+    /// The anchor seq this reducer resolves for a key, if it knows one.
+    pub fn anchor_seq(&mut self, session_id: &str, key: &str) -> Option<u64> {
+        self.anchors.get(session_id, key)
+    }
+
+    /// A subagent snapshot or Call anchor is complete, so its row is replaced
+    /// in place. It survives turn ends (a subagent can outlive the prompt that
+    /// launched it) and never interrupts the parent's streamed message.
+    fn reduce_anchor(&mut self, mut env: Envelope, key: &str) -> Envelope {
+        if let Some(seq) = self.anchors.get(&env.session_id, key) {
+            env.seq = seq;
             return env;
         }
-        if self.subagents.len() >= MAX_SUBAGENT_ROWS {
-            self.subagents.clear();
-        }
-        self.subagents.insert(key, env.seq);
+        self.anchors.insert(&env.session_id, key, env.seq);
         env
     }
 
@@ -109,14 +128,8 @@ impl EventReducer {
         if matches!(kind, Some("usage_update" | "session_info_update")) {
             return None;
         }
-        if kind == Some(crate::runtime_wire::SUBAGENT_UPDATE)
-            && let Some(child) = update
-                .get("sessionId")
-                .and_then(serde_json::Value::as_str)
-                .filter(|child| !child.is_empty())
-        {
-            let child = child.to_owned();
-            return Some(self.reduce_subagent(env, &child));
+        if let Some(key) = crate::transcript_anchors::anchor_key(update) {
+            return Some(self.reduce_anchor(env, &key));
         }
         // Codex exposes terminal stdout/stderr as an extension-only delta. It
         // is useful to connected clients while a command is running, but it is

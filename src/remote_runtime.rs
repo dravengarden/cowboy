@@ -2004,6 +2004,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                             queue_permission(shared, &session_id, request_id, option_id);
                         } else {
                             mark_projected_provider_auth_expired(shared, &session_id, &event);
+                            let event = stamp_worker_incarnation(
+                                &shared.hub,
+                                &session_id,
+                                &worker_epoch,
+                                event,
+                            );
                             apply_event(&shared.hub, &session_id, event);
                             reconcile_idle_guard(shared, &session_id, idle_guard);
                         }
@@ -2821,6 +2827,35 @@ fn apply_worker_status(hub: &Hub, session_id: &str, state: WorkerState, detail: 
     hub.set_status(session_id, status, detail);
 }
 
+/// Name the worker incarnation that reported a subagent snapshot, and note
+/// the session's current incarnation (docs/background-tasks.md I3). A
+/// snapshot from an older incarnation renders as not reporting and loses its
+/// Stop grant until the new worker announces the child again.
+fn stamp_worker_incarnation(
+    hub: &Hub,
+    session_id: &str,
+    worker_epoch: &str,
+    mut event: RuntimeEvent,
+) -> RuntimeEvent {
+    if worker_epoch.is_empty() {
+        return event;
+    }
+    hub.note_worker_incarnation(session_id, worker_epoch);
+    if let RuntimeEvent::Update { update, .. } = &mut event
+        && update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some(crate::runtime_wire::SUBAGENT_UPDATE)
+        && let Some(object) = update.as_object_mut()
+    {
+        object.insert(
+            "incarnation".to_owned(),
+            serde_json::Value::String(worker_epoch.to_owned()),
+        );
+    }
+    event
+}
+
 #[allow(clippy::too_many_lines)] // Keep the exhaustive lifecycle projection behind one binding fence.
 fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     if !hub.accepts_runtime_projection(session_id) {
@@ -3180,6 +3215,69 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // T6: the Controller names the worker incarnation of every subagent
+    // snapshot it ingests, and observes incarnation changes per session.
+    #[test]
+    fn t6_subagent_snapshots_carry_their_worker_incarnation() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "t".into(),
+            crate::core::SessionOrigin::Api,
+            false,
+        );
+        let snapshot = RuntimeEvent::Update {
+            update: serde_json::json!({
+                "sessionUpdate": crate::runtime_wire::SUBAGENT_UPDATE,
+                "sessionId": "child", "revision": 1, "state": "running",
+            }),
+            cmid: None,
+        };
+        let changes = crate::transcript_anchors::METRICS
+            .epoch_changes
+            .load(Ordering::Relaxed);
+        let RuntimeEvent::Update { update, .. } =
+            stamp_worker_incarnation(&hub, "s", "worker-1", snapshot.clone())
+        else {
+            panic!("an update stays an update");
+        };
+        assert_eq!(update["incarnation"], "worker-1");
+        let RuntimeEvent::Update { update, .. } =
+            stamp_worker_incarnation(&hub, "s", "worker-2", snapshot)
+        else {
+            panic!("an update stays an update");
+        };
+        assert_eq!(update["incarnation"], "worker-2");
+        assert_eq!(
+            hub.subagent_observations("s")
+                .unwrap()
+                .incarnation
+                .as_deref(),
+            Some("worker-2")
+        );
+        assert!(
+            crate::transcript_anchors::METRICS
+                .epoch_changes
+                .load(Ordering::Relaxed)
+                > changes
+        );
+        let other = RuntimeEvent::Update {
+            update: serde_json::json!({"sessionUpdate": "agent_message_chunk"}),
+            cmid: None,
+        };
+        let RuntimeEvent::Update { update, .. } =
+            stamp_worker_incarnation(&hub, "s", "worker-2", other)
+        else {
+            panic!("an update stays an update");
+        };
+        assert!(
+            update.get("incarnation").is_none(),
+            "only subagent snapshots are stamped"
+        );
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // One restored binding exercises every adoption/replay boundary.

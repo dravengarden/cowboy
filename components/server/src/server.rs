@@ -84,6 +84,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
 mod agent_api;
+mod background_tasks;
+#[cfg(test)]
+mod background_tasks_tests;
 mod cardea_authorization;
 mod code_buffers;
 mod code_reads;
@@ -1393,6 +1396,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 })
                 .collect();
             let restored_count = restored.len();
+            // Adopt durable anchors before any reducer sees a new event, so a
+            // restarted Controller never starts a second subagent/Call row.
+            match store
+                .recent_transcript_anchors(crate::transcript_anchors::HUB_WARM_ANCHORS)
+                .await
+            {
+                Ok(anchors) => hub.warm_transcript_anchors(anchors),
+                Err(error) => tracing::warn!(%error, "warming transcript anchors failed"),
+            }
             // Detached workers outlive this control-plane process. Keep
             // persisted Busy turns guarded until their Machine runtime has had
             // one bounded reconnect window to prove ownership; only then may a
@@ -2303,6 +2315,26 @@ async fn run_store_writer(
     tracing::info!("store writer shutting down (channel closed)");
 }
 
+/// Resolve a subagent or Call anchor this writer lifetime does not know yet
+/// through the durable table (scanning a session's pre-table rows once), so a
+/// restarted or evicting writer replaces the original row instead of starting
+/// a second one. `Ok(None)` means the key is new.
+async fn resolve_durable_anchor(
+    store: &Store,
+    session_id: &str,
+    key: &str,
+) -> anyhow::Result<Option<u64>> {
+    if let Some(seq) = store.transcript_anchor(session_id, key).await? {
+        return Ok(Some(seq));
+    }
+    if key.starts_with(crate::transcript_anchors::SUBAGENT_PREFIX)
+        && store.backfill_subagent_anchors(session_id).await?.is_some()
+    {
+        return store.transcript_anchor(session_id, key).await;
+    }
+    Ok(None)
+}
+
 async fn apply_store_batch(
     store: &Store,
     reducer: &mut EventReducer,
@@ -2310,6 +2342,7 @@ async fn apply_store_batch(
 ) -> bool {
     let mut events: BTreeMap<(String, u64), Envelope> = BTreeMap::new();
     let mut highwaters: HashMap<String, u64> = HashMap::new();
+    let mut anchors: Vec<crate::transcript_anchors::AnchorWrite> = Vec::new();
     let mut ok = true;
     for write in writes {
         match write {
@@ -2318,22 +2351,53 @@ async fn apply_store_batch(
                     .entry(env.session_id.clone())
                     .and_modify(|seq| *seq = (*seq).max(env.seq.saturating_add(1)))
                     .or_insert_with(|| env.seq.saturating_add(1));
+                let anchor = match &env.event {
+                    Event::Update { update } => crate::transcript_anchors::anchor_key(update),
+                    _ => None,
+                };
+                // An anchor created earlier in this unflushed batch is not in
+                // the table yet; the reducer may already have evicted it.
+                let pending = anchor.as_deref().and_then(|key| {
+                    anchors
+                        .iter()
+                        .find(|write| write.session_id == env.session_id && write.key == key)
+                        .map(|write| write.seq)
+                });
+                if let (Some(key), Some(seq)) = (anchor.as_deref(), pending) {
+                    reducer.adopt_anchor(&env.session_id, key, seq);
+                } else if let Some(key) = anchor.as_deref()
+                    && !reducer.knows_anchor(&env.session_id, key)
+                {
+                    match resolve_durable_anchor(store, &env.session_id, key).await {
+                        Ok(Some(seq)) => reducer.adopt_anchor(&env.session_id, key, seq),
+                        Ok(None) => anchors.push(crate::transcript_anchors::AnchorWrite {
+                            session_id: env.session_id.clone(),
+                            key: key.to_owned(),
+                            seq: env.seq,
+                        }),
+                        Err(error) => {
+                            // Never block the transcript on the index: the row
+                            // lands at its own seq and clients merge by id.
+                            tracing::warn!(%error, session = %env.session_id, key, "transcript anchor lookup failed");
+                        }
+                    }
+                }
                 if let Some(reduced) = reducer.reduce(env) {
                     events.insert((reduced.session_id.clone(), reduced.seq), reduced);
                 }
             }
             StoreWrite::ClearEvents { ref session_id, .. } => {
-                ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+                ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
                 reducer.clear_session(session_id);
                 ok &= retry_store_write(store, &write).await;
             }
             other => {
-                ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+                ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
                 ok &= retry_store_write(store, &other).await;
             }
         }
     }
-    ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+    ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
     ok
 }
 
@@ -2341,15 +2405,20 @@ async fn flush_event_batch(
     store: &Store,
     events: &mut BTreeMap<(String, u64), Envelope>,
     highwaters: &mut HashMap<String, u64>,
+    anchors: &mut Vec<crate::transcript_anchors::AnchorWrite>,
 ) -> bool {
-    if events.is_empty() && highwaters.is_empty() {
+    if events.is_empty() && highwaters.is_empty() && anchors.is_empty() {
         return true;
     }
     let rows: Vec<Envelope> = std::mem::take(events).into_values().collect();
     let watermarks = std::mem::take(highwaters);
+    let new_anchors = std::mem::take(anchors);
     let mut last_error = None;
     for attempt in 0..4 {
-        match store.upsert_event_batch(&rows, &watermarks).await {
+        match store
+            .upsert_event_batch_with_anchors(&rows, &watermarks, &new_anchors)
+            .await
+        {
             Ok(()) => {
                 if let Err(error) = record_lifecycle_incidents(store, &rows).await {
                     tracing::error!(%error, "recording lifecycle incidents failed");
@@ -10723,6 +10792,10 @@ async fn serve_axum(
     execution::sessions::start_recovery(&state);
     workspace_preparation::start_recovery(&state);
     managed_calls::Coordinator::start(&state);
+    if let Some(store) = state.store.clone() {
+        let hub = state.hub.clone();
+        tokio::spawn(async move { background_tasks::repair_call_anchors(&hub, &store).await });
+    }
     let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
         Some(store) => store
@@ -11076,6 +11149,10 @@ async fn serve_axum(
             get(api_question_page),
         )
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
+        .route(
+            "/api/sessions/{id}/subagents/lookup",
+            post(background_tasks::lookup),
+        )
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
@@ -12523,7 +12600,9 @@ async fn prometheus_metrics(
         state.observability.health().failed_log_batches(),
         state.observability.health().failed_metric_batches(),
     );
-    let body = body + &state.observability.health().prometheus();
+    let body = body
+        + &state.observability.health().prometheus()
+        + &crate::transcript_anchors::METRICS.prometheus();
     (
         [(
             header::CONTENT_TYPE,
@@ -20338,6 +20417,19 @@ struct QuestionPagesQuery {
 #[derive(Debug, Serialize)]
 struct SessionBootstrapResponse {
     messages: Vec<Outbound>,
+    /// Authoritative subagent observations (docs/background-tasks.md I5).
+    /// A sibling of `messages`, not an `Outbound`, so protocol bridges and
+    /// older Web clients are unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subagent_state: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SessionBootstrapQuery {
+    /// The highest seq the client already holds; children observed after it
+    /// are included even when terminal.
+    #[serde(default)]
+    since_seq: Option<u64>,
 }
 
 /// Hydrate only the session the reader actually opened. The WebSocket connect
@@ -20347,14 +20439,22 @@ struct SessionBootstrapResponse {
 async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
+    Query(query): Query<SessionBootstrapQuery>,
 ) -> Response {
     session_configuration::prepare(&state, &session_id);
+    let since_seq = query.since_seq;
+    let subagent_state =
+        background_tasks::subagent_state(&state.hub, state.store.as_ref(), &session_id, since_seq)
+            .await;
     let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     (
         [(header::CACHE_CONTROL, "no-store")],
-        Json(SessionBootstrapResponse { messages }),
+        Json(SessionBootstrapResponse {
+            messages,
+            subagent_state,
+        }),
     )
         .into_response()
 }

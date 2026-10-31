@@ -6,7 +6,8 @@ mod runner;
 mod selection;
 
 pub(super) use coordinator::{
-    Coordinator, delete_child, dispatch_calls, handle, image_capabilities, parent_deleted,
+    Coordinator, delete_child, dispatch_calls, dispatch_calls_from, handle, image_capabilities,
+    parent_deleted,
 };
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
@@ -171,6 +172,13 @@ pub(super) async fn dismiss(
 #[serde(deny_unknown_fields)]
 pub(super) struct ApprovalDecision {
     decision: approval::Decision,
+    /// The `request_ids` of the prompt the person answered. A decision binds
+    /// to exactly these; absent only from Web clients older than the binding.
+    #[serde(default)]
+    presented: Option<Vec<String>>,
+    /// The answered prompt's revision (diagnostic; the set is authoritative).
+    #[serde(default)]
+    prompt_revision: Option<u64>,
 }
 
 /// A person's answer to the calls its session's agent is waiting for.
@@ -192,10 +200,25 @@ pub(super) async fn decide_approval(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if body
+        .presented
+        .as_ref()
+        .is_some_and(|ids| ids.is_empty() || ids.len() > 64 || ids.iter().any(|id| id.len() > 64))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let approvals = &state.managed_calls.approvals;
-    // Nothing waiting: the agent already stopped asking.
-    let Some(agents) = approvals.decide(&parent, body.decision) else {
-        state.hub.broadcast_call_approval(&parent, None);
+    // Nothing the person saw is still waiting (it expired, or the agent
+    // stopped asking): refresh every viewer instead of deciding later arrivals.
+    let Some(agents) = approvals.decide(&parent, body.decision, body.presented.as_deref()) else {
+        state
+            .hub
+            .broadcast_call_approval(&parent, approvals.view(&parent, &info.meta.provider));
+        tracing::info!(
+            session = %parent,
+            prompt_revision = ?body.prompt_revision,
+            "call approval answered a prompt that no longer waits"
+        );
         return StatusCode::CONFLICT.into_response();
     };
     if body.decision == approval::Decision::Session {

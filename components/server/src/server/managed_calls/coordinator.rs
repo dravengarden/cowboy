@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::super::AppState;
 use super::super::agent_tools;
+use super::super::background_tasks::CallOrigin;
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution;
 use crate::machine_protocol::{
@@ -422,6 +423,18 @@ pub(in crate::server) async fn dispatch_calls(
     ledger: &Ledger,
     action: Action,
 ) -> Value {
+    dispatch_calls_from(state, meta, ledger, action, &CallOrigin::Gateway).await
+}
+
+/// [`dispatch_calls`] for a caller with a structured identity the accepted
+/// Call's transcript anchor links back to (an MCP `calls.start`).
+pub(in crate::server) async fn dispatch_calls_from(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    action: Action,
+    origin: &CallOrigin,
+) -> Value {
     match action {
         Action::Capabilities {} => capabilities(state, meta, ledger).await,
         Action::Start {
@@ -438,6 +451,7 @@ pub(in crate::server) async fn dispatch_calls(
                 *request,
                 wait_ms,
                 preset.as_deref(),
+                origin,
             )
             .await
         }
@@ -911,6 +925,7 @@ fn same_request(original: &Record, requested: &str, preset: Option<&str>) -> boo
     }
 }
 
+#[allow(clippy::too_many_arguments)] // The admission inputs plus the anchor's origin.
 async fn start(
     state: &Arc<AppState>,
     meta: &crate::core::SessionMeta,
@@ -919,6 +934,7 @@ async fn start(
     request: Request,
     wait_ms: u64,
     preset: Option<&str>,
+    origin: &CallOrigin,
 ) -> Value {
     // The caller's gateways time this exchange from its receipt; approval,
     // readiness and admission spend the same budget as the observation.
@@ -1087,10 +1103,20 @@ async fn start(
     // The inserted call now protects its child; never hold the fence while
     // waiting for the call to start.
     drop(fence);
-    state
+    let approval_request_id = state
         .managed_calls
         .approvals
         .admitted(&meta.id, &request.request_id);
+    // I8: one idempotent transcript anchor per accepted Call, after the
+    // ledger commit. A crash before this push is repaired at the next start.
+    super::super::background_tasks::push_call_anchor(
+        &state.hub,
+        &meta.id,
+        &record.call_id,
+        &record.request_id,
+        origin,
+        approval_request_id.as_deref(),
+    );
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
     envelope(&wait_started(state, ledger, &record, deadline).await)

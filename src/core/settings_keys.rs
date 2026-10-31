@@ -7,6 +7,9 @@
 
 use crate::admin;
 
+/// When this database first ran a Controller that writes Call transcript
+/// anchors (docs/background-tasks.md). Older calls are not anchored.
+pub const TRANSCRIPT_ANCHORS_CALLS_SINCE: &str = "transcript_anchors.calls_since_ms";
 /// Session id -> first epoch ms a retention pass saw the session dormant.
 pub const SESSION_DORMANT_SINCE: &str = "session_dormant_since";
 /// UI-owned per-Machine maintenance policy; TOML supplies inherited defaults.
@@ -41,6 +44,7 @@ pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_upd
 pub fn is_persisted_setting_key(key: &str) -> bool {
     admin::is_admin_setting_key(key)
         || key == SESSION_DORMANT_SINCE
+        || key == TRANSCRIPT_ANCHORS_CALLS_SINCE
         || [
             MACHINE_MAINTENANCE_PREFIX,
             SESSION_RESOURCE_WAIT_PREFIX,
@@ -73,6 +77,7 @@ pub fn examples() -> Vec<String> {
         admin::SESSION_LIMITS_SETTING.to_owned(),
         admin::ADMIN_IDENTITIES_SETTING.to_owned(),
         SESSION_DORMANT_SINCE.to_owned(),
+        TRANSCRIPT_ANCHORS_CALLS_SINCE.to_owned(),
         format!("{MACHINE_MAINTENANCE_PREFIX}ovh"),
         format!("{SESSION_RESOURCE_WAIT_PREFIX}sess-1"),
         format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),

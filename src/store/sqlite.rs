@@ -5060,6 +5060,7 @@ impl SqliteStorage {
         &self,
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
+        anchors: &[crate::transcript_anchors::AnchorWrite],
     ) -> Result<()> {
         let mut transaction = self
             .pool
@@ -5101,6 +5102,21 @@ impl SqliteStorage {
             .await
             .with_context(|| format!("UPDATE SQLite next_seq for {session_id}"))?;
         }
+        for anchor in anchors {
+            sqlx::query(
+                "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(session_id, anchor_key) DO NOTHING",
+            )
+            .bind(&anchor.session_id)
+            .bind(&anchor.key)
+            .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
+            .bind(timestamp)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| {
+                format!("INSERT SQLite anchor {}/{}", anchor.session_id, anchor.key)
+            })?;
+        }
         transaction
             .commit()
             .await
@@ -5115,6 +5131,20 @@ impl SqliteStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
+        sqlx::query("DELETE FROM transcript_anchors WHERE session_id = ?1")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("DELETE SQLite transcript anchors for {session_id}"))?;
+        sqlx::query(
+            "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES (?1, ?2, 0, ?3)",
+        )
+        .bind(session_id)
+        .bind(crate::transcript_anchors::BACKFILL_SENTINEL)
+        .bind(now_ms())
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("INSERT SQLite anchor sentinel for {session_id}"))?;
         sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = ?1 AND json_extract(document, '$.created_at_ms') < ?2")
             .bind(session_id)
             .bind(calls_before_ms)

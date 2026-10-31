@@ -695,12 +695,19 @@ async fn execute(
             }
         }
         "calls.start" | "review.start" => {
+            let origin = super::super::background_tasks::CallOrigin::Mcp {
+                action: action.to_owned(),
+                operation: operation.to_owned(),
+            };
             let action = match call_action(action, args, operation) {
                 Ok(action) => action,
                 Err(refusal) => return Ok(refusal.value()),
             };
             Ok(call_result(
-                super::super::managed_calls::dispatch_calls(state, meta, ledger, action).await,
+                super::super::managed_calls::dispatch_calls_from(
+                    state, meta, ledger, action, &origin,
+                )
+                .await,
             ))
         }
         "calls.cancel" => {
