@@ -1176,6 +1176,10 @@ struct MobileReviewState {
     remote_review: Option<crate::workspace_extensions::ReviewBinding>,
     #[serde(default)]
     remote_selected: bool,
+    /// The chosen comparison: `""` is uncommitted work, otherwise a Git
+    /// reference. Absent means the repository's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comparison: Option<String>,
     #[serde(default = "default_mobile_review_mode")]
     mode: String,
     #[serde(default)]
@@ -1199,6 +1203,7 @@ impl Default for MobileReviewState {
             future: std::collections::BTreeMap::new(),
             remote_review: None,
             remote_selected: false,
+            comparison: None,
             mode: default_mobile_review_mode(),
             tabs: Vec::new(),
             active: None,
@@ -1226,6 +1231,13 @@ impl MobileReviewState {
         {
             state.remote_review = None;
             state.remote_selected = false;
+        }
+        if state
+            .comparison
+            .as_deref()
+            .is_some_and(|value| !valid_mobile_review_comparison(value))
+        {
+            state.comparison = None;
         }
         if !matches!(state.mode.as_str(), "files" | "git") {
             state.mode = default_mobile_review_mode();
@@ -1268,6 +1280,13 @@ impl MobileReviewState {
         }
         state
     }
+}
+
+fn valid_mobile_review_comparison(value: &str) -> bool {
+    value.is_empty()
+        || (value.starts_with("refs/")
+            && value.len() <= 512
+            && !value.chars().any(char::is_control))
 }
 
 fn valid_mobile_review_path(path: &str) -> bool {
@@ -4186,6 +4205,18 @@ impl Hub {
                     }
                     state.mode = mode;
                 }
+                "setComparison" => {
+                    state.comparison = match args.get("comparison") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(value) => Some(
+                            value
+                                .as_str()
+                                .filter(|value| valid_mobile_review_comparison(value))
+                                .map(str::to_owned)
+                                .ok_or("setComparison: invalid comparison")?,
+                        ),
+                    };
+                }
                 "markReviewed" => {
                     let key = mobile_review_string_arg(args, "key", 2048)?;
                     match args.get("revision").and_then(serde_json::Value::as_str) {
@@ -4516,6 +4547,7 @@ impl Hub {
                         | "setPinned"
                         | "activate"
                         | "setMode"
+                        | "setComparison"
                         | "markReviewed"
                         | "setPosition"
                 ) {
@@ -9023,6 +9055,36 @@ mod core_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn mobile_review_comparison_is_validated_and_clearable() {
+        let hub = hub_with_session("compare");
+        let reference = "refs/remotes/origin/main";
+        let apply = |id: &str, comparison: serde_json::Value| {
+            hub.sync_apply(
+                "mobile-review:compare",
+                id.to_owned(),
+                "setComparison",
+                &serde_json::json!({ "comparison": comparison }),
+            )
+        };
+        let read =
+            || serde_json::to_value(&hub.inner.sessions.lock()["compare"].mobile_review).unwrap();
+
+        apply("c1", serde_json::json!(reference)).unwrap();
+        assert_eq!(read()["comparison"], reference);
+        apply("c2", serde_json::json!("")).unwrap();
+        assert_eq!(read()["comparison"], "");
+        assert!(apply("c3", serde_json::json!("--upload-pack=x")).is_err());
+        assert_eq!(read()["comparison"], "");
+        apply("c4", serde_json::Value::Null).unwrap();
+        assert!(read().get("comparison").is_none());
+
+        let restored = super::MobileReviewState::from_stored(
+            serde_json::json!({ "comparison": "main; rm -rf" }),
+        );
+        assert_eq!(restored.comparison, None);
     }
 
     #[test]

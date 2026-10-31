@@ -394,6 +394,35 @@ export function announceDraft(sessionId: string): void {
   }
 }
 
+const appendListeners = new Map<string, (text: string) => void>();
+
+/** Add text to a session's draft from outside its Composer. A mounted Composer
+ * takes it, so it never overwrites keystrokes the store has not seen yet. */
+export function appendDraftText(sessionId: string, text: string): void {
+  const composer = appendListeners.get(sessionId);
+  if (composer) {
+    composer(text);
+    return;
+  }
+  const draft = getDraft(sessionId);
+  setDraft(sessionId, {
+    ...draft,
+    text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
+  });
+}
+
+export function subscribeDraftAppend(
+  sessionId: string,
+  listener: (text: string) => void,
+): () => void {
+  appendListeners.set(sessionId, listener);
+  return () => {
+    if (appendListeners.get(sessionId) === listener) {
+      appendListeners.delete(sessionId);
+    }
+  };
+}
+
 /** A mounted composer learns when its draft's bytes arrive from the database
  * after its mount seed, or when they turned out to be gone. */
 export function subscribeDraftRestore(

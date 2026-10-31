@@ -16,7 +16,12 @@ import {
   reconcileDeletedInlineImages,
   settlePendingAttachments,
 } from "../attachments";
-import { getDraft, setDraft, subscribeDraftRestore } from "../draftStore";
+import {
+  getDraft,
+  setDraft,
+  subscribeDraftAppend,
+  subscribeDraftRestore,
+} from "../draftStore";
 import { handOffSettledAttachments } from "./draftHandOff";
 import {
   getInlineAttachment,
@@ -214,6 +219,17 @@ export function useComposerDraftController(
   useEffect(() => {
     persistDraft();
   }, [persistDraft, attachments]);
+
+  useEffect(
+    () =>
+      subscribeDraftAppend(sessionId, (added) => {
+        const current = editorRef.current?.getValue() ?? textRef.current;
+        const next = current ? `${current.trimEnd()}\n\n${added}` : added;
+        editorRef.current?.applyRemoteText(next);
+        setText(next);
+      }),
+    [editorRef, sessionId, setText],
+  );
 
   // Desktop reads the live ref whenever another meaningful state transition
   // renders the shell. Mobile/native controls consume the reactive mirror.

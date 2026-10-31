@@ -30,6 +30,7 @@ if (
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "review-compare" &&
   suite !== "subscriptions" && suite !== "session-context"
 ) {
   throw new Error("unknown suite");
@@ -40,6 +41,8 @@ const entry = suite === "session-context"
   ? "runSubscriptionsBrowserConformance"
   : suite === "review-context"
   ? "runReviewContextBrowserConformance"
+  : suite === "review-compare"
+  ? "runReviewCompareBrowserConformance"
   : suite === "info-metrics"
   ? "runInfoMetricsBrowserConformance"
   : suite === "dormant-session"
@@ -324,6 +327,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 5
         : suite === "review-context"
         ? 8
+        : suite === "review-compare"
+        ? 1
         : suite === "review-recovery"
         ? 17
         : 6) ||
