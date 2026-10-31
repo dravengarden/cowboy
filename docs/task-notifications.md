@@ -1,7 +1,9 @@
 # Task notifications and per-account acknowledgement
 
-Status: contract for [background tasks](background-tasks.md) Phase 2, not yet
-implemented. Installed-app rules come from the Columbus PWA convention.
+Status: contract for [background tasks](background-tasks.md) Phase 2, revised
+after the Astra Max design review (19 findings, none rejected; see
+[Decisions](#decisions)). Installed-app rules come from the Columbus PWA
+convention.
 
 ## Starting point
 
@@ -24,65 +26,81 @@ Observed on 2026-10-31:
 ## Goals and non-goals
 
 Goals: a person learns about actionable input and unresolved failures while
-away, exactly once per occurrence as far as they can observe, across a
-Controller restart; a failure acknowledged on one device stops being unseen on
-all of the account's devices.
+away, with at-least-once delivery per installation that survives a Controller
+restart; a failure acknowledged on one device stops being unseen on all of the
+account's devices.
 
-Non-goals: an inbox surface, completion digests, email or other transports,
-per-task notification rules, and declarative Web Push. The service worker
-remains the renderer; moving to the declarative document needs its own physical
-acceptance.
+Non-goals: an inbox surface, completion digests, other transports, per-task
+rules, declarative Web Push, and exactly-once presentation. The service worker
+remains the renderer.
 
-## Intents
+## Occurrences and intents
 
-A **notification intent** is one durable row, committed before any send:
+An **intent** is one durable row for one occurrence, committed before any send.
 
 ```text
 notification_intents(
-  dedupe_key PK, owner_user_id, session_id, category, task_key NULL,
-  title_hint NULL, created_at_ms, expires_at_ms, state, resolved_at_ms NULL
+  dedupe_key PK, owner_user_id, session_id, category, destination,
+  title_hint NULL, due_at_ms, expires_at_ms,
+  state, expanded_at_ms NULL, created_at_ms
 )
 ```
 
-`category` is one of `input`, `failure`, `completion`. `state` is `pending`,
-`resolved` (the condition went away or was acknowledged) or `expired`.
+`category` is `input`, `failure` or `completion`. `state` is `pending`,
+`resolved` or `expired`. `destination` is a task key or empty, see
+[Audience and content](#audience-and-content).
 
-| Occurrence | Dedupe key | Category | Producer |
+| Occurrence | Dedupe key | Category | Durable identity and producer |
 |---|---|---|---|
-| Permission request | `req:perm:<session>:<request id>` | input | Hub, live ACP event |
-| Pending call approval | `req:approval:<approval request id>` | input | approval registry, first time a request waits |
-| Subagent waiting on a person | `req:perm:…` of its permission request | input | same path; `requires_action` alone never notifies (R4) |
-| Subagent failed | `entity:<child>:<incarnation>:<revision>` | failure | accepted snapshot (I4) with a failure stop reason |
-| Call failed | `exec:<call_id>:terminal` | failure | committed ledger transition to `failed` |
-| Call completed | `exec:<call_id>:terminal` | completion | committed ledger transition to `completed` |
-| Subagent ended normally | `entity:<child>:<incarnation>:<revision>` | completion | accepted terminal snapshot |
-| Session error | `session-error:<session>:<fingerprint>:<minute>` | failure | `Outbound::Error`, today's producer |
+| Permission request | `req:perm:<session>:<event seq>` | input | The envelope seq of `PermissionRequest`. Request ids restart with each agent process; the seq does not |
+| Pending call approval | `req:approval:<parent>:<managed request id>` | input | The agent resubmits the same request id; registry `apr-…` ids are random per insertion and are not used |
+| Subagent failed | `entity:<child>:<terminalSeq>` | failure | Non-terminal → terminal transition, see below |
+| Subagent finished | `entity:<child>:<terminalSeq>` | completion | Same transition |
+| Call failed | `exec:<call_id>:terminal` | failure | Ledger transition to `failed` |
+| Call completed | `exec:<call_id>:terminal` | completion | Ledger transition to `completed` |
+| Session error | `incident:<incident id>` | failure | The `runtime_incidents` id, written with the incident |
 
 Rules:
 
+- **Terminal occurrence.** The Hub stamps `terminalSeq` on the snapshot where a
+  child moves from non-terminal to terminal and carries it on later terminal
+  snapshots, so metadata updates neither repeat the notification nor change the
+  acknowledgement marker. `SnapshotMark` gains the terminal flag and `terminalSeq`,
+  and the restart warm restores them. A resumed child that ends again is a new
+  occurrence. An equal-revision correction after termination is not a new one.
 - **Only producers create intents.** Bootstrap, history, gap fills, lookups and
-  backfill never do. A replayed subagent snapshot is either fenced (I4) or
-  conflicts on its dedupe key, which uses producer identity rather than
-  `observedSeq` because the latter changes on replay.
+  backfill never do. A replayed snapshot is fenced by I4 before the transition
+  is evaluated.
 - **Execution failure is not a review result.** A completed review with findings
   is a completion. `cancelled`, `Stopped`, `Ended` and `Not reporting` never
-  notify: the first two were asked for or carry no outcome, and contact loss is
-  not an outcome.
-- **Write order.** For a Call the intent commits in the same transaction as the
-  ledger transition. For Hub producers it goes through the store writer with the
-  event batch. A crash therefore loses neither or both, and repeated writes are
-  `ON CONFLICT DO NOTHING`.
-- **Child sessions.** A managed Call's child and a subagent notify on the parent
-  session; `owner_user_id` is the parent's. Rows for a system session are not
-  written.
-- Intents older than their `expires_at_ms` are not delivered: 1 hour for input
-  and failure, 15 minutes for completion. An input intent resolves as soon as
-  its request is answered or withdrawn.
+  notify.
+- **Write order.** A Call intent commits in the ledger transaction. An incident's
+  commits with the incident. An event's goes through the store writer in the
+  batch of its event.
+- **Durability boundary.** An event intent is exactly as durable as the event.
+  The worker frame is acknowledged after projection, before the writer commits,
+  so a Controller crash in that window loses the transcript row and its intent
+  together. A graceful stop drains the writer. Moving that acknowledgement behind
+  commit is a transcript-durability change with its own backpressure contract and
+  is not part of this phase.
+- **Child sessions.** A managed Call's child and a subagent notify on the parent;
+  `owner_user_id` is the parent's. System sessions write no intent.
+- **Resolution.** An input intent resolves when its request is answered,
+  withdrawn, or (approval) leaves the waiting set. The approval registry is
+  memory-only, so a pending approval intent is resolved at Controller start and
+  re-created by the next resubmission; `ON CONFLICT` makes that a state reset to
+  `pending` only if it never expanded.
+- **Expiry.** Delivery expiry only: 1 hour for input and failure, 15 minutes for
+  completion. It never decides attention. The bar's unseen state stays derived
+  from task state and acknowledgements.
 
 ## Delivery
 
-A single Controller task owns delivery. Sends are at-least-once; the visible
-result is deduplicated by the notification `tag`.
+A single Controller task owns delivery. Delivery is at-least-once per
+installation and never promises exactly-once presentation: after an uncertain
+send a dismissed notification can appear again, and tags do not span devices.
+The duplicate bound is one retry after a crash or timeout between the push
+service's accept and the local record.
 
 ```text
 notification_deliveries(
@@ -90,110 +108,164 @@ notification_deliveries(
 )
 ```
 
-- A delivery row is created per matching subscription when an intent is first
-  processed. A subscription added later does not receive older intents.
+- **Audience freeze.** The first processing of an intent inserts its delivery
+  rows and sets `expanded_at_ms` in one transaction, including for an empty
+  audience. A subscription enrolled later never receives older intents.
 - Retry 408, 425, 429, 5xx and transport errors with exponential backoff from
   5 seconds, at most 5 attempts, honoring `Retry-After`; any other 4xx fails the
   delivery; 404 and 410 remove the subscription.
-- The task resumes pending rows at start, so a restart neither loses nor resends
-  a delivery already recorded `sent`. A crash between the push service's accept
-  and the row update resends; the tag replaces the first banner.
-- Web Push `Urgency` is `high` for input, `normal` otherwise. `TTL` is the time
-  left until the intent expires. `Topic` is a hash of the coalescing key, so the
-  push service also replaces an undelivered predecessor.
-- Delivery rows and resolved or expired intents are deleted after 7 days.
-- Counters: intents created by category, deliveries sent, retried, failed,
-  suppressed and expired. HTTP success stays labelled as push-service acceptance,
-  never as device presentation.
+- The task resumes pending rows at start.
+- `Urgency` is `high` for input and `normal` otherwise. `TTL` is the time left
+  until expiry. `Topic` and `tag` are per occurrence for input, so an independent
+  request is never replaced. Failure and completion use the aggregate described
+  next.
+- Delivery rows and finished intents are deleted after 7 days.
+- Counters: intents by category; deliveries sent, retried, failed, deferred and
+  expired. HTTP success is labelled push-service acceptance, never presentation.
+- The rollback setting `notifications.delivery` (default on) stops the task, not
+  only producers.
 
-### Coalescing
+### Aggregation
 
-Completion and failure intents wait 3 seconds, then all pending intents of one
-`(owner, session, category)` become one notification ("3 tasks failed"). Input
-is never delayed. The coalescing tag is
-`cowboy-<session>-<category>`; a later burst replaces the banner and states the
-current unseen count rather than only the burst.
+Failure and completion intents are due 3 seconds after creation. All due intents
+of one `(owner, session, category)` are sent as one notification, tag and Topic
+`cowboy-<session>-<category>`, with the count of that send. A later burst
+replaces the earlier banner; it states its own count and does not claim a total
+unseen count. Dismissing and a later burst simply show a new banner. Throttling
+never changes occurrence identity.
+
+### Presence
+
+A device showing a session renews a 30 second lease every 15 seconds with
+`PUT /api/notifications/presence {session_id}` while visible and focused, and
+deletes it on hide. Leases live in Controller memory per account and device.
+
+**Input ignores presence**: it is delivered to every device, always.
+
+A due failure or completion whose session has a live lease of that account is
+**deferred** to the lease's expiry and re-evaluated then. While the person stays
+it keeps deferring until acknowledged or expired; if they leave without opening
+it, a stale lease costs at most 30 seconds and the push still goes out. A
+Controller restart empties the table, which delivers.
+
+The service worker **renders every push it receives**. WebKit requires a visible
+notification per push and can revoke subscriptions otherwise, so the existing
+per-device visibility check in `sw.js` is removed.
 
 ### Audience and content
 
-- A subscription belongs to the account that enrolled it. A subscription with
-  no owner (written by a previous Controller) is not delivered to until the next
-  enrollment refresh, because delivering it would leak sessions across accounts.
-- The audience is rechecked at delivery: the owner must still see the session,
-  it must not be muted, and the intent must still be `pending`.
-- `title_hint` is agent-produced text and stays display data. It reaches a
-  notification only when `showSessionNames` is on, is truncated and never
-  interpreted. With the setting off the copy is generic.
-- The deep link is `/?session=<id>#task=<key>`. The service worker validates both
-  against their grammars. A tap opens the row's inspector and never approves,
-  stops or acknowledges anything.
+- Subscriptions move to a database table:
+  `web_push_subscriptions(endpoint PK, owner_user_id, enrolled_session_id NULL,
+  p256dh, auth, preferences, updated_at_ms)`. `web-push-subscriptions.json` is no
+  longer read or written. A rollback to an older Controller therefore reads the
+  file it left, which holds no new enrollment, and cannot broadcast across
+  accounts.
+- `PUT` takes over the endpoint for the authenticated account, so the same
+  installation under a new account stops serving the old one.
+- Explicit logout removes the subscriptions enrolled by that cookie session and
+  the Web unsubscribes locally. Pushes already accepted by a push service cannot
+  be recalled; they carry only display-safe text.
+- Delivery rechecks that the owner can still see the session, that it is not
+  muted, and that the intent is `pending` with no matching acknowledgement.
+- `title_hint` is agent-produced display data, sent only when
+  `showSessionNames` is on, truncated and never interpreted. Otherwise the copy
+  is generic.
+- **Destinations.** `destination` is `subagent:<child>` or `call:<id>` for a
+  single task failure or completion; empty for requests, incidents and any
+  aggregate of more than one. The link is `/?session=<id>` plus `#task=<key>` when
+  present. A request opens the session, whose approval surface is already shown.
+  A task key that is no longer listed opens the session only. A tap never
+  approves, stops or acknowledges.
+
+### Payload compatibility
+
+The push stays `version: 1` with the existing `category` values: `input` or
+`permission` for input, `error` for failure, `completed` for completion. New
+fields (`tag`, `task`) are optional, and an installed older worker ignores them
+and still renders. No capability negotiation is needed, on upgrade or after a
+Web rollback.
 
 ### Preferences
 
-Category defaults change to the design's: input and failure on, completion off.
-The stored `completed` and `input` booleans become effective here, so their
-defaults change together with the first producer; `permission` and `error`
-remain accepted and map onto `input` and `failure`. The Controller accepts both
-shapes, so it must be released before the Web.
-
-### Presence lease
-
-A device showing a session renews a lease of 30 seconds every 15 seconds with
-`PUT /api/notifications/presence {session_id}` while the document is visible and
-focused, and deletes it on hide. Leases live in Controller memory per account
-and device.
-
-A delivery whose session has a live lease of that account is **suppressed** for
-all of the account's devices: the person is looking at it. Suppression is
-recorded and the intent stays unseen for the bar. Input is exempt, so a request
-never depends on a visible row being noticed from across the room: it is
-delivered to every device except the one holding the lease. A missing or expired
-lease delivers. Lease failure therefore over-notifies rather than under-notifies,
-and a Controller restart empties the table.
+Stored preferences gain `schema: 2`, and the server stores the mapped result.
+Migration from an unversioned value: `input` takes the old `permission` flag,
+the only input ever delivered; `error` is kept; `completed` becomes `false`
+regardless of its stored value, because it was a default, not an opt-in. From
+then on the Settings toggle is the opt-in.
 
 ## Acknowledgement
 
 ```text
-task_acknowledgements(owner_user_id, task_key, marker, acknowledged_at_ms,
-  PK(owner_user_id, task_key, marker))
+task_acknowledgements(owner_user_id, session_id REFERENCES sessions ON DELETE
+  CASCADE, task_key, marker, acknowledged_at_ms, PK(all but the last))
 ```
 
 - `POST /api/sessions/{id}/tasks/acknowledge {task_key, marker}` is idempotent.
-  The marker stays Phase 1's terminal marker, so a resumed child's later failure
-  is unseen again. It must name a task of that session; a client cannot write
-  arbitrary rows.
+  The marker is `terminalSeq` for a subagent (falling back to Phase 1's marker for
+  a row without it) and `finished_at_ms` for a Call.
 - The focused bootstrap carries the session's acknowledgements, and a
-  `task_acknowledged` outbound updates other connected devices.
-- Acknowledging resolves the matching failure intent, so a pending retry stops.
-- Device-local acknowledgements from Phase 1 are uploaded once for tasks still
-  loaded, then ignored; the failure list is short-lived, so older ones lapse and
-  may be seen once more, which is safe. A write offline stays queued locally and
-  the local state wins until it lands.
-- Rows are deleted with their session and after 30 days.
-- Opening a notification does not acknowledge. Opening the inspector does, as in
-  Phase 1.
+  `task_acknowledged` outbound, scoped to the account, updates its other devices.
+- Delivery reads this table, so an acknowledgement committed before its intent
+  still stops the send; no ordering between them is required.
+- Rows live as long as their session, so a failed task does not become unseen
+  again on reload.
+- A write made offline stays queued per account and session, and local state wins
+  until it lands.
+- Phase 1's device-local acknowledgements stay readable on that device and are
+  not uploaded: the key is origin-wide and could belong to another account.
+- **Opening is not acknowledging for a link.** The inspector acknowledges on open
+  for origins `row`, `bar` and `command`. With origin `link`, which a notification
+  uses, it does not; the detail shows an explicit **Mark as seen** action.
 
 ## Rollout and rollback
 
-- Two additive migrations per database. An older Controller ignores the tables
-  (SQLx `ignore_missing`).
-- Order: Controller, then Web, then the service worker through the normal Web
-  release. Machines are not involved.
-- A Service setting `notifications.intents` (default on) disables producers and
-  leaves the current best-effort path off as well; it exists only for rollback
-  and is removed with the Calls dock switch.
+- Additive migrations on both databases; an older Controller ignores them.
+- Order: Controller, then Web, including `sw.js`. No Machine release.
+- New enrollments reach only the new table, so until the Web ships nothing is
+  delivered, which matches production's zero subscriptions.
+- Rollback: set `notifications.delivery` off, or roll the Controller back; either
+  stops delivery with no cross-account path.
 
 ## Acceptance
 
-Automated, on both databases where storage is involved: every producer and
-excluded case in the table above; replay, bootstrap and backfill creating no
-intent; crash between ledger commit and delivery resuming; retry and backoff
-including `Retry-After`; 404/410 removal; coalescing; audience recheck after a
-session is muted or reassigned; ownerless subscriptions skipped; preference
-shapes; acknowledgement sync across two clients and intent resolution; presence
-suppression and fail-open behavior.
+Automated, on both databases where storage is involved: each producer and
+excluded case; replay, bootstrap and backfill creating no intent; metadata
+updates after termination; a new occurrence after resume; permission seqs after
+a worker restart; approval resubmission; audience freeze with an empty audience;
+restart resuming deliveries; retry including `Retry-After`; 404/410 removal;
+independent input Topics; aggregation; audience recheck; endpoint takeover and
+logout; preference migration; acknowledgement before the intent, across two
+clients and across sessions reusing a child id; presence deferral, stale lease and
+input exemption; link-origin non-acknowledgement.
 
-Physical, per the PWA convention and not replaceable by the above: on a locked
-iPhone with the installed app, one remote push for input and one for a failure
-appear on the Lock Screen and open the exact task. Push-service acceptance alone
-is recorded as acceptance only of that step.
+Physical, per the PWA convention: on a locked iPhone with the installed app, an
+input push and a failure push reach the Lock Screen and open the right session
+and task from a cold start; two offline requests both arrive; a push received in
+the foreground is rendered and a later locked push still arrives, proving the
+subscription survived. Push-service acceptance alone proves only that step.
+
+## Decisions
+
+From the design review (`call-d4b18d86e28547320be31fde`):
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | Rollback breaks startup or restores broadcast | Subscriptions move to a table; the old file is left alone; delivery switch |
+| 2 | Logout and account switching | Endpoint takeover, logout removal, session-bound enrollment |
+| 3 | Write-behind can lose both event and intent | Accepted and stated as the durability boundary; closing it is a separate transcript contract |
+| 4 | Old service workers reject new categories | Payload stays v1 with existing categories; no capability gate |
+| 5 | Browser suppression risks revocation | Service worker renders every push |
+| 6 | Permission ids restart | Dedupe on the event seq |
+| 7 | A stale lease hides input | Input ignores presence; others defer, not suppress |
+| 8 | Shared Topic drops requests | Per-occurrence Topic and tag for input |
+| 9 | Revision is not an occurrence | `terminalSeq` stamped at the transition |
+| 10 | Approval ids are nondurable | Managed request id; intents resolved at start |
+| 11 | Acknowledgement can precede the intent | Delivery reads the acknowledgement table |
+| 12 | Acknowledgement scope | Session in the key; legacy local data not uploaded |
+| 13 | "First processed" undefined | Atomic audience freeze with `expanded_at_ms` |
+| 14 | Tags cannot give exactly-once | Goal restated as at-least-once with a stated bound |
+| 15 | Default change misses stored consent | Versioned preference migration |
+| 16 | Producers without a task destination | Typed destinations with a session fallback |
+| 17 | Tap implies acknowledgement | Link origin does not acknowledge; explicit action |
+| 18 | Minute buckets for session errors | Incident id, written with the incident |
+| 19 | Retention resurrects failures | Acknowledgements live with the session; expiry governs delivery only |
