@@ -136,6 +136,16 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     if review && input.task.is_some() && input.root.is_none() {
         return Err(refuse("a base-bound review needs root"));
     }
+    // A description passed as task fails later as an opaque context error.
+    if input
+        .task
+        .as_deref()
+        .is_some_and(|task| !crate::managed_calls::valid_id(task))
+    {
+        return Err(refuse(
+            "task must be a short id (letters, digits, '-', '_' or '.', up to 128); put the description in focus",
+        ));
+    }
     let purpose = if review {
         if input.design {
             "design_review"
@@ -929,6 +939,11 @@ mod tests {
             json!({"root":root,"base":"1ef0ea6f","task":"t"}),
         );
         assert!(short.contains("full 40- or 64-hex"), "{short}");
+        let task = message(
+            "review.start",
+            json!({"root":root,"base":"a".repeat(40),"task":"Review commits a..HEAD in apps/x"}),
+        );
+        assert!(task.contains("task must be a short id"), "{task}");
         assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
         assert!(message("calls.start", json!({"title":"x"})).contains("needs instruction"));
         assert!(
@@ -951,7 +966,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(context.code, "invalid_argument");
         assert!(context.message.contains("absolute directory"));
-        for value in [short, unknown, context.message] {
+        for value in [short, task, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
     }
