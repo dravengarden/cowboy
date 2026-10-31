@@ -105,6 +105,7 @@ test("Duplicate requests carry config overrides and an idempotency key", async (
   expect(seen[1]!.url).toBe("/api/sessions/s/duplicate");
   expect((seen[1]!.init.headers as Record<string, string>)["idempotency-key"]).toBe("key-1");
   expect(JSON.parse(String(seen[1]!.init.body))).toEqual({
+    operation: "key-1",
     provider: "codex",
     provider_account_id: "pika",
     preset: "codex/max",

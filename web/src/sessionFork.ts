@@ -109,6 +109,7 @@ export async function duplicateSession(
     provider_account_id: string;
     preset?: string | null;
     config?: Record<string, string | boolean>;
+    inherit_settings?: boolean;
   },
   key: string,
   fetcher: SessionForkFetch = globalThis.fetch,
@@ -119,12 +120,14 @@ export async function duplicateSession(
       method: "POST",
       headers: { "content-type": "application/json", "idempotency-key": key },
       body: JSON.stringify({
+        operation: key,
         provider: body.provider,
         provider_account_id: body.provider_account_id,
         ...(body.preset ? { preset: body.preset } : {}),
         ...(body.config && Object.keys(body.config).length > 0
           ? { config: body.config }
           : {}),
+        ...(body.inherit_settings === false ? { inherit_settings: false } : {}),
       }),
     },
   );

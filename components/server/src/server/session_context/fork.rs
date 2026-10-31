@@ -255,9 +255,21 @@ async fn fork_session(
     Ok((destination, true))
 }
 
+/// Admitted copies by owner, source and operation, with the request they
+/// answered: a retried or dropped request returns the same copy, and the same
+/// operation never creates a second one for a different request.
+type DuplicateKey = (String, String, String);
+/// The copy's id and the request fingerprint it answered.
+type DuplicateAnswer = (String, String);
+static DUPLICATES: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<DuplicateKey, DuplicateAnswer>>,
+> = std::sync::LazyLock::new(Default::default);
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct DuplicateRequest {
+    /// Stable per distinct request; a retry with it returns the same copy.
+    pub operation: String,
     pub provider: String,
     pub provider_account_id: crate::provider_account::ProviderAccountId,
     /// A signed preset of the target installation (`provider/preset`).
@@ -266,6 +278,13 @@ pub(in crate::server) struct DuplicateRequest {
     /// Explicit live options for the copy (same Provider only).
     #[serde(default)]
     pub config: serde_json::Map<String, serde_json::Value>,
+    /// Copy compatible settings from the source (default on).
+    #[serde(default = "inherit_by_default")]
+    pub inherit_settings: bool,
+}
+
+fn inherit_by_default() -> bool {
+    true
 }
 
 /// A copy on another subscription or Provider (or where a native fork is
@@ -277,9 +296,35 @@ async fn duplicate_session(
     id: String,
     request: DuplicateRequest,
 ) -> Result<String, String> {
+    if !crate::managed_calls::valid_id(&request.operation) {
+        return Err("A stable operation id is required".into());
+    }
+    let lock = write_lock(&id);
+    let _guard = lock.lock().await;
     current_authority(&state, &auth)?;
     let info = owned(&state, &auth.principal, &id)?;
     valid_overrides(&request.config)?;
+    let replay_key = (
+        auth.principal.user_id.clone(),
+        id.clone(),
+        request.operation.clone(),
+    );
+    let fingerprint = serde_json::json!({
+        "provider": request.provider,
+        "account": request.provider_account_id,
+        "preset": request.preset,
+        "config": request.config,
+        "inherit": request.inherit_settings,
+    })
+    .to_string();
+    if let Some((destination, answered)) = DUPLICATES.lock().get(&replay_key).cloned() {
+        if answered != fingerprint {
+            return Err("This operation already created a different copy".into());
+        }
+        if state.hub.session_info(&destination).is_some() {
+            return Ok(destination);
+        }
+    }
     if state.hub.session_is_trashed(&id) {
         return Err("Restore this session from Trash before duplicating it".into());
     }
@@ -300,12 +345,15 @@ async fn duplicate_session(
         cwd: project.clone(),
         runtime_machine_id: runtime_machine_id.clone(),
         preset: request.preset.clone(),
-        inherit_settings: true,
+        inherit_settings: request.inherit_settings,
     };
     inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
     state.hub.continuation_folder(&id, &actor)?;
     let destination = state.supervisor.reserve_session_id();
+    // Fenced until placed, like a fork or continuation destination.
+    let target_lock = write_lock(&destination);
+    let _target_guard = target_lock.lock().await;
     let create = NewSessionRequest {
         provider: request.provider.clone(),
         provider_account_id: Some(request.provider_account_id.clone()),
@@ -326,12 +374,22 @@ async fn duplicate_session(
     if !response.status().is_success() {
         return Err(creation_error(response).await);
     }
-    current_authority(&state, &auth)?;
-    let source = owned(&state, &auth.principal, &id)?.meta;
-    let created = owned(&state, &auth.principal, &destination)?.meta;
-    inheritance::apply(&state, &source, &created, &selection)?;
-    apply_overrides(&state, &destination, &request.config)?;
-    state.hub.place_copy(&id, &destination, &actor)?;
+    DUPLICATES
+        .lock()
+        .insert(replay_key, (destination.clone(), fingerprint));
+    let finish = || -> Result<(), String> {
+        current_authority(&state, &auth)?;
+        let source = owned(&state, &auth.principal, &id)?.meta;
+        let created = owned(&state, &auth.principal, &destination)?.meta;
+        if selection.inherit_settings {
+            inheritance::apply(&state, &source, &created, &selection)?;
+        }
+        apply_overrides(&state, &destination, &request.config)?;
+        state.hub.place_copy(&id, &destination, &actor)
+    };
+    finish().map_err(|error| {
+        format!("The copy {destination} was created but not finished ({error}); delete it and duplicate again")
+    })?;
     Ok(destination)
 }
 

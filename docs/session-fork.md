@@ -22,16 +22,19 @@ model and reasoning to keep or change, otherwise a preset.
 - Another subscription or Provider, or no native fork on the Machine: a new
   session on the source's Machines and project that inherits compatible
   settings and reads the source as linked context on its first message
-  (`POST /api/sessions/SESSION/duplicate`, MCP `sessions.duplicate`, with an
-  `idempotency-key`). It is placed beside the source as "SOURCE (copy)".
+  (`POST /api/sessions/SESSION/duplicate`, MCP `sessions.duplicate`). A
+  stable `operation` returns the same copy on retry, also after a dropped
+  request, and refuses a different request; the form starts a new operation
+  whenever a choice changes. **Inherit compatible settings** can be turned
+  off when the target cannot accept the source's settings. It is placed beside
+  the source as "SOURCE (copy)"; if a later step fails, the error names the
+  created copy to inspect or delete.
 
 The form states which of the two it will do.
 
-- **Fork** in the session menu (mobile menu, Desktop session actions with `F`)
-  forks the whole conversation in one step. It does not open a form: the new
-  session opens at once (on Desktop with the composer focused; Mobile keeps
-  the keyboard down until the user taps the composer). While the source is
-  working, the item waits for the turn to end.
+- **Duplicate…** in the session menu (mobile menu, Desktop session actions
+  with `F`) opens Session Settings at Duplicate; forking from there needs an
+  idle source and opens the new session.
 - Forking through an earlier answer is available to agents and scripts with
   `message_id` (below). The Transcript shows no fork action: switches and
   branches are made in Session Settings.

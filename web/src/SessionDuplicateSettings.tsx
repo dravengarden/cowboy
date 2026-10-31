@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Button,
+  Checkbox,
+  FormControlLabel,
   MenuItem,
   Stack,
   TextField,
@@ -43,6 +45,7 @@ export function SessionDuplicateSettings(
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const section = useRef<HTMLDivElement>(null);
+  const panelId = useId();
   useEffect(() => {
     const take = () => {
       if (takeDuplicateRequest(session.id)) setOpen(true);
@@ -60,12 +63,17 @@ export function SessionDuplicateSettings(
         startIcon={<ContentCopyOutlined />}
         endIcon={<ExpandMore sx={{ transform: open ? "rotate(180deg)" : undefined }} />}
         aria-expanded={open}
+        aria-controls={panelId}
         onClick={() => setOpen((value) => !value)}
         sx={{ justifyContent: "flex-start", textTransform: "none" }}
       >
         Duplicate…
       </Button>
-      {open && <DuplicateEditor session={session} onDone={() => setOpen(false)} />}
+      {open && (
+        <Box id={panelId}>
+          <DuplicateEditor session={session} onDone={() => setOpen(false)} />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -114,11 +122,19 @@ function DuplicateEditor(
     presets.some((entry) => `${provider}/${entry.id}` === preset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [key] = useState(() => `duplicate-${newUuid()}`);
+  const [inheritSettings, setInheritSettings] = useState(true);
   const changed = Object.fromEntries(
     Object.entries(overrides).filter(([id, value]) =>
       coreOptions.find((option) => option.id === id)?.currentValue !== value
     ),
+  );
+  // One operation per distinct request: a retry returns the same copy, and
+  // changing any choice asks for a new one.
+  const choice = JSON.stringify([provider, subscription.value, preset, changed, inheritSettings]);
+  const key = useMemo(() => `duplicate-${newUuid()}`, [choice]);
+  // The copy is created on this session's runtime Machine.
+  const installations = placement.installations.filter((item) =>
+    item.runtime_machine_id === session.machine_id
   );
   const waitForTurn = mode === "fork" && fork === "busy";
   const run = async () => {
@@ -132,6 +148,7 @@ function DuplicateEditor(
           provider_account_id: subscription.value,
           preset: sameAgent ? null : preset || null,
           config: sameAgent ? changed : {},
+          inherit_settings: inheritSettings,
         }, key);
       onDone();
       closeSessionSettings(session.id);
@@ -145,7 +162,7 @@ function DuplicateEditor(
   return (
     <Stack spacing={1.5} sx={{ pt: 1 }} data-duplicate-editor>
       <AiInstallationPicker
-        installations={placement.installations}
+        installations={installations}
         value={placement.installation?.value || ""}
         onChange={(value) => {
           setPreset("");
@@ -194,6 +211,18 @@ function DuplicateEditor(
             helperText={validPreset ? "" : "Choose an available preset for this agent"}
           />
         )}
+      {mode === "linked" && (
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={inheritSettings}
+              onChange={(event) => setInheritSettings(event.target.checked)}
+            />
+          }
+          label="Inherit compatible settings"
+        />
+      )}
       <Typography variant="caption" color="text.secondary" data-duplicate-mode={mode}>
         {mode === "fork"
           ? "Copies the whole conversation into a new session (native fork). This session is unchanged."

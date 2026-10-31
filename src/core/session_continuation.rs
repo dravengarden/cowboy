@@ -64,7 +64,12 @@ impl Hub {
         actor: &FolderActor,
     ) -> Result<(), String> {
         let title = self.place_beside(source, destination, true, actor)?;
-        self.rename_session(destination, format!("{title} (copy)"));
+        let title = if title.ends_with(" (copy)") {
+            title
+        } else {
+            format!("{title} (copy)")
+        };
+        self.rename_session(destination, title);
         Ok(())
     }
 
