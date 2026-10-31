@@ -6526,9 +6526,7 @@ async fn enforce_product_api(
             return StatusCode::FORBIDDEN.into_response();
         }
         RouteAuth::ProductSessionSee | RouteAuth::ProductSessionMutate => {
-            if let Err(status) =
-                authorize_session_route(&state.hub, &principal, &method, &path)
-            {
+            if let Err(status) = authorize_session_route(&state.hub, &principal, &method, &path) {
                 return status.into_response();
             }
         }

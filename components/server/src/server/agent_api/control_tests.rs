@@ -323,3 +323,298 @@ fn discovery_and_receipts_do_not_dump_the_whole_catalog_or_result() {
     assert_eq!(page["data"], "中".repeat(20));
     assert_eq!(page["range"]["next"], 30);
 }
+
+mod machine_scope_and_tools {
+    use super::super::{machine_scope, tools_widening};
+    use crate::core::{Hub, SessionMeta, SessionOrigin, SessionRegistration};
+    use crate::execution_environment::{ExecutionBinding, fixture};
+    use serde_json::{Value, json};
+    use std::collections::BTreeSet;
+
+    fn add(hub: &Hub, id: &str, machine: &str, binding: Option<ExecutionBinding>) -> SessionMeta {
+        hub.create_session(SessionRegistration {
+            id: id.into(),
+            provider: "codex".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: machine.into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: binding,
+            cwd: "/tmp".into(),
+            title: String::new(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("owner".into()),
+            owner_username: None,
+        });
+        hub.session_info(id).unwrap().meta
+    }
+
+    /// `ovh-parent` runs and executes on OVH. `bridged` keeps its runtime on
+    /// OVH but executes on Hawk, which is how production runs Claude.
+    fn fleet() -> (Hub, SessionMeta, SessionMeta, BTreeSet<String>) {
+        let hub = Hub::new();
+        let parent = add(&hub, "ovh-parent", "ovh", None);
+        add(&hub, "ovh-peer", "ovh", None);
+        add(&hub, "hawk-plain", "hawk", None);
+        let bridged = add(&hub, "bridged", "ovh", Some(fixture()));
+        (hub, parent, bridged, BTreeSet::from(["hawk".to_owned()]))
+    }
+
+    fn scope(
+        (hub, colocated): (&Hub, &BTreeSet<String>),
+        parent: &SessionMeta,
+        name: &str,
+        input: Value,
+    ) -> Result<(), &'static str> {
+        machine_scope(hub, colocated, parent, name, &input)
+    }
+
+    #[test]
+    fn a_remote_parent_cannot_reach_another_execution_machine() {
+        const DENIED: Result<(), &str> = Err("machine_scope_denied");
+        let (hub, parent, _, colocated) = fleet();
+        let at = (&hub, &colocated);
+        let submit = |id: &str| json!({"session_id":id,"text":"x"});
+        assert_eq!(
+            scope(at, &parent, "queue.submit", submit("hawk-plain")),
+            DENIED
+        );
+        // Same runtime Machine, different execution Machine.
+        assert_eq!(
+            scope(at, &parent, "queue.submit", submit("bridged")),
+            DENIED
+        );
+        assert_eq!(
+            scope(at, &parent, "queue.submit", submit("ovh-peer")),
+            Ok(())
+        );
+        assert_eq!(
+            scope(
+                at,
+                &parent,
+                "drafts.move",
+                json!({"session_id":"ovh-peer","id":"d","to_session":"hawk-plain"})
+            ),
+            DENIED
+        );
+        assert_eq!(
+            scope(
+                at,
+                &parent,
+                "sync.apply",
+                json!({"state":"order","name":"reorder","args":{"order":["ovh-peer","hawk-plain"]}})
+            ),
+            DENIED
+        );
+        assert_eq!(
+            scope(
+                at,
+                &parent,
+                "sessions.trash",
+                json!({"session_ids":["ovh-peer"],"folder_ids":["any-machine"]})
+            ),
+            DENIED
+        );
+    }
+
+    #[test]
+    fn a_remote_parent_creates_only_on_its_own_execution_machine() {
+        const DENIED: Result<(), &str> = Err("machine_scope_denied");
+        let (hub, parent, _, colocated) = fleet();
+        let at = (&hub, &colocated);
+        let create = |body: Value| scope(at, &parent, "sessions.create", json!({"body":body}));
+        assert_eq!(create(json!({"machine_id":"ovh"})), Ok(()));
+        assert_eq!(create(json!({"machine_id":"hawk"})), DENIED);
+        // Omitted placement would resolve through mutable folder defaults.
+        assert_eq!(create(json!({"folder_id":"f"})), DENIED);
+        assert_eq!(
+            create(json!({"machine_id":"ovh","runtime_machine_id":"hawk"})),
+            DENIED
+        );
+        assert_eq!(
+            scope(
+                at,
+                &parent,
+                "sessions.context_set",
+                json!({"session_id":"ovh-peer","body":{"revision":1,"sources":[],
+                    "next_agent":{"machine_id":"hawk"}}})
+            ),
+            DENIED
+        );
+    }
+
+    #[test]
+    fn a_remote_parent_has_no_global_writes_even_naming_its_own_session() {
+        let (hub, parent, _, colocated) = fleet();
+        let at = (&hub, &colocated);
+        for name in [
+            "configuration.service_set",
+            "plugins.call",
+            "plugins.install",
+            "plugins.uninstall_plan",
+            "plugins.uninstall",
+            "projects.policy_set",
+            "folders.create",
+            "folders.defaults_set",
+            "tools.defaults_set",
+            "usage.reset",
+            "usage.reset_schedule",
+            "usage.reset_cancel",
+            "usage.executor_set",
+        ] {
+            assert_eq!(
+                scope(at, &parent, name, json!({"session_id":"ovh-parent"})),
+                Err("machine_scope_denied"),
+                "{name}"
+            );
+        }
+        for state in ["folders", "workspace-order"] {
+            assert_eq!(
+                scope(
+                    at,
+                    &parent,
+                    "sync.apply",
+                    json!({"state":state,"name":"remove","args":{"session_id":"ovh-parent"}})
+                ),
+                Err("machine_scope_denied"),
+                "{state}"
+            );
+        }
+        assert_eq!(
+            scope(at, &parent, "machines.refresh", json!({"machine":"hawk"})),
+            Err("machine_scope_denied")
+        );
+        assert_eq!(
+            scope(at, &parent, "machines.refresh", json!({"machine":"ovh"})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_parent_executing_on_the_controller_host_is_unchanged() {
+        let (hub, _, bridged, colocated) = fleet();
+        let plain = hub.session_info("hawk-plain").unwrap().meta;
+        let at = (&hub, &colocated);
+        for parent in [&bridged, &plain] {
+            for (name, input) in [
+                ("queue.submit", json!({"session_id":"ovh-peer","text":"x"})),
+                ("sessions.create", json!({"body":{"machine_id":"ovh"}})),
+                ("configuration.service_set", json!({})),
+                ("plugins.install", json!({})),
+                ("tools.defaults_set", json!({})),
+            ] {
+                assert_eq!(scope(at, parent, name, input), Ok(()), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_binding_never_grants_colocated_authority() {
+        let (hub, _, _, colocated) = fleet();
+        let parent = add(
+            &hub,
+            "unknown",
+            "hawk",
+            Some(ExecutionBinding::from_record(json!({"schema":99}))),
+        );
+        assert_eq!(
+            scope((&hub, &colocated), &parent, "tools.defaults_set", json!({})),
+            Err("machine_scope_denied")
+        );
+    }
+
+    fn calls_off(hub: &Hub, id: &str) {
+        hub.set_setting(
+            format!("{}{id}", crate::core::settings_keys::SESSION_TOOLS_PREFIX),
+            json!({"schema":1,"matrix":{"tools":false},"calls":{"enabled":false}}),
+        );
+    }
+
+    fn set(hub: &Hub, parent: &SessionMeta, id: &str, body: Value) -> Result<(), &'static str> {
+        tools_widening(
+            hub,
+            parent,
+            "tools.session_set",
+            &json!({"session_id":id,"body":body}),
+        )
+    }
+
+    #[test]
+    fn an_agent_cannot_widen_its_own_tools_or_its_lineage() {
+        const DENIED: Result<(), &str> = Err("tools_widening_denied");
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        add(&hub, "continued", "hawk", None);
+        hub.set_continued_from("continued", Some("parent".to_owned()));
+        add(&hub, "stranger", "hawk", None);
+        for id in ["parent", "continued", "stranger"] {
+            calls_off(&hub, id);
+        }
+        let enable = json!({"schema":1,"calls":{"enabled":true}});
+        assert_eq!(set(&hub, &parent, "parent", enable.clone()), DENIED);
+        assert_eq!(
+            set(&hub, &parent, "parent", json!({"schema":1})),
+            DENIED,
+            "clearing a restrictive override widens too"
+        );
+        assert_eq!(
+            set(
+                &hub,
+                &parent,
+                "parent",
+                json!({"schema":1,"calls":{"enabled":false},"matrix":{"tools":true}})
+            ),
+            DENIED
+        );
+        assert_eq!(set(&hub, &parent, "continued", enable.clone()), DENIED);
+        let continued = hub.session_info("continued").unwrap().meta;
+        assert_eq!(set(&hub, &continued, "parent", enable.clone()), DENIED);
+        // Outside the lineage this gate does not apply.
+        assert_eq!(set(&hub, &parent, "stranger", enable), Ok(()));
+        // Keeping or narrowing policy stays available to the agent.
+        assert_eq!(
+            set(
+                &hub,
+                &parent,
+                "parent",
+                json!({"schema":1,"calls":{"enabled":false},"matrix":{"tools":false,"recall":false}})
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_new_call_target_is_a_widening_but_a_review_preference_is_not() {
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        hub.set_setting(
+            format!("{}parent", crate::core::settings_keys::SESSION_TOOLS_PREFIX),
+            json!({"schema":1,"calls":{"targets":[{"agent":"claude-code"}]}}),
+        );
+        assert_eq!(
+            set(
+                &hub,
+                &parent,
+                "parent",
+                json!({"schema":1,"calls":{"targets":[{"agent":"claude-code"},{"agent":"grok"}]}})
+            ),
+            Err("tools_widening_denied")
+        );
+        assert_eq!(
+            set(
+                &hub,
+                &parent,
+                "parent",
+                json!({"schema":1,"calls":{"targets":[{"agent":"claude-code"}],
+                    "review":{"claude":["opus"]}}})
+            ),
+            Ok(())
+        );
+    }
+}

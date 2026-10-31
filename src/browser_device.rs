@@ -64,9 +64,7 @@ struct Enrollment {
 /// An IPv6 client controls its whole /64, so one address is not one client.
 fn client_bucket(client: IpAddr) -> IpAddr {
     match client.to_canonical() {
-        IpAddr::V6(address) => {
-            IpAddr::V6((u128::from(address) & !u128::from(u64::MAX)).into())
-        }
+        IpAddr::V6(address) => IpAddr::V6((u128::from(address) & !u128::from(u64::MAX)).into()),
         address @ IpAddr::V4(_) => address,
     }
 }
@@ -114,13 +112,7 @@ impl BrowserDevices {
         Ok(proof)
     }
 
-    pub fn consume(
-        &self,
-        proof: &Proof,
-        registered: bool,
-        now: i64,
-        client: IpAddr,
-    ) -> Result<()> {
+    pub fn consume(&self, proof: &Proof, registered: bool, now: i64, client: IpAddr) -> Result<()> {
         let replay = format!("{}:{}", proof.key, proof.nonce);
         let mut guard = self.nonces.lock();
         let nonces = &mut *guard;
@@ -154,11 +146,17 @@ impl BrowserDevices {
         let client = client_bucket(client);
         ensure!(
             nonces.enrollment.len() < MAX_NONCES
-                && nonces.enrollment_per_client.get(&client).copied().unwrap_or(0)
+                && nonces
+                    .enrollment_per_client
+                    .get(&client)
+                    .copied()
+                    .unwrap_or(0)
                     < MAX_ENROLLMENT_NONCES_PER_CLIENT,
             "device proof capacity exhausted"
         );
-        nonces.enrollment.insert(replay, Enrollment { expires, client });
+        nonces
+            .enrollment
+            .insert(replay, Enrollment { expires, client });
         *nonces.enrollment_per_client.entry(client).or_insert(0) += 1;
         Ok(())
     }
@@ -270,7 +268,10 @@ pub mod tests {
         assert_eq!(client_bucket(first), client_bucket(second));
         assert_ne!(client_bucket(first), client_bucket(other));
         let mapped: IpAddr = "::ffff:192.0.2.1".parse().unwrap();
-        assert_eq!(client_bucket(mapped), "192.0.2.1".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_bucket(mapped),
+            "192.0.2.1".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]

@@ -199,6 +199,172 @@ fn scoped_targets(
     }
 }
 
+/// Where a session's tools run. `machine_id` is only the runtime Machine: a
+/// Claude runtime on OVH executes on Hawk through its binding. `None` for a
+/// binding this Controller cannot read, which never widens authority.
+fn execution_machine(meta: &SessionMeta) -> Option<String> {
+    match &meta.execution_binding {
+        Some(binding) => binding
+            .decode()
+            .ok()
+            .map(|binding| binding.environment.machine_id),
+        None => Some(meta.machine_id.clone()),
+    }
+}
+
+fn named_sessions<'a>(name: &str, input: &'a Value) -> Vec<&'a str> {
+    let mut named: Vec<&str> = ["session_id", "to_session"]
+        .iter()
+        .filter_map(|key| input.get(key)?.as_str())
+        .collect();
+    let list = |value: &'a Value| {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+    };
+    named.extend(list(&input["session_ids"]));
+    if name == "sync.apply" {
+        let args = &input["args"];
+        named.extend(
+            input["state"]
+                .as_str()
+                .and_then(web::session_id_from_sync_state),
+        );
+        named.extend(args["session_id"].as_str());
+        named.extend(list(&args["order"]));
+        named.extend(list(&args["session_ids"]));
+    }
+    named
+}
+
+fn placement_stays_on(body: &Value, own: &str, parent: &SessionMeta) -> bool {
+    body["machine_id"].as_str() == Some(own)
+        && match body.get("runtime_machine_id") {
+            None | Some(Value::Null) => true,
+            Some(runtime) => runtime
+                .as_str()
+                .is_some_and(|runtime| runtime == own || runtime == parent.machine_id),
+        }
+}
+
+/// A parent executing outside the Controller's host holds no authority over
+/// other Machines or the Service. An agent on OVH could otherwise steer a Hawk
+/// session, which is a shell on the Controller host. Colocated parents are
+/// already inside that boundary. Unlisted operations are refused, so a new
+/// write stays closed until it is classified here.
+fn machine_scope(
+    hub: &crate::core::Hub,
+    colocated: &std::collections::BTreeSet<String>,
+    parent: &SessionMeta,
+    name: &str,
+    input: &Value,
+) -> Result<(), &'static str> {
+    const DENIED: &str = "machine_scope_denied";
+    let own = execution_machine(parent).ok_or(DENIED)?;
+    if colocated.contains(&own) {
+        return Ok(());
+    }
+    let sessions = named_sessions(name, input);
+    for id in &sessions {
+        let target = hub.session_info(id).ok_or("not_found")?;
+        if execution_machine(&target.meta).as_deref() != Some(own.as_str()) {
+            return Err(DENIED);
+        }
+    }
+    let allowed = match name {
+        "sessions.create" => placement_stays_on(&input["body"], &own, parent),
+        "sessions.context_set" => {
+            !sessions.is_empty()
+                && match input["body"].get("next_agent") {
+                    None | Some(Value::Null) => true,
+                    Some(next) => placement_stays_on(next, &own, parent),
+                }
+        }
+        // A folder holds sessions on any Machine.
+        "sessions.trash" | "sessions.restore" | "sessions.purge" => {
+            !sessions.is_empty()
+                && input["folder_ids"]
+                    .as_array()
+                    .is_none_or(std::vec::Vec::is_empty)
+        }
+        "machines.refresh" | "machines.maintenance_set" | "projects.request" => {
+            input["machine"].as_str() == Some(own.as_str())
+        }
+        // Requests observations from the shared collectors; changes no policy.
+        "usage.refresh" => true,
+        "sync.apply" => match input["state"].as_str() {
+            Some("title" | "order") => true,
+            Some("folders") => input["name"] == "place",
+            Some("workspace-order") | None => false,
+            Some(_) => !sessions.is_empty(),
+        },
+        // Judged by the operation's contract, never by what a caller adds.
+        _ => {
+            !sessions.is_empty()
+                && catalog::find(name).is_some_and(|op| op.input.contains("session_id:string"))
+        }
+    };
+    if allowed { Ok(()) } else { Err(DENIED) }
+}
+
+/// Same conversation family: walk continuation and fork links to their roots.
+fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> String {
+    let mut current = session.id.clone();
+    let mut source = session
+        .forked_from
+        .clone()
+        .or(session.continued_from.clone());
+    // A corrupt cycle ends the walk; the links are otherwise bounded by history.
+    for _ in 0..256 {
+        let Some(id) = source else { break };
+        let Some(info) = hub.session_info(&id) else {
+            return id;
+        };
+        source = info
+            .meta
+            .forked_from
+            .clone()
+            .or(info.meta.continued_from.clone());
+        current = id;
+    }
+    current
+}
+
+/// Calls and memory are what a person approves for a session, so its own agent
+/// cannot grant them to itself or to a session continuing its conversation.
+fn tools_widening(
+    hub: &crate::core::Hub,
+    parent: &SessionMeta,
+    name: &str,
+    input: &Value,
+) -> Result<(), &'static str> {
+    if name != "tools.session_set" {
+        return Ok(());
+    }
+    let target = input["session_id"].as_str().ok_or("invalid_argument")?;
+    let target = hub.session_info(target).ok_or("not_found")?.meta;
+    if target.id != parent.id && lineage_root(hub, &target) != lineage_root(hub, parent) {
+        return Ok(());
+    }
+    let update = serde_json::from_value(input["body"].clone()).map_err(|_| "invalid_argument")?;
+    if web::agent_tools::override_widens(hub, &target, &update) {
+        return Err("tools_widening_denied");
+    }
+    Ok(())
+}
+
+fn write_gate(
+    state: &AppState,
+    parent: &SessionMeta,
+    name: &str,
+    input: &Value,
+) -> Result<(), &'static str> {
+    machine_scope(&state.hub, &state.colocated_machines, parent, name, input)?;
+    tools_widening(&state.hub, parent, name, input)
+}
+
 fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<AppState>>)> {
     Some(match name {
         "machines.refresh" => (
@@ -625,6 +791,9 @@ async fn dispatch(
         return Err("permission_denied".into());
     }
     scoped_targets(&state.hub, parent, name, &input)?;
+    if spec.write {
+        write_gate(state, parent, name, &input)?;
+    }
     if input.get("to_session").is_some() {
         target(
             &state.hub,
@@ -1114,6 +1283,7 @@ pub(super) async fn apply(
     }
     let auth = identity(state, parent, true).await?;
     scoped_targets(&state.hub, parent, &input.name, &input.input)?;
+    write_gate(state, parent, &input.name, &input.input)?;
     let store = state.store.as_ref().ok_or("unavailable")?.clone();
     let slot = Arc::clone(&EFFECTS)
         .try_acquire_owned()
