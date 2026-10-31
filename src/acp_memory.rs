@@ -720,6 +720,19 @@ mod tests {
                 .status(ToolCallStatus::Completed),
         )));
         memory.finish();
+        let delivered = || {
+            service.requests.lock().iter().any(|(_, body)| {
+                body["payload"]["events"]
+                    .as_array()
+                    .is_some_and(|events| events.len() == 3)
+            })
+        };
+        for _ in 0..400 {
+            if delivered() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         settle(root.path()).await;
         let requests = service.requests.lock();
         let last = &requests.last().unwrap().1["payload"];
