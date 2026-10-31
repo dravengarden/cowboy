@@ -14949,6 +14949,22 @@ fn failed_provider_auth_projection_ids(
         .collect()
 }
 
+/// Named accounts always carry evidence. The default account has no recorded
+/// identity to compare, and current Machines send none for it, so here this
+/// only refuses evidence that breaks the signed method's contract.
+fn refresh_identity_evidence(
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    recipe: Option<&cowboy_provider_sdk::NativeIdentityRecipe>,
+    identity: Option<&crate::provider_account::NativeIdentity>,
+) -> Result<(), String> {
+    if account_id.is_default() && identity.is_none() {
+        return Ok(());
+    }
+    provider_accounts::validate_native_evidence(provider_id, recipe, identity)
+        .map_err(str::to_owned)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn accept_provider_auth_refresh_candidate(
     state: &Arc<AppState>,
@@ -15005,25 +15021,25 @@ async fn accept_provider_auth_refresh_candidate(
     let packages = state
         .provider_catalog
         .packages_for_authentication_scope(portable_schema);
+    let method = package
+        .manifest
+        .authentication
+        .methods
+        .iter()
+        .find(|method| method.id == auth_method)
+        .ok_or("unknown refresh method")?;
+    refresh_identity_evidence(
+        provider_id,
+        account_id,
+        method.native_identity.as_ref(),
+        native_identity,
+    )?;
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
     let result = if account_id.is_default() {
         scope
             .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
             .map_err(|error| error.to_string())?
     } else {
-        let method = package
-            .manifest
-            .authentication
-            .methods
-            .iter()
-            .find(|method| method.id == auth_method)
-            .ok_or("unknown refresh method")?;
-        provider_accounts::validate_native_evidence(
-            provider_id,
-            method.native_identity.as_ref(),
-            native_identity,
-        )
-        .map_err(str::to_owned)?;
         scope
             .refresh_current_grant(
                 state.store.as_ref().ok_or("refresh requires persistence")?,
@@ -20966,6 +20982,38 @@ async fn static_handler(
         Body::from(content),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod refresh_identity_evidence_tests {
+    use super::refresh_identity_evidence;
+    use crate::provider_account::{NativeIdentity, ProviderAccountId};
+    use cowboy_provider_sdk::NativeIdentityRecipe;
+
+    #[test]
+    fn default_refresh_refuses_evidence_outside_the_signed_contract() {
+        let default = ProviderAccountId::default();
+        let recipe = NativeIdentityRecipe::FreshLoginJsonV1 {
+            authority: "claude-ai".into(),
+            relative_path: ".claude.json".into(),
+            subject_path: vec!["oauthAccount".into(), "accountUuid".into()],
+            tenant_path: None,
+        };
+        let identity = |authority: &str| NativeIdentity {
+            authority: authority.into(),
+            subject: "subject".into(),
+            tenant: None,
+        };
+        let check = |recipe, identity: Option<&NativeIdentity>| {
+            refresh_identity_evidence("claude-code", &default, recipe, identity)
+        };
+        // No Machine reports identity for the default account today.
+        assert!(check(Some(&recipe), None).is_ok());
+        assert!(check(None, None).is_ok());
+        assert!(check(Some(&recipe), Some(&identity("claude-ai"))).is_ok());
+        assert!(check(Some(&recipe), Some(&identity("elsewhere"))).is_err());
+        assert!(check(None, Some(&identity("claude-ai"))).is_err());
+    }
 }
 
 #[cfg(test)]
