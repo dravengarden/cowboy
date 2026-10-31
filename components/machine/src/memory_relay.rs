@@ -44,6 +44,8 @@ const HOME_CONNECT: Duration = Duration::from_secs(2);
 /// Excess requests are refused, never queued behind a slow link.
 const MAX_IN_FLIGHT: usize = 32;
 const TOKEN_PREFIX: &str = "cbm1";
+const BIND_ATTEMPTS: u32 = 10;
+const BIND_RETRY: Duration = Duration::from_millis(200);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,23 +123,31 @@ fn store(path: &Path, persisted: &Persisted) -> Result<()> {
     Ok(())
 }
 
+/// The previous process may still hold the port for a moment during a restart.
+async fn bind(port: u16) -> Result<tokio::net::TcpListener> {
+    let mut last = None;
+    for _ in 0..BIND_ATTEMPTS {
+        match tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if port != 0 => {
+                last = Some(error);
+                tokio::time::sleep(BIND_RETRY).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // Retained sessions lose memory until they reload; new ones are fine.
+    tracing::warn!(error = ?last, port, "memory relay port is unavailable");
+    Ok(tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?)
+}
+
 impl MemoryRelay {
     pub async fn start(state_dir: &Path) -> Result<Arc<Self>> {
         let directory = state_dir.join("extensions");
         std::fs::create_dir_all(&directory)?;
         let record = directory.join("memory-relay.json");
         let mut persisted = load_or_create(&record)?;
-        let listener = match tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, persisted.port))
-            .await
-        {
-            Ok(listener) => listener,
-            // Retained sessions lose memory until they reload; new ones are fine.
-            Err(error) if persisted.port != 0 => {
-                tracing::warn!(%error, port = persisted.port, "memory relay port is unavailable");
-                tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?
-            }
-            Err(error) => return Err(error.into()),
-        };
+        let listener = bind(persisted.port).await?;
         persisted.port = listener.local_addr()?.port();
         store(&record, &persisted)?;
         let relay = Arc::new(Self {
@@ -297,6 +307,8 @@ async fn serve(
 
 #[derive(Deserialize)]
 struct HomeBinding {
+    schema: u16,
+    provider: String,
     endpoint: String,
     token: String,
     #[serde(default)]
@@ -355,10 +367,33 @@ fn home_binding(config: &Path, provider: &str) -> Result<HomeBinding> {
         config.join(format!("matrix/{name}.json")),
     ] {
         if let Some(bytes) = read_private(&path)? {
-            return serde_json::from_slice(&bytes).context("parsing memory binding");
+            let binding: HomeBinding =
+                serde_json::from_slice(&bytes).context("parsing memory binding")?;
+            ensure!(
+                binding.schema == 1 && binding.provider == name,
+                "memory binding belongs to another client"
+            );
+            ensure!(
+                permitted_endpoint(&binding.endpoint),
+                "memory endpoint would expose its credential"
+            );
+            return Ok(binding);
         }
     }
     bail!("no memory binding for {name}");
+}
+
+/// HTTPS, or plain HTTP on this host only: the same rule as Provider clients.
+fn permitted_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.path() == "/"
+        && (url.scheme() == "https"
+            || url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "[::1]")))
 }
 
 /// One logical project for a workspace on any Machine: an exact mapping wins,
@@ -501,9 +536,9 @@ mod tests {
     }
 
     fn binding(projects: Value) -> HomeBinding {
-        serde_json::from_value(
-            json!({"endpoint":"http://127.0.0.1:1","token":"t","projects":projects}),
-        )
+        serde_json::from_value(json!({
+            "schema":1,"provider":"grok","endpoint":"http://127.0.0.1:1","token":"t","projects":projects,
+        }))
         .unwrap()
     }
 
@@ -546,8 +581,21 @@ mod tests {
         let directory = root.path().join("cowboy/memory/matrix");
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("claude.json");
-        std::fs::write(&path, r#"{"endpoint":"http://127.0.0.1:1","token":"t"}"#).unwrap();
+        let binding = |provider: &str, endpoint: &str| {
+            json!({"schema":1,"provider":provider,"endpoint":endpoint,"token":"t"}).to_string()
+        };
+        std::fs::write(&path, binding("claude", "http://127.0.0.1:1")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(home_binding(root.path(), "claude-code").is_ok());
+        // A copied credential or a plaintext remote endpoint is refused.
+        for (provider, endpoint) in [
+            ("codex", "http://127.0.0.1:1"),
+            ("claude", "http://matrix.example:7331"),
+        ] {
+            std::fs::write(&path, binding(provider, endpoint)).unwrap();
+            assert!(home_binding(root.path(), "claude-code").is_err());
+        }
+        std::fs::write(&path, binding("claude", "https://matrix.example")).unwrap();
         assert!(home_binding(root.path(), "claude-code").is_ok());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(home_binding(root.path(), "claude-code").is_err());
@@ -568,9 +616,8 @@ mod tests {
                 .authenticate(&token.replace("sess-a", "sess-c"))
                 .is_none()
         );
-        let second = MemoryRelay::start(root.path())
-            .await
-            .unwrap_or_else(|_| first.clone());
+        // The first listener still holds the port: the record and tokens survive.
+        let second = MemoryRelay::start(root.path()).await.unwrap();
         assert_eq!(second.authenticate(token).unwrap(), "sess-a.b");
     }
 

@@ -9,27 +9,44 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 
 use super::AppState;
 use crate::machine_protocol::MachineCommand;
 use crate::machine_protocol::memory_relay::{Identity, Request, Response};
 
-/// Slightly beyond the home Machine's own deadline, so that one answers first.
-const DEADLINE: Duration = Duration::from_secs(32);
+/// Slightly beyond the home Machine's own deadlines, so that one answers first.
+const TURN_DEADLINE: Duration = Duration::from_secs(9);
+const TOOL_DEADLINE: Duration = Duration::from_secs(32);
+/// Memory has its own budget: it must never take capacity from execution.
+const MAX_IN_FLIGHT: usize = 64;
 
 struct Waiter {
     home: String,
     sender: oneshot::Sender<Response>,
 }
 
-#[derive(Default)]
 pub(super) struct Relay {
     next: AtomicU64,
     pending: Mutex<HashMap<String, Waiter>>,
+    capacity: Arc<Semaphore>,
+}
+
+impl Default for Relay {
+    fn default() -> Self {
+        Self {
+            next: AtomicU64::default(),
+            pending: Mutex::default(),
+            capacity: Arc::new(Semaphore::new(MAX_IN_FLIGHT)),
+        }
+    }
 }
 
 impl Relay {
+    pub(super) fn try_admit(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.capacity).try_acquire_owned().ok()
+    }
+
     /// Complete one request, from the Machine it was sent to only.
     pub(super) fn complete(&self, machine_id: &str, request_id: &str, response: Response) {
         let mut pending = self.pending.lock();
@@ -124,6 +141,11 @@ async fn relay(
         "memory-{}",
         state.memory_relay.next.fetch_add(1, Ordering::Relaxed)
     );
+    let deadline = if request.path == "/mcp" {
+        TOOL_DEADLINE
+    } else {
+        TURN_DEADLINE
+    };
     let (sender, receiver) = oneshot::channel();
     state
         .memory_relay
@@ -139,7 +161,7 @@ async fn relay(
         },
     );
     let response = if sent.is_ok() {
-        tokio::time::timeout(DEADLINE, receiver)
+        tokio::time::timeout(deadline, receiver)
             .await
             .ok()
             .and_then(Result::ok)

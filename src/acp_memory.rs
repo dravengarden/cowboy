@@ -135,15 +135,34 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let partial = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&partial)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    std::fs::rename(&partial, path)?;
-    Ok(())
+    let published = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&partial)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&partial, path)?;
+        let parent = path.parent().context("outbox entry has no directory")?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if published.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    published
+}
+
+/// Keep evidence off the turn: a stalled disk must not hold the ACP runtime.
+fn store(outbox: PathBuf, payload: &Value) -> Result<()> {
+    ensure!(
+        queued(&outbox)?.len() < MAX_OUTBOX,
+        "memory delivery queue is full"
+    );
+    let bytes = serde_json::to_vec(payload)?;
+    let name = format!("{:x}.json", Sha256::digest(&bytes));
+    write_private(&outbox.join(name), &bytes)
 }
 
 fn queued(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -270,8 +289,8 @@ impl AcpMemory {
             Ok(response) if response.status().is_success() => {
                 response.json::<Value>().await.map_err(anyhow::Error::from)
             }
-            Ok(response) if response.status().is_client_error() => {
-                // The service answered: it is up, this request is not deliverable.
+            Ok(response) if undeliverable(response.status().as_u16()) => {
+                // The service answered: it is up, this request can never pass.
                 *self.unavailable_until.lock() = None;
                 return Err(Refused.into());
             }
@@ -297,9 +316,14 @@ impl AcpMemory {
             return blocks;
         }
         let notice = self.recall.then(|| UNAVAILABLE.to_owned());
-        let context = tokio::time::timeout(BEGIN_BUDGET, self.begin(&prompt))
-            .await
-            .unwrap_or(notice);
+        let context = match tokio::time::timeout(BEGIN_BUDGET, self.begin(&prompt)).await {
+            Ok(context) => context,
+            // Whatever stalled, the next turns must not wait for it again.
+            Err(_) => {
+                *self.unavailable_until.lock() = Some(Instant::now() + BREAKER);
+                notice
+            }
+        };
         let Some(context) = context.filter(|text| !text.trim().is_empty()) else {
             return blocks;
         };
@@ -330,7 +354,7 @@ impl AcpMemory {
         let notice = self.recall.then(|| UNAVAILABLE.to_owned());
         if self.known_down() {
             if let Some(evidence) = evidence {
-                self.enqueue(&evidence);
+                self.enqueue(evidence);
             }
             return notice;
         }
@@ -338,7 +362,7 @@ impl AcpMemory {
             Some(evidence) => match self.exchange("observe", evidence).await {
                 Ok(receipt) => Some(receipt),
                 Err(_) => {
-                    self.enqueue(evidence);
+                    self.enqueue(evidence.clone());
                     return notice;
                 }
             },
@@ -399,7 +423,7 @@ impl AcpMemory {
         }
     }
 
-    /// The turn ended: keep its segment for delivery. Never waits for it.
+    /// The turn ended: keep its segment for delivery. Never waits for either.
     pub fn finish(self: &Arc<Self>) {
         let payload = {
             let mut segment = self.segment.lock();
@@ -409,25 +433,29 @@ impl AcpMemory {
             segment.bytes = 0;
             (!events.is_empty()).then(|| json!({"turn": turn, "events": events}))
         };
-        if let Some(payload) = payload {
-            self.enqueue(&payload);
-        }
         let memory = Arc::clone(self);
-        tokio::spawn(async move { memory.deliver().await });
+        tokio::spawn(async move {
+            if let Some(payload) = payload {
+                memory.store(payload).await;
+            }
+            memory.deliver().await;
+        });
     }
 
-    fn enqueue(&self, payload: &Value) {
-        let stored = (|| -> Result<()> {
-            ensure!(
-                queued(&self.outbox)?.len() < MAX_OUTBOX,
-                "memory delivery queue is full"
-            );
-            let bytes = serde_json::to_vec(payload)?;
-            let name = format!("{:x}.json", Sha256::digest(&bytes));
-            write_private(&self.outbox.join(name), &bytes)
-        })();
-        if let Err(error) = stored {
-            tracing::warn!(error = %format!("{error:#}"), "memory evidence was not kept");
+    fn enqueue(self: &Arc<Self>, payload: Value) {
+        let memory = Arc::clone(self);
+        tokio::spawn(async move { memory.store(payload).await });
+    }
+
+    async fn store(&self, payload: Value) {
+        let outbox = self.outbox.clone();
+        let stored = tokio::task::spawn_blocking(move || store(outbox, &payload)).await;
+        match stored {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %format!("{error:#}"), "memory evidence was not kept");
+            }
+            Err(error) => tracing::warn!(%error, "memory evidence was not kept"),
         }
     }
 
@@ -437,29 +465,39 @@ impl AcpMemory {
         let Ok(_delivery) = self.delivery.try_lock() else {
             return;
         };
-        let Ok(paths) = queued(&self.outbox) else {
+        let outbox = self.outbox.clone();
+        let Ok(Ok(paths)) = tokio::task::spawn_blocking(move || queued(&outbox)).await else {
             return;
         };
         for path in paths.into_iter().take(8) {
-            let Ok(payload) = std::fs::read(&path)
-                .map_err(anyhow::Error::from)
-                .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
-            else {
-                let _ = std::fs::remove_file(&path);
-                continue;
+            let source = path.clone();
+            let Ok(read) = tokio::task::spawn_blocking(move || std::fs::read(source)).await else {
+                return;
             };
-            match self.exchange("observe", &payload).await {
-                Ok(_) => {
-                    let _ = std::fs::remove_file(&path);
-                }
-                // Never deliverable: retrying would block the queue forever.
-                Err(error) if error.is::<Refused>() => {
-                    let _ = std::fs::remove_file(&path);
-                }
-                Err(_) => return,
+            let payload = read
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?));
+            let remove = match payload {
+                Err(_) => true,
+                Ok(payload) => match self.exchange("observe", &payload).await {
+                    Ok(_) => true,
+                    Err(error) if error.is::<Refused>() => true,
+                    Err(_) => return,
+                },
+            };
+            if remove {
+                tokio::task::spawn_blocking(move || {
+                    let _ = std::fs::remove_file(path);
+                });
             }
         }
     }
+}
+
+/// Authentication and rate answers may pass later; other refusals are about
+/// the request itself, and retrying one would block the queue behind it.
+fn undeliverable(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 401 | 408 | 429)
 }
 
 #[derive(Debug)]
@@ -603,6 +641,20 @@ mod tests {
         queued(&root.join("outbox")).unwrap().len()
     }
 
+    /// Delivery runs in the background; wait for the outbox to drain.
+    async fn settle(root: &Path) {
+        for _ in 0..400 {
+            let empty = outbox(root) == 0;
+            let quiet =
+                tokio::time::timeout(Duration::from_millis(5), std::future::pending::<()>());
+            let _ = quiet.await;
+            if empty && outbox(root) == 0 {
+                return;
+            }
+        }
+        panic!("the outbox did not drain");
+    }
+
     #[test]
     fn only_packages_without_an_adapter_are_bridged() {
         for provider in [
@@ -668,8 +720,7 @@ mod tests {
                 .status(ToolCallStatus::Completed),
         )));
         memory.finish();
-        memory.deliver().await;
-        assert_eq!(outbox(root.path()), 0);
+        settle(root.path()).await;
         let requests = service.requests.lock();
         let last = &requests.last().unwrap().1["payload"];
         assert_eq!(last["events"][1]["role"], "assistant");
@@ -691,12 +742,28 @@ mod tests {
         let asked = service.requests.lock().len();
         memory.prepare(vec![ContentBlock::from("two")]).await;
         assert_eq!(service.requests.lock().len(), asked);
+        for _ in 0..200 {
+            if outbox(root.path()) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         assert!(outbox(root.path()) >= 2);
         // Delivery probes, closes the breaker and drains the queue.
         service.status.store(200, Ordering::SeqCst);
         memory.deliver().await;
         assert!(!memory.known_down());
-        assert_eq!(outbox(root.path()), 0);
+        settle(root.path()).await;
+    }
+
+    #[test]
+    fn only_refusals_about_the_request_are_dropped() {
+        for status in [400, 403, 404, 413] {
+            assert!(undeliverable(status), "{status}");
+        }
+        for status in [200, 401, 408, 429, 500, 503] {
+            assert!(!undeliverable(status), "{status}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -712,6 +779,7 @@ mod tests {
         .await
         .expect("bounded");
         assert_eq!(text(prepared.last().unwrap()), "hello");
+        assert!(memory.known_down());
     }
 
     #[tokio::test]

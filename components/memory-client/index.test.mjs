@@ -185,7 +185,7 @@ test("outage retains completed turns for restart delivery without stale recall",
     ),
     /unavailable/,
   );
-  assert.doesNotMatch(client.context, /Current revision/);
+  assert.doesNotMatch(await client.begin("again"), /Current revision/);
   client.add("tool", "Verification passed.");
   client.add("assistant", "Recorded the result.");
   await client.close();

@@ -4525,10 +4525,28 @@ async fn run_session(
                     // Bounded, and outside the gate so steering never waits on it.
                     let blocks = match &state.memory {
                         Some(memory) if !managed_meta.as_ref().is_ok_and(Option::is_some) => {
-                            memory.prepare(blocks).await
+                            tokio::select! {
+                                prepared = memory.prepare(blocks.clone()) => prepared,
+                                _ = cancellation.changed() => blocks,
+                            }
                         }
                         _ => blocks,
                     };
+                    if *cancellation.borrow_and_update() != cancellation_generation {
+                        if let Some(tx) = completion {
+                            let _ = tx.send(Err("prompt cancelled before it started".to_owned()));
+                        }
+                        sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
+                        sink.push(
+                            &sid,
+                            Event::TurnEnd {
+                                usage: None,
+                                stop_reason: "Cancelled".to_owned(),
+                            },
+                        );
+                        state.set_status(Status::Running, None);
+                        return Ok(());
+                    }
                     let mut steering_gate = Some(state.steering_gate.lock().await);
                     let prompt = Arc::new(ActivePrompt::new(capture_completion));
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));

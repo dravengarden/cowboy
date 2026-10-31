@@ -23,6 +23,8 @@ export const MEMORY_TOOLS = [
 const BREAKER_MS = 30000;
 /** The longest memory may hold a user turn. */
 const BEGIN_BUDGET_MS = 5000;
+/** The longest keeping a completed turn may hold its output. */
+const FINISH_BUDGET_MS = 1000;
 const UNAVAILABLE_NOTICE =
   "[Matrix memory unavailable for this turn. Continue normally and verify facts directly.]";
 const id = (value) =>
@@ -350,7 +352,6 @@ export class MatrixClient {
     this.directory = directory;
     this.events = [];
     this.bytes = 0;
-    this.context = "";
     this.turn = randomUUID();
     this.delivery = Promise.resolve();
     this.inFlight = new Set();
@@ -393,7 +394,9 @@ export class MatrixClient {
       const error = new Error(
         "Matrix request refused (" + response.status + ")",
       );
-      error.refused = response.status < 500;
+      // Rate and authentication answers may pass later.
+      error.refused = response.status < 500 &&
+        ![401, 408, 429].includes(response.status);
       throw error;
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -414,7 +417,11 @@ export class MatrixClient {
     const notice = this.recall ? UNAVAILABLE_NOTICE : "";
     let timer;
     const bounded = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(notice), BEGIN_BUDGET_MS);
+      timer = setTimeout(() => {
+        // Whatever stalled, the next turns must not wait for it again.
+        this.unavailableUntil = Date.now() + BREAKER_MS;
+        resolve(notice);
+      }, BEGIN_BUDGET_MS);
     });
     try {
       return await Promise.race([this.#begin(prompt), bounded]);
@@ -426,10 +433,17 @@ export class MatrixClient {
     }
   }
   async finish() {
+    let timer;
+    const bounded = new Promise((resolve) => {
+      timer = setTimeout(resolve, FINISH_BUDGET_MS);
+    });
     try {
-      await this.#finish();
+      // Output frames wait here: a stalled disk may not hold them.
+      await Promise.race([this.#finish(), bounded]);
     } catch (error) {
       unavailable("delivery", error);
+    } finally {
+      clearTimeout(timer);
     }
   }
   get recall() {
@@ -505,23 +519,24 @@ export class MatrixClient {
     // Without recall or tools nothing is injected; the user turn stays in
     // the segment the turn's completion delivers for learning.
     if (!this.recall && !this.tools) return "";
-    this.context = this.recall ? UNAVAILABLE_NOTICE : "";
+    // Local to this turn: a late completion can reach no other turn.
+    let context = this.recall ? UNAVAILABLE_NOTICE : "";
     if (!this.events.length) {
       // A backend that recalls without observing still answers context.
       if (
         !this.recall || !publicText(prompt).trim() ||
         Date.now() < this.unavailableUntil
-      ) return this.context;
+      ) return context;
       try {
         const found = await this.request("context", {
           query: publicText(prompt),
           budget: 6000,
         });
-        this.context = found.text;
+        context = found.text;
       } catch {
         /* Keep the explicit unavailable notice. */
       }
-      return this.context;
+      return context;
     }
     const evidence = {
       turn: this.turn + "-user",
@@ -531,7 +546,7 @@ export class MatrixClient {
     // Known down: keep the evidence for delivery and do not wait for a reply.
     if (Date.now() < this.unavailableUntil) {
       await this.enqueue(evidence);
-      return this.context;
+      return context;
     }
     // Reserve before publishing the file so a concurrent background flush
     // cannot send the same current-user observation. Durable evidence remains
@@ -548,7 +563,7 @@ export class MatrixClient {
           budget: 6000,
         })
         : { text: "" };
-      this.context = found.text +
+      context = found.text +
         (this.tools
           ? "\nCurrent user evidence for memory_put: " +
             receipt.events.join(", ") +
@@ -560,7 +575,7 @@ export class MatrixClient {
       this.inFlight.delete(path);
     }
     void this.flush();
-    return this.context;
+    return context;
   }
   async #finish() {
     const events = this.events;

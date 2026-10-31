@@ -37792,7 +37792,7 @@
           "sources": [
             "components/memory-client"
           ],
-          "digest": "sha256:c65d3363fd1f2a88a971947bb1061d6240f1a4e2fc9873d22428f02ec32b2383",
+          "digest": "sha256:db729ef163b89d76b38535c0212b383a4208043cef2f3f89cbcf1ff69aee9a6b",
           "package": {
             "kind": "npm",
             "name": "@cowboy/memory-client",

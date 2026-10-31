@@ -16715,9 +16715,9 @@ async fn handle_machine_ws(
                 let relay_connection = connection.clone();
                 let relay_machine = hello.machine_id.clone();
                 let outgoing = machine_write_tx.clone();
-                let permit = Arc::clone(&execution_calls).try_acquire_owned();
+                let permit = state.memory_relay.try_admit();
                 tokio::spawn(async move {
-                    let response = if let Ok(_permit) = permit {
+                    let response = if let Some(_permit) = permit {
                         memory_relay::handle(&relay_state, &relay_machine, &session_id, request)
                             .await
                     } else {
