@@ -159,6 +159,7 @@
     "AddDraft": "drafts.add",
     "AuthActivity": "exception:streams — human gesture clock; an agent must not extend a human login session.",
     "Cancel": "sessions.cancel",
+    "CancelSubagent": "sessions.cancel_subagent",
     "CancelSubmitted": "exception:native — ACP bridge cancellation uses the bridge-owned correlation id; agent queue management uses queue.remove.",
     "ClearDrafts": "drafts.clear",
     "ClearQueue": "queue.clear",

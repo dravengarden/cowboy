@@ -473,6 +473,7 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
         "sessions.pause" => ("set_paused", "session_id paused"),
         "sessions.configure" => ("set_config_option", "session_id config_id value"),
         "sessions.cancel" => ("cancel", "session_id"),
+        "sessions.cancel_subagent" => ("cancel_subagent", "session_id subagent_session_id"),
         "sessions.retry" => ("retry_turn", "session_id"),
         "sessions.reset" => ("reset_session", "session_id"),
         "sessions.delete" => ("delete_session", "session_id"),

@@ -73,6 +73,7 @@ operations! {
     "queue.release_hold", true, "{session_id:string,operation:string}; explicitly release the matching interrupt hold only on an idle worker after inspecting transcript/receipt; never resends the replacement; preserves Pause";
     "sessions.configure", true, "{session_id:string,config_id:string,value:string|boolean}; configuration.read('session') discovers Provider choices";
     "sessions.cancel", true, "{session_id:string}; accepted means cancellation requested, not confirmed stopped";
+    "sessions.cancel_subagent", true, "{session_id:string,subagent_session_id:string}; stop one ACP subagent (the sessionId of its cowboy_subagent row) while the turn continues; only while that row is cancellable; observe the row's state";
     "sessions.retry", true, "{session_id:string}; explicitly repeats the last failed prompt";
     "sessions.reset", true, "{session_id:string}; destructive: clears conversation context";
     "sessions.delete", true, "{session_id:string}; PERMANENT, skips Trash: accepted means close/delete requested; observe session absence before assuming deletion. Prefer sessions.trash";
