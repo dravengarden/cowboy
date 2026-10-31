@@ -14,6 +14,45 @@ pub(in crate::server) struct ForkRequest {
     /// Provider ID of a turn-final assistant message; omitted forks it all.
     #[serde(default)]
     pub message_id: Option<String>,
+    /// Live options (model, reasoning, …) the copy uses instead of the
+    /// inherited ones; saved before its first launch.
+    #[serde(default)]
+    pub config: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Save explicit option choices on a dormant destination; its first launch
+/// replays them, like any Settings change on a sleeping session.
+fn apply_overrides(
+    state: &AppState,
+    destination: &str,
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    for (config_id, value) in config {
+        state
+            .hub
+            .set_config_preference(destination, config_id.clone(), value.clone())?;
+    }
+    Ok(())
+}
+
+fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    if config.len() > 32 {
+        return Err("Too many configuration choices".into());
+    }
+    for (config_id, value) in config {
+        if config_id.is_empty()
+            || config_id.len() > 128
+            || !matches!(
+                value,
+                serde_json::Value::String(_) | serde_json::Value::Bool(_)
+            )
+        {
+            return Err(
+                "Configuration choices must be option ids with a string or boolean value".into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Execution Machine, runtime Machine and project of an admitted session.
@@ -79,6 +118,7 @@ async fn fork_session(
     if !crate::managed_calls::valid_id(&request.operation) {
         return Err("A stable operation id is required".into());
     }
+    valid_overrides(&request.config)?;
     if let Some((destination, record)) = state.hub.fork_by_operation(&id, &request.operation) {
         if record.message_id != request.message_id {
             return Err("This operation already forked another point".into());
@@ -210,8 +250,117 @@ async fn fork_session(
     }
     state.hub.open_fork(&destination, &record, &source.title);
     inheritance::apply(&state, &source, &created, &selection)?;
+    apply_overrides(&state, &destination, &request.config)?;
     state.hub.place_fork(&id, &destination, &actor)?;
     Ok((destination, true))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::server) struct DuplicateRequest {
+    pub provider: String,
+    pub provider_account_id: crate::provider_account::ProviderAccountId,
+    /// A signed preset of the target installation (`provider/preset`).
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Explicit live options for the copy (same Provider only).
+    #[serde(default)]
+    pub config: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A copy on another subscription or Provider (or where a native fork is
+/// unavailable): a new agent on the source's Machines and project that reads
+/// the source as linked context on its first message. The source is untouched.
+async fn duplicate_session(
+    state: Arc<AppState>,
+    auth: AuthenticatedProductRequest,
+    id: String,
+    request: DuplicateRequest,
+) -> Result<String, String> {
+    current_authority(&state, &auth)?;
+    let info = owned(&state, &auth.principal, &id)?;
+    valid_overrides(&request.config)?;
+    if state.hub.session_is_trashed(&id) {
+        return Err("Restore this session from Trash before duplicating it".into());
+    }
+    if state.hub.is_managed_child(&id) {
+        return Err("A managed call cannot be duplicated".into());
+    }
+    if !request.config.is_empty() && request.provider != info.meta.provider {
+        return Err(
+            "Model and reasoning choices apply to the same Provider; choose a preset".into(),
+        );
+    }
+    let source = info.meta.clone();
+    let (machine_id, runtime_machine_id, project) = placement(&source)?;
+    let selection = NextAgent {
+        provider: request.provider.clone(),
+        provider_account_id: request.provider_account_id.clone(),
+        machine_id: machine_id.clone(),
+        cwd: project.clone(),
+        runtime_machine_id: runtime_machine_id.clone(),
+        preset: request.preset.clone(),
+        inherit_settings: true,
+    };
+    inheritance::preflight(&state, &auth, &source, &selection).await?;
+    let actor = folder_actor(&state, &auth.principal);
+    state.hub.continuation_folder(&id, &actor)?;
+    let destination = state.supervisor.reserve_session_id();
+    let create = NewSessionRequest {
+        provider: request.provider.clone(),
+        provider_account_id: Some(request.provider_account_id.clone()),
+        machine_id,
+        runtime_machine_id,
+        cwd: Some(project),
+        preset: request.preset.clone(),
+        folder_id: None,
+        system: false,
+        origin: SessionOrigin::Web,
+        initial_prompt: None,
+        context_sources: vec![id.clone()],
+        reserved_id: Some(destination.clone()),
+        retained_auth_generation: None,
+    };
+    let response =
+        api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;
+    if !response.status().is_success() {
+        return Err(creation_error(response).await);
+    }
+    current_authority(&state, &auth)?;
+    let source = owned(&state, &auth.principal, &id)?.meta;
+    let created = owned(&state, &auth.principal, &destination)?.meta;
+    inheritance::apply(&state, &source, &created, &selection)?;
+    apply_overrides(&state, &destination, &request.config)?;
+    state.hub.place_copy(&id, &destination, &actor)?;
+    Ok(destination)
+}
+
+pub(in crate::server) async fn duplicate(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(id): Path<String>,
+    Json(request): Json<DuplicateRequest>,
+) -> Response {
+    let response_state = state.clone();
+    // A dropped HTTP request does not cancel an admitted creation; the
+    // creation-replay layer returns the same copy for a retried key.
+    match tokio::spawn(duplicate_session(state, auth, id, request)).await {
+        Ok(Ok(session_id)) => {
+            let session = response_state
+                .hub
+                .session_info(&session_id)
+                .map(|info| info.meta);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"session_id": session_id, "session": session})),
+            )
+                .into_response()
+        }
+        Ok(Err(error)) => failure(error),
+        Err(_) => {
+            failure("Duplicate outcome is unknown; inspect the session list before retrying".into())
+        }
+    }
 }
 
 pub(in crate::server) async fn fork(
@@ -272,6 +421,22 @@ mod tests {
             owner_username: None,
         });
         hub.session_info("source").unwrap()
+    }
+
+    #[test]
+    fn copy_overrides_are_option_ids_with_scalar_values() {
+        let config = |value: serde_json::Value| {
+            serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value).unwrap()
+        };
+        assert!(
+            valid_overrides(&config(serde_json::json!({"model": "opus", "fast": true}))).is_ok()
+        );
+        assert!(valid_overrides(&config(serde_json::json!({"model": {"nested": 1}}))).is_err());
+        assert!(valid_overrides(&config(serde_json::json!({"": "opus"}))).is_err());
+        let many = (0..33)
+            .map(|index| (format!("o{index}"), serde_json::json!("x")))
+            .collect();
+        assert!(valid_overrides(&many).is_err());
     }
 
     #[test]

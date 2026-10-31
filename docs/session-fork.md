@@ -10,6 +10,23 @@ keeps the complete model context and can reuse the Provider prompt cache.
 
 ## User flow
 
+**Duplicate…** in Session Settings (Mobile settings and Desktop Run
+Configuration, under **Switch agent or link context**; the session menu item
+and Desktop `F` open it) copies a session without changing it. Choose the
+installation and subscription; on the same Provider the form shows the live
+model and reasoning to keep or change, otherwise a preset.
+
+- Same Provider and subscription on a fork-capable Machine: a native fork
+  (below) of the whole conversation, with the chosen model/reasoning saved on
+  the copy before its first launch (`config`). It waits for the current turn.
+- Another subscription or Provider, or no native fork on the Machine: a new
+  session on the source's Machines and project that inherits compatible
+  settings and reads the source as linked context on its first message
+  (`POST /api/sessions/SESSION/duplicate`, MCP `sessions.duplicate`, with an
+  `idempotency-key`). It is placed beside the source as "SOURCE (copy)".
+
+The form states which of the two it will do.
+
 - **Fork** in the session menu (mobile menu, Desktop session actions with `F`)
   forks the whole conversation in one step. It does not open a form: the new
   session opens at once (on Desktop with the composer focused; Mobile keeps

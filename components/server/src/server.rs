@@ -11080,6 +11080,13 @@ async fn serve_axum(
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/sessions/{id}/fork", post(session_context::fork))
+        .route(
+            "/api/sessions/{id}/duplicate",
+            post(session_context::duplicate).layer(middleware::from_fn_with_state(
+                Arc::clone(&state.session_create_replays),
+                session_create_replay::replay,
+            )),
+        )
         .route("/api/sessions/{id}/config-revert", get(config_revert::get))
         .route(
             "/api/sessions/{id}/config-revert/restore",

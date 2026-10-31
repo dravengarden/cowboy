@@ -14,7 +14,7 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { recordUndo } from "./undoActions";
 import { UNDO_NOTICE_MS } from "./undoHistory";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
-import { forkAvailability, forkSession } from "./sessionFork";
+import { forkAvailability } from "./sessionFork";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
 import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
@@ -98,7 +98,7 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ForkRightOutlined,
-    CallSplitOutlined,
+    ContentCopyOutlined,
     ExpandMore,
     FolderOpenOutlined,
     FolderOutlined,
@@ -147,7 +147,7 @@ import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
-import { openSessionSettings, requestComposerFocus, requestNewAgent } from "./sessionSettingsOpen";
+import { openSessionSettings, requestDuplicate, requestNewAgent } from "./sessionSettingsOpen";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -888,21 +888,6 @@ function SessionList({
     const menuFork = menuLiveSession && !isManagedChild(menuLiveSession)
         ? forkAvailability(menuLiveSession, sessionMachines)
         : null;
-    const forkMenuSession = (): void => {
-        if (!menuAnchor || menuFork !== "ready") return;
-        const session = menuAnchor.row;
-        setMenuAnchor(null);
-        void forkSession(session.id)
-            .then((receipt) => {
-                requestPickSession(receipt.session_id, receipt.session ?? undefined);
-                // Mobile keeps the keyboard down: a focus outside the tap's own
-                // gesture would show a caret without raising the keyboard.
-                if (desktop) {
-                    setTimeout(() => requestComposerFocus(receipt.session_id), 150);
-                }
-            })
-            .catch((error: Error) => documentNotice(error.message));
-    };
     const menuProjection = useExploreSessionState(
         menuAnchor?.row.id ?? "__session-menu-none__",
     ).projection;
@@ -2863,14 +2848,22 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
-                {menuFork && (
-                    <MenuItem data-session-fork disabled={menuFork === "busy"} onClick={forkMenuSession}>
+                {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                    <MenuItem
+                        data-session-duplicate
+                        onClick={(): void => {
+                            const row = menuAnchor.row;
+                            setMenuAnchor(null);
+                            requestPickSession(row.id, row);
+                            requestDuplicate(row.id);
+                        }}
+                    >
                         <ListItemIcon>
-                            <CallSplitOutlined fontSize="medium" />
+                            <ContentCopyOutlined fontSize="medium" />
                         </ListItemIcon>
                         <ListItemText
-                            primary="Fork"
-                            secondary={menuFork === "busy" ? "Available after the current turn" : "Same agent and conversation, new branch"}
+                            primary="Duplicate…"
+                            secondary={menuFork ? "Fork, or copy to another agent" : "Copy to a new agent"}
                         />
                     </MenuItem>
                 )}
@@ -3024,9 +3017,9 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
                                 <Kbd keys="M" />
                             </Button>
-                            {menuFork && (
-                                <Button data-session-shortcut="f" data-session-fork fullWidth disabled={menuFork === "busy"} startIcon={<CallSplitOutlined />} onClick={forkMenuSession} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuFork === "busy" ? "Fork after this turn" : "Fork"}</Box>
+                            {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                                <Button data-session-shortcut="f" data-session-duplicate fullWidth startIcon={<ContentCopyOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestDuplicate(row.id); }} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Duplicate…</Box>
                                     <Kbd keys="F" />
                                 </Button>
                             )}

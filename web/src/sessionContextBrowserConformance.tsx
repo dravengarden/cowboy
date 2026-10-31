@@ -6,6 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
+import { SessionDuplicateSettings } from "./SessionDuplicateSettings";
 import { SessionContextCue } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
@@ -29,6 +30,7 @@ export async function runSessionContextBrowserConformance(
   const realFetch = globalThis.fetch;
   const realSocket = globalThis.WebSocket;
   const checks: string[] = [];
+  const duplicateKeys: string[] = [];
   const entry = managementEntryFixture("claude-code");
   entry.publisher = entry.manifest.publisher;
   const sessions: SessionMeta[] = [
@@ -126,6 +128,15 @@ export async function runSessionContextBrowserConformance(
     if (url.endsWith("/hibernate")) {
       writes.push({ url, body: {} });
       return new Response(null, { status: 204 });
+    }
+    if (url.endsWith("/fork") || url.endsWith("/duplicate")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push({ url, body });
+      duplicateKeys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
+      return Response.json({
+        session_id: url.endsWith("/fork") ? "fork-copy" : "linked-copy",
+        session: null,
+      }, { status: 201 });
     }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -301,7 +312,12 @@ export async function runSessionContextBrowserConformance(
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
-          {desktop ? <SessionContextSettings session={sessions[0]!} /> : (
+          {desktop ? (
+            <>
+              <SessionContextSettings session={sessions[0]!} />
+              <SessionDuplicateSettings session={sessions[0]!} />
+            </>
+          ) : (
             <Sheet
               open
               cover
@@ -313,6 +329,7 @@ export async function runSessionContextBrowserConformance(
             >
               <Box sx={{ py: 2 }}>
                 <SessionContextSettings session={sessions[0]!} />
+                <SessionDuplicateSettings session={sessions[0]!} />
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="overline">Session</Typography>
                 <Typography>{sessions[0]!.title}</Typography>
@@ -846,6 +863,80 @@ export async function runSessionContextBrowserConformance(
       flushSync(() => root.render(null));
       if (workspace !== undefined) sessions[0]!.workspace_id = workspace;
     }
+    // Duplicate in Session Settings: native fork on the same agent, a linked
+    // copy on another subscription; the source is never changed.
+    flushSync(() => root.render(<Fixture desktop />));
+    await until(() => Boolean(button("Duplicate…")));
+    Socket.active.at(-1)?.publish({
+      type: "config_options",
+      session_id: sessions[0]!.id,
+      options: [{
+        id: "model",
+        name: "Model",
+        category: "model",
+        currentValue: "sonnet",
+        options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
+      }],
+    });
+    button("Duplicate…").click();
+    await until(() => Boolean(container.querySelector("[data-duplicate-mode]")));
+    check(
+      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "linked",
+      "duplicate: without native fork on the Machine the copy is a linked new agent",
+    );
+    Socket.active.at(-1)?.publish({
+      type: "machines",
+      machines: [{ ...machine, capabilities: { hibernation: true, native_fork: true } }],
+      resync: true,
+    });
+    await until(() =>
+      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "fork"
+    );
+    check(true, "duplicate: the same agent on a fork-capable Machine forks natively");
+    await until(() => Boolean(container.querySelector('[data-duplicate-option="model"]')));
+    container.querySelector<HTMLElement>('[data-duplicate-option="model"] [role="combobox"]')!
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    await until(() => Boolean(option("Opus")));
+    option("Opus").click();
+    await until(() =>
+      container.querySelector('[data-duplicate-option="model"]')?.textContent?.includes("Opus") === true
+    );
+    const beforeFork = writes.length;
+    container.querySelector<HTMLButtonElement>("[data-duplicate-run]")!.click();
+    await until(() => writes.length > beforeFork);
+    const forked = writes.at(-1)!;
+    check(
+      forked.url.endsWith("/fork") &&
+        JSON.stringify(forked.body.config) === JSON.stringify({ model: "opus" }),
+      "duplicate: a native fork carries only the changed model",
+    );
+    check(
+      !writes.slice(beforeFork).some((write) => write.url.endsWith("/context")),
+      "duplicate: the source's context and agent stay unchanged",
+    );
+    flushSync(() => root.render(null));
+    flushSync(() => root.render(<Fixture desktop />));
+    await until(() => Boolean(button("Duplicate…")));
+    button("Duplicate…").click();
+    await until(() => Boolean(container.querySelector("[data-duplicate-editor] [data-session-subscription] [role=\"combobox\"]")));
+    container.querySelector<HTMLElement>("[data-duplicate-editor] [data-session-subscription] [role=\"combobox\"]")!
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    await until(() => Boolean(option("Claude · Mink")));
+    option("Claude · Mink").click();
+    await until(() =>
+      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "linked"
+    );
+    const beforeCopy = writes.length;
+    container.querySelector<HTMLButtonElement>("[data-duplicate-run]")!.click();
+    await until(() => writes.length > beforeCopy);
+    const copied = writes.at(-1)!;
+    check(
+      copied.url.endsWith("/duplicate") && copied.body.provider_account_id === "mink" &&
+        (duplicateKeys.at(-1) ?? "").startsWith("duplicate-"),
+      "duplicate: another subscription creates a linked copy with an idempotency key",
+    );
+    flushSync(() => root.render(null));
+    Socket.active.at(-1)?.publish({ type: "machines", machines: [machine], resync: true });
     await runCreateDefaultsBrowserChecks(sessions[1]!, "Claude · Mink");
   } finally {
     root.unmount();

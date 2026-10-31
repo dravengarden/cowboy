@@ -6,7 +6,7 @@ use crate::session_context::{Context, Delivery, Injection, NextAgent, Source};
 
 mod fork;
 mod inheritance;
-pub(super) use fork::fork;
+pub(super) use fork::{duplicate, fork};
 
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.

@@ -32,7 +32,7 @@ import { setSessionConfigOptions, useStoreSelector } from "./store";
 const EMPTY_OPTIONS: readonly ConfigOption[] = [];
 
 // Provider categories are portable; ids cover older declarations without a category.
-function isCoreOption(option: ConfigOption): boolean {
+export function isCoreOption(option: ConfigOption): boolean {
   return option.category === "model" || option.category === "thought_level" ||
     ["model", "effort", "reasoning_effort"].includes(option.id);
 }
