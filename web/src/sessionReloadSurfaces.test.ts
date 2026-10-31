@@ -14,7 +14,7 @@ const dialogSource = await readFile(
 
 test("desktop session dialog exposes confirmed runtime reload", () => {
   assert(appSource.includes('data-session-shortcut="l"'));
-  // F opens New session from this in Session Settings (continue or fork).
+  // F opens Continue or fork in Session Settings.
   assert(appSource.includes('data-session-shortcut="f" data-session-new-from'));
   assert(appSource.includes("data-session-new-from\n"));
   assert(appSource.includes("onRequestReload(menuAnchor.row)"));

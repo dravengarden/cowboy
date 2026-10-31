@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  COWBOY_PATCH,
   dshHome,
   fileText,
   planOf,
@@ -293,6 +294,15 @@ test("fileText leaves unframed or unnumbered text alone", () => {
       "<path>/a</path>\n<type>file</type>\n<content>\nno numbers\n</content>",
     ),
     "no numbers",
+  );
+});
+
+test("the profile patch routes web_fetch through the gateway", () => {
+  assert.match(COWBOY_PATCH, /fetchProvider: deepseek-fetch-api/u);
+  assert.match(COWBOY_PATCH, /searchProvider: deepseek-official/u);
+  assert.match(
+    COWBOY_PATCH,
+    /baseURL: !!js process\.env\.DEEPSEEK_WEB_BASE_URL/u,
   );
 });
 

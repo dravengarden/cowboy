@@ -18,12 +18,22 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 // An id-targeted override replaces the whole config block, so it restates the
 // bundle's provider route.
 // Users still choose any advertised model through the session configuration.
+// dsh's local web_fetch refuses every non-public DNS answer, which includes a
+// fake-IP resolver, so fetches use DeepSeek's Fetch API through the gateway.
 export const COWBOY_PATCH =
   `# Written by Cowboy at every launch; local edits are replaced.
 - id: acp
   config:
     provider: deepseek-official
     model: deepseek-flash
+- id: web
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: deepseek-fetch-api
+- id: web-deepseek-api
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_WEB_BASE_URL
 `;
 
 function record(value) {
