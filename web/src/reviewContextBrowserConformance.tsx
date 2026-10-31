@@ -419,8 +419,10 @@ async function checkReviewCompareAndSelection(): Promise<string> {
       () => compare()?.textContent?.includes("Ready to merge · origin/main") === true,
       "The default comparison should be named by its scenario",
     );
-    const unread = fixture.container.querySelector("[data-review-unread]");
-    check(unread?.textContent === "1 unread", "Unread count is missing");
+    await until(
+      () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
+      "Unread count is missing",
+    );
 
     await press(compare(), "comparison control");
     await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");
