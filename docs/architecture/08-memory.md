@@ -5,22 +5,30 @@ and checkpointing. It is a separate product and filesystem instance repository,
 not a Cowboy database table or Controller endpoint. Native agents still own
 their conversation history, compaction, authentication and execution.
 
-The standard Codex and Claude Plugins can opt in through a private runtime-host
-configuration. Their exact signed adapters disable native automatic memory,
-recall bounded historical context before a user turn, provide Matrix MCP tools,
-and durably queue public observations for Matrix's background worker. They do
-not read or rewrite native memory databases. Existing sessions retain their
-recorded Plugin generation; publication cannot retrofit a running process.
+Memory is available to every Agent on every Machine that has the `matrix`
+Plugin active, and it is never required: see [the reliability
+contract](../matrix-memory.md#reliability-contract). The standard Codex and
+Claude signed adapters disable native automatic memory, recall bounded
+historical context before a user turn, provide Matrix MCP tools, and durably
+queue public observations for Matrix's background worker. They do not read or
+rewrite native memory databases. Existing sessions retain their recorded Plugin
+generation; publication cannot retrofit a running process. Grok, DeepSeek
+Harness and the Claude and Codex DeepSeek variants have no such adapter, so the
+ACP worker provides the same behavior for them and leaves their native memory
+as it is.
 
-For OVH runtime with Hawk/Falcon execution, Matrix requests and its outbox stay
-on OVH. The execution descriptor supplies executor and workspace identity.
-Explicit host mappings join those registrations to one logical Matrix project.
-The Matrix server independently fixes user/Provider/runtime and checks grants.
+A Machine with a local Matrix binding talks to it directly. Every other Machine
+reaches the home Machine through its authenticated Cowboy connection, so memory
+uses the route the Machine already has and needs no tunnel, proxy setting or
+credential. The Controller derives the session's identity from its own record.
+Explicit mappings on the home Machine join workspaces to one logical Matrix
+project. The Matrix server independently fixes user/Provider/runtime and checks
+grants.
 
-`cowboy.memory-client` contains only bounded delivery. Codex and Claude own
-their native protocol integration. Grok is deferred and retains native memory.
-DeepSeek variants stay isolated and never read standard Codex/Claude Matrix
-configuration, credentials or stores.
+`cowboy.memory-client` and the worker's `acp_memory` contain only bounded
+delivery. Each Agent has its own Matrix credential and private provider scope,
+and shares user, project and machine scopes. Isolated variants never read
+standard Codex/Claude Matrix configuration or stores.
 
 Required guidance belongs in AGENTS.md, documentation, tests and hooks;
 reusable procedures belong in skills. Memory is fallible historical evidence

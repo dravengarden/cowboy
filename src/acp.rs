@@ -2600,6 +2600,8 @@ struct ClientState {
     sink: Arc<dyn AgentSink>,
     session_id: String,
     provider_id: String,
+    /// Present only for Providers without a memory adapter of their own.
+    memory: Option<Arc<crate::acp_memory::AcpMemory>>,
     /// This worker opened an immutable Service-owned credential projection.
     /// ACP authentication failures can therefore expire that exact generation.
     service_auth_projected: bool,
@@ -2960,7 +2962,9 @@ async fn agent_main(
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
     let (prompt_cancellation, _) = watch::channel(0_u64);
+    let memory = crate::acp_memory::AcpMemory::open(&spec.id);
     let state = Arc::new(ClientState {
+        memory,
         sink,
         session_id: session_id.to_owned(),
         provider_id: spec.id.clone(),
@@ -3679,6 +3683,11 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     if !route_subagent_notification(state, notif) {
         return;
     }
+    if let Some(memory) = &state.memory
+        && state.current_prompt().is_some()
+    {
+        memory.observe_update(&notif.update);
+    }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
         match serde_json::to_value(&update.config_options) {
             Ok(opts) => {
@@ -3949,6 +3958,9 @@ async fn run_session(
         .is_some();
     let resume_method = select_resume_method(agent_can_resume, agent_can_load);
     let agent_can_fork = init.agent_capabilities.session_capabilities.fork.is_some();
+    let memory_servers = state.memory.as_ref().map_or_else(Vec::new, |memory| {
+        memory.mcp_servers(init.agent_capabilities.mcp_capabilities.http)
+    });
     let (resume, fork) = match start {
         NativeStart::New => (None, None),
         NativeStart::Resume(id) => (Some(id), None),
@@ -3988,11 +4000,10 @@ async fn run_session(
             ResumeMethod::Resume => {
                 startup_phase.send_replace(StartupPhase::Resume);
                 match cx
-                    .send_request(resume_session_request(
-                        provider_id,
-                        resume_id.clone(),
-                        cwd.clone(),
-                    ))
+                    .send_request(
+                        resume_session_request(provider_id, resume_id.clone(), cwd.clone())
+                            .mcp_servers(memory_servers.clone()),
+                    )
                     .block_task()
                     .await
                 {
@@ -4014,11 +4025,10 @@ async fn run_session(
                 startup_phase.send_replace(StartupPhase::Load);
                 state.suppress_updates.store(true, Ordering::SeqCst);
                 let loaded = cx
-                    .send_request(load_session_request(
-                        provider_id,
-                        resume_id.clone(),
-                        cwd.clone(),
-                    ))
+                    .send_request(
+                        load_session_request(provider_id, resume_id.clone(), cwd.clone())
+                            .mcp_servers(memory_servers.clone()),
+                    )
                     .block_task()
                     .await;
                 state.suppress_updates.store(false, Ordering::SeqCst);
@@ -4042,7 +4052,10 @@ async fn run_session(
     if let Some(fork) = fork {
         startup_phase.send_replace(StartupPhase::Fork);
         let forked = cx
-            .send_request(fork_session_request(provider_id, &fork, cwd.clone()))
+            .send_request(
+                fork_session_request(provider_id, &fork, cwd.clone())
+                    .mcp_servers(memory_servers.clone()),
+            )
             .block_task()
             .await
             .map_err(|error| {
@@ -4070,7 +4083,9 @@ async fn run_session(
     } else {
         startup_phase.send_replace(StartupPhase::New);
         let session = cx
-            .send_request(new_session_request(provider_id, cwd.clone()))
+            .send_request(
+                new_session_request(provider_id, cwd.clone()).mcp_servers(memory_servers.clone()),
+            )
             .block_task()
             .await
             .map_err(|error| {
@@ -4506,8 +4521,15 @@ async fn run_session(
                     }
                     // A queued prompt may acquire the lock just after the prior
                     // turn reported Running. Reassert Busy before its RPC.
-                    let mut steering_gate = Some(state.steering_gate.lock().await);
                     state.set_status(Status::Busy, None);
+                    // Bounded, and outside the gate so steering never waits on it.
+                    let blocks = match &state.memory {
+                        Some(memory) if !managed_meta.as_ref().is_ok_and(Option::is_some) => {
+                            memory.prepare(blocks).await
+                        }
+                        _ => blocks,
+                    };
+                    let mut steering_gate = Some(state.steering_gate.lock().await);
                     let prompt = Arc::new(ActivePrompt::new(capture_completion));
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
                     let mut retries = 0;
@@ -4600,6 +4622,9 @@ async fn run_session(
                             break response;
                         }
                     };
+                    if let Some(memory) = &state.memory {
+                        memory.finish();
+                    }
                     state.clear_prompt(&prompt);
                     // Only silence after the parent's turn counts against a
                     // subagent that is still running.

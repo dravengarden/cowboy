@@ -124,6 +124,11 @@ descriptor and exposes its path to the Provider launcher as
 }
 ```
 
+On a Machine that runs the memory relay, `memory.relay` adds the session's
+loopback `endpoint`, its `token` and its private outbox `state_dir`. A launcher
+without a local binding uses it; see
+[Matrix Provider integration](matrix-memory.md#every-machine-and-every-agent).
+
 Provider launchers read only this descriptor and the private binding it names.
 No descriptor (a Machine that predates session extensions) keeps the legacy
 host enrollment with both switches on and the release's built-in call

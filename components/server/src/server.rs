@@ -16,6 +16,7 @@ pub(crate) use agent_tools::launch_extensions;
 mod dormant_pins;
 mod folder_defaults;
 mod memory_reclaim;
+mod memory_relay;
 mod secure_transport;
 mod send_delivery;
 mod session_configuration;
@@ -384,6 +385,7 @@ struct AppState {
     execution_closures:
         Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
     managed_calls: Arc<managed_calls::Coordinator>,
+    memory_relay: memory_relay::Relay,
     /// Machines permitted to have their Code reads executed on the
     /// Controller's own filesystem. A hello's declared connection mode is a
     /// request; this set is the permission.
@@ -1935,6 +1937,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         lost_turns: Default::default(),
         execution_closures: Arc::default(),
         managed_calls: Arc::default(),
+        memory_relay: memory_relay::Relay::default(),
         colocated_machines: args.colocated_machines.iter().cloned().collect(),
         zed_adapter_socket: args.zed_adapter_socket,
         observability,
@@ -16695,6 +16698,55 @@ async fn handle_machine_ws(
                         );
                     }
                 });
+                continue;
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::MemoryRelayRequest {
+                        request_id,
+                        session_id,
+                        request,
+                    },
+            } => {
+                // Off the read loop, like a managed call: a slow home Machine
+                // must not hold this connection. An exhausted budget is an
+                // ordinary unavailable answer.
+                let relay_state = Arc::clone(&state);
+                let relay_connection = connection.clone();
+                let relay_machine = hello.machine_id.clone();
+                let outgoing = machine_write_tx.clone();
+                let permit = Arc::clone(&execution_calls).try_acquire_owned();
+                tokio::spawn(async move {
+                    let response = if let Ok(_permit) = permit {
+                        memory_relay::handle(&relay_state, &relay_machine, &session_id, request)
+                            .await
+                    } else {
+                        crate::machine_protocol::memory_relay::Response::unavailable()
+                    };
+                    if relay_state.machine_control.is_current(&relay_connection) {
+                        let _ = queue_machine_json(
+                            &outgoing,
+                            &crate::machine_protocol::MachineFrame::Command {
+                                command: crate::machine_protocol::MachineCommand::MemoryRelayReply {
+                                    request_id,
+                                    response,
+                                },
+                            },
+                        );
+                    }
+                });
+                continue;
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::MemoryRelayResponse {
+                        request_id,
+                        response,
+                    },
+            } => {
+                state
+                    .memory_relay
+                    .complete(&hello.machine_id, &request_id, response);
                 continue;
             }
             crate::machine_protocol::MachineFrame::Event { event } => {

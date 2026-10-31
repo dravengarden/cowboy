@@ -335,6 +335,8 @@ pub struct MachineBrokerArgs {
     /// contexts and `extensions/sessions` session-extension descriptors.
     /// Local parent workers receive their stable context path.
     pub call_context_root: Option<PathBuf>,
+    /// Gives sessions memory on a Machine without a local backend.
+    pub memory_relay: Option<Arc<crate::memory_relay::MemoryRelay>>,
 }
 
 #[derive(Clone)]
@@ -3506,6 +3508,12 @@ impl Broker {
                         root,
                         &session.session_id,
                         switches,
+                        // A managed child never receives memory.
+                        self.args
+                            .memory_relay
+                            .as_ref()
+                            .filter(|_| !session.system)
+                            .map(|relay| relay.session_access(&session.session_id)),
                     )
                 });
             let value = match written {
@@ -5402,6 +5410,7 @@ mod tests {
             worktree_root: root.path().join("worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         // Replay while no worker exists must retain one original context.
         handle_core_command(&broker, command.clone()).await;
@@ -5627,6 +5636,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.sessions.lock().insert(
             "sess-heartbeat-reset".to_owned(),
@@ -5707,6 +5717,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: ready_timeout,
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.sessions.lock().insert(
             session_id.to_owned(),
@@ -5929,6 +5940,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let session = StartSession {
             session_id: "sess-fast-failure".to_owned(),
@@ -5979,6 +5991,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         broker
@@ -6077,6 +6090,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         broker.sessions.lock().insert(
             "sess-1".to_owned(),
@@ -6180,6 +6194,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.sessions.lock().insert(
             "sess-1".to_owned(),
@@ -6252,6 +6267,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         let slots = broker.cutover_launches.available_permits();
         assert!((2..=8).contains(&slots));
@@ -6332,6 +6348,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         let mut sockets = Vec::new();
         for (connection_id, session_id) in [(1, "sess-silent"), (2, "sess-lagging")] {
@@ -6428,6 +6445,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let (tx, rx) = mpsc::unbounded_channel();
         broker
@@ -6505,6 +6523,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let launch = StartSession {
             session_id: "sess-launch".to_owned(),
@@ -8644,6 +8663,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         broker
@@ -8685,6 +8705,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         for (session_id, provider) in [("sess-codex", "codex"), ("sess-claude", "claude-code")] {
             broker.sessions.lock().insert(
@@ -8838,6 +8859,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         broker.sessions.lock().insert(
             "sess-ready".to_owned(),
@@ -8939,6 +8961,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         broker
             .healthy_generations
@@ -8971,6 +8994,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         let launch = StartSession {
             session_id: "sess-1".to_owned(),
@@ -9031,6 +9055,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .ensure_session(StartSession {
@@ -9075,6 +9100,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -9170,6 +9196,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -9243,6 +9270,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -9308,6 +9336,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .cancelled_sessions
@@ -9392,6 +9421,7 @@ mod tests {
             worktree_root: worktree_root.clone().into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.sessions.lock().insert(
             "sess-reset-race".to_owned(),
@@ -9482,6 +9512,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         });
         broker
             .cancelled_sessions
@@ -9521,6 +9552,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .cancelled_sessions
@@ -9580,6 +9612,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         let session: StartSession = serde_json::from_value(serde_json::json!({
             "session_id": "named", "provider": "claude-code", "cwd": "/work",
@@ -9634,6 +9667,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
         broker
@@ -9755,6 +9789,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         let mut command = Command::new("sh");
         command.arg("-c").arg("sleep 60");
@@ -9840,6 +9875,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         });
         let mut old_command = Command::new("sh");
         old_command.arg("-c").arg("sleep 0.2");
@@ -9926,6 +9962,7 @@ mod tests {
             worktree_root: managed.clone().into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -10023,6 +10060,7 @@ mod tests {
             worktree_root: roots,
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -10111,6 +10149,7 @@ mod tests {
             worktree_root: worktree_root.clone().into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.sessions.lock().insert(
             "sess-connected-delete".to_owned(),
@@ -10190,6 +10229,7 @@ mod tests {
             worktree_root: root.join("worktrees").into(),
             worker_ready_timeout: Duration::from_secs(1),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -10561,6 +10601,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         broker
             .cancelled_sessions
@@ -10621,6 +10662,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         });
         *broker.previous_generation.lock() = Some("gen-machine".to_owned());
         let named = StartSession {
@@ -10689,6 +10731,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
+            memory_relay: None,
         }));
         broker.unhealthy_generations.lock().insert(
             ("gen-2".to_owned(), "codex".to_owned()),
@@ -10727,6 +10770,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
             worker_ready_timeout: Duration::from_millis(100),
             call_context_root: None,
+            memory_relay: None,
         }));
         for _ in 0..100 {
             if socket.exists() {

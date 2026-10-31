@@ -120,6 +120,7 @@ impl LoginIo {
 }
 
 struct ControllerConfig {
+    memory_relay: Option<Arc<crate::memory_relay::MemoryRelay>>,
     execution: Arc<execution::Manager>,
     controller_url: String,
     service_id: Option<String>,
@@ -580,6 +581,15 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         environment_names.len() <= crate::execution_target_environment::MAX,
         "execution environment including workspace storage exceeds the variable limit"
     );
+    // Memory is optional: a relay that cannot start leaves sessions without it.
+    let memory_relay = if args.service_id.is_some() {
+        crate::memory_relay::MemoryRelay::start(&args.state_dir)
+            .await
+            .inspect_err(|error| tracing::warn!(%error, "memory relay unavailable"))
+            .ok()
+    } else {
+        None
+    };
     let mut broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
@@ -593,6 +603,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         worktree_root: worktree_roots.clone(),
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
         call_context_root: Some(args.state_dir.clone()),
+        memory_relay: memory_relay.clone(),
     };
     let controller_url = args
         .controller_url
@@ -689,6 +700,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let deletion_service_id = args.service_id.clone();
     let durable_state = crate::machine_broker::DurableStateView::default();
     let controller = controller_loop(ControllerConfig {
+        memory_relay,
         execution,
         controller_url,
         service_id: args.service_id,
@@ -1368,6 +1380,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .then(|| config.execution.calls())
         .flatten()
         .map(|calls| calls.attach(event_tx.clone()));
+    let _memory_uplink = (protocol >= crate::machine_protocol::MEMORY_RELAY_PROTOCOL_VERSION)
+        .then(|| config.memory_relay.as_ref())
+        .flatten()
+        .map(|relay| relay.attach(event_tx.clone()));
     let _provider_auth_watcher = if protocol >= 6 {
         Some(auth_watch::start(Arc::clone(&config.providers), event_tx.clone(), protocol).await?)
     } else {
@@ -1560,6 +1576,22 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         if let Some(calls) = config.execution.calls() {
                                             calls.reply(&request_id, response);
                                         }
+                                        continue;
+                                    }
+                                    if let MachineCommand::MemoryRelayReply { request_id, response } = command {
+                                        if let Some(relay) = config.memory_relay.as_ref() {
+                                            relay.reply(&request_id, response);
+                                        }
+                                        continue;
+                                    }
+                                    if let MachineCommand::MemoryRelay { request_id, identity, request } = command {
+                                        // A slow backend never holds this loop.
+                                        crate::memory_relay::serve_home(
+                                            request_id,
+                                            identity,
+                                            request,
+                                            event_tx.clone(),
+                                        );
                                         continue;
                                     }
                                     if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
@@ -3415,7 +3447,10 @@ fn handle_machine_command(
                 });
             });
         }
-        MachineCommand::ProviderUsageAck { .. } | MachineCommand::ManagedCallReply { .. } => {
+        MachineCommand::ProviderUsageAck { .. }
+        | MachineCommand::ManagedCallReply { .. }
+        | MachineCommand::MemoryRelay { .. }
+        | MachineCommand::MemoryRelayReply { .. } => {
             // Consumed synchronously by the controller connection so the
             // durable spool advances before another batch is selected, and
             // so a call reply never waits behind another command.

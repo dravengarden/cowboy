@@ -1,8 +1,64 @@
 # Matrix Provider integration
 
-Source contract for standard Codex 3.3.2 and Claude 3.4.7. Upstream native CLI,
-ACP and authentication versions are unchanged. Installation and native runtime
-acceptance are separate release receipts, not implied by this document.
+Source contract for standard Codex 3.3.2 and Claude 3.4.7, extended to every
+Agent and Machine by the [Machine relay](#every-machine-and-every-agent).
+Upstream native CLI, ACP and authentication versions are unchanged. Installation
+and native runtime acceptance are separate release receipts, not implied by
+this document.
+
+## Reliability contract
+
+Memory is never required. A Matrix, relay, Controller, disk or configuration
+failure may cost a session its memory; it must never stop, fail or noticeably
+stall the session.
+
+- No memory configuration or session fault fails a launch: the session starts
+  without memory and the reason goes to the operator log, never to the model.
+- A user turn waits for memory at most 5 seconds. After a failed exchange, turns
+  skip recall for 30 seconds, so an outage costs one wait rather than one per
+  turn. Background delivery probes the service and closes this breaker.
+- A turn that recalled nothing carries a short unavailable notice.
+- Completed turns stay in a private bounded outbox and are delivered later. A
+  full or unwritable outbox loses that evidence, not the turn.
+- A failing Matrix MCP server is a failed optional tool, never a startup failure.
+
+## Every Machine and every Agent
+
+The `matrix` Plugin is the opt-in on the Machine that runs the Provider. A
+Machine with a local binding (below) talks to Matrix directly. Any other Machine
+serves a loopback endpoint with Matrix's own routes, named with a per-session
+token in the session descriptor. The Machine sends each request over its
+authenticated Cowboy connection. The Controller checks that the session belongs
+to that Machine and has memory on, derives the Provider, workspace and execution
+Machine from its own record, and forwards the request to `memory.home_machines`.
+The home Machine maps that identity to a Matrix binding, using its private
+credential for the Provider, and calls Matrix on its loopback.
+
+The relay therefore adds no network path: it inherits whatever route the Machine
+uses to reach the Controller, including the approved proxy route, and no Machine
+but the home Machine holds a Matrix credential. An unmapped workspace is
+addressed by its own id on any Machine; Matrix still checks the project against
+the Provider's grant.
+
+| Agent | Delivery | Matrix client |
+|---|---|---|
+| Claude | Plugin adapter | `claude` |
+| Codex | Plugin adapter | `codex` |
+| Grok | ACP worker | `grok` |
+| DeepSeek Harness | ACP worker | `deepseek-harness` |
+| Claude DeepSeek | ACP worker | `claude-deepseek` |
+| Codex DeepSeek | ACP worker | `codex-deepseek` |
+
+The ACP worker declares Matrix through ACP `mcpServers`, prepends recall to the
+prompt, and observes the session's own updates. Each client has its own
+credential and private provider scope and shares user, project and machine
+scopes with the others. Its home binding is
+`$XDG_CONFIG_HOME/cowboy/memory/matrix/<client>.json` on the home Machine.
+
+The relay requires Machine protocol 41 on the runtime and home Machines. Sessions
+started before their Machine's upgrade keep their previous behavior.
+
+## Bindings
 
 Matrix is the first-party `matrix` memory-backend Plugin (Codex 3.4.7 and
 Claude 3.19.36 onward, see [session extension Plugins](session-extension-plugins.md)).

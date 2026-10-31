@@ -19,6 +19,12 @@ export const MEMORY_TOOLS = [
   "memory_put",
   "memory_forget",
 ];
+/** After a failed exchange, turns skip recall for this long. */
+const BREAKER_MS = 30000;
+/** The longest memory may hold a user turn. */
+const BEGIN_BUDGET_MS = 5000;
+const UNAVAILABLE_NOTICE =
+  "[Matrix memory unavailable for this turn. Continue normally and verify facts directly.]";
 const id = (value) =>
   typeof value === "string" &&
   /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value);
@@ -99,6 +105,15 @@ export async function matrixConfiguration(
 }
 
 const PROTOCOLS = ["matrix_http_v1"];
+
+/** Memory is never required: an agent keeps working through every failure
+ * below. Operators read the reason; it never reaches model context. */
+function unavailable(stage, error) {
+  process.stderr.write(
+    "Matrix " + stage + " unavailable: " + String(error?.message ?? error) +
+      "\n",
+  );
+}
 const BINDING_DIRECTORY = ["cowboy", "memory"];
 
 async function privateFile(path, limit) {
@@ -149,15 +164,41 @@ function configHome() {
     : join(userInfo().homedir, ".config");
 }
 
+/** The session's Machine relay. Its endpoint and token are scoped to this
+ * session, and the Controller supplies the identity, so no project mapping
+ * or backend credential exists here. */
+function relayConfiguration(provider, relay) {
+  if (!relay) return null;
+  const url = new URL(relay.endpoint);
+  if (
+    url.protocol !== "http:" || url.hostname !== "127.0.0.1" ||
+    typeof relay.token !== "string" || !isAbsolute(relay.state_dir ?? "")
+  ) throw new Error("Invalid memory relay");
+  return {
+    provider,
+    relay: true,
+    endpoint: relay.endpoint,
+    token: relay.token,
+    state_dir: relay.state_dir,
+    projects: [],
+  };
+}
+
 /** Memory for one Provider session. With a descriptor, the installed
  * backend and the session's switches decide; its Machine-private binding
  * lives at $XDG_CONFIG_HOME/cowboy/memory/<plugin>/<provider>.json, and the
  * Matrix Plugin also accepts the legacy ~/.config/matrix enrollment. Without
  * a descriptor the legacy enrollment applies with every capability on. */
-export async function memoryConfiguration(
-  provider,
-  { extensions, legacyPath } = {},
-) {
+export async function memoryConfiguration(provider, options) {
+  try {
+    return await resolveMemory(provider, options);
+  } catch (error) {
+    unavailable("configuration", error);
+    return null;
+  }
+}
+
+async function resolveMemory(provider, { extensions, legacyPath } = {}) {
   const descriptor = extensions === undefined
     ? await sessionExtensions()
     : extensions;
@@ -187,12 +228,15 @@ export async function memoryConfiguration(
   const enableRecall = memory.enable_recall === true;
   const observe = memory.observe === true;
   if (!enableTools && !enableRecall && !observe) return null;
+  // A Machine with a local backend uses it directly; every other Machine
+  // reaches the backend through its Cowboy connection.
   let config = await matrixConfiguration(provider, {
     path: join(configHome(), ...BINDING_DIRECTORY, plugin, provider + ".json"),
   });
   if (!config && plugin === "matrix") {
     config = await matrixConfiguration(provider, { path: legacyPath });
   }
+  config ??= relayConfiguration(provider, memory.relay);
   if (!config) return null;
   const tools = Array.isArray(memory.tools) ? memory.tools : [];
   if (!tools.every((tool) => /^[a-z][a-z0-9_]{0,63}$/.test(tool))) {
@@ -232,36 +276,68 @@ export function memoryToolNames(config) {
     : [];
 }
 
+/** The relay's Controller-derived identity replaces this placeholder. */
+const RELAY_BINDING = { project: "relay", machine: "relay", session: "relay" };
+
+function selectBinding(config, descriptor, cwd, session) {
+  if (config.relay) return RELAY_BINDING;
+  const binding = descriptor?.binding;
+  const matches = config.projects.filter((project) =>
+    binding
+      ? project.workspace === binding.workspace.id &&
+        project.machine === binding.environment.machine_id
+      : project.path && resolve(project.path) === resolve(cwd)
+  );
+  // A workspace is one project on every Machine. An unmapped one uses its own
+  // id; the service still checks the project against this client's grant.
+  const elsewhere = binding
+    ? [
+      ...new Set(
+        config.projects
+          .filter((project) => project.workspace === binding.workspace.id)
+          .map((project) => project.project),
+      ),
+    ]
+    : [];
+  const selected = {
+    project: matches.length === 1
+      ? matches[0].project
+      : elsewhere.length === 1
+      ? elsewhere[0]
+      : binding?.workspace.id,
+    machine: matches.length === 1
+      ? matches[0].machine
+      : binding?.environment.machine_id,
+    session: binding?.id ?? session,
+  };
+  if (!Object.values(selected).every(id)) {
+    throw new Error("Matrix project mapping is missing or ambiguous");
+  }
+  return selected;
+}
+
 export class MatrixClient {
-  static async open(
+  /** `null` when this session has no usable memory, for any reason. */
+  static async open(config, descriptor, options) {
+    if (!config) return null;
+    try {
+      return await MatrixClient.#open(config, descriptor, options);
+    } catch (error) {
+      unavailable("session", error);
+      return null;
+    }
+  }
+  static async #open(
     config,
     descriptor,
     { cwd = process.cwd(), session = randomUUID() } = {},
   ) {
-    if (!config) return null;
-    const binding = descriptor?.binding;
-    const matches = config.projects.filter((project) =>
-      binding
-        ? project.workspace === binding.workspace.id &&
-          project.machine === binding.environment.machine_id
-        : project.path && resolve(project.path) === resolve(cwd)
-    );
-    if (matches.length !== 1) {
-      throw new Error("Matrix project mapping is missing or ambiguous");
-    }
-    const project = matches[0];
-    const selected = {
-      project: project.project,
-      machine: project.machine,
-      session: binding?.id ?? session,
-    };
-    if (!Object.values(selected).every(id)) {
-      throw new Error("Invalid Matrix session binding");
-    }
+    const selected = selectBinding(config, descriptor, cwd, session);
     await privateDirectory(config.state_dir);
     const directory = join(config.state_dir, config.provider);
     await privateDirectory(directory);
     const client = new MatrixClient(config, selected, directory);
+    // Delivery also probes: a success closes the recall breaker.
     client.timer = setInterval(() => {
       void client.flush();
     }, 10000);
@@ -278,14 +354,27 @@ export class MatrixClient {
     this.turn = randomUUID();
     this.delivery = Promise.resolve();
     this.inFlight = new Set();
+    this.unavailableUntil = 0;
   }
   async request(action, payload, binding = this.binding) {
+    try {
+      const reply = await this.#exchange(action, payload, binding);
+      this.unavailableUntil = 0;
+      return reply;
+    } catch (error) {
+      // A refusal is an answer from a healthy service; only silence opens
+      // the breaker, so an outage costs one wait instead of one per turn.
+      if (!error.refused) this.unavailableUntil = Date.now() + BREAKER_MS;
+      throw error;
+    }
+  }
+  async #exchange(action, payload, binding) {
     const response = await fetch(
       new URL("/v1/" + action, this.config.endpoint),
       {
         method: "POST",
         redirect: "error",
-        signal: AbortSignal.timeout(2000),
+        signal: AbortSignal.timeout(this.config.relay ? 4000 : 2000),
         headers: {
           "Content-Type": "application/json",
           Authorization: "Bearer " + this.config.token,
@@ -301,7 +390,11 @@ export class MatrixClient {
       chunks.push(Buffer.from(chunk));
     }
     if (!response.ok) {
-      throw new Error("Matrix request refused (" + response.status + ")");
+      const error = new Error(
+        "Matrix request refused (" + response.status + ")",
+      );
+      error.refused = response.status < 500;
+      throw error;
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   }
@@ -314,6 +407,30 @@ export class MatrixClient {
         "X-Matrix-Binding": JSON.stringify(this.binding),
       },
     };
+  }
+  /** Bounded so a stalled service can delay a turn only briefly; no failure
+   * leaves here. Delivery failures keep their evidence in the outbox. */
+  async begin(prompt) {
+    const notice = this.recall ? UNAVAILABLE_NOTICE : "";
+    let timer;
+    const bounded = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(notice), BEGIN_BUDGET_MS);
+    });
+    try {
+      return await Promise.race([this.#begin(prompt), bounded]);
+    } catch (error) {
+      unavailable("recall", error);
+      return notice;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async finish() {
+    try {
+      await this.#finish();
+    } catch (error) {
+      unavailable("delivery", error);
+    }
   }
   get recall() {
     return this.config.enableRecall !== false;
@@ -381,19 +498,20 @@ export class MatrixClient {
     }).catch(() => {});
     return this.delivery;
   }
-  async begin(prompt) {
+  async #begin(prompt) {
     // Steering may arrive in an existing turn. Retain the previous segment first.
     await this.finish();
     this.add("user", prompt);
     // Without recall or tools nothing is injected; the user turn stays in
     // the segment the turn's completion delivers for learning.
     if (!this.recall && !this.tools) return "";
-    this.context = this.recall
-      ? "[Matrix memory unavailable; native memory remains disabled. Verify facts directly.]"
-      : "";
+    this.context = this.recall ? UNAVAILABLE_NOTICE : "";
     if (!this.events.length) {
       // A backend that recalls without observing still answers context.
-      if (!this.recall || !publicText(prompt).trim()) return this.context;
+      if (
+        !this.recall || !publicText(prompt).trim() ||
+        Date.now() < this.unavailableUntil
+      ) return this.context;
       try {
         const found = await this.request("context", {
           query: publicText(prompt),
@@ -410,6 +528,11 @@ export class MatrixClient {
       events: this.events,
       learn: false,
     };
+    // Known down: keep the evidence for delivery and do not wait for a reply.
+    if (Date.now() < this.unavailableUntil) {
+      await this.enqueue(evidence);
+      return this.context;
+    }
     // Reserve before publishing the file so a concurrent background flush
     // cannot send the same current-user observation. Durable evidence remains
     // available to a restarted process if this request never gets a receipt.
@@ -439,13 +562,13 @@ export class MatrixClient {
     void this.flush();
     return this.context;
   }
-  async finish() {
-    if (this.events.length) {
-      await this.enqueue({ turn: this.turn, events: this.events });
-    }
+  async #finish() {
+    const events = this.events;
+    const turn = this.turn;
     this.events = [];
     this.bytes = 0;
     this.turn = randomUUID();
+    if (events.length) await this.enqueue({ turn, events });
     void this.flush();
   }
   async close() {

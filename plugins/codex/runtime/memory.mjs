@@ -185,11 +185,11 @@ async function runNative(args, execution, descriptor) {
     servers,
   }));
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
-  if (!config) return await execution.main(args);
-  if (config.server === "cowboy") {
-    throw new Error("The cowboy MCP name is reserved for session tools");
-  }
-  const memory = await MatrixClient.open(config, descriptor);
+  // A reserved name or any other unusable memory leaves the session without it.
+  const memory = config?.server === "cowboy"
+    ? null
+    : await MatrixClient.open(config, descriptor);
+  if (!memory) return await execution.main(args);
   const mcp = memory.mcp();
   configuration.push(
     "-c",

@@ -1198,9 +1198,8 @@ async function native(args) {
     memoryConfigured = managed
       ? null
       : await memoryConfiguration("claude", { extensions });
-    if (memoryConfigured?.server === "cowboy") {
-      throw new Error("The cowboy MCP server name is reserved");
-    }
+    // A reserved name leaves the session without memory, like any other fault.
+    if (memoryConfigured?.server === "cowboy") memoryConfigured = null;
     memory = managed
       ? null
       : await MatrixClient.open(memoryConfigured, descriptor);

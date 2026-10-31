@@ -67,10 +67,9 @@ async function send(stream, frame) {
 // Local sessions retain the upstream ACP tool surface. The remote Mods facade
 // uses the same memory client but still owns every project tool separately.
 export async function localMemoryNative(executable, args) {
-  const config = await memoryConfiguration("claude");
-  if (config?.server === "cowboy") {
-    throw new Error("The cowboy MCP server name is reserved");
-  }
+  const configured = await memoryConfiguration("claude");
+  // A reserved name leaves the session without memory, like any other fault.
+  const config = configured?.server === "cowboy" ? null : configured;
   const memory = await MatrixClient.open(config);
   const stage = await mkdtemp(join(tmpdir(), "cowboy-matrix-"));
   const mcp = join(stage, "mcp.json");

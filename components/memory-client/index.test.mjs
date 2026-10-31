@@ -139,17 +139,32 @@ test("logical project identity spans Machines and ignores task directory names",
   });
   assert.equal(second.binding.project, first.binding.project);
   assert.notEqual(second.binding.machine, first.binding.machine);
-  await assert.rejects(
-    MatrixClient.open(f.config, undefined, { cwd: "/other/cowboy" }),
-    /mapping/,
+  // Without a usable mapping the session simply has no memory.
+  assert.equal(
+    await MatrixClient.open(f.config, undefined, { cwd: "/other/cowboy" }),
+    null,
   );
-  await assert.rejects(
-    MatrixClient.open({
-      ...f.config,
-      projects: [...f.config.projects, f.config.projects[0]],
-    }, f.descriptor),
-    /ambiguous/,
+  // A new Machine or workspace needs no enrollment; the service checks grants.
+  const placed = (workspace, machine) => ({
+    binding: {
+      id: "s",
+      workspace: { id: workspace },
+      environment: { machine_id: machine },
+    },
+  });
+  const newMachine = await MatrixClient.open(
+    f.config,
+    placed("project-123", "ovh"),
   );
+  assert.equal(newMachine.binding.project, "cowboy");
+  assert.equal(newMachine.binding.machine, "ovh");
+  const newWorkspace = await MatrixClient.open(
+    f.config,
+    placed("fresh", "hawk"),
+  );
+  assert.equal(newWorkspace.binding.project, "fresh");
+  await newMachine.close();
+  await newWorkspace.close();
   await first.close();
   await second.close();
   await first.delivery;
@@ -348,15 +363,123 @@ test("session extensions select the backend binding and switches", async (t) => 
       null,
     );
   }
-  await assert.rejects(
-    memoryConfiguration("codex", {
+  // An invalid descriptor costs memory, never the launch.
+  assert.equal(
+    await memoryConfiguration("codex", {
       extensions: {
         schema: 1,
         memory: { ...memory, plugin: { id: "../escape" } },
       },
     }),
-    /identity/,
+    null,
   );
+});
+
+test("a Machine without a local backend uses the session's relay", async (t) => {
+  const f = await fixture(t);
+  const memory = {
+    plugin: { id: "matrix" },
+    protocol: "matrix_http_v1",
+    tools: ["memory_search"],
+    enable_tools: true,
+    enable_recall: true,
+    observe: true,
+    relay: {
+      endpoint: f.config.endpoint,
+      token: "cbm1.session-123." + "a".repeat(64),
+      state_dir: join(f.root, "relay", "session-123"),
+    },
+  };
+  const absent = join(f.root, "absent.json");
+  const config = await memoryConfiguration("claude", {
+    extensions: { schema: 1, memory },
+    legacyPath: absent,
+  });
+  assert.equal(config.relay, true);
+  assert.equal(config.server, "matrix");
+  const client = await MatrixClient.open(config);
+  assert.equal(client.mcp().headers.Authorization, "Bearer " + config.token);
+  await client.close();
+  await client.delivery;
+  // A local enrollment stays direct: the relay adds a dependency.
+  const local = join(f.root, "local.json");
+  await writeFile(
+    local,
+    JSON.stringify({ ...f.config, provider: "claude" }),
+    { mode: 0o600 },
+  );
+  const direct = await memoryConfiguration("claude", {
+    extensions: { schema: 1, memory },
+    legacyPath: local,
+  });
+  assert.equal(direct.relay, undefined);
+  assert.equal(direct.token, f.config.token);
+  // Only this Machine's loopback relay is ever accepted.
+  assert.equal(
+    await memoryConfiguration("claude", {
+      extensions: {
+        schema: 1,
+        memory: {
+          ...memory,
+          relay: { ...memory.relay, endpoint: "http://example.com" },
+        },
+      },
+      legacyPath: absent,
+    }),
+    null,
+  );
+});
+
+test("an outage costs one wait, not one per turn", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(f.config, f.descriptor);
+  f.setAvailable(false);
+  assert.match(await client.begin("first"), /unavailable/);
+  await client.delivery;
+  const asked = f.requests.filter((r) => r.path === "/v1/context").length;
+  const during = f.requests.length;
+  assert.match(await client.begin("second"), /unavailable/);
+  assert.equal(
+    f.requests.filter((r) => r.path === "/v1/context").length,
+    asked,
+  );
+  assert.ok(f.requests.length >= during);
+  // A successful delivery closes the breaker and the queued turns arrive.
+  f.setAvailable(true);
+  await client.flush();
+  assert.equal(client.unavailableUntil, 0);
+  assert.match(await client.begin("third"), /Matrix memory\]/);
+  await client.close();
+  await client.delivery;
+});
+
+test("no memory failure reaches the agent", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(f.config, f.descriptor);
+  // A full or unwritable queue: every enqueue fails.
+  client.enqueue = () => Promise.reject(new Error("no space left on device"));
+  assert.match(await client.begin("question"), /unavailable/);
+  client.add("assistant", "answer");
+  await client.finish();
+  await client.close();
+  await client.delivery;
+});
+
+test("a stalled service delays a turn by a bounded time", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(f.config, f.descriptor);
+  client.request = () => new Promise(() => {});
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const reply = client.begin("question");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(5000);
+  assert.match(await reply, /unavailable/);
+  t.mock.timers.reset();
+  delete client.request;
+  client.inFlight.clear();
+  await client.close();
+  await client.delivery;
 });
 
 test("descriptor file must be private", async (t) => {

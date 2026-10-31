@@ -55,7 +55,17 @@ pub const SESSIONS_MEMORY_RECLAIM_UNTIL: Key<u64> =
 pub const SESSIONS_MEMORY_RECLAIM_MIN_IDLE: Key<Duration> =
     Key::new(Scope::Service, "sessions.memory_reclaim_min_idle");
 
+pub const MEMORY_HOME_MACHINES: Key<Vec<String>> =
+    Key::new(Scope::Service, "memory.home_machines");
+
 pub static SERVICE_FIELDS: &[Field] = &[
+    Field {
+        key: "memory.home_machines",
+        kind: Kind::Identifiers { max_items: 1 },
+        default: Value::Patterns(std::borrow::Cow::Borrowed(&[])),
+        reload: Reload::Live,
+        doc: "The Machine that hosts the memory backend. Sessions on every other Machine\nreach it over their Machine connection, with no network path or credential\nof their own. Empty: those sessions run without memory.",
+    },
     Field {
         key: "usage.provider_window",
         kind: Kind::Duration {

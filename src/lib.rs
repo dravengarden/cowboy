@@ -18,6 +18,8 @@ pub use tikv_jemallocator::Jemalloc;
 #[cfg(feature = "full")]
 pub mod acp;
 #[cfg(feature = "full")]
+pub mod acp_memory;
+#[cfg(feature = "full")]
 pub mod acp_bridge;
 #[cfg(feature = "full")]
 pub mod admin;

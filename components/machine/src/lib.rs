@@ -15,6 +15,8 @@ pub mod machine_cli;
 pub mod machine_code_plugins;
 #[cfg(feature = "machine-host")]
 pub mod machine_plugins;
+#[cfg(feature = "machine-host")]
+pub mod memory_relay;
 
 #[cfg(all(test, target_os = "linux", feature = "machine-host"))]
 mod cgroup_containment_tests;

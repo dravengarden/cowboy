@@ -3,6 +3,13 @@
 # Validate edits with `cowboy config check --scope service`; see docs/configuration.md.
 schema = 1
 
+[memory]
+# The Machine that hosts the memory backend. Sessions on every other Machine
+# reach it over their Machine connection, with no network path or credential
+# of their own. Empty: those sessions run without memory.
+# array of at most 1 distinct lowercase slug identifiers; applies live.
+# home_machines = []
+
 [usage]
 # Rolling admission window shared by every account of one usage Provider.
 # All Service quota collectors, manual and automatic, use this durable budget.

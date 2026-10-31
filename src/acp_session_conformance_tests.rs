@@ -123,6 +123,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
     });
     let (prompt_cancellation, _) = watch::channel(0);
     let state = Arc::new(ClientState {
+        memory: None,
         sink: sink.clone(),
         session_id: SESSION.to_owned(),
         provider_id: "fixture-provider".to_owned(),

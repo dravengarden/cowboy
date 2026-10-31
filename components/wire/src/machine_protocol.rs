@@ -17,6 +17,7 @@ pub mod code_buffer_navigation;
 pub mod code_buffer_sync;
 pub mod execution;
 pub mod installation_revision;
+pub mod memory_relay;
 pub mod plugin_install;
 pub mod plugin_recovery;
 pub mod plugin_step;
@@ -27,7 +28,10 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 40;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 41;
+/// A Machine relays its sessions' memory requests over this channel, and a
+/// home Machine answers them from its local memory backend.
+pub const MEMORY_RELAY_PROTOCOL_VERSION: u16 = 41;
 /// Machines route `CoreCommand::CancelSubagent` to a worker that reports
 /// `supports_subagent_cancel`, and refuse it for any other worker.
 pub const SUBAGENT_CANCEL_PROTOCOL_VERSION: u16 = 40;
@@ -1247,6 +1251,17 @@ pub enum MachineCommand {
         request_id: String,
         response: serde_json::Value,
     },
+    /// Ask this home Machine to serve one relayed memory request.
+    MemoryRelay {
+        request_id: String,
+        identity: memory_relay::Identity,
+        request: memory_relay::Request,
+    },
+    /// The Controller's single reply to a Machine-relayed memory request.
+    MemoryRelayReply {
+        request_id: String,
+        response: memory_relay::Response,
+    },
 }
 
 impl MachineCommand {
@@ -1307,6 +1322,9 @@ impl MachineCommand {
                 MANAGED_CALL_PROTOCOL_VERSION
             }
             Self::ManagedCallReply { .. } => MANAGED_CALL_PROTOCOL_VERSION,
+            Self::MemoryRelay { .. } | Self::MemoryRelayReply { .. } => {
+                MEMORY_RELAY_PROTOCOL_VERSION
+            }
             Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary
             // adapter traffic keeps its original floor below.
@@ -1517,6 +1535,18 @@ pub enum MachineEvent {
         request_id: String,
         grant: crate::managed_calls::protocol::Grant,
         action: Box<crate::managed_calls::protocol::Action>,
+    },
+    /// One session's memory request. The session's Provider, placement and
+    /// memory switches are read from the Controller's own records.
+    MemoryRelayRequest {
+        request_id: String,
+        session_id: String,
+        request: memory_relay::Request,
+    },
+    /// A home Machine's answer to one `MachineCommand::MemoryRelay`.
+    MemoryRelayResponse {
+        request_id: String,
+        response: memory_relay::Response,
     },
     Inventory {
         components: Vec<ComponentInventory>,
