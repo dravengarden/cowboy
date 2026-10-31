@@ -478,53 +478,7 @@ impl Host for SessionHost<'_> {
                 self.calls(Action::Observe { request_id }).await
             }
             "sessions.list" => {
-                only_keys(
-                    &args,
-                    &[
-                        "status",
-                        "limit",
-                        "after",
-                        "query",
-                        "provider",
-                        "machine",
-                        "workspace",
-                    ],
-                )?;
-                let filter = session_reads::ListFilter::parse(&args)?;
-                let status = match args.get("status") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(status)) if status.len() <= 32 => Some(status.clone()),
-                    Some(_) => return Err("invalid_argument".into()),
-                };
-                let limit = page_limit(&args, 50, 200)?;
-                let after = after_id(&args)?;
-                let owner = self.meta.owner_user_id.clone();
-                let mut rows = self
-                    .state
-                    .hub
-                    .session_list_filtered(|row| row == owner.as_deref());
-                rows.sort_by(|a, b| a.id.cmp(&b.id));
-                let rows = rows
-                    .into_iter()
-                    .filter(|meta| {
-                        !meta.system
-                            && !meta.closing
-                            && after.is_none_or(|after| meta.id.as_str() > after)
-                    })
-                    .filter_map(|meta| self.state.hub.session_info(&meta.id))
-                    .filter(|info| {
-                        !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
-                    })
-                    .filter(|info| filter.matches(&info.meta))
-                    .map(|info| session_view(&info))
-                    .filter(|view| {
-                        status
-                            .as_deref()
-                            .is_none_or(|status| view["status"] == status)
-                    })
-                    .take(limit)
-                    .collect();
-                Ok(Value::Array(rows))
+                session_reads::list(&self.state.hub, self.meta.owner_user_id.as_deref(), &args)
             }
             "documents.list" | "documents.read" => {
                 let owner = self.meta.owner_user_id.as_deref().ok_or("unavailable")?;

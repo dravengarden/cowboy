@@ -360,6 +360,7 @@ impl Host for FakeHost {
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
             "machines.list" => Ok(json!({"machines":[{"id":"a"},{"id":"b"}],"next":null})),
+            "sessions.list" => Ok(json!({"sessions":[{"id":"s1"},{"id":"s2"}],"next":"s2"})),
             "machines.read" => {
                 arg_str(&args, "id")?;
                 Ok(json!({"op":op,"args":args}))
@@ -752,6 +753,27 @@ async fn paged_lists_iterate_like_arrays_without_changing_their_json() {
         value["value"],
         json!({"ids":["a","b"],"spread":2,"length":2,"found":"b",
             "json":{"machines":[{"id":"a"},{"id":"b"}],"next":null}}),
+        "{value}"
+    );
+}
+
+#[tokio::test]
+async fn session_pages_keep_array_programs_and_expose_their_cursor() {
+    let Some(value) = run(
+        r#"
+        const page = await cowboy.sessions.list({limit: 2});
+        return { ids: page.map((s) => s.id), length: page.length, next: page.next };
+        "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        value["value"],
+        json!({"ids":["s1","s2"],"length":2,"next":"s2"}),
         "{value}"
     );
 }

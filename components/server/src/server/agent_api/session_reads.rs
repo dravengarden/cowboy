@@ -62,6 +62,54 @@ impl ListFilter {
     }
 }
 
+/// One page of the owner's visible sessions in stable ID order. `next` is the
+/// cursor for the following page and `null` only when this page reached the
+/// end: a bare array made a full first page indistinguishable from the whole
+/// set (2026-10-31: an operator's idle-session sweep missed every session
+/// after the default 50).
+pub(super) fn list(
+    hub: &crate::core::Hub,
+    owner: Option<&str>,
+    args: &Value,
+) -> Result<Value, String> {
+    only_keys(
+        args,
+        &[
+            "status",
+            "limit",
+            "after",
+            "query",
+            "provider",
+            "machine",
+            "workspace",
+        ],
+    )?;
+    let filter = ListFilter::parse(args)?;
+    let status = match args.get("status") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(status)) if status.len() <= 32 => Some(status.as_str()),
+        Some(_) => return Err("invalid_argument".into()),
+    };
+    let limit = page_limit(args, 50, 200)?;
+    let after = after_id(args)?;
+    let mut rows = hub.session_list_filtered(|row| row == owner);
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut sessions: Vec<Value> = rows
+        .into_iter()
+        .filter(|meta| visible(meta, owner) && after.is_none_or(|after| meta.id.as_str() > after))
+        .filter_map(|meta| hub.session_info(&meta.id))
+        .filter(|info| visible(&info.meta, owner) && filter.matches(&info.meta))
+        .map(|info| session_view(&info))
+        .filter(|view| status.is_none_or(|status| view["status"] == status))
+        .take(limit + 1)
+        .collect();
+    let next = (sessions.len() > limit).then(|| {
+        sessions.truncate(limit);
+        sessions[limit - 1]["id"].clone()
+    });
+    Ok(json!({"sessions": sessions, "next": next}))
+}
+
 pub(super) async fn history(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,
