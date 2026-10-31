@@ -543,16 +543,17 @@ export function MobileProductShell({
         // New Session is a cover: its DetentSheet body is the only visible
         // vertical scroll owner. iOS keeps every background momentum scroller
         // as an independent compositor tile, and their native indicators can
-        // paint through the otherwise opaque cover. Tie the freeze to the
-        // sheet's actual DOM lifetime (not the open registry), so removal also
-        // restores every Agent/Review scroller even after a portaled dismiss.
-        "&:has([data-detent-sheet='true'][aria-label='Create']) [data-mobile-overflow-layer='true']": {
-          overflowY: "hidden !important",
-          WebkitOverflowScrolling: "auto",
+        // paint through the otherwise opaque cover. Hide those scrollers while
+        // the cover is settled; it stays tied to the sheet's actual DOM
+        // lifetime (not the open registry). Never change their overflow here:
+        // WebKit can keep a scroller non-scrollable after overflow returns to
+        // auto, until some later layout rebuilds its scrolling node, so the
+        // session a new session lands on would not scroll.
+        "&:has([data-detent-sheet='true'][aria-label='Create']:not([data-detent-moving])) [data-mobile-overflow-layer='true']": {
+          visibility: "hidden",
         },
-        "&:has([data-detent-sheet='true'][aria-label='Create']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
-          overflowY: "auto !important",
-          WebkitOverflowScrolling: "touch",
+        "&:has([data-detent-sheet='true'][aria-label='Create']:not([data-detent-moving])) [data-detent-sheet='true'], &:has([data-detent-sheet='true'][aria-label='Create']:not([data-detent-moving])) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
+          visibility: "visible",
         },
       }}
     >

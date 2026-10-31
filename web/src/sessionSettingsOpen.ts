@@ -3,7 +3,7 @@ export const CLOSE_SESSION_SETTINGS_EVENT = "cowboy:close-session-settings";
 export const SESSION_NEW_FROM_EVENT = "cowboy:session-new-from";
 export const COMPOSER_FOCUS_EVENT = "cowboy:composer-focus";
 
-export type SessionSettingsFocus = "session" | "agent";
+export type SessionSettingsFocus = "session" | "agent" | "new_from";
 
 /** A request made while another session was selected is honored by the
  *  target's settings surfaces when they mount, within a short window. */
@@ -45,7 +45,7 @@ export function requestNewFrom(sessionId: string): void {
   document.dispatchEvent(
     new CustomEvent(SESSION_NEW_FROM_EVENT, { detail: { sessionId } }),
   );
-  openSessionSettings("agent", sessionId);
+  openSessionSettings("new_from", sessionId);
 }
 
 export function takeNewFromRequest(sessionId: string): boolean {
@@ -69,5 +69,6 @@ export function sessionSettingsFocusFromEvent(
   event: Event,
 ): SessionSettingsFocus {
   if (!(event instanceof CustomEvent)) return "session";
-  return event.detail?.focus === "agent" ? "agent" : "session";
+  const focus = event.detail?.focus;
+  return focus === "agent" || focus === "new_from" ? focus : "session";
 }
