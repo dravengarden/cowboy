@@ -368,9 +368,8 @@ mod tests {
         });
         let client = SigningKey::random(&mut OsRng);
         let keys = SubscriptionKeys {
-            p256dh: URL_SAFE_NO_PAD.encode(
-                client.verifying_key().to_encoded_point(false).as_bytes(),
-            ),
+            p256dh: URL_SAFE_NO_PAD
+                .encode(client.verifying_key().to_encoded_point(false).as_bytes()),
             auth: URL_SAFE_NO_PAD.encode([5_u8; 16]),
         };
         let response = service

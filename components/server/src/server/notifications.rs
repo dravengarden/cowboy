@@ -458,7 +458,7 @@ pub(super) async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool
         {
             tracing::warn!(%error, "task notification tick failed");
         }
-        if ticks % PRUNE_EVERY_TICKS == 0
+        if ticks.is_multiple_of(PRUNE_EVERY_TICKS)
             && let Err(error) = store.prune_notifications(now - RETENTION_MS).await
         {
             tracing::warn!(%error, "pruning task notifications failed");
