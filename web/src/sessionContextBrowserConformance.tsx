@@ -377,6 +377,12 @@ export async function runSessionContextBrowserConformance(
       await until(() =>
         contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
       );
+      await until(() => Boolean(container.querySelector("[data-session-links-toggle]")));
+      check(
+        !container.querySelector("[data-session-link]"),
+        `${mode}: links start folded`,
+      );
+      container.querySelector<HTMLElement>("[data-session-links-toggle]")!.click();
       await until(() => Boolean(container.querySelector('[data-session-link="deleted"]')));
       check(
         container.querySelector('[data-session-link="deleted"]')?.textContent

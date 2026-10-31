@@ -3,6 +3,7 @@ import { Alert, Box, Button, ButtonBase, keyframes, Stack, Typography } from "@m
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import LinkOffOutlined from "@mui/icons-material/LinkOffOutlined";
+import ExpandMore from "@mui/icons-material/ExpandMore";
 import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import HistoryRounded from "@mui/icons-material/HistoryRounded";
 import { glyphSize } from "./surface/desktopSize";
@@ -549,15 +550,35 @@ export function SessionProvenance(
     (provider, account) => accountIdentity(accounts, provider, account).label,
   );
   const continued = cue?.kind === "continued_in";
+  const [expanded, setExpanded] = useState(false);
   if (links.length === 0 && !continued) return null;
   return (
     <Stack data-session-provenance-list spacing={0.5} sx={{ minWidth: 0, pb: 1.5 }}>
       {links.length > 0 && (
-        <Typography variant="caption" color="text.secondary">
-          {links.length === 1 ? "1 link" : `${links.length} links`}
-        </Typography>
+        <ButtonBase
+          data-session-links-toggle
+          aria-expanded={expanded}
+          onClick={(): void => setExpanded((value) => !value)}
+          sx={{
+            alignSelf: "flex-start",
+            gap: 0.25,
+            minHeight: 32,
+            borderRadius: 1,
+            color: "text.secondary",
+          }}
+        >
+          <Typography variant="caption">
+            {links.length === 1 ? "1 link" : `${links.length} links`}
+          </Typography>
+          <ExpandMore
+            sx={{
+              fontSize: glyphSize(16),
+              transform: expanded ? "rotate(180deg)" : undefined,
+            }}
+          />
+        </ButtonBase>
       )}
-      {links.map((link) => <SessionLink key={link.id} link={link} />)}
+      {expanded && links.map((link) => <SessionLink key={link.id} link={link} />)}
       <SessionContextCue sessionId={sessionId} placement="end" />
     </Stack>
   );

@@ -94,7 +94,7 @@ next-send choice, so it leaves the Composer. The switch itself stays in Session
 Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
 its empty and preparing state), with `+N` for its other links.
 
-The links list in Session Settings has one row per link: "Forked from",
+The links list in Session Settings starts folded under "N links" and has one row per link: "Forked from",
 "Continued from" or "Linked", with the title and subscription. A link is
 recorded when its send is accepted (`links` in the context) and survives later
 edits, with the history boundary and title captured then. Following a row opens
