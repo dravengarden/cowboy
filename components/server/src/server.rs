@@ -5935,8 +5935,10 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/plugins/catalog/refresh" {
         return RouteAuth::AdminOperator;
     }
+    // Plugin RPC is a mutation surface: the Agent API catalog already requires
+    // an Operator for the same command.
     if plugin_call_path(path) {
-        return RouteAuth::Product;
+        return RouteAuth::ProductOperator;
     }
     if path == "/api/providers/catalog/refresh" {
         return RouteAuth::AdminOperator;
@@ -25713,7 +25715,7 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/password/call"),
-            RouteAuth::Product,
+            RouteAuth::ProductOperator,
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/password/ui/index.js"),
