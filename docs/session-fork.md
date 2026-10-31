@@ -1,7 +1,7 @@
 # Session fork
 
 In the product, **Fork** means keeping both sessions live, unlike
-[Continue](session-context.md), which moves the work and leaves history. It
+[Replace](session-context.md), which moves the work and retires the source. It
 runs in one of two ways, which follow from the target.
 
 A native fork is a new Cowboy session that continues the same native
@@ -13,7 +13,7 @@ is a new agent that reads the source through Cowboy MCP.
 
 ## User flow
 
-**Fork now** in **Continue or fork** (Session Settings; the session menu
+**Fork to new session** in **Replace or fork** (Session Settings; the session menu
 item and Desktop `F` open it) leaves the source unchanged. Native fork takes no
 model or reasoning fields: configure the opened session. The API keeps `config`.
 
@@ -47,7 +47,7 @@ title is the source title with a ` (fork)` suffix, it is placed directly after
 the source in the same folder, and its list row shows a **Fork** badge. Session
 Settings shows "Forked from SOURCE · Open"; the Transcript itself has no
 marker.
-To move to another project, use **Continue on next message** instead; native transcripts never move between accounts or Machines.
+To move to another project, use **Replace this session** instead; native transcripts never move between accounts or Machines.
 
 Queue contents, Pause, one-shot approvals, pending permissions, drafts and
 scheduled wakeups are never copied.
