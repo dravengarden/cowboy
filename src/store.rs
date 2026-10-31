@@ -54,6 +54,7 @@ mod plugin_installations;
 mod plugin_operations;
 mod sqlite;
 mod telemetry_bindings;
+pub mod transcript_anchors;
 mod usage_execution;
 
 use sqlite::SqliteStorage;
@@ -465,6 +466,29 @@ pub struct PasskeySnapshot {
 enum StorageBackend {
     Postgres(PostgresStorage),
     Sqlite(SqliteStorage),
+}
+
+/// Clearing a transcript removes its anchors and records that nothing older
+/// remains to backfill.
+async fn clear_transcript_anchors_pg(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: &str,
+) -> Result<()> {
+    sqlx::query("DELETE FROM transcript_anchors WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("DELETE transcript anchors for {session_id}"))?;
+    sqlx::query(
+        "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES ($1, $2, 0, $3)",
+    )
+    .bind(session_id)
+    .bind(crate::transcript_anchors::BACKFILL_SENTINEL)
+    .bind(chrono::Utc::now().timestamp_millis())
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("INSERT anchor sentinel for {session_id}"))?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1697,7 +1721,18 @@ impl Store {
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
     ) -> Result<()> {
-        dispatch_storage!(self, upsert_event_batch(events, highwaters))
+        dispatch_storage!(self, upsert_event_batch(events, highwaters, &[]))
+    }
+
+    /// [`Self::upsert_event_batch`] plus the durable anchors of new subagent and
+    /// Call rows, in the same transaction (docs/background-tasks.md).
+    pub async fn upsert_event_batch_with_anchors(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+        anchors: &[crate::transcript_anchors::AnchorWrite],
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_event_batch(events, highwaters, anchors))
     }
 
     pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
@@ -5981,6 +6016,7 @@ impl PostgresStorage {
         &self,
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
+        anchors: &[crate::transcript_anchors::AnchorWrite],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin event batch")?;
         for env in events {
@@ -6012,6 +6048,20 @@ impl PostgresStorage {
             .await
             .with_context(|| format!("UPDATE next_seq for {session_id}"))?;
         }
+        let created_at_ms = chrono::Utc::now().timestamp_millis();
+        for anchor in anchors {
+            sqlx::query(
+                "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT(session_id, anchor_key) DO NOTHING",
+            )
+            .bind(&anchor.session_id)
+            .bind(&anchor.key)
+            .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
+            .bind(created_at_ms)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("INSERT anchor {}/{}", anchor.session_id, anchor.key))?;
+        }
         tx.commit().await.context("commit event batch")?;
         Ok(())
     }
@@ -6025,6 +6075,7 @@ impl PostgresStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE events for {session_id}"))?;
+        clear_transcript_anchors_pg(&mut tx, session_id).await?;
         // Archive the old conversation's Calls without changing child execution,
         // results, admission receipts or budgets. Future calls start visible.
         sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = $1 AND (document::jsonb->>'created_at_ms')::bigint < $2")

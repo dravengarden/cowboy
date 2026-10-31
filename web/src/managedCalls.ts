@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionMeta } from "./protocol";
 import { useStoreSelector } from "./store";
 
@@ -431,6 +431,24 @@ export async function fetchCalls(
   return Array.isArray(body.calls) ? body.calls : [];
 }
 
+/** `/calls` returns this many newest records; a full page may omit older ones. */
+export const CALLS_PAGE = 100;
+
+/** One Call outside the listed page: `null` only on authoritative evidence that
+ *  its row should go (dismissed, or no longer in the ledger). */
+export async function fetchAnchoredCall(
+  parent: string,
+  call: string,
+): Promise<ManagedCallSummary | null> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(parent)}/calls/${encodeURIComponent(call)}`,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Call unavailable (${String(response.status)})`);
+  const body = await response.json() as { call: ManagedCallSummary; dismissed?: boolean };
+  return body.dismissed === true ? null : body.call;
+}
+
 export async function fetchCall(
   parent: string,
   call: string,
@@ -470,8 +488,95 @@ export async function dismissCalls(parent: string, ids: string[], dismissed = tr
   return result.call_ids;
 }
 
+interface CallsSnapshot {
+  calls: ManagedCallSummary[];
+  observedAt: number | null;
+  error: string | null;
+}
+
+interface CallsFeed {
+  snapshot: CallsSnapshot;
+  listeners: Set<() => void>;
+  controller: AbortController | null;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  active: boolean;
+}
+
+const EMPTY_CALLS: CallsSnapshot = { calls: [], observedAt: null, error: null };
+// One poll per parent, shared by every surface that shows its calls (the
+// background-tasks bar, transcript anchors, the inspector, the legacy dock).
+const callFeeds = new Map<string, CallsFeed>();
+
+function publishFeed(feed: CallsFeed, next: Partial<CallsSnapshot>): void {
+  feed.snapshot = { ...feed.snapshot, ...next };
+  for (const listener of feed.listeners) listener();
+}
+
+function loadFeed(parent: string, feed: CallsFeed): void {
+  if (feed.timer !== undefined) globalThis.clearTimeout(feed.timer);
+  feed.timer = undefined;
+  feed.controller?.abort();
+  if (feed.listeners.size === 0) return;
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    feed.timer = globalThis.setTimeout(() => loadFeed(parent, feed), 5_000);
+    return;
+  }
+  const controller = new AbortController();
+  feed.controller = controller;
+  void fetchCalls(parent, controller.signal).then((next) => {
+    if (controller.signal.aborted) return;
+    feed.active = next.some((call) => callActive(call.state));
+    publishFeed(feed, { calls: next, observedAt: Date.now(), error: null });
+  }).catch((reason: unknown) => {
+    if (!controller.signal.aborted) {
+      publishFeed(feed, {
+        error: reason instanceof Error ? reason.message : "Calls unavailable",
+      });
+    }
+  }).finally(() => {
+    if (!controller.signal.aborted && callFeeds.get(parent) === feed) {
+      feed.controller = null;
+      feed.timer = globalThis.setTimeout(
+        () => loadFeed(parent, feed),
+        feed.active ? 2_000 : 20_000,
+      );
+    }
+  });
+}
+
+function subscribeCalls(parent: string, listener: () => void): () => void {
+  let feed = callFeeds.get(parent);
+  if (!feed) {
+    feed = {
+      snapshot: EMPTY_CALLS,
+      listeners: new Set(),
+      controller: null,
+      timer: undefined,
+      active: false,
+    };
+    callFeeds.set(parent, feed);
+  }
+  const owned = feed;
+  owned.listeners.add(listener);
+  if (owned.listeners.size === 1) loadFeed(parent, owned);
+  return (): void => {
+    owned.listeners.delete(listener);
+    if (owned.listeners.size > 0) return;
+    owned.controller?.abort();
+    if (owned.timer !== undefined) globalThis.clearTimeout(owned.timer);
+    if (callFeeds.get(parent) === owned) callFeeds.delete(parent);
+  };
+}
+
+/** Read the parent's calls again now (after a Stop, Clear or Undo). */
+export function refreshCalls(parent: string): void {
+  const feed = callFeeds.get(parent);
+  if (feed) loadFeed(parent, feed);
+}
+
 /** Poll one parent's calls. Active calls refresh quickly; settled lists slowly.
- * The last observation is kept across network failures with its age. */
+ * The last observation is kept across network failures with its age. Every
+ * consumer of one parent shares a single poll. */
 export function useManagedCalls(parent: string | null): {
   calls: ManagedCallSummary[];
   observedAt: number | null;
@@ -488,61 +593,34 @@ export function useManagedCalls(parent: string | null): {
     }
     return 0;
   });
-  const [calls, setCalls] = useState<ManagedCallSummary[]>([]);
-  const [observedAt, setObservedAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-  const activeRef = useRef(false);
+  const subscribe = useCallback(
+    (listener: () => void) => parent ? subscribeCalls(parent, listener) : () => undefined,
+    [parent],
+  );
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => (parent ? callFeeds.get(parent)?.snapshot : undefined) ?? EMPTY_CALLS,
+    () => EMPTY_CALLS,
+  );
+  const clearedRef = useRef(clearedAt);
   useEffect(() => {
-    setCalls([]);
-    setObservedAt(null);
-    setError(null);
-  }, [parent]);
-  useEffect(() => {
-    if (!parent) return;
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const load = (): void => {
-      if (
-        typeof document !== "undefined" && document.visibilityState === "hidden"
-      ) {
-        timer = globalThis.setTimeout(load, 5_000);
-        return;
-      }
-      void fetchCalls(parent, controller.signal).then((next) => {
-        if (controller.signal.aborted) return;
-        setCalls(next);
-        setObservedAt(Date.now());
-        setError(null);
-        activeRef.current = next.some((call) => callActive(call.state));
-      }).catch((reason: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(
-            reason instanceof Error ? reason.message : "Calls unavailable",
-          );
-        }
-      }).finally(() => {
-        if (!controller.signal.aborted) {
-          timer = globalThis.setTimeout(
-            load,
-            activeRef.current ? 2_000 : 20_000,
-          );
-        }
-      });
-    };
-    load();
-    return (): void => {
-      controller.abort();
-      if (timer !== undefined) globalThis.clearTimeout(timer);
-    };
-  }, [parent, tick, clearedAt]);
+    if (clearedRef.current === clearedAt) return;
+    clearedRef.current = clearedAt;
+    if (parent) refreshCalls(parent);
+  }, [parent, clearedAt]);
+  const { calls, observedAt, error } = snapshot;
   return {
     // Clear is visible before the durable writer and an older HTTP poll settle.
     // Neither a stale response nor a finishing old child may repaint this rail.
-    calls: clearedAt ? calls.filter((call) => call.created_at_ms >= clearedAt) : calls,
+    calls: useMemo(
+      () => clearedAt ? calls.filter((call) => call.created_at_ms >= clearedAt) : calls,
+      [calls, clearedAt],
+    ),
     observedAt,
     error,
-    refresh: (): void => setTick((value) => value + 1),
+    refresh: useCallback((): void => {
+      if (parent) refreshCalls(parent);
+    }, [parent]),
   };
 }
 

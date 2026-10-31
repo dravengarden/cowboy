@@ -38,7 +38,7 @@ export function CallApprovalOverlay({
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const expanded = sticky || desktop !== undefined;
-  const { busy, failure, answer: decide } = useCallApprovalAnswer(sessionId);
+  const { busy, failure, answer: decide } = useCallApprovalAnswer(sessionId, approval);
   const title = callApprovalTitle(approval);
   const answer = (decision: CallApprovalDecision): void => {
     if (busy) return;

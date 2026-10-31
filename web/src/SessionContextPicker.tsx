@@ -104,45 +104,14 @@ export function SessionContextPicker(
           }
         }}
       >
-        <Button
-          ref={trigger}
-          variant="outlined"
-          disableFocusRipple
+        <SelectionField
+          trigger={trigger}
+          open={open}
           disabled={disabled}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          endIcon={<ChevronRight />}
-          onClick={() => setOpen(true)}
-          sx={{
-            minHeight: 48,
-            justifyContent: "space-between",
-            textTransform: "none",
-            color: "text.primary",
-            borderColor: "divider",
-            "&.Mui-focusVisible": {
-              outline: "2px solid",
-              outlineColor: "primary.main",
-              outlineOffset: 2,
-            },
-          }}
-        >
-          <SelectLabel count={value.length} />
-        </Button>
-        {value.length > 0 && (
-          <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-            {value.map((id) => (
-              <Chip
-                key={id}
-                size="small"
-                label={identityLabel(id)}
-                disabled={disabled}
-                onDelete={() =>
-                  onChange(value.filter((value) => value !== id))}
-                sx={{ maxWidth: "100%" }}
-              />
-            ))}
-          </Stack>
-        )}
+          labels={value.map((id) => ({ id, label: identityLabel(id) }))}
+          onOpen={() => setOpen(true)}
+          onRemove={(id) => onChange(value.filter((other) => other !== id))}
+        />
         {open && (
           <Sheet
             open
@@ -183,16 +152,98 @@ export function SessionContextPicker(
   );
 }
 
-function SelectLabel({ count }: { count: number }): React.JSX.Element {
+/** Keeps the trigger named when chips replace its visible label. */
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clipPath: "inset(50%)",
+  whiteSpace: "nowrap",
+} as const;
+
+/** One field: the selected sessions sit inside it, like the value of any
+ *  input. The whole field opens the picker; only a chip's ✕ does something
+ *  else, which is why the trigger lies behind the chips instead of around them. */
+function SelectionField(
+  { trigger, open, disabled, labels, onOpen, onRemove }: {
+    trigger?: React.Ref<HTMLButtonElement>;
+    open: boolean;
+    disabled: boolean;
+    labels: { id: string; label: string }[];
+    onOpen: () => void;
+    onRemove: (id: string) => void;
+  },
+): React.JSX.Element {
   return (
-    <>
-      Select sessions
-      {count > 0 && (
-        <Box component="span" sx={{ ml: "auto", pr: 0.5, color: "text.secondary" }}>
-          {count} selected
+    <Box
+      sx={{
+        position: "relative",
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 0.75,
+        minHeight: 48,
+        boxSizing: "border-box",
+        pl: 1,
+        pr: 4.5,
+        py: 0.75,
+        minWidth: 0,
+      }}
+    >
+      <Button
+        ref={trigger ?? null}
+        variant="outlined"
+        disableFocusRipple
+        disabled={disabled}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={onOpen}
+        sx={{
+          position: "absolute",
+          inset: 0,
+          justifyContent: "flex-start",
+          textTransform: "none",
+          color: "text.primary",
+          borderColor: "divider",
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 2,
+          },
+        }}
+      >
+        <Box component="span" sx={labels.length > 0 ? visuallyHidden : {}}>
+          Select sessions
         </Box>
-      )}
-    </>
+      </Button>
+      {labels.map(({ id, label }) => (
+        <Chip
+          key={id}
+          size="small"
+          label={label}
+          disabled={disabled}
+          onDelete={() => onRemove(id)}
+          sx={{
+            position: "relative",
+            maxWidth: "100%",
+            pointerEvents: "none",
+            "& .MuiChip-deleteIcon": { pointerEvents: "auto" },
+          }}
+        />
+      ))}
+      <ChevronRight
+        fontSize="small"
+        sx={{
+          position: "absolute",
+          right: 12,
+          top: "50%",
+          transform: "translateY(-50%)",
+          color: "text.secondary",
+          pointerEvents: "none",
+        }}
+      />
+    </Box>
   );
 }
 
@@ -235,36 +286,13 @@ function DesktopContextPicker(
     : "available";
   return (
     <Stack spacing={1} data-context-picker>
-      <Button
-        variant="outlined"
+      <SelectionField
+        open={open}
         disabled={disabled}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        endIcon={<ChevronRight />}
-        onClick={() => setOpen(true)}
-        sx={{
-          justifyContent: "space-between",
-          textTransform: "none",
-          color: "text.primary",
-          borderColor: "divider",
-        }}
-      >
-        <SelectLabel count={value.length} />
-      </Button>
-      {value.length > 0 && (
-        <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-          {value.map((id) => (
-            <Chip
-              key={id}
-              size="small"
-              label={identityLabel(id)}
-              disabled={disabled}
-              onDelete={() => onChange(value.filter((other) => other !== id))}
-              sx={{ maxWidth: "100%" }}
-            />
-          ))}
-        </Stack>
-      )}
+        labels={value.map((id) => ({ id, label: identityLabel(id) }))}
+        onOpen={() => setOpen(true)}
+        onRemove={(id) => onChange(value.filter((other) => other !== id))}
+      />
       {open && (
         <DesktopModal
           open

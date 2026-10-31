@@ -59,6 +59,7 @@ const TABLES: &[&str] = &[
     "managed_review_inputs",
     "managed_review_sources",
     "events",
+    "transcript_anchors",
     "settings",
     "scheduled_wakeups",
     "scheduled_provider_actions",

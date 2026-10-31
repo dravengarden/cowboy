@@ -189,7 +189,7 @@ function CallApprovalDock({
   approval: CallApproval;
   sessionId: string;
 }): React.JSX.Element {
-  const { busy, failure, answer } = useCallApprovalAnswer(sessionId);
+  const { busy, failure, answer } = useCallApprovalAnswer(sessionId, approval);
   const labels: Record<CallApprovalDecision, string> = {
     once: approval.requests === 1 ? "Allow once" : "Allow these calls",
     session: "Allow for this session",

@@ -1,5 +1,6 @@
 {
   "http": {
+    "background_tasks::lookup": "sessions.history",
     "send_delivery::receipt": "queue.delivery_receipt",
     "send_delivery::options": "queue.options",
     "send_delivery::set_policy": "queue.policy_set",

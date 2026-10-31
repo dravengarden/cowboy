@@ -113,7 +113,9 @@ export async function runSessionContextBrowserConformance(
   globalThis.WebSocket = Socket as unknown as typeof WebSocket;
   bindProductSyncPrincipal("context-fixture");
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    // A focused bootstrap names the client's cached high-water seq
+    // (`?since_seq=`, docs/background-tasks.md); route it by its path.
+    const url = String(input).replace(/(\/bootstrap)\?since_seq=\d+$/, "$1");
     if (!url.startsWith("/api/")) return realFetch(input, init);
     if (url === "/api/sync/dataset") {
       return Response.json({

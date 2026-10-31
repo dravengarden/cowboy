@@ -19,8 +19,8 @@ export const SUBAGENT_STOP_KEY = "X";
 export function focusedSubagentStop(): HTMLButtonElement | null {
   const active = globalThis.document?.activeElement;
   if (!(active instanceof HTMLElement)) return null;
-  const stop = active.closest<HTMLElement>("[data-subagent-row]")
-    ?.querySelector<HTMLButtonElement>("[data-subagent-stop]");
+  const stop = active.closest<HTMLElement>("[data-subagent-row], [data-task-row]")
+    ?.querySelector<HTMLButtonElement>("[data-subagent-stop], [data-task-stop]");
   return stop && !stop.disabled ? stop : null;
 }
 
@@ -65,6 +65,14 @@ export interface Subagent {
    *  the parent's turn ended, or its worker was replaced without announcing
    *  it again. Its outcome is unknown, not success or failure. */
   reporting: boolean;
+  /** The Controller's receipt seq of this snapshot (I2), or null for rows
+   *  from before the Controller stamped it. Clients order by it. */
+  observedSeq: number | null;
+  /** The worker incarnation that reported it (I3), when stamped. */
+  incarnation: string | null;
+  /** The Controller no longer has this row (cleared or retired): never
+   *  presented as finished (I6). Set by reconciliation only. */
+  unavailable?: boolean;
 }
 
 function text(value: unknown): string | null {
@@ -128,6 +136,10 @@ export function subagentOf(update: AcpUpdate): Subagent | null {
     model: text(update["model"]),
     tokens: count((update["usage"] as { totalTokens?: unknown } | null | undefined)?.totalTokens),
     reporting: update["reporting"] !== false,
+    observedSeq: typeof update["observedSeq"] === "number" && Number.isFinite(update["observedSeq"])
+      ? update["observedSeq"]
+      : null,
+    incarnation: text(update["incarnation"]),
   };
 }
 
@@ -146,39 +158,93 @@ export function isWorking(subagent: Pick<Subagent, "state">): boolean {
 
 export type SubagentTone = "working" | "waiting" | "done" | "failed" | "stopped" | "unknown";
 
+/** Presentation grouping only (docs/background-tasks.md §3.2), never a state
+ *  machine: the raw `state`/`stopReason` stay in the detail view. */
+export type DisplayGroup =
+  | "active"
+  | "waiting"
+  | "needs_you"
+  | "stopping"
+  | "done"
+  | "failed"
+  | "stopped"
+  | "ended"
+  | "not_reporting"
+  | "unavailable";
+
 export interface SubagentStatus {
   label: string;
   tone: SubagentTone;
+  group: DisplayGroup;
 }
 
-export function subagentStatus(subagent: Subagent): SubagentStatus {
-  if (isWorking(subagent) && !subagent.reporting) {
-    return { label: "No longer reporting", tone: "unknown" };
+/** Groups whose chip states an observed outcome. */
+export function terminalGroup(group: DisplayGroup): boolean {
+  return group === "done" || group === "failed" || group === "stopped" || group === "ended";
+}
+
+export interface SubagentStatusContext {
+  /** Current permission/elicitation requests this child raised that this
+   *  client can answer (R4). */
+  pendingRequests?: number;
+  /** A Stop was accepted and the child has not reported idle yet. */
+  stopping?: boolean;
+}
+
+export function subagentStatus(
+  subagent: Subagent,
+  context: SubagentStatusContext = {},
+): SubagentStatus {
+  if (subagent.unavailable) {
+    return { label: "No longer available", tone: "unknown", group: "unavailable" };
+  }
+  // R2: losing contact is never an outcome.
+  if (subagent.state !== "idle" && !subagent.reporting) {
+    return { label: "Not reporting", tone: "unknown", group: "not_reporting" };
   }
   switch (subagent.state) {
     case "running":
-      return { label: "Working", tone: "working" };
+      return context.stopping
+        ? { label: "Stopping", tone: "working", group: "stopping" }
+        : { label: "Working", tone: "working", group: "active" };
     case "requires_action":
-      return { label: "Needs your answer", tone: "waiting" };
+      // R4: "Needs your answer" only with a request this client can answer.
+      return (context.pendingRequests ?? 0) > 0
+        ? { label: "Needs your answer", tone: "waiting", group: "needs_you" }
+        : { label: "Waiting", tone: "waiting", group: "waiting" };
     case "idle":
       switch (subagent.stopReason) {
+        case "end_turn":
+          return subagent.error
+            ? { label: "Failed", tone: "failed", group: "failed" }
+            : { label: "Done", tone: "done", group: "done" };
         case "cancelled":
-          return { label: "Stopped", tone: "stopped" };
+          return { label: "Stopped", tone: "stopped", group: "stopped" };
         case "error":
-          return { label: "Failed", tone: "failed" };
+          return { label: "Failed", tone: "failed", group: "failed" };
         case "refusal":
-          return { label: "Declined", tone: "failed" };
+          return { label: "Failed: declined", tone: "failed", group: "failed" };
         case "max_tokens":
         case "max_turn_requests":
-          return { label: "Hit its limit", tone: "failed" };
-        default:
+          return { label: "Failed: hit its limit", tone: "failed", group: "failed" };
+        case null:
+          // R1: cessation was observed without an outcome (e.g. the adapter
+          // restarted its worker). A reply alone is not proof of success.
           return subagent.error
-            ? { label: "Failed", tone: "failed" }
-            : { label: "Done", tone: "done" };
+            ? { label: "Failed", tone: "failed", group: "failed" }
+            : { label: "Ended: outcome unreported", tone: "unknown", group: "ended" };
+        default:
+          return { label: `Ended: ${subagent.stopReason.replaceAll("_", " ")}`, tone: "unknown", group: "ended" };
       }
     default:
-      return { label: "Ended", tone: "unknown" };
+      // `unknown` (and any adapter-specific state) is not terminal.
+      return { label: "Not reporting", tone: "unknown", group: "not_reporting" };
   }
+}
+
+/** The subagent's foreground work has ended (an `idle` snapshot). */
+export function subagentTerminal(subagent: Pick<Subagent, "state">): boolean {
+  return subagent.state === "idle";
 }
 
 function plural(value: number, one: string, many: string): string {
@@ -209,8 +275,15 @@ function firstLine(value: string): string {
   return line.length > 160 ? `${line.slice(0, 159)}…` : line;
 }
 
-/** The newer of two snapshots of one subagent. */
-export function newerSubagent(current: Subagent, next: Subagent): boolean {
+/** Whether `next` is at least as new as `current` (I2): the Controller's
+ *  receipt seq when both are stamped, else the producer revision. */
+export function newerSubagent(
+  current: Pick<Subagent, "revision" | "observedSeq">,
+  next: Pick<Subagent, "revision" | "observedSeq">,
+): boolean {
+  if (current.observedSeq !== null && next.observedSeq !== null) {
+    return next.observedSeq >= current.observedSeq;
+  }
   return next.revision >= current.revision;
 }
 
@@ -227,6 +300,18 @@ export function mergeSubagent(current: Subagent, next: Subagent): Subagent {
     prompt: next.prompt ?? current.prompt,
     model: next.model ?? current.model,
   };
+}
+
+/** The child session id a permission or elicitation request names, if a
+ *  child raised it. */
+export function requestingSubagentId(toolCall: unknown): string | null {
+  if (!toolCall || typeof toolCall !== "object") return null;
+  const cowboy = (toolCall as { _cowboy?: unknown })._cowboy;
+  if (!cowboy || typeof cowboy !== "object") return null;
+  const subagent = (cowboy as { subagent?: unknown }).subagent;
+  if (!subagent || typeof subagent !== "object") return null;
+  const id = (subagent as { sessionId?: unknown }).sessionId;
+  return typeof id === "string" && id ? id : null;
 }
 
 /** The subagent a permission or elicitation request names, if a child raised it. */

@@ -136,6 +136,11 @@ impl Store {
         dispatch!(self, admit_managed_call(record, request))
     }
 
+    /// Whether a person dismissed this call from the session's list.
+    pub async fn managed_call_dismissed(&self, parent: &str, id: &str) -> Result<bool> {
+        dispatch!(self, managed_call_dismissed(parent, id))
+    }
+
     /// Private dispatch input. Product projections deliberately return only Record.
     pub async fn managed_call_input(&self, parent: &str, id: &str) -> Result<Option<Request>> {
         dispatch!(self, managed_call_input(parent, id))
@@ -193,6 +198,12 @@ macro_rules! implementation {
                     }));
                 }
                 anyhow::bail!("review retry history limit")
+            }
+
+            async fn managed_call_dismissed(&self, parent: &str, id: &str) -> Result<bool> {
+                let dismissed: Option<bool> = sqlx::query_scalar("SELECT dismissed FROM managed_agent_calls WHERE parent_session_id = $1 AND call_id = $2")
+                    .bind(parent).bind(id).fetch_optional(&self.pool).await?;
+                Ok(dismissed.unwrap_or(false))
             }
 
             async fn dismiss_managed_call(&self, parent: &str, id: &str, dismissed: bool) -> Result<bool> {
