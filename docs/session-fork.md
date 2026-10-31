@@ -82,8 +82,13 @@ token refresh (about every eight hours) without a new sign-in. Admission
 therefore keeps the source's older generation for a fork: the Service
 readiness check still holds the current generation, and every retained home
 is re-projected with the newest credentials, exactly as when the source
-resumes. A named subscription's generation advances only on a real sign-in,
-so a fork across one is refused with "use Continue in new agent". The fork
+resumes. A Service re-login also advances the generation, and a fork across
+it likewise runs on the newest credentials in the source's home, the same as
+resuming the source. A named subscription's generation advances only on a
+real sign-in whose old tokens may be revoked, so a fork across one is refused
+with "use Continue in new agent". A Provider upgrade that changes the auth
+contract makes the source's generation unlaunchable, so such a fork fails at
+its first launch, as the source itself would. The fork
 uses that login's currently admitted
 release of the same Provider; inheritance keeps only settings that release
 declares. If the admitted session no longer matches, it is kept but marked so
