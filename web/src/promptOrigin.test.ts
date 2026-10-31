@@ -91,3 +91,8 @@ test("agent review follow-ups collapse to a note instead of a human bubble", () 
   assertEquals(presented.title, "Addressing review findings");
   assertEquals(presented.raw?.includes("/tmp/agent-1000/"), true);
 });
+
+test("a Cowboy notice follows the global font size", async () => {
+  const source = await Bun.file(new URL("./PromptOriginNote.tsx", import.meta.url)).text();
+  assertEquals(source.includes("fontSize: desktopSize(13)"), false);
+});
