@@ -151,6 +151,10 @@ code-buffer-sync-browser-conformance BROWSER:
 review-code-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-code' conformance "{{BROWSER}}"
 
+# Actual Review comparison choice and line selection, isolated fixture HTTP.
+review-compare-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-compare' conformance "{{BROWSER}}"
+
 # Actual Review DocumentView refresh/scroll anchoring, isolated fixture HTTP.
 review-document-refresh-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-document-refresh' conformance "{{BROWSER}}"

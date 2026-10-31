@@ -153,6 +153,18 @@ worktree", computed in the browser from the session list the principal already
 sees, so it adds no server-side visibility rule. Paths are shortened to their
 last two segments; the full path stays available as a hint.
 
+In the overview this strip is one tappable row, the branch over its facts; the
+Machine, path and fact chips unfold from it, so the list keeps the screen.
+Changes names its comparison by the reason to look: **Uncommitted**, **Ready to
+merge** (the default branch), **Not pushed** (the upstream), or any other branch
+from the same sheet. A branch comparison runs from the merge base to the working
+tree, so each of those includes uncommitted work and says so. The choice is the
+`comparison` of the session's synced Review state (`""` is uncommitted, absent
+follows the repository), set with the `setComparison` mutation, which agents
+reach through the same sync operation. A stored branch that no longer exists
+falls back to the default and is not overwritten. The unread chip filters the
+list without changing next/previous navigation.
+
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists
 open pull requests that are not checked out. See
@@ -266,6 +278,13 @@ Mobile review defaults to a unified diff with collapsed unchanged regions.
 Opening a file switches to its read-only source view while retaining hunk,
 diagnostic, and symbol navigation. Editing, terminals, task runners, and Zed UI
 settings are deliberately out of scope.
+
+Tapping a line number selects it, and a second tap extends the selection to
+that line; line numbers are the target because native text selection on iOS
+competes with the page swipe. **Send to Agent** appends the location and the
+selected text to the active session's Composer and returns to the Agent; nothing
+is sent until the reader does. In a diff the location names file lines, new side
+first, not rows of the diff document.
 
 Code Review owns only code-surface typography: its 12/14/16/18 px setting
 changes CodeMirror source and diff text without changing Agent or sheet text.

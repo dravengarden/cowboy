@@ -20,12 +20,12 @@ Session Settings answers independent questions, each in one place:
   changes in place. Nothing below repeats it.
 - **What this session has read**: the links list names every session this
   conversation came from or read (below).
-- **What the next message will read**: **Select sessions** is always visible
+- **What the next prompt will read**: **Select sessions** is always visible
   under the Agent block in mobile settings, desktop Run Configuration and the
-  empty-session configuration workspace. **Save changes** stages the selection
-  for this session's next message, including a staged continuation;
-  **Discard** drops the edit and **Cancel linked context** removes a saved one.
-  Once sent, a selection joins the links.
+  empty-session configuration workspace. It behaves like an attachment: every
+  selection applies at once, is not a prompt, and starts no reply. Removing a
+  chip or **Cancel** in the Composer cue undoes it. Once a prompt carries a
+  selection it joins the links.
 - **Where the work goes**: **Continue or fork** opens one form with the
   target agent and two actions. **Continue on next message** moves the work;
   **Fork now** keeps both live.
@@ -254,8 +254,16 @@ admission. The destination is fenced before its session becomes visible, so
 another tab cannot race its bootstrap. Ordinary WS/API submission and steering
 cannot bypass a pending context choice.
 
-The queue also holds scheduled wakeups, activated drafts and manual drain
-requests while context is pending. Saving a preference closes queue admission
+Links hold nothing: saving them records a waiting list and marks the context
+applied, whether the agent is idle, busy or has queued prompts. The first
+authored prompt dispatched turns that list into its injection (below), which
+is when the selection becomes links and every device drops the cue. A claimed
+injection is never replaced while its prompt is queued for retry, and a session
+deleted while waiting is skipped rather than refusing the prompt. A Web send
+waits for link edits still being saved. `POST .../context/send` still accepts
+waiting links, for callers that want a receipt. Only a staged new agent is
+pending. The queue holds scheduled wakeups, activated drafts and manual drain
+requests until that send. Saving it closes queue admission
 under the same Hub lock before awaiting storage. Messages arriving during that
 write remain queued. Clearing context is allowed with a held queue and releases
 it under the normal Pause policy. A bootstrap precedes messages queued during
@@ -282,6 +290,10 @@ in diagnostics and reports the affected Machine and retry state. A later
 with its original detail available; `starting` alone does not prove recovery.
 Failed turns and interrupted tools retain their failure state. Folding a
 recovered error does not retry a message or transfer it to another session.
+
+Editing the selection before a prompt carries it replaces it; a session already
+waiting keeps its history boundary, including across staging a new agent and
+going Back.
 
 The links belong to the first authored prompt dispatched to the agent, not only
 to the queued bootstrap row. Before handing a prompt to its runtime, the

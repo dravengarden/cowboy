@@ -58,7 +58,7 @@ test("a pending new agent names its subscription", () => {
     { kind: "pending_agent", provider: "claude-code", label: "claude-code:mink" },
   );
   assertEquals(
-    contextCue("s", { ...base, revision: 2, sources: ["a", "b"] }, label),
+    contextCue("s", { ...base, pending_links: ["a", "b"] }, label),
     { kind: "pending_links", count: 2 },
   );
 });

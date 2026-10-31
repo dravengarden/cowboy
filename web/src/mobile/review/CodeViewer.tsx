@@ -9,6 +9,7 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  lineNumbers,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -46,6 +47,8 @@ import {
 } from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
+
+import type { ReviewLineSelection } from "./reviewLineSelection";
 
 export interface CodeInspectCandidate {
   label: string;
@@ -360,6 +363,8 @@ export default function CodeViewer({
   semanticHighlighting,
   onInspect,
   mapDiffPoint,
+  selection,
+  onToggleLine,
   onVisibleLine,
   scrollRestoreKey,
   savedScrollTop,
@@ -385,6 +390,9 @@ export default function CodeViewer({
   mapDiffPoint?:
     | ((row: number, column: number) => { row: number; column: number } | null)
     | undefined;
+  /** Selected document lines; a tap on a line number reports that line. */
+  selection?: ReviewLineSelection | undefined;
+  onToggleLine?: ((line: number) => void) | undefined;
   onVisibleLine?: ((line: number) => void) | undefined;
   scrollRestoreKey: string;
   savedScrollTop?: unknown;
@@ -398,6 +406,18 @@ export default function CodeViewer({
   const scrollRestoreFrame = useRef(0);
   const onVisibleLineRef = useRef(onVisibleLine);
   onVisibleLineRef.current = onVisibleLine;
+  const onToggleLineRef = useRef(onToggleLine);
+  onToggleLineRef.current = onToggleLine;
+  const selectionExtensions = useMemo(() => [
+    lineNumbers({
+      domEventHandlers: {
+        click: (view, block) => {
+          onToggleLineRef.current?.(view.state.doc.lineAt(block.from).number);
+          return onToggleLineRef.current !== undefined;
+        },
+      },
+    }),
+  ], []);
   const visibleLineReporterRef = useRef<
     MobileCodeScrollIdleReporter<EditorView> | null
   >(null);
@@ -951,6 +971,29 @@ export default function CodeViewer({
     });
   }, [extensions, revealRange, text]);
 
+  const allExtensions = useMemo(() => {
+    if (!selection) return [...selectionExtensions, ...extensions];
+    const line = Decoration.line({ class: "cm-review-selected-line" });
+    const marks = (state: EditorState): DecorationSet =>
+      Decoration.set(
+        Array.from(
+          {
+            length: Math.max(
+              0,
+              Math.min(selection.to, state.doc.lines) - selection.from + 1,
+            ),
+          },
+          (_, index) =>
+            line.range(state.doc.line(selection.from + index).from),
+        ),
+      );
+    return [
+      ...selectionExtensions,
+      ...extensions,
+      EditorView.decorations.compute(["doc"], marks),
+    ];
+  }, [extensions, selection, selectionExtensions]);
+
   return (
     <Box
       data-mobile-code-layer="true"
@@ -971,11 +1014,12 @@ export default function CodeViewer({
         "& .cm-editor, & .cm-scroller, & .cm-content": {
           fontSize: `${fontSize}px !important`,
         },
+        "& .cm-review-selected-line": { bgcolor: "action.selected" },
       }}
     >
       <CodeMirror
         value={text}
-        extensions={extensions}
+        extensions={allExtensions}
         onCreateEditor={(view) => {
           editorRef.current = view;
           freezeDisposeRef.current?.();
@@ -996,7 +1040,7 @@ export default function CodeViewer({
           }
         }}
         basicSetup={{
-          lineNumbers: true,
+          lineNumbers: false,
           foldGutter: false,
           highlightActiveLine: false,
           highlightActiveLineGutter: false,

@@ -204,7 +204,8 @@ fn sync_mutations() -> Value {
             "selectRemoteReview":"{selected:boolean}",
             "open":"{path:string}", "close":"{path:string}", "activate":"{path:string|null}",
             "reorder":"{paths:string[]}", "setPinned":"{path:string,pinned:boolean}",
-            "setMode":"{mode:'files'|'git'}", "markReviewed":"{key:string,revision?:string|null}",
+            "setMode":"{mode:'files'|'git'}", "setComparison":"{comparison:string|null}: '' uncommitted, a refs/... branch, null follows the repository default",
+            "markReviewed":"{key:string,revision?:string|null}",
             "setPosition":"{path:string,line:number,revision?:string|null}"
         }
     })

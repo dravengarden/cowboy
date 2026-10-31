@@ -23,6 +23,7 @@ if (
   suite !== "managed-calls" && suite !== "session-maintenance" &&
   suite !== "dormant-session" && suite !== "about-layout" &&
   suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "review-compare" &&
   suite !== "loading-progress" &&
   suite !== "subscriptions" && suite !== "client-update" &&
   suite !== "session-context" && suite !== "boot-snapshot" &&
@@ -60,6 +61,7 @@ await build({
         suite === "session-maintenance" || suite === "dormant-session" ||
         suite === "about-layout" || suite === "info-metrics" ||
         suite === "loading-progress" || suite === "review-context" ||
+        suite === "review-compare" ||
         suite === "subscriptions" || suite === "client-update" ||
         suite === "session-context" || suite === "elicitation" ||
         suite === "subagents" || suite === "background-tasks"
@@ -107,6 +109,7 @@ await build({
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "dormant-session" || suite === "info-metrics" ||
         suite === "review-context" || suite === "loading-progress" ||
+        suite === "review-compare" ||
         suite === "client-update" || suite === "subscriptions" ||
         suite === "session-context" || suite === "elicitation" ||
         suite === "subagents" || suite === "background-tasks"
@@ -133,6 +136,8 @@ await build({
           : suite === "loading-progress"
           ? "../web/src/loadingProgressBrowserConformance.tsx"
           : suite === "review-context"
+          ? "../web/src/reviewContextBrowserConformance.tsx"
+          : suite === "review-compare"
           ? "../web/src/reviewContextBrowserConformance.tsx"
           : suite === "info-metrics"
           ? "../web/src/infoMetricsBrowserConformance.tsx"

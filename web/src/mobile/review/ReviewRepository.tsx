@@ -11,7 +11,9 @@ import {
   Alert,
   Box,
   Button,
+  ButtonBase,
   Chip,
+  Collapse,
   List,
   ListItemButton,
   ListItemText,
@@ -209,6 +211,12 @@ function WorktreeGroupLabel(
   );
 }
 
+/** One line of views: the list below them is what the screen is for. */
+const compactTabsSx = {
+  "& [data-segmented-tab]": { minHeight: 32, py: 0, fontSize: "0.8125rem" },
+  "& [data-segmented-tab] svg": { fontSize: "1rem" },
+};
+
 const factChipSx = {
   height: 22,
   borderRadius: "11px",
@@ -345,7 +353,9 @@ export function ReviewRepository({
   reviewed,
   onRevision,
   comparison,
+  preferredComparison,
   onComparisonChange,
+  onComparisonResolved,
   onChanges,
   onClose,
   refreshToken,
@@ -365,7 +375,9 @@ export function ReviewRepository({
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
   comparison: string | null | undefined;
+  preferredComparison?: string | null | undefined;
   onComparisonChange: (comparison: string | null) => void;
+  onComparisonResolved: (comparison: string | null) => void;
   onChanges: (entries: GitReviewEntry[]) => void;
   onClose: () => void;
   refreshToken?: number;
@@ -383,6 +395,7 @@ export function ReviewRepository({
   const [section, setSection] = useState<RepositorySection>("changes");
   const [changesRefresh, setChangesRefresh] = useState(0);
   const [otherOpen, setOtherOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [pulls, setPulls] = useState<RepositoryPulls | null>(null);
   useEffect(() => {
     setPulls(null);
@@ -568,120 +581,182 @@ export function ReviewRepository({
     return () => observer.disconnect();
   }, [loadMore, moreError, section, truncated]);
 
+  const targetBranch = target?.branch ??
+    (target?.head ? `Detached ${shortOid(target.head)}` : target ? "No HEAD" : "Repository");
+  const machineChip = machineLabel && (
+    <Chip
+      label={machineLabel}
+      size="small"
+      color="primary"
+      variant="outlined"
+      sx={{
+        height: 22,
+        borderRadius: "11px",
+        fontSize: "0.6875rem",
+        fontWeight: 600,
+        "& .MuiChip-label": { px: 0.9 },
+      }}
+    />
+  );
+  const factChips = targetFacts.map((fact) => (
+    <Chip
+      key={fact.key}
+      size="small"
+      variant="outlined"
+      label={fact.label}
+      color={fact.tone === "attention" ? "warning" : "default"}
+      {...(fact.key === "changes" ||
+          (fact.comparison && fact.comparison !== comparison)
+        ? {
+          onClick: (): void => {
+            if (fact.comparison) {
+              onComparisonChange(fact.comparison);
+            } else if (comparison) onComparisonChange(null);
+            setSection("changes");
+          },
+        }
+        : {})}
+      sx={factChipSx}
+    />
+  ));
+
   return (
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
       <Box
         sx={{
-          pt: embedded ? 1 : "calc(var(--cowboy-system-top-clearance) + 14px)",
+          pt: embedded ? 0.5 : "calc(var(--cowboy-system-top-clearance) + 14px)",
           px: 1.5,
-          pb: 1,
+          pb: embedded ? 0.5 : 1,
         }}
       >
-        <Stack spacing={0.35} sx={{ px: 0.5, mb: 1 }}>
-          <Stack direction="row" alignItems="center" spacing={0.75}>
-            {!embedded && (
-              <Typography variant="subtitle1" fontWeight={700}>
-                Repository
-              </Typography>
+        <Stack spacing={0.35} sx={{ px: 0.5, mb: embedded ? 0.5 : 1 }}>
+          {embedded
+            ? (
+              <Box data-repository-change-target>
+                <ButtonBase
+                  data-repository-details-toggle
+                  aria-expanded={detailsOpen}
+                  aria-label="Repository details"
+                  onClick={() => setDetailsOpen((open) => !open)}
+                  sx={{
+                    display: "flex",
+                    width: 1,
+                    minHeight: 38,
+                    justifyContent: "flex-start",
+                    textAlign: "left",
+                    gap: 0.5,
+                    borderRadius: 1,
+                  }}
+                >
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700} noWrap>
+                      {targetBranch}
+                    </Typography>
+                    {targetFacts.length > 0 && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        noWrap
+                        component="div"
+                        sx={{ lineHeight: 1.3 }}
+                      >
+                        {targetFacts.map((fact) => fact.label).join(" · ")}
+                      </Typography>
+                    )}
+                  </Box>
+                  <ExpandMore
+                    fontSize="small"
+                    sx={{
+                      color: "text.secondary",
+                      transform: detailsOpen ? "rotate(180deg)" : undefined,
+                    }}
+                  />
+                </ButtonBase>
+                {targetPull && (
+                  <PullChip
+                    pull={targetPull}
+                    onOpen={openPull ? () => openPull(targetPull) : undefined}
+                  />
+                )}
+                <Collapse in={detailsOpen}>
+                  <Stack spacing={0.5} sx={{ pt: 0.5 }}>
+                    <Stack direction="row" alignItems="center" spacing={0.75}>
+                      {machineChip}
+                      <Typography
+                        data-repository-project-path
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ minWidth: 0, overflowWrap: "anywhere" }}
+                      >
+                        {projectPath}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" flexWrap="wrap" sx={{ gap: 0.5 }}>
+                      {factChips}
+                    </Stack>
+                  </Stack>
+                </Collapse>
+              </Box>
+            )
+            : (
+              <>
+                <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <Typography variant="subtitle1" fontWeight={700}>
+                    Repository
+                  </Typography>
+                  {machineChip}
+                </Stack>
+                {projectPath && (
+                  <HintTooltip title={projectPath}>
+                    <Typography
+                      data-repository-project-path
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{
+                        display: "-webkit-box",
+                        overflow: "hidden",
+                        overflowWrap: "anywhere",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: 2,
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {projectPath}
+                    </Typography>
+                  </HintTooltip>
+                )}
+                {target && (
+                  <Stack
+                    data-repository-change-target
+                    direction="row"
+                    alignItems="center"
+                    flexWrap="wrap"
+                    sx={{ gap: 0.5, pt: 0.5 }}
+                  >
+                    <Typography
+                      variant="body2"
+                      fontWeight={700}
+                      noWrap
+                      sx={{ minWidth: 0, maxWidth: 1, mr: 0.25 }}
+                    >
+                      {targetBranch}
+                    </Typography>
+                    {factChips}
+                    {targetPull && (
+                      <PullChip
+                        pull={targetPull}
+                        onOpen={openPull ? () => openPull(targetPull) : undefined}
+                      />
+                    )}
+                  </Stack>
+                )}
+              </>
             )}
-            {machineLabel && (
-              <Chip
-                label={machineLabel}
-                size="small"
-                color="primary"
-                variant="outlined"
-                sx={{
-                  height: 22,
-                  borderRadius: "11px",
-                  fontSize: "0.6875rem",
-                  fontWeight: 600,
-                  "& .MuiChip-label": { px: 0.9 },
-                }}
-              />
-            )}
-            {embedded && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                noWrap
-                title={projectPath}
-                sx={{ flex: 1, minWidth: 0 }}
-              >
-                {projectPath}
-              </Typography>
-            )}
-          </Stack>
-          {!embedded && projectPath && (
-            <HintTooltip title={projectPath}>
-              <Typography
-                data-repository-project-path
-                variant="caption"
-                color="text.secondary"
-                sx={{
-                  display: "-webkit-box",
-                  overflow: "hidden",
-                  overflowWrap: "anywhere",
-                  WebkitBoxOrient: "vertical",
-                  WebkitLineClamp: 2,
-                  lineHeight: 1.35,
-                }}
-              >
-                {projectPath}
-              </Typography>
-            </HintTooltip>
-          )}
-          {target && (
-            <Stack
-              data-repository-change-target
-              direction="row"
-              alignItems="center"
-              flexWrap="wrap"
-              sx={{ gap: 0.5, pt: 0.5 }}
-            >
-              <Typography
-                variant="body2"
-                fontWeight={700}
-                noWrap
-                sx={{ minWidth: 0, maxWidth: 1, mr: 0.25 }}
-              >
-                {target.branch ??
-                  (target.head
-                    ? `Detached ${shortOid(target.head)}`
-                    : "No HEAD")}
-              </Typography>
-              {targetFacts.map((fact) => (
-                <Chip
-                  key={fact.key}
-                  size="small"
-                  variant="outlined"
-                  label={fact.label}
-                  color={fact.tone === "attention" ? "warning" : "default"}
-                  {...(fact.key === "changes" ||
-                      (fact.comparison && fact.comparison !== comparison)
-                    ? {
-                      onClick: (): void => {
-                        if (fact.comparison) {
-                          onComparisonChange(fact.comparison);
-                        } else if (comparison) onComparisonChange(null);
-                        setSection("changes");
-                      },
-                    }
-                    : {})}
-                  sx={factChipSx}
-                />
-              ))}
-              {targetPull && (
-                <PullChip
-                  pull={targetPull}
-                  onOpen={openPull ? () => openPull(targetPull) : undefined}
-                />
-              )}
-            </Stack>
-          )}
         </Stack>
         <SegmentedTabs
           rootProps={{ "data-mobile-repository-tabs": "" }}
           aria-label="Repository views"
+          {...(embedded ? { sx: compactTabsSx } : {})}
           value={section}
           onChange={setSection}
           options={[
@@ -708,7 +783,10 @@ export function ReviewRepository({
               reviewed={reviewed}
               onRevision={onRevision}
               {...(comparison === undefined ? {} : { comparison })}
+              preferredComparison={preferredComparison}
+              target={target}
               onComparisonChange={onComparisonChange}
+              onComparisonResolved={onComparisonResolved}
               onChanges={onChanges}
               compact={embedded}
               {...(onBrowseFiles ? { onBrowseFiles } : {})}

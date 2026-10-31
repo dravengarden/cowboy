@@ -26,10 +26,10 @@ export function contextCue(
         ),
       };
     }
-    return context.sources.length > 0
-      ? { kind: "pending_links", count: context.sources.length }
-      : null;
   }
+  const links = context.pending_links?.length ?? 0;
+  if (links > 0) return { kind: "pending_links", count: links };
+  if (context.revision !== context.applied_revision) return null;
   if (delivery?.state !== "accepted") return null;
   return delivery.session_id === sessionId ? null : { kind: "continued_in", context };
 }

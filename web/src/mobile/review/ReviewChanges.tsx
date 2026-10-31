@@ -9,12 +9,13 @@ import {
   ExpandMore,
   FolderOutlined,
   Refresh,
+  UnfoldMore,
 } from "@mui/icons-material";
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
+  ButtonBase,
   Chip,
   CircularProgress,
   List,
@@ -22,7 +23,6 @@ import {
   ListItemIcon,
   ListItemText,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +33,7 @@ import {
   type CodeChanges,
   type CodeChangeStatus,
   fetchCodeChanges,
+  type GitChangeTarget,
 } from "./codeApi";
 import {
   type GitReviewEntry,
@@ -43,6 +44,12 @@ import {
 import { buildGitChangeTree, type GitChangeTreeNode } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
+import { ReviewComparePicker } from "./ReviewComparePicker";
+import {
+  resolveReviewComparison,
+  reviewCompareLabel,
+  reviewCompareScenarios,
+} from "./reviewCompareModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
   modified: "M",
@@ -93,27 +100,29 @@ function GitTreeRows({
               <ListItemButton
                 onClick={() => onToggle(node.path)}
                 sx={{
-                  minHeight: 46,
-                  pl: 1 + depth * 2,
-                  pr: 1.25,
+                  minHeight: 34,
+                  py: 0,
+                  pl: 0.75 + depth * 1.5,
+                  pr: 1,
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 30, color: "text.secondary" }}>
+                <ListItemIcon sx={{ minWidth: 26, color: "text.secondary" }}>
                   {isCollapsed
                     ? <ChevronRight fontSize="small" />
                     : <ExpandMore fontSize="small" />}
                 </ListItemIcon>
                 <FolderOutlined
                   fontSize="small"
-                  sx={{ mr: 1.25, color: "text.secondary" }}
+                  sx={{ mr: 0.75, color: "text.secondary" }}
                 />
                 <ListItemText
                   primary={node.name}
                   primaryTypographyProps={{
                     noWrap: true,
                     fontFamily: "var(--cowboy-font-mono)",
-                    fontSize: "0.875rem",
+                    fontSize: "0.8125rem",
                   }}
+                  sx={{ my: 0 }}
                 />
               </ListItemButton>
               {!isCollapsed && (
@@ -144,15 +153,17 @@ function GitTreeRows({
             key={`${entry.scope}:${entry.change.path}`}
             onClick={() => onOpenDiff(entry, queue)}
             sx={{
-              minHeight: 52,
-              pl: 1 + depth * 2,
+              minHeight: 38,
+              py: 0,
+              pl: 0.75 + depth * 1.5,
               pr: 1.25,
             }}
           >
             <ListItemIcon
               sx={{
-                minWidth: 34,
+                minWidth: 28,
                 color: isReviewed ? "success.main" : "text.secondary",
+                "& svg": { fontSize: "1.125rem" },
               }}
             >
               {isReviewed
@@ -164,15 +175,21 @@ function GitTreeRows({
               primaryTypographyProps={{
                 noWrap: true,
                 fontFamily: "var(--cowboy-font-mono)",
-                fontSize: "0.875rem",
+                fontSize: "0.8125rem",
               }}
+              sx={{ my: 0 }}
             />
-            <Chip
-              size="small"
-              label={statusLabel[entry.change.status]}
-              color={entry.change.status === "conflicted" ? "error" : "default"}
-              sx={{ minWidth: 32 }}
-            />
+            <Typography
+              aria-label={entry.change.status}
+              variant="caption"
+              fontWeight={700}
+              color={entry.change.status === "conflicted"
+                ? "error.main"
+                : "text.secondary"}
+              sx={{ ml: 1, fontFamily: "var(--cowboy-font-mono)" }}
+            >
+              {statusLabel[entry.change.status]}
+            </Typography>
           </ListItemButton>
         );
       })}
@@ -186,7 +203,10 @@ export function ReviewChanges({
   reviewed,
   onRevision,
   comparison,
+  preferredComparison,
+  target,
   onComparisonChange,
+  onComparisonResolved,
   onChanges,
   drawer = false,
   onClose,
@@ -199,7 +219,13 @@ export function ReviewChanges({
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
   comparison?: string | null;
+  /** The session's stored choice; `undefined` follows the repository. */
+  preferredComparison?: string | null | undefined;
+  target?: GitChangeTarget | undefined;
+  /** The reader chose a comparison. */
   onComparisonChange?: (comparison: string | null) => void;
+  /** The stored or default comparison took effect; nothing to remember. */
+  onComparisonResolved?: (comparison: string | null) => void;
   onChanges?: (entries: GitReviewEntry[]) => void;
   drawer?: boolean;
   onClose?: () => void;
@@ -224,6 +250,8 @@ export function ReviewChanges({
   const [error, setError] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [visibleCount, setVisibleCount] = useState(REVIEW_WINDOW_SIZE);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
@@ -239,18 +267,52 @@ export function ReviewChanges({
     [changes, comparison],
   );
   const queue = useMemo(() => reviewQueue(sections), [sections]);
+  const isUnread = useCallback(
+    (entry: GitReviewEntry): boolean =>
+      !reviewed.has(
+        reviewEntryKey(entry.change.path, entry.scope, entry.comparison),
+      ),
+    [reviewed],
+  );
+  const listedSections = useMemo(
+    () =>
+      unreadOnly
+        ? sections
+          .map((section) => ({
+            ...section,
+            entries: section.entries.filter(isUnread),
+          }))
+          .filter((section) => section.entries.length > 0)
+        : sections,
+    [isUnread, sections, unreadOnly],
+  );
+  const listedCount = useMemo(
+    () => reviewQueue(listedSections).length,
+    [listedSections],
+  );
+  const unreadCount = useMemo(
+    () => queue.filter(isUnread).length,
+    [isUnread, queue],
+  );
   const sectionCounts = useMemo(
     () =>
       new Map(
-        sections.map((section) => [section.kind, section.entries.length]),
+        listedSections.map((section) => [section.kind, section.entries.length]),
       ),
-    [sections],
+    [listedSections],
   );
   const visibleSections = useMemo(
-    () => limitGitSections(sections, visibleCount),
-    [sections, visibleCount],
+    () => limitGitSections(listedSections, visibleCount),
+    [listedSections, visibleCount],
   );
-  const renderedCount = Math.min(visibleCount, queue.length);
+  const renderedCount = Math.min(visibleCount, listedCount);
+  const defaultComparison = snapshot?.sessionId === sessionId
+    ? snapshot?.result.defaultComparison ?? undefined
+    : undefined;
+  const scenarios = useMemo(
+    () => reviewCompareScenarios(target, comparisons, defaultComparison),
+    [comparisons, defaultComparison, target],
+  );
 
   const load = useCallback(async (): Promise<void> => {
     request.current?.abort();
@@ -282,9 +344,14 @@ export function ReviewChanges({
         setCollapsed(new Set());
       }
       setSnapshot({ sessionId, comparison, result });
-      if (comparison === undefined && onComparisonChange) {
-        onComparisonChange(result.defaultComparison ?? null);
-        if (result.defaultComparison) return;
+      if (comparison === undefined && onComparisonResolved) {
+        const resolved = resolveReviewComparison(
+          preferredComparison,
+          result.comparisons,
+          result.defaultComparison,
+        );
+        onComparisonResolved(resolved);
+        if (resolved) return;
       }
       onRevision(result.revision);
     } catch (reason) {
@@ -302,11 +369,22 @@ export function ReviewChanges({
     armRetry,
     cancelRetry,
     comparison,
-    onComparisonChange,
+    onComparisonResolved,
     onRevision,
+    preferredComparison,
     sessionId,
     settleRetry,
   ]);
+
+  // Another device chose, or the stored choice arrived after the first read.
+  useEffect(() => {
+    if (comparison === undefined || preferredComparison === undefined) return;
+    if (comparison === preferredComparison) return;
+    if (
+      preferredComparison === null ||
+      comparisons.some((item) => item.reference === preferredComparison)
+    ) onComparisonResolved?.(preferredComparison);
+  }, [comparison, comparisons, onComparisonResolved, preferredComparison]);
 
   useEffect(() => onChanges?.(queue), [onChanges, queue]);
 
@@ -330,12 +408,12 @@ export function ReviewChanges({
   useEffect(() => {
     const root = scrollRoot.current;
     const sentinel = loadMoreSentinel.current;
-    if (!root || !sentinel || renderedCount >= queue.length) return undefined;
+    if (!root || !sentinel || renderedCount >= listedCount) return undefined;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
           setVisibleCount((current) =>
-            Math.min(current + REVIEW_WINDOW_SIZE, queue.length)
+            Math.min(current + REVIEW_WINDOW_SIZE, listedCount)
           );
         }
       },
@@ -343,7 +421,7 @@ export function ReviewChanges({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [queue.length, renderedCount]);
+  }, [listedCount, renderedCount]);
 
   return (
     <Stack sx={{ position: "relative", height: "100%", minHeight: 0 }}>
@@ -392,44 +470,55 @@ export function ReviewChanges({
         direction="row"
         alignItems="center"
         spacing={1}
-        sx={{ mx: 2, mb: 1, pt: compact ? 1 : 0 }}
+        sx={{ mx: 1.75, mb: 0.5, pt: compact ? 0.5 : 0, minHeight: 36 }}
       >
-        <Autocomplete
-          size="small"
-          disableClearable
-          options={[
-            { reference: "", label: "Working tree only" },
-            ...comparisons,
-          ]}
-          value={comparisons.find((item) => item.reference === comparison) ??
-            { reference: "", label: "Working tree only" }}
-          isOptionEqualToValue={(option, value) =>
-            option.reference === value.reference}
-          onChange={(_, value) => onComparisonChange?.(value.reference || null)}
+        <ButtonBase
+          data-review-compare
+          aria-haspopup="dialog"
+          aria-label={`Compare: ${
+            reviewCompareLabel(comparison, scenarios, comparisons)
+          }`}
           disabled={comparison === undefined}
-          renderInput={(params) => (
-            <TextField {...params} label="Compare against" />
-          )}
-          sx={{ flex: 1, minWidth: 0 }}
-        />
-        {compact && (
+          onClick={() => setPickerOpen(true)}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 36,
+            justifyContent: "flex-start",
+            gap: 0.25,
+            borderRadius: 1,
+          }}
+        >
+          <Typography variant="body2" fontWeight={600} noWrap>
+            {reviewCompareLabel(comparison, scenarios, comparisons)}
+          </Typography>
+          <UnfoldMore fontSize="small" sx={{ color: "text.secondary" }} />
+        </ButtonBase>
+        {queue.length > 0 && (
           <Chip
+            data-review-unread
             size="small"
-            aria-label="Viewed changes"
-            label={`${
-              queue.filter((entry) =>
-                reviewed.has(
-                  reviewEntryKey(
-                    entry.change.path,
-                    entry.scope,
-                    entry.comparison,
-                  ),
-                )
-              ).length
-            } / ${queue.length}`}
+            variant={unreadOnly ? "filled" : "outlined"}
+            color={unreadOnly ? "primary" : "default"}
+            aria-pressed={unreadOnly}
+            label={unreadCount === 0
+              ? "All viewed"
+              : `${unreadCount} unread`}
+            onClick={() => setUnreadOnly((current) => !current)}
           />
         )}
       </Stack>
+      <ReviewComparePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        comparison={comparison}
+        scenarios={scenarios}
+        comparisons={comparisons}
+        onSelect={(value) => {
+          setPickerOpen(false);
+          if (value !== comparison) onComparisonChange?.(value);
+        }}
+      />
       {truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
           Showing the first 1,000 changes
@@ -485,14 +574,24 @@ export function ReviewChanges({
               )}
             </Stack>
           )
+          : listedCount === 0
+          ? (
+            <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
+              <CheckCircleOutline color="disabled" />
+              <Typography color="text.secondary">All changes viewed</Typography>
+              <Button onClick={() => setUnreadOnly(false)}>
+                Show all changes
+              </Button>
+            </Stack>
+          )
           : (
-            <Stack spacing={1.25}>
+            <Stack spacing={0.5}>
               {visibleSections.map((section) => (
                 <Box component="section" key={section.kind}>
-                  <Stack
+                  {visibleSections.length > 1 && <Stack
                     direction="row"
                     alignItems="center"
-                    sx={{ px: 1.25, minHeight: 36 }}
+                    sx={{ px: 1, minHeight: 28 }}
                   >
                     <Typography
                       variant="overline"
@@ -506,11 +605,11 @@ export function ReviewChanges({
                     <Typography variant="caption" color="text.secondary">
                       {sectionCounts.get(section.kind)}
                     </Typography>
-                  </Stack>
+                  </Stack>}
                   <List
                     disablePadding
                     sx={{
-                      borderTop: 1,
+                      borderTop: visibleSections.length > 1 ? 1 : 0,
                       borderColor: "divider",
                     }}
                   >
@@ -533,7 +632,7 @@ export function ReviewChanges({
                   </List>
                 </Box>
               ))}
-              {renderedCount < queue.length && (
+              {renderedCount < listedCount && (
                 <Box
                   ref={loadMoreSentinel}
                   role="status"
@@ -544,7 +643,7 @@ export function ReviewChanges({
                   }}
                 >
                   <Typography variant="caption" color="text.secondary">
-                    {`Showing ${renderedCount} of ${queue.length}`}
+                    {`Showing ${renderedCount} of ${listedCount}`}
                   </Typography>
                 </Box>
               )}

@@ -42,13 +42,14 @@ export interface SessionContext {
     provider_account_id?: string;
     before?: number | null;
   }[];
+  pending_links?: string[];
   delivery: ContextDelivery | null;
   max_sources: number;
 }
 
-/** Sources the next message will read. Once sent they are links instead. */
+/** Sessions the next prompt will read. Once it carries them they are links. */
 export function pendingSources(context: SessionContext): string[] {
-  return context.revision === context.applied_revision ? [] : context.sources;
+  return context.pending_links ?? [];
 }
 
 const reads = new Map<string, Promise<SessionContext>>();
@@ -149,6 +150,16 @@ export function withoutAgentSwitch(
     sources: context.sources.filter((id) => id !== sessionId),
     next_agent: null,
   };
+}
+
+const linkEdits = new Map<string, Promise<void>>();
+
+/** A prompt sent right after linking must not overtake that link. */
+export function trackLinkEdit(id: string, edit: Promise<void>): void {
+  const tracked = edit.finally(() => {
+    if (linkEdits.get(id) === tracked) linkEdits.delete(id);
+  });
+  linkEdits.set(id, tracked);
 }
 
 export async function saveSessionContext(
@@ -275,6 +286,7 @@ export async function sendWithContext(
   text: string,
   content: unknown[],
 ): Promise<boolean> {
+  await linkEdits.get(id);
   // Ordinary sessions retain their offline outbox and zero extra fetches. The
   // owner-scoped preferences stream announces links across tabs and reconnects;
   // the Service also rejects stale direct sends at the dispatch boundary.

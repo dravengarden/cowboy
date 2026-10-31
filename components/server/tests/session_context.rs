@@ -236,26 +236,16 @@ async fn session_context_cas_is_durable_and_first_send_replays_only_its_receipt(
     assert_eq!(statuses, [200, 409]);
     let context = fixture.get(&context_url).await;
     assert_eq!(context["revision"], 1);
-    assert_eq!(context["applied_revision"], 0);
-    assert_eq!(context["sources"], json!(["source"]));
-
-    // Ordinary submission cannot skip staged links. No Machine is enrolled in
-    // this fixture, so the test cannot start a Provider or make a model request.
-    let bypass = fixture
-        .request(
-            reqwest::Method::POST,
-            &format!("{base}/api/sessions/destination/prompt"),
-        )
-        .json(&json!({"text":"bypass"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(bypass.status(), 409);
+    // Links wait for a prompt: nothing is pending, and they survive a restart.
+    assert_eq!(context["applied_revision"], 1);
+    assert_eq!(context["pending_links"], json!(["source"]));
     drop(controller);
 
     let (controller, base) = fixture.start().await;
     let context_url = format!("{base}/api/sessions/destination/context");
-    assert_eq!(fixture.get(&context_url).await["revision"], 1);
+    let restored = fixture.get(&context_url).await;
+    assert_eq!(restored["revision"], 1);
+    assert_eq!(restored["pending_links"], json!(["source"]));
     let send_url = format!("{context_url}/send");
     // Exercise the HTTP body budget used by inline attachments. Axum's default
     // 2 MiB limit would reject this before the context handler ran.

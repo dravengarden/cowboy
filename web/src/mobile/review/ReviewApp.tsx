@@ -141,6 +141,13 @@ import {
   useReviewSettings,
 } from "./reviewSettings";
 import { openMobileProduct } from "../appPagerMotion";
+import { appendDraftText } from "../../draftStore";
+import { ReviewSelectionBar } from "./ReviewSelectionBar";
+import {
+  nextReviewLineSelection,
+  type ReviewLineSelection,
+  reviewSelectionMessage,
+} from "./reviewLineSelection";
 import { presentHoverBlock } from "./symbolPresentation";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
@@ -489,9 +496,12 @@ export function DocumentView({
   onOutlineClose,
   outlineLine,
   onOutlineSelect,
+  onSendSelection,
 }: {
   sessionId: string;
   reviewStateId?: string;
+  /** Hand selected lines to the Agent's Composer; absent without an Agent. */
+  onSendSelection?: ((message: string) => void) | undefined;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
@@ -525,6 +535,10 @@ export function DocumentView({
   onOutlineSelect: (line: number) => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
+  const [lineSelection, setLineSelection] = useState<ReviewLineSelection>();
+  const toggleSelectedLine = useCallback((line: number): void => {
+    setLineSelection((current) => nextReviewLineSelection(current, line));
+  }, []);
   const mutateMobileReview: typeof mutateReviewState = useCallback((_context, name, args) => mutateReviewState(reviewStateId, name, args), [reviewStateId]);
   const settings = useReviewSettings();
   const previewKind = reviewPreviewKind(target.path);
@@ -2006,6 +2020,12 @@ export function DocumentView({
                   ? inspectCandidatesOrPoint
                   : undefined}
                 mapDiffPoint={usingOwned ? diff.point : undefined}
+                {...(onSendSelection
+                  ? {
+                    selection: lineSelection,
+                    onToggleLine: toggleSelectedLine,
+                  }
+                  : {})}
                 onVisibleLine={target.kind === "source"
                   ? persistVisibleLine
                   : undefined}
@@ -2015,6 +2035,24 @@ export function DocumentView({
               />
             </Suspense>
           )}
+        {lineSelection && onSendSelection && (
+          <ReviewSelectionBar
+            selection={lineSelection}
+            onClear={() => setLineSelection(undefined)}
+            onSend={() => {
+              onSendSelection(reviewSelectionMessage({
+                path: target.path,
+                text: displayText,
+                kind: target.kind,
+                selection: lineSelection,
+                comparison: target.kind === "diff"
+                  ? target.comparison
+                  : undefined,
+              }));
+              setLineSelection(undefined);
+            }}
+          />
+        )}
         {surface.kind === "mobile"
           ? (
             <Sheet
@@ -2297,7 +2335,7 @@ export function ReviewApp({
     setDrawerOpen(open);
     onDrawerOpenChange(open);
   }, [onDrawerOpenChange]);
-  const changeGitComparison = useCallback(
+  const adoptGitComparison = useCallback(
     (comparison: string | null): void => {
       setGitComparison(comparison);
       setGitQueue([]);
@@ -2307,6 +2345,30 @@ export function ReviewApp({
     },
     [workspace?.sessionId],
   );
+  const comparisonStateId = workspace
+    ? reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)
+    : undefined;
+  const changeGitComparison = useCallback(
+    (comparison: string | null): void => {
+      adoptGitComparison(comparison);
+      if (comparisonStateId) {
+        mutateReviewState(comparisonStateId, "setComparison", {
+          comparison: comparison ?? "",
+        });
+      }
+    },
+    [adoptGitComparison, comparisonStateId],
+  );
+  const sendSelectionToAgent = useMemo(() => {
+    if (!activeSessionId) return undefined;
+    return (message: string): void => {
+      appendDraftText(activeSessionId, message);
+      openMobileProduct("agent");
+    };
+  }, [activeSessionId]);
+  const preferredGitComparison = syncedReview.comparison === undefined
+    ? undefined
+    : syncedReview.comparison || null;
 
   useEffect(() => {
     if (
@@ -3247,7 +3309,9 @@ export function ReviewApp({
             reviewed={reviewedMarks}
             onRevision={adoptManifestRevision}
             comparison={gitComparison}
+            preferredComparison={preferredGitComparison}
             onComparisonChange={changeGitComparison}
+            onComparisonResolved={adoptGitComparison}
             onChanges={setGitQueue}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
@@ -3472,6 +3536,7 @@ export function ReviewApp({
               }`}
               sessionId={workspace.sessionId}
               reviewStateId={reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)}
+              onSendSelection={sendSelectionToAgent}
               bufferMode={bufferMode}
               dataRevision={dataRevision}
               active={active}

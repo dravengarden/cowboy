@@ -3393,6 +3393,8 @@ export interface MobileReviewState {
   readonly directory?: string | null;
   readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
   readonly remote_selected?: boolean;
+  /** `""` is uncommitted work; absent follows the repository default. */
+  readonly comparison?: string;
   readonly mode: "files" | "git";
   readonly tabs: readonly MobileReviewTabState[];
   readonly active?: string;
@@ -3424,6 +3426,12 @@ const mobileReviewMutators = {
   selectRemoteReview: (
     value: MobileReviewState, args: { selected: boolean },
   ): MobileReviewState => ({ ...value, remote_selected: args.selected }),
+  setComparison: (
+    value: MobileReviewState, args: { comparison: string | null },
+  ): MobileReviewState => {
+    const { comparison: _comparison, ...rest } = value;
+    return args.comparison === null ? rest : { ...rest, comparison: args.comparison };
+  },
   open: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
     const existing = value.tabs.find((tab) => tab.path === args.path);
     let tabs = existing ? [...value.tabs] : [...value.tabs, { path: args.path, pinned: false }];

@@ -20,7 +20,6 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
-import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { MachineSummary, SessionMeta } from "./protocol";
 
 export async function runSessionContextBrowserConformance(
@@ -150,6 +149,7 @@ export async function runSessionContextBrowserConformance(
       context.applied_revision = context.revision;
       context.next_agent = null;
       context.sources = [];
+      context.pending_links = [];
       context.delivery = {
         operation: String(body.operation),
         session_id: "fresh-destination",
@@ -170,10 +170,10 @@ export async function runSessionContextBrowserConformance(
           sources: body.sources as string[],
           next_agent: body.next_agent as SessionContext["next_agent"],
           revision: context.revision + 1,
-          applied_revision:
-            !(body.sources as string[]).length && !body.next_agent
-              ? context.revision + 1
-              : context.applied_revision,
+          pending_links: body.sources as string[],
+          applied_revision: !body.next_agent
+            ? context.revision + 1
+            : context.applied_revision,
         };
       }
       return Response.json(context);
@@ -414,8 +414,8 @@ export async function runSessionContextBrowserConformance(
         `${mode}: opening settings starts no agent or writes`,
       );
       check(
-        !button("Save changes") && !button("Cancel pending"),
-        `${mode}: unchanged empty settings have no save or reset action`,
+        !button("Save changes") && !button("Discard"),
+        `${mode}: links have no save step`,
       );
       await openChoices(desktop);
       if (desktop) {
@@ -574,22 +574,18 @@ export async function runSessionContextBrowserConformance(
         !container.textContent?.includes("credentials"),
         `${mode}: context UI exposes no credential controls`,
       );
-      check(
-        writes.length === 0 && Boolean(button("Save changes")),
-        `${mode}: choosing sources changes only the unsaved form`,
-      );
       await observe?.(`${mode}-links`);
-      button("Save changes").click();
-      await until(() => context.revision === 1 && !button("Save changes"));
+      await until(() => context.sources.length === 2);
       check(
-        writes.length === 1 && writes[0]!.url.endsWith("/context"),
-        `${mode}: saving links only writes a preference`,
+        writes.every((write) => write.url.endsWith("/context")) &&
+          context.revision === context.applied_revision,
+        `${mode}: each selection applies at once and starts nothing`,
       );
-      await until(() => Boolean(button("Cancel linked context")));
-      check(
-        Boolean(button("Cancel linked context")),
-        `${mode}: saved selection shows pending state and a distinct cancel action`,
+      await until(() =>
+        Boolean(document.querySelector('[data-session-context-cue="pending_links"]'))
       );
+      check(true, `${mode}: the composer says the next prompt reads them`);
+      const beforeAgent = writes.length;
       button("Continue or fork").click();
       await until(() => Boolean(continueRun()) && !continueRun().disabled);
       check(
@@ -629,11 +625,12 @@ export async function runSessionContextBrowserConformance(
       await observe?.(`${mode}-selection`);
       continueRun().click();
       await until(() =>
-        context.revision === 2 &&
+        Boolean(context.next_agent) &&
         !container.querySelector("[data-new-session-editor]")
       );
       check(
-        context.next_agent?.provider === "claude-code" && writes.length === 2,
+        context.next_agent?.provider === "claude-code" &&
+          writes.length === beforeAgent + 1,
         `${mode}: agent choice remains staged until send`,
       );
       check(
@@ -669,7 +666,7 @@ export async function runSessionContextBrowserConformance(
       await observe?.(`${mode}-pending`);
       await frontPrompt(sessions[0]!.id, "", []);
       check(
-        writes.length === 2,
+        writes.length === beforeAgent + 1,
         `${mode}: an empty composer never creates a context send`,
       );
       sendFailure = 413;
@@ -681,7 +678,7 @@ export async function runSessionContextBrowserConformance(
         )
       );
       check(
-        context.revision === 2,
+        Boolean(context.next_agent),
         `${mode}: rejected sends publish a visible error without consuming context`,
       );
       sendFailure = null;
@@ -768,62 +765,22 @@ export async function runSessionContextBrowserConformance(
       );
       await openChoices(desktop);
       option("Mobile findings").click();
+      await until(() => context.sources.length === 1);
       await until(() =>
         option("Mobile findings")?.getAttribute("aria-selected") === "true"
       );
-      await closeChoices(desktop);
-      context = { ...context, revision: context.revision + 1 };
-      window.dispatchEvent(
-        new CustomEvent(PREFERENCES_CHANGED, {
-          detail: { [`session_context:${sessions[0]!.id}`]: 30 },
-        }),
-      );
-      await until(() =>
-        Boolean(container.textContent?.includes("changed on another device"))
-      );
-      check(
-        button("Save changes").disabled,
-        `${mode}: concurrent edits do not overwrite an open form`,
-      );
-      await observe?.(`${mode}-conflict`);
-      check(
-        container.scrollWidth <= container.clientWidth + 1,
-        `${mode}: controls fit the available width`,
-      );
-      const writeCount = writes.length;
-      button("Discard").click();
-      await until(() => !button("Save changes"));
-      check(
-        writes.length === writeCount,
-        `${mode}: discarding a local edit never changes stored context`,
-      );
-      await openChoices(desktop);
       option("Mobile findings").click();
+      await until(() => context.sources.length === 0);
       await until(() =>
-        option("Mobile findings")?.getAttribute("aria-selected") === "true"
+        option("Mobile findings")?.getAttribute("aria-selected") === "false"
       );
-      await closeChoices(desktop);
-      button("Save changes").click();
-      await until(() => Boolean(button("Cancel linked context")));
-      button("Cancel linked context").click();
-      await until(() =>
-        context.sources.length === 0 &&
-        context.revision === context.applied_revision &&
-        !button("Cancel linked context") && !button("Cancelling")
-      );
-      await new Promise((resolve) => setTimeout(resolve, 50));
       check(
-        !context.next_agent,
-        `${mode}: cancelling pending context clears only the staged configuration`,
+        !context.next_agent && context.revision === context.applied_revision,
+        `${mode}: removing a selection undoes it at once`,
       );
-      await openChoices(desktop);
       option("API decisions").click();
-      await until(() =>
-        option("API decisions")?.getAttribute("aria-selected") === "true"
-      );
+      await until(() => context.sources.length === 1);
       await closeChoices(desktop);
-      button("Save changes").click();
-      await until(() => context.sources.length === 1 && !button("Save changes"));
       const surfaceEvents: string[] = [];
       const recordSurface = (event: Event) => surfaceEvents.push(event.type);
       document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
@@ -855,9 +812,10 @@ export async function runSessionContextBrowserConformance(
           !context.sources.includes(sessions[0]!.id),
         `${mode}: Back cancels the new agent and keeps independent links`,
       );
-      await until(() => Boolean(button("Cancel linked context")));
-      button("Cancel linked context").click();
-      await until(() => context.revision === context.applied_revision);
+      check(
+        context.revision === context.applied_revision,
+        `${mode}: links left after Back wait without holding anything`,
+      );
       flushSync(() => root.render(null));
       const workspace = sessions[0]!.workspace_id;
       delete sessions[0]!.workspace_id;

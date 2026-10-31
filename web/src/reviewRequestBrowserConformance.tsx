@@ -223,6 +223,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
                     reviewed={new Set()}
                     onRevision={noop}
                     comparison={null}
+                    onComparisonResolved={noop}
                     onComparisonChange={(next) => {
                       comparisons.push(next);
                     }}

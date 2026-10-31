@@ -11,7 +11,8 @@ import type { SessionMeta } from "./protocol";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { Suspense, use } from "react";
 import { MobileReviewBoundary } from "./mobile/review/MobileReviewPage";
-import { MOBILE_OPEN_PRODUCT_EVENT } from "./mobile/appPagerMotion";
+import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "./mobile/appPagerMotion";
+import { getDraft, setDraft } from "./draftStore";
 
 const wait = (ms = 50) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -26,7 +27,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -211,7 +212,13 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false)
           revision: context,
           head: "abcdef01",
           truncated: false,
-          comparisons: [],
+          comparisons: branches
+            ? [
+              { reference: "refs/remotes/origin/main", label: "origin/main" },
+              { reference: "refs/remotes/origin/topic", label: "origin/topic" },
+            ]
+            : [],
+          ...(branches ? { defaultComparison: "refs/remotes/origin/main" } : {}),
           changes: clean ? [] : [
             {
               path: "src/app.ts",
@@ -385,6 +392,75 @@ async function checkReviewLoading(): Promise<string> {
     globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onNavigate);
     root.unmount();
     container.remove();
+  }
+}
+
+async function checkReviewCompareAndSelection(): Promise<string> {
+  const fixture = renderReviewContextPreview(false, false, true);
+  const body = document.body;
+  const opened: unknown[] = [];
+  const onOpen = (event: Event): void => {
+    opened.push(mobileProductFromEvent(event));
+  };
+  window.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpen);
+  const press = async (element: Element | null | undefined, name: string) => {
+    check(element instanceof HTMLElement, `Missing ${name}`);
+    flushSync(() => element.click());
+    await wait();
+  };
+  const row = (name: string) =>
+    [...body.querySelectorAll<HTMLElement>('[role="button"], button')]
+      .find((element) => element.textContent?.includes(name));
+  try {
+    setDraft("worktree", { text: "", attachments: [] });
+    fixture.refresh();
+    const compare = () => fixture.container.querySelector("[data-review-compare]");
+    await until(
+      () => compare()?.textContent?.includes("Ready to merge · origin/main") === true,
+      "The default comparison should be named by its scenario",
+    );
+    await until(
+      () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
+      "Unread count is missing",
+    );
+
+    await press(compare(), "comparison control");
+    await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");
+    await press(row("origin/topic"), "branch row");
+    await until(
+      () => compare()?.textContent?.includes("Branch · origin/topic") === true,
+      "A chosen branch should become the comparison",
+    );
+    check(
+      fixture.mutations.some((mutation) => mutation.includes("setComparison")),
+      "The chosen comparison was not saved to the session",
+    );
+
+    await until(() => !!row("app.ts"), "Comparison should list its files");
+    await press(row("app.ts"), "changed file");
+    const lines = () => [
+      ...body.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement"),
+    ].filter((element) => element.textContent?.trim());
+    await until(() => lines().length >= 6, "Diff should render line numbers");
+    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5");
+    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6");
+    const bar = () => body.querySelector("[data-review-selection-bar]");
+    await until(() => bar()?.textContent?.includes("2 lines") === true, "Two taps should select a range");
+    check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
+
+    await press(row("Send to Agent"), "Send to Agent");
+    await until(() => opened.includes("agent"), "Sending should return to the Agent");
+    const draft = getDraft("worktree").text;
+    check(
+      draft.startsWith("`src/app.ts:1` (compared with origin/topic)\n```diff\n-old\n+new\n```"),
+      `Draft should cite file lines, got: ${draft}`,
+    );
+    check(!bar(), "Sending should clear the selection");
+    return "scenario comparison is saved to the session, and tapped lines reach the Agent draft as file lines";
+  } finally {
+    window.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpen);
+    setDraft("worktree", { text: "", attachments: [] });
+    fixture.cleanup();
   }
 }
 
@@ -802,4 +878,8 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
   } finally {
     fixture.cleanup();
   }
+}
+
+export async function runReviewCompareBrowserConformance(): Promise<string[]> {
+  return [await checkReviewCompareAndSelection()];
 }

@@ -19,6 +19,7 @@ import {
   saveSessionContext,
   type SessionContext,
   pendingSources,
+  trackLinkEdit,
   useSessionContext,
   withoutAgentSwitch,
 } from "./sessionContext";
@@ -62,8 +63,7 @@ export function SessionContextSettings(
   },
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  // Sources edited here also go out with a Continue, so they outlive the form.
-  const [draft, setDraft] = useState<{ sources: string[]; revision: number } | null>(null);
+  const [draft, setDraft] = useState<string[] | null>(null);
   const section = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const handedOff = useContinuation(session.id) !== undefined;
@@ -80,7 +80,6 @@ export function SessionContextSettings(
   }, [open]);
   const onSaved = () => {
     void reload();
-    setDraft(null);
     setOpen(false);
   };
   const stagedAgent = Boolean(data?.next_agent) &&
@@ -115,7 +114,7 @@ export function SessionContextSettings(
                 context={data}
                 draft={draft}
                 onDraft={setDraft}
-                onSaved={onSaved}
+                onSettled={reload}
               />
             </>
           )}
@@ -144,7 +143,7 @@ export function SessionContextSettings(
               key={session.id}
               session={session}
               observed={data}
-              sources={draft?.sources ?? pendingSources(data)}
+              sources={draft ?? pendingSources(data)}
               allowFork={allowFork && !session.system && !isManagedChild(session)}
               onContinued={() => {
                 onSaved();
@@ -162,82 +161,72 @@ export function SessionContextSettings(
   );
 }
 
-/** What the next message will read, whichever agent receives it. Links
- *  already sent are history, shown above. A fork leaves this selection here. */
+/** What the next prompt will read, whichever agent receives it. Like an
+ *  attachment: each change applies at once and nothing runs until that prompt
+ *  is sent, so there is nothing to save. A fork leaves this selection here. */
 function LinkedSessions(
-  { session, context, draft, onDraft, onSaved }: {
+  { session, context, draft, onDraft, onSettled }: {
     session: SessionMeta;
     context: SessionContext;
-    draft: { sources: string[]; revision: number } | null;
-    onDraft: (draft: { sources: string[]; revision: number } | null) => void;
-    onSaved: () => void;
+    draft: string[] | null;
+    onDraft: (draft: string[] | null) => void;
+    onSettled: () => Promise<unknown>;
   },
 ): React.JSX.Element {
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const sources = draft?.sources ?? pendingSources(context);
-  const changedElsewhere = draft !== null && draft.revision !== context.revision;
+  const [recovering, setRecovering] = useState(false);
+  const latest = useRef<string[] | null>(null);
+  const applying = useRef(false);
+  const revision = useRef(context.revision);
+  if (!applying.current) revision.current = context.revision;
   const unresolved = context.delivery?.state === "preparing" ||
     context.delivery?.state === "unknown";
-  const pending = context.revision !== context.applied_revision;
-  const save = async (next: string[]) => {
-    setSaving(true);
+  // Selections made while one saves collapse into the newest.
+  const apply = async () => {
+    if (applying.current) return;
+    applying.current = true;
     setError("");
     try {
-      await saveSessionContext(session.id, {
-        revision: context.revision,
-        sources: next,
-        next_agent: context.next_agent,
-      });
-      onSaved();
+      while (latest.current) {
+        const sources = latest.current;
+        latest.current = null;
+        const saved = await saveSessionContext(session.id, {
+          revision: revision.current,
+          sources,
+          next_agent: context.next_agent,
+        });
+        revision.current = saved.revision;
+        // Keep the selection on screen until the saved one replaces it.
+        if (!latest.current) await onSettled();
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save context");
+      latest.current = null;
+      setRecovering(true);
+      setError(cause instanceof Error ? cause.message : "Could not link sessions");
+      await onSettled();
+      setRecovering(false);
     } finally {
-      setSaving(false);
+      applying.current = false;
+      onDraft(null);
     }
   };
   return (
     <Stack spacing={1} data-context-links>
       <Typography variant="caption" color="text.secondary">
-        Link sessions · Read with your next message
+        Link sessions · Read with your next prompt, no reply until then
       </Typography>
-      {changedElsewhere && (
-        <Alert severity="warning">
-          Context changed on another device. Discard to review it; your
-          choices have not been applied.
-        </Alert>
-      )}
       <SessionContextPicker
-        value={sources}
-        onChange={(next) =>
-          onDraft({ sources: next, revision: draft?.revision ?? context.revision })}
-        disabled={saving || unresolved}
+        value={draft ?? pendingSources(context)}
+        onChange={(next) => {
+          onDraft(next);
+          latest.current = next;
+          trackLinkEdit(session.id, apply());
+        }}
+        disabled={unresolved || recovering}
         // Continuing makes this session a source of the new agent's context.
         exclude={context.next_agent ? undefined : session.id}
       />
       {error && <Alert severity="error">{error}</Alert>}
-      {draft
-        ? (
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            <Button
-              variant="contained"
-              disabled={saving || unresolved || changedElsewhere}
-              onClick={() => void save(draft.sources)}
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-            <Button disabled={saving} onClick={() => onDraft(null)}>Discard</Button>
-          </Stack>
-        )
-        : pending && !context.next_agent && sources.length > 0 && !unresolved && (
-          <Button
-            disabled={saving}
-            onClick={() => void save([])}
-            sx={{ alignSelf: "flex-start" }}
-          >
-            Cancel linked context
-          </Button>
-        )}
     </Stack>
   );
 }
@@ -256,8 +245,9 @@ function NewSessionForm(
   },
 ): React.JSX.Element {
   const [snapshot] = useState(observed);
-  const changedElsewhere = observed.revision !== snapshot.revision ||
-    observed.applied_revision !== snapshot.applied_revision ||
+  // Links are edited beside this form; only what it replaces is a conflict.
+  const changedElsewhere =
+    JSON.stringify(observed.next_agent) !== JSON.stringify(snapshot.next_agent) ||
     observed.delivery?.operation !== snapshot.delivery?.operation;
   const [advanced, setAdvanced] = useState(false);
   const [inheritSettings, setInheritSettings] = useState(
