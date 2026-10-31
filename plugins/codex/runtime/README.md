@@ -33,6 +33,66 @@ The shared runtime component remains unchanged. This Provider owns the changes:
   managed call then reports `provider_error` instead of treating the message as
   model output such as an invalid structured review.
 
+## Authentication default
+
+codex-acp logs in with `DEFAULT_AUTH_REQUEST` whenever the native app-server
+reports that a login is required, and answers ACP `authRequired` only when no
+default is set. Its API-key method reads `CODEX_API_KEY` or `OPENAI_API_KEY`
+from the adapter environment. Package 3.5.14 and earlier declared
+`{"methodId":"api-key"}` for every launch, so a ChatGPT account whose login
+expired failed `session/resume` with the internal error "CODEX_API_KEY or
+OPENAI_API_KEY is not set" on every worker generation instead of reaching
+Cowboy's reconnect state.
+
+The launcher now declares the API-key request only when the projected
+credential is an API key (the `api-key` method projects `OPENAI_API_KEY`), and
+drops a declared API-key request that has no key. Any other explicit request,
+such as the offline conformance fixtures' `chat-gpt`, is kept. A ChatGPT
+account then gets ACP `authRequired`; the worker maps it to the typed
+"Provider authentication required" detail, the Controller marks the projected
+account generation expired, and the Machine does not retry an older worker
+generation. Reconnecting the same account in Settings retries the retained
+native thread. `codex-deepseek` uses its own gateway login and the shared
+launcher; it never declared this default and is unchanged.
+
+## MCP startup wait
+
+The worker sends `_meta.mcpStartupAwaitTimeoutMs` on `session/new`,
+`session/resume` and `session/fork` for the Codex family. codex-acp honors it
+only for servers in the request's `mcpServers`: it converts them into the
+thread's `mcp_servers` configuration and awaits exactly those names. Every
+server a Cowboy Codex session uses comes from native configuration instead
+(user/project `config.toml`, or the launcher's `-c mcp_servers.*` options), so
+the wait has no effect today. Moving them into ACP `mcpServers` is not
+semantics-preserving, so they stay native configuration:
+
+- ACP stdio maps only to `{command, args, env}` and ACP HTTP only to
+  `{url, http_headers}`, with literal values. Session Cowboy MCP depends on
+  `environment_id` and `cwd` to run `cowboy mcp` on the session's execution
+  target (the keeper then supplies its own call context), on
+  `env_vars=["COWBOY_CALL_CONTEXT"]` locally, and on `tool_timeout_sec=75`.
+  Matrix memory depends on `env_http_headers`, which keeps its bearer token in
+  the process environment rather than in configuration, and on
+  `enabled_tools`, which exposes only the tools the backend declares. None of
+  these can be expressed, and the token would become a literal thread
+  configuration value.
+- These servers are assembled inside the Provider's native bridge
+  (`memory.mjs`), after the native server list is read and the Matrix client is
+  opened for the execution target. The Rust worker that sends the ACP request
+  knows none of them, and the bridge sits on the native app-server stream, not
+  on ACP.
+- codex-acp skips, and does not await, a requested server whose name any
+  native configuration layer already defines. User-configured servers stay
+  owned by the user's Codex configuration; Cowboy does not read or rewrite it
+  to re-declare them.
+- Managed read-only and image profiles disable every configured server, and
+  codex-acp ignores request `mcpServers` under a managed profile anyway.
+
+The metadata stays in place so that a server supplied through ACP in the future
+is awaited without another worker change. Making the first turn wait for
+native-configured servers would need an adapter patch that awaits the
+configured names, not a change of transport.
+
 ## Dependency audit (2026-10-11)
 
 The `image_v1` managed profile delegates native image generation/editing through
