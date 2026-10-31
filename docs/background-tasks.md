@@ -101,11 +101,14 @@ What failed is delivery to a client that holds a cached row:
   `[(5, "running"), (400, "idle")]`; more than 4,096 children produced
   `[(1, "running"), (9000, "idle")]` — the duplicate-anchor paths.
 - T18, live: a real Controller binary on a disposable SQLite stack served the
-  real Web bundle to a disposable hawk Chrome context; three subagents were
-  cached as Working, the tab went offline, the three finished (with more than
-  300 later events) across a Controller restart, and the tab came back online.
-  The pre-fix build stayed Working without a reload; the fixed build shows
-  Done. See §7 for the exact procedure and its limits.
+  real Web bundle to a disposable hawk Chrome context; three subagents
+  followed by 300 later events were cached as Working, the tab went offline,
+  the three finished across a Controller restart, and the tab came back
+  online. Because the reconnect tail overlapped the cached window, nothing
+  refetched the anchors: the pre-fix build stayed Working without a reload;
+  the fixed build shows Done (reconciled by lookup). When the offline gap is
+  larger than the tail, the existing gap fill already repaired the rows, so
+  the stale state needs an overlapping tail. See §7.
 
 ## 3. Identity, status and display
 
@@ -347,18 +350,25 @@ inspector before removing the switch.
 | T15 | browser suite (Desktop keys, IME, focus return); `just desktop-browser-gate` | pass |
 | T16 | browser suite in Chrome Mobile emulation (Back ×3, scroll, `#task=`) | pass; **iOS Simulator not run** |
 | T17 | Controller legacy-row decode/backfill (both DBs); Web fallback (I7); old Web ignores `subagent_state`, `observedSeq`, `cowboy_call_anchor` | pass |
-| T18 | live seeded stack, pre-fix vs fixed build | see below |
+| T18 | live seeded stack, pre-fix vs fixed build | pre-fix Working ×3, fixed Done ×3 |
 
-T18 procedure: build `cowboy-controller` and the Web bundle from the pre-fix
-commit and from this branch; for each, start the Controller on a fresh SQLite
-database with product login off, seed one session with three `running`
-`cowboy_subagent` rows, open it in a disposable hawk Chrome context, take the
-tab offline (CDP network emulation), stop the Controller, write the three
-terminal snapshots in place at their anchors plus 300 later events (the
-durable state the writer produces), restart the Controller and bring the tab
-online. Limits: no real Claude agents (a disposable stack cannot run signed
-Provider plugins with live credentials), so the adapter → worker → ingest
-path is covered by the existing worker conformance and the Controller tests
+T18 procedure (`tools/background-tasks-live-repro.ts <controller> <web-root>
+<cdp-endpoint> <out-dir>`): build `cowboy-controller` and the Web bundle from
+the pre-fix commit and from this branch; for each, start the Controller on a
+fresh SQLite database behind a loopback TLS proxy (Option 1 requires an HTTPS
+origin), create the only user through the product's setup and login routes,
+seed one session with three `running` `cowboy_subagent` rows followed by 300
+events, open it with `?session=` in a disposable hawk Chrome context and read
+back to the start (the device caches the whole window), take the tab offline
+(CDP network emulation), stop the Controller, write the three terminal
+snapshots in place at their anchors (the durable state the writer produces)
+plus 20 events, restart the Controller and bring the tab online. Results
+(2026-10-31, Chrome 151): pre-fix build `Working ×3`, fixed build
+`Done ×3`, no reload in either; new Web + old Controller and old Web + new
+Controller both render without errors and stay `Working` (the repair needs
+both components). Limits: no real Claude agents (a disposable stack cannot
+run signed Provider plugins with live credentials), so the adapter → worker
+→ ingest path is covered by the worker conformance and the Controller tests
 above, not by T18.
 
 Rollout order: Controller first (adds the table, stamps, bootstrap field,

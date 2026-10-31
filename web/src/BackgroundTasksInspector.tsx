@@ -465,7 +465,7 @@ export function BackgroundTasksInspector({
     close();
     globalThis.requestAnimationFrame?.(() => {
       document.querySelector<HTMLElement>(
-        "[data-desktop-approval-dock] button, [data-call-approval] button",
+        "[data-desktop-approval-dock] button, [data-call-approval-overlay] button",
       )?.focus();
     });
   };
