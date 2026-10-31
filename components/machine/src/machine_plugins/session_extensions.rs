@@ -120,9 +120,17 @@ impl MachinePluginStore {
         state_dir: &Path,
         session_id: &str,
         switches: SessionExtensions,
+        relay: Option<Value>,
     ) -> Result<PathBuf> {
         let path = descriptor_path(state_dir, session_id).context("invalid session id")?;
-        let bytes = serde_json::to_vec(&self.session_extensions(switches)?)?;
+        let mut descriptor = self.session_extensions(switches)?;
+        if let (Some(memory), Some(relay)) = (
+            descriptor.get_mut("memory").and_then(Value::as_object_mut),
+            relay,
+        ) {
+            memory.insert("relay".to_owned(), relay);
+        }
+        let bytes = serde_json::to_vec(&descriptor)?;
         ensure!(
             bytes.len() <= DESCRIPTOR_LIMIT,
             "session extension descriptor exceeds its read limit"
@@ -177,7 +185,7 @@ mod tests {
         let installed = store.install(&matrix).await.unwrap();
         store.install(&review).await.unwrap();
         let path = store
-            .write_session_extensions(&root.join("state"), "sess-1", switches)
+            .write_session_extensions(&root.join("state"), "sess-1", switches, None)
             .unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,

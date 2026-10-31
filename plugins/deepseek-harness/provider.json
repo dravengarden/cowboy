@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.17",
   "display": {
@@ -30,6 +30,18 @@
     }
   },
   "card_layout": "mark_above",
+  "configuration_presets": [
+    {
+      "id": "deepseek-flash-max",
+      "name": "Flash \u00b7 Max",
+      "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
+      "is_default": true,
+      "values": {
+        "model": "deepseek-flash",
+        "reasoning_effort": "max"
+      }
+    }
+  ],
   "activity": {
     "indicator": {
       "kind": "terminal_prompt",
@@ -197,9 +209,9 @@
       },
       {
         "id": "claude-deepseek-gateway",
-        "version": "0.1.5",
-        "source": "git+ssh://git@github.com/dravengarden/columbus.git#d5b5c25d4f6b33a9d6c94f639433123888c481bb:projects/claude-deepseek",
-        "integrity": "sha256:4c9de319445a4c888e36449d8d4336e663eff4c163facdbedc3a02d7b069590c",
+        "version": "0.1.6",
+        "source": "git+ssh://git@github.com/dravengarden/columbus.git#920a18efe145a6873d6815a8c24159938daa1a13:projects/claude-deepseek",
+        "integrity": "sha256:4a39f971c6f68f9a6de37ff548a181229348522ddd9a0fba245a527b912d52bf",
         "private": true
       }
     ],

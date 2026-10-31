@@ -117,7 +117,7 @@ operations! {
     "documents.history_snapshot", false, "{id:string,revision:string}";
     "documents.undo_copy", true, "{session_id:string,cmid:string,body:{text:string,content:unknown[]}}; removes the draft copy only if unchanged";
     "sync.read", false, "{state:'title'|'order'|'workspace-order'|'folders'|`queue:${string}`|`mobile-review:${string}`}; only owned sessions/folders";
-    "sync.apply", true, "{state:string,name:string,args:unknown}; existing typed UI sync mutation and permission checks; operation supplies mutation id";
+    "sync.apply", true, "{state:string,name:string,args:unknown}; existing typed UI sync mutation and permission checks; operation supplies mutation id. Review: state mobile-review:<session> sets the comparison and bound repositories; describe lists mutations";
 }
 
 pub fn find(name: &str) -> Option<&'static Operation> {
@@ -205,6 +205,8 @@ fn sync_mutations() -> Value {
             "open":"{path:string}", "close":"{path:string}", "activate":"{path:string|null}",
             "reorder":"{paths:string[]}", "setPinned":"{path:string,pinned:boolean}",
             "setMode":"{mode:'files'|'git'}", "setComparison":"{comparison:string|null}: '' uncommitted, a refs/... branch, null follows the repository default",
+            "bind":"{context:string}: show this code context in the session's Review, as session::<id> or workspace::<machine>::<id> (projects.workspaces); use when work spans repositories the session's own worktree does not hold. Grants no file access",
+            "unbind":"{context:string}",
             "markReviewed":"{key:string,revision?:string|null}",
             "setPosition":"{path:string,line:number,revision?:string|null}"
         }

@@ -20,6 +20,8 @@ pub mod acp;
 #[cfg(feature = "full")]
 pub mod acp_bridge;
 #[cfg(feature = "full")]
+pub mod acp_memory;
+#[cfg(feature = "full")]
 pub mod admin;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod agent_api;

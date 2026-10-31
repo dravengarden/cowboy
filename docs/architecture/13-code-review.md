@@ -171,6 +171,15 @@ as **Linked sessions** in the context control, and a session with no changes
 offers **Review linked session** in place of the empty list. Either reads that
 worktree without moving the Agent.
 
+A session can also bind other code contexts, for work that spans repositories
+its own worktree does not hold. Bindings are the session's Review state, set by
+the reader from the context control (**Bind … to this session**) or by an agent
+with the `bind` and `unbind` mutations. A binding is a browsing value
+(`session::<id>`, `workspace::<machine>::<id>`), so it names a context that
+Code can already open and grants no file access; every read keeps its own
+authority check. A project binding therefore shows that registered checkout,
+not a task worktree of it.
+
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists
 open pull requests that are not checked out. See

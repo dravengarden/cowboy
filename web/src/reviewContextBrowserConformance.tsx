@@ -429,7 +429,13 @@ async function checkLinkedSessionReview(
     "Reviewing the linked session should read its worktree",
   );
   check(getActiveSessionId() === "copy", "Reviewing a linked session moved the Agent");
-  return "a clean session reviews its linked session's worktree without moving the Agent";
+  fixture.mutations.length = 0;
+  flushSync(() => document.querySelector<HTMLElement>('[aria-label="Open Review context"], [data-review-context-button]')?.click());
+  await until(() => !!document.querySelector("[data-review-bind-current]"), "A viewed context should offer binding");
+  flushSync(() => document.querySelector<HTMLElement>("[data-review-bind-current]")!.click());
+  await until(() => !!document.querySelector('[data-review-binding="session::worktree"]'), "A binding should list its context");
+  await until(() => fixture.mutations.some((mutation) => mutation.includes("bind")), "The binding was not saved");
+  return "a clean session reviews and binds its linked session's worktree without moving the Agent";
 }
 
 async function checkReviewCompareAndSelection(
