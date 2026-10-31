@@ -149,6 +149,16 @@ export function PermissionOverlay({
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               {label}
             </Typography>
+            {item.subagent && (
+              <Typography
+                variant="caption"
+                data-permission-subagent
+                noWrap
+                sx={{ color: "text.secondary", minWidth: 0 }}
+              >
+                {item.subagent}
+              </Typography>
+            )}
             {waiting > 1 && (
               <Typography variant="caption" sx={{ color: "text.secondary" }}>
                 1 of {waiting} waiting

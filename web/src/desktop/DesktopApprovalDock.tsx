@@ -127,7 +127,10 @@ export function DesktopPermissionDock({
         ? <HelpOutlineRounded sx={{ fontSize: desktopSize(16) }} />
         : <WarningAmberRounded sx={{ fontSize: desktopSize(16) }} />}
       title={question ? "Answer needed" : "Permission required"}
-      detail={waiting > 1 ? `1 of ${String(waiting)} waiting` : null}
+      detail={[
+        item.subagent ? `Asked by subagent ${item.subagent}` : null,
+        waiting > 1 ? `1 of ${String(waiting)} waiting` : null,
+      ].filter((part) => part !== null).join(" · ") || null}
       choices={choices}
       busyId={response.busy
         ? item.elicitation ? elicitationChoiceOf(response.optionId) : response.optionId

@@ -11,6 +11,14 @@ import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation"
 import { isTurnActivityUpdate } from "./turnWaiting";
 import { resultStatus, toolContent } from "./tools/result";
 import {
+  mergeSubagent,
+  newerSubagent,
+  orphanedSubagent,
+  requestingSubagent,
+  type Subagent,
+  subagentOf,
+} from "./subagents";
+import {
   isHumanPrompt,
   isInternalRuntimePrompt,
   parsePromptOrigin,
@@ -78,7 +86,11 @@ export type RenderItem = { key: string } & (
       options: PermissionOption[];
       resolved: boolean;
       chosen: string | null;
+      /** Title of the subagent that asked, when a child session asked. */
+      subagent?: string | undefined;
     }
+  // One ACP subagent (a child session): its latest snapshot, updated in place.
+  | { kind: "subagent"; subagent: Subagent }
   | { kind: "lifecycle"; status: Status; detail: string | null; turnFailure?: boolean; recovered?: boolean }
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
@@ -165,7 +177,13 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
       return b.kind === "permission" && a.requestId === b.requestId &&
         a.requestKind === b.requestKind &&
         a.title === b.title && a.resolved === b.resolved &&
-        a.chosen === b.chosen && Object.is(a.options, b.options);
+        a.chosen === b.chosen && a.subagent === b.subagent &&
+        Object.is(a.options, b.options);
+    case "subagent":
+      return b.kind === "subagent" && a.subagent.id === b.subagent.id &&
+        a.subagent.revision === b.subagent.revision &&
+        a.subagent.state === b.subagent.state &&
+        a.subagent.cancellable === b.subagent.cancellable;
     case "lifecycle":
       return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail &&
         a.turnFailure === b.turnFailure && a.recovered === b.recovered;
@@ -385,6 +403,17 @@ function envelopeEndsMessage(env: Envelope): boolean {
   }
 }
 
+/** The row a streamed chunk may extend. A subagent row is out of band: one
+ *  that appeared mid-message stays after it, as in the durable transcript,
+ *  where the Controller coalesces the message around it. */
+function lastStreamTarget(items: RenderItem[]): RenderItem | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "subagent") return item;
+  }
+  return undefined;
+}
+
 export function derive(timeline: Envelope[]): RenderItem[] {
   const cached = DERIVE_CACHE.get(timeline);
   if (cached) return cached;
@@ -394,6 +423,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   // toolCallId -> index of the permission marker that asked for it.
   const permByTool = new Map<string, number>();
   const compactionIndex = new Map<string, number>();
+  const subagentIndex = new Map<string, number>();
   const runtimeFailures = new Set<Extract<RenderItem, { kind: "lifecycle" }>>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
@@ -441,7 +471,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               promptReplayOffset += 1;
               break;
             }
-            const last = items[items.length - 1];
+            const last = lastStreamTarget(items);
             const messageId = typeof u.messageId === "string" ? u.messageId : undefined;
             if (
               cursor?.kind === "message" && cursor.role === role &&
@@ -477,7 +507,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           }
           case "agent_thought_chunk": {
             const text = textOf(u);
-            const last = items[items.length - 1];
+            const last = lastStreamTarget(items);
             if (cursor?.kind === "thought" && last?.kind === "thought") {
               pushThoughtText(last, text);
             } else {
@@ -573,6 +603,22 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             cursor = null;
             break;
           }
+          case "cowboy_subagent": {
+            // Out of band: a subagent row never ends the parent's message.
+            const subagent = subagentOf(u);
+            if (!subagent) break;
+            const idx = subagentIndex.get(subagent.id);
+            const existing = idx === undefined ? undefined : items[idx];
+            if (existing?.kind === "subagent") {
+              if (newerSubagent(existing.subagent, subagent)) {
+                existing.subagent = mergeSubagent(existing.subagent, subagent);
+              }
+            } else {
+              items.push({ kind: "subagent", key: String(env.seq), subagent });
+              subagentIndex.set(subagent.id, items.length - 1);
+            }
+            break;
+          }
           case "cowboy_fork_origin": {
             const source = u["sourceSessionId"];
             if (typeof source !== "string" || !source) break;
@@ -609,6 +655,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
       }
       case "permission_request": {
+        const subagent = requestingSubagent(env.tool_call);
         items.push({
           kind: "permission",
           key: String(env.seq),
@@ -618,6 +665,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           options: env.options,
           resolved: false,
           chosen: null,
+          ...(subagent ? { subagent } : {}),
         });
         permIndex.set(env.request_id, items.length - 1);
         const asking = toolCallIdOf(env.tool_call);
@@ -647,6 +695,12 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         }
         if (env.status === "crashed" || env.status === "interrupted") {
           settleOutstandingTools(items, "interrupted");
+        }
+        if (permissionWaiterGone(env.status)) {
+          // Subagents live in their worker's ACP connection.
+          for (const item of items) {
+            if (item.kind === "subagent") item.subagent = orphanedSubagent(item.subagent);
+          }
         }
         // Crashes (and interrupted turns) explain a broken turn in the log.
         // A clean worker exit is session chrome — dormant in the status bar —
@@ -797,6 +851,8 @@ export interface PendingPermission {
   options: PermissionOption[];
   /** The form or link an elicitation asks for; null for a tool permission. */
   elicitation: Elicitation | null;
+  /** Title of the subagent that asked, when a child session asked. */
+  subagent?: string | undefined;
 }
 /// Every request still waiting for an answer, oldest first: parallel tool
 /// calls each block on their own answer, so the surface answers them in
@@ -823,6 +879,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
     if (env.kind === "permission_request") {
       // Re-inserting moves a reused id to its real place in arrival order.
       drop(env.request_id);
+      const subagent = requestingSubagent(env.tool_call);
       pending.set(env.request_id, {
         seq: env.seq,
         requestId: env.request_id,
@@ -830,6 +887,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         title: titleOfToolCall(env.tool_call),
         options: env.options,
         elicitation: elicitationOf(env.tool_call),
+        ...(subagent ? { subagent } : {}),
       });
       const tool = toolCallIdOf(env.tool_call);
       if (tool !== null) byTool.set(tool, env.request_id);
@@ -838,8 +896,11 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
     } else if (pending.size === 0) {
       continue;
     } else if (env.kind === "turn_end") {
-      pending.clear();
-      byTool.clear();
+      // A subagent can outlive the turn that launched it, and its requests
+      // still wait for an answer; the parent's own requests ended with it.
+      for (const [requestId, request] of pending) {
+        if (request.subagent === undefined) drop(requestId);
+      }
     } else if (env.kind === "lifecycle") {
       if (permissionWaiterGone(env.status)) {
         pending.clear();

@@ -2147,6 +2147,20 @@ export function cancelTurn(sessionId: string): boolean {
   return false;
 }
 
+/** Stop one subagent of the session while its turn continues. Live-only, like
+ * {@link cancelTurn}: a stop delivered later could reach a later run. */
+export function cancelSubagent(sessionId: string, subagentSessionId: string): boolean {
+  if (
+    send({
+      type: "cancel_subagent",
+      session_id: sessionId,
+      subagent_session_id: subagentSessionId,
+    })
+  ) return true;
+  notify("Needs a connection to stop this subagent.", "warning");
+  return false;
+}
+
 /** Retry only this session's bootstrap; never reload the whole application or
  * discard a local composer/delivery state merely because history was slow. */
 export function retrySessionHydration(sessionId: string): Promise<void> {

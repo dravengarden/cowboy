@@ -79,6 +79,7 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { requestPickSession } from "./sessionPickRequest";
 import { forkAvailability, forkSession } from "./sessionFork";
 import { isManagedChild } from "./managedCalls";
+import { SubagentCard } from "./SubagentCard";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
@@ -2986,7 +2987,8 @@ function PermissionCard({
           {question
             ? rejected ? "Declined" : "Answered"
             : rejected ? "Rejected" : "Allowed"}
-          {!question && item.chosen ? `: ${item.chosen}` : ""} · {item.title}
+          {!question && item.chosen ? `: ${item.chosen}` : ""} · {item.subagent ? `${item.subagent}: ` : ""}
+          {item.title}
         </Typography>
       </Stack>
     );
@@ -3007,6 +3009,7 @@ function PermissionCard({
         ? <HelpOutlineRounded sx={{ fontSize: glyphSize(18), flexShrink: 0 }} />
         : <WarningAmberRounded sx={{ fontSize: glyphSize(18), flexShrink: 0 }} />}
       <Typography variant="caption" noWrap sx={{ fontWeight: 600, minWidth: 0 }}>
+        {item.subagent ? `${item.subagent}: ` : ""}
         {question ? "Waiting for your answer" : `Permission requested · ${item.title}`}
       </Typography>
     </Stack>
@@ -3170,6 +3173,8 @@ const ItemView = memo(function ItemView({
       );
     case "permission":
       return <PermissionCard item={item} />;
+    case "subagent":
+      return <SubagentCard subagent={item.subagent} sessionId={sessionId} desktop={desktop} />;
     case "lifecycle": {
       if (item.recovered) {
         return (
@@ -3601,6 +3606,8 @@ function itemProgressSignature(
       return `${count}:${item.key}:permission:${item.resolved}:${
         item.chosen ?? ""
       }`;
+    case "subagent":
+      return `${count}:${item.key}:subagent:${item.subagent.revision}:${item.subagent.state}`;
     case "lifecycle":
       return `${count}:${item.key}:lifecycle:${item.status}:${item.recovered ?? false}`;
     case "cleared":
