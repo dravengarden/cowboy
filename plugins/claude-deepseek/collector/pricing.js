@@ -72,6 +72,9 @@ function modelFamily(model) {
   return undefined;
 }
 
+// The Fetch API has no chat model; its requests are valued as server tools.
+const FETCH_API_MODEL = "deepseek-fetch";
+
 function emptyEstimate() {
   return {
     estimatedCost: 0,
@@ -127,7 +130,7 @@ function estimate(model, aggregate, keys) {
       allHitFloorCost: tools.serverToolCost,
       requests,
       usageObservedRequests,
-      unknownModelRequests: requests,
+      unknownModelRequests: model === FETCH_API_MODEL ? 0 : requests,
       inputTokens,
       unpricedInputTokens: inputTokens,
       outputTokens,

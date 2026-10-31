@@ -92,8 +92,11 @@ re-labels only tool updates with the standard ACP kind, title, locations and
 applied diff, and mirrors `todo_write` as an ACP plan; requests, results and
 every other message pass through unchanged. The launcher also selects the
 current Flash model through a Cowboy-owned dsh profile patch in the isolated
-`DSH_HOME`. dsh's own `web_fetch` refuses hosts whose DNS answer is not a
-public address, which includes proxy fake-IP resolvers.
+`DSH_HOME`. dsh's local `web_fetch` backend refuses hosts whose DNS answer is
+not a public address, which includes proxy fake-IP resolvers, so the same patch
+selects DeepSeek's Fetch API behind the gateway (`DEEPSEEK_WEB_BASE_URL`). The
+gateway holds the key and reports each successful fetch as a billed
+`fetch_requests` usage event under model `deepseek-fetch`.
 
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases

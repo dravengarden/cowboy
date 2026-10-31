@@ -83,6 +83,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.74.0 records provider-runtime 1.1.26. DeepSeek Harness now
+selects DeepSeek's Fetch API for `web_fetch`, because dsh's local backend refuses
+fake-IP DNS answers, and reaches it through claude-deepseek-gateway 0.1.4, which
+keeps the key and reports each successful fetch. Every Plugin that pins
+provider-runtime advances one patch version; only deepseek-harness and
+claude-deepseek change behavior. Native pins are unchanged.
+
 Scoped release 3.73.0 records app-shell 1.1.34 for the already-committed
 loading-spinner changes `b2053d73` and `f7bd4bbd`; no Plugin depends on that
 component. It also records Claude Code 3.20.22, whose usage collector badges
