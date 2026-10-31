@@ -68,8 +68,8 @@ export type RenderItem = { key: string } & (
       id: string;
       title: string;
       toolKind: string;
-      /// Upstream tool NAME (`_meta.<provider>.toolName`, e.g. "Bash" / "Edit" /
-      /// codex "shell"), or "" when the agent didn't tag one. Drives the
+      /// Programmatic tool NAME (ACP `name`, else `_meta.<provider>.toolName`;
+      /// e.g. "Bash" / "Edit" / codex "shell"), or "" when the agent didn't tag one. Drives the
       /// per-tool renderer in tools/registry; `toolKind` is the ACP fallback.
       toolName: string;
       status: string;
@@ -303,11 +303,20 @@ function pushThoughtText(item: { sections: string[] }, incoming: string): void {
   item.sections.push(...thoughtSectionsOf(tail + incoming));
 }
 
-/// The upstream tool name lives under `_meta.<provider>.toolName` (e.g.
-/// `_meta.claudeCode.toolName = "Bash"`). The provider key varies, so scan the
-/// one-level `_meta` object for any `{ toolName }`. "" when absent.
-function toolNameOf(update: AcpUpdate): string {
-  if (typeof update["name"] === "string") return update["name"];
+/// ACP's standard programmatic tool name (`ToolCall.name` /
+/// `ToolCallUpdate.name`, schema 1.8+), when the agent sends one. "" otherwise.
+function standardToolNameOf(update: AcpUpdate): string {
+  const name = update["name"];
+  return typeof name === "string" ? name.trim() : "";
+}
+
+/// The programmatic tool name: the standard `name` first, then the older
+/// `_meta.<provider>.toolName` (e.g. `_meta.claudeCode.toolName = "Bash"`).
+/// The provider key varies, so scan the one-level `_meta` object for any
+/// `{ toolName }`. "" when absent.
+export function toolNameOf(update: AcpUpdate): string {
+  const standard = standardToolNameOf(update);
+  if (standard) return standard;
   const meta = update["_meta"];
   if (meta && typeof meta === "object") {
     for (const v of Object.values(meta as Record<string, unknown>)) {
@@ -548,7 +557,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (existing && existing.kind === "tool") {
               if (u.status) existing.status = u.status;
               if (u.title) existing.title = u.title;
-              if (!existing.toolName) existing.toolName = toolNameOf(u);
+              // A later standard name corrects a heuristic one; otherwise the
+              // first name the call reported stays.
+              const standard = standardToolNameOf(u);
+              if (standard) existing.toolName = standard;
+              else if (!existing.toolName) existing.toolName = toolNameOf(u);
               const input = toolInputOf(u);
               const content = toolContentOf(u);
               if (input !== undefined) existing.rawInput = input;

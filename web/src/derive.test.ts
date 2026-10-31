@@ -9,6 +9,7 @@ import {
   latestCompactionCompletionSeq,
   latestPlan,
   linkTimeline,
+  toolNameOf,
 } from "./derive";
 import type { Envelope } from "./protocol";
 
@@ -1008,4 +1009,31 @@ test("notices render as advisory rows and end the current message", () => {
     "Model fallback",
     "Using a smaller model.",
   ]);
+});
+
+test("the standard ACP tool name wins over provider _meta names", () => {
+  assertEquals(
+    toolNameOf({ sessionUpdate: "tool_call", name: "Bash", _meta: { claudeCode: { toolName: "Other" } } }),
+    "Bash",
+  );
+  assertEquals(toolNameOf({ sessionUpdate: "tool_call", _meta: { claudeCode: { toolName: "Read" } } }), "Read");
+  // A blank standard name says nothing; the provider name still applies.
+  assertEquals(toolNameOf({ sessionUpdate: "tool_call", name: " ", _meta: { codex: { toolName: "shell" } } }), "shell");
+  assertEquals(toolNameOf({ sessionUpdate: "tool_call", name: null }), "");
+
+  const items = derive([
+    { session_id: "s1", seq: 1, kind: "update", update: {
+      sessionUpdate: "tool_call", toolCallId: "t", status: "pending", _meta: { claudeCode: { toolName: "Guess" } },
+    } },
+    { session_id: "s1", seq: 2, kind: "update", update: {
+      sessionUpdate: "tool_call_update", toolCallId: "t", name: "Edit", status: "in_progress",
+    } },
+    { session_id: "s1", seq: 3, kind: "update", update: {
+      sessionUpdate: "tool_call_update", toolCallId: "t", status: "completed", _meta: { claudeCode: { toolName: "Late" } },
+    } },
+  ]);
+  const tool = items[0];
+  if (tool?.kind !== "tool") throw new Error("expected one tool");
+  // The update's standard name corrects the first guess; a later _meta name does not undo it.
+  assertEquals(tool.toolName, "Edit");
 });

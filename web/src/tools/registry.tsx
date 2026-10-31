@@ -47,7 +47,7 @@ export interface ToolCtx {
   /** Exact immutable Provider package identity pinned by the session. */
   providerVersion?: string | undefined;
   providerDigest?: string | undefined;
-  /** Upstream tool name (`_meta.<provider>.toolName`), or "" if absent. */
+  /** Programmatic tool name (ACP `name`, else `_meta.<provider>.toolName`), or "" if absent. */
   toolName: string;
   /** ACP kind: read | edit | execute | search | fetch | think | other | … */
   kind: string;
