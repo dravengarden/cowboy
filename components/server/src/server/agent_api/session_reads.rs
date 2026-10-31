@@ -23,7 +23,11 @@ impl ListFilter {
             {
                 Some(text.to_lowercase())
             }
-            _ => return Err("invalid_argument".into()),
+            _ => {
+                return Err(
+                    "invalid_argument: query must be non-empty text up to 256 bytes".into(),
+                );
+            }
         };
         let mut exact = Vec::new();
         for key in ["provider", "machine", "workspace"] {

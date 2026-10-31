@@ -360,6 +360,10 @@ impl Host for FakeHost {
             "calls.inspect" => Ok(json!({"call_id": args["call_id"], "state":"running"})),
             "sessions.info" => Err("not_found".into()),
             "machines.list" => Ok(json!({"machines":[{"id":"a"},{"id":"b"}],"next":null})),
+            "machines.read" => {
+                arg_str(&args, "id")?;
+                Ok(json!({"op":op,"args":args}))
+            }
             "api.help" => {
                 only_keys(&args, &["topic"])?;
                 crate::agent_api::help(arg_str(&args, "topic")?).ok_or("invalid_help".into())
@@ -383,6 +387,39 @@ impl Host for FakeHost {
             _ => Err("unknown_operation".into()),
         }
     }
+}
+
+#[tokio::test]
+async fn object_form_ids_mean_the_same_call_as_positional_ids() {
+    let Some(value) = run(
+        r#"
+        const args = async (promise) => (await promise).args;
+        return {
+          history: [await args(cowboy.sessions.history("s", {limit:2})),
+                    await args(cowboy.sessions.history({session_id:"s", limit:2})),
+                    await args(cowboy.sessions.history({id:"s"}, {limit:2}))],
+          usage: [await args(cowboy.sessions.usage({session_id:"s"})),
+                  await args(cowboy.usage.read({account_id:"a"}))],
+          machine: await args(cowboy.machines.read({machine:"m"})),
+          call: (await cowboy.calls.inspect({id:"c"})).call_id,
+          help: typeof (await cowboy.api.help({topic:"calls"})),
+        };
+        "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value["state"], "ok", "{value}");
+    let out = &value["value"];
+    let history = json!({"session_id":"s","limit":2});
+    assert_eq!(out["history"], json!([history, history, history]));
+    assert_eq!(out["usage"], json!([{"id":"s"},{"account":"a"}]));
+    assert_eq!(out["machine"], json!({"id":"m"}));
+    assert_eq!(out["call"], "c");
+    assert_eq!(out["help"], "object");
 }
 
 #[tokio::test]
@@ -627,8 +664,10 @@ async fn failed_calls_name_the_operation_and_what_was_received() {
     let Some(value) = run(
         r#"
         const out = {};
-        try { await cowboy.api.help({topic:"calls"}); }
+        try { await cowboy.machines.read(42); }
         catch (e) { out.argument = [e.code, e.message]; }
+        try { await cowboy.api.help({topic:"calls", cursor:"x"}); }
+        catch (e) { out.option = e.message; }
         try { await cowboy.sessions.get("s"); } catch (e) { out.method = [e.code, e.message]; }
         try { await cowboy.help("calls"); } catch (e) { out.root = [e.code, e.message]; }
         out.passthrough = [typeof cowboy.then, typeof cowboy.sessions.toJSON];
@@ -645,10 +684,15 @@ async fn failed_calls_name_the_operation_and_what_was_received() {
     assert_eq!(out["argument"][0], "invalid_argument", "{value}");
     let message = out["argument"][1].as_str().unwrap();
     assert!(
-        message.starts_with("api.help: invalid_argument: topic must be an id string; received {")
-            && message.contains(r#"{"topic":{"topic":"calls"}}"#)
-            && message.contains(r#"cowboy_read({help:"index"})"#),
+        message.starts_with("machines.read: invalid_argument: id must be an id string; received {")
+            && message.contains(r#"{"id":42}"#)
+            && message.contains(r#"cowboy_read({help:"machines"})"#),
         "{message}"
+    );
+    let option = out["option"].as_str().unwrap();
+    assert!(
+        option.contains("cursor is not accepted; options are topic"),
+        "{option}"
     );
     assert_eq!(out["method"][0], "unknown_operation");
     let message = out["method"][1].as_str().unwrap();

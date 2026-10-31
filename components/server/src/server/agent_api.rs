@@ -178,10 +178,23 @@ fn after_id(args: &Value) -> Result<Option<&str>, String> {
         .transpose()
 }
 
+// Name the rejected key and the accepted ones; a bare code was the most
+// common reason agents retried a read with another guessed option.
 fn only_keys(args: &Value, allowed: &[&str]) -> Result<(), String> {
-    match args {
-        Value::Object(map) if map.keys().all(|key| allowed.contains(&key.as_str())) => Ok(()),
-        _ => Err("invalid_argument".to_owned()),
+    let Value::Object(map) = args else {
+        return Err("invalid_argument: options must be an object".to_owned());
+    };
+    match map.keys().find(|key| !allowed.contains(&key.as_str())) {
+        None => Ok(()),
+        Some(key) if allowed.is_empty() => Err(format!(
+            "invalid_argument: {} is not accepted; this read takes no options",
+            bounded(key, 40)
+        )),
+        Some(key) => Err(format!(
+            "invalid_argument: {} is not accepted; options are {}",
+            bounded(key, 40),
+            allowed.join(", ")
+        )),
     }
 }
 
@@ -751,7 +764,13 @@ impl EventQuery {
             Some(value) => value
                 .as_u64()
                 .map(Some)
-                .ok_or_else(|| "invalid_argument".to_owned()),
+                .ok_or_else(|| format!("invalid_argument: {key} must be an event seq integer")),
+        };
+        let invalid_kinds = || {
+            format!(
+                "invalid_argument: kinds must be an array of {}",
+                EVENT_KINDS.join(", ")
+            )
         };
         let kinds = match args.get("kinds") {
             None | Some(Value::Null) => EVENT_KINDS
@@ -765,10 +784,10 @@ impl EventQuery {
                     kind.as_str()
                         .filter(|kind| EVENT_KINDS.contains(kind))
                         .map(str::to_owned)
-                        .ok_or_else(|| "invalid_argument".to_owned())
+                        .ok_or_else(invalid_kinds)
                 })
                 .collect::<Result<_, _>>()?,
-            Some(_) => return Err("invalid_argument".into()),
+            Some(_) => return Err(invalid_kinds()),
         };
         Ok(Self {
             after: optional("after")?,

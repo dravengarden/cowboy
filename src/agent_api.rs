@@ -197,7 +197,8 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean}
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
-// task + base (immutable commit SHA) + root bind review input for automatic reuse.
+// task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)
+//   + base (full commit SHA) + root bind review input for automatic reuse.
 // Only use with all required evidence in the captured files/instruction. fresh:true requests an independent pass.
 // calls.cancel: {call_id:string}; operation MUST equal call_id. Cancellation is idempotent.
 // documents.mutate: {document_id:string,expected_revision:number,change:DraftChange}

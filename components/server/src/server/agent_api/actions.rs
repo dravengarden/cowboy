@@ -133,6 +133,17 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             "base must be a full 40- or 64-hex commit id, not a short or symbolic ref",
         ));
     }
+    // The request contract reports root and file faults together; split the
+    // common mistake of attaching absolute paths instead of root-relative ones.
+    if input
+        .files
+        .iter()
+        .any(|file| !crate::managed_calls::relative_file(file))
+    {
+        return Err(refuse(
+            "files must be paths relative to root, without a leading /, '.' or '..' segments; capture files outside root into the worktree first",
+        ));
+    }
     if review && input.task.is_some() && input.root.is_none() {
         return Err(refuse("a base-bound review needs root"));
     }
@@ -945,6 +956,11 @@ mod tests {
         );
         assert!(task.contains("task must be a short id"), "{task}");
         assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
+        let absolute = message(
+            "review.start",
+            json!({"root":root,"files":["/srv/private/source/design.md"]}),
+        );
+        assert!(absolute.contains("relative to root"), "{absolute}");
         assert!(message("calls.start", json!({"title":"x"})).contains("needs instruction"));
         assert!(
             message("calls.start", json!({"instruction":"x","base":"a"})).contains("review.start")
@@ -966,7 +982,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(context.code, "invalid_argument");
         assert!(context.message.contains("absolute directory"));
-        for value in [short, task, unknown, context.message] {
+        for value in [short, task, absolute, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
     }
