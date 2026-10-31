@@ -118,7 +118,7 @@ test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(false), "layout paint");
   assertEquals(transcriptRowContainment(false, true), "layout");
   assert(
-    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey,\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\)/
+    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey \|\| isRunningTool\(item\),\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\)/
       .test(
         transcriptSource,
       ),

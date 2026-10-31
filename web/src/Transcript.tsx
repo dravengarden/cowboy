@@ -909,6 +909,11 @@ function ConversationEmptyState({
 // Soft opacity breathing — used both for the in-flight tool card and the
 // Claude "thinking" spark. CSS keyframes instead of a JS animation lib so it's
 // free on bundle size and runs on the compositor (smooth on low-end phones).
+function isRunningTool(item: RenderItem): boolean {
+  return item.kind === "tool" &&
+    (item.status === "pending" || item.status === "in_progress");
+}
+
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.55; }
@@ -6057,7 +6062,7 @@ export function Transcript({
                       // otherwise retain an empty off-screen paint layer and
                       // hide the entire user bubble when it scrolls into view.
                       contain: transcriptRowContainment(
-                        item.key === streamingRowKey,
+                        item.key === streamingRowKey || isRunningTool(item),
                         item.kind === "message" &&
                           item.chunks.some((chunk) => chunk.type === "image"),
                       ),
