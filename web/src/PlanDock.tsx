@@ -1,4 +1,9 @@
 import {
+  COMPOSER_STACK_DISCLOSURE_TIMEOUT,
+  composerStackDisclosureSx,
+  swallowStrayDisclosureClick,
+} from "./composerStackDisclosure";
+import {
   Box,
   ButtonBase,
   Collapse,
@@ -68,7 +73,10 @@ export const PlanDock = memo(function PlanDock({
   const toggle = (): void => {
     toggleComposerStackPanel("plan");
   };
-  const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
+  const toggleTap = useReliableTouchTap<HTMLButtonElement>(
+    toggle,
+    swallowStrayDisclosureClick,
+  );
 
   if (desktop) {
     return (
@@ -165,7 +173,11 @@ export const PlanDock = memo(function PlanDock({
         color={allDone ? "success" : "primary"}
         sx={{ height: 4 }}
       />
-      <Collapse in={expanded}>
+      <Collapse
+        in={expanded}
+        timeout={COMPOSER_STACK_DISCLOSURE_TIMEOUT}
+        sx={composerStackDisclosureSx(expanded)}
+      >
         {/* Bounded, self-contained scroller — same strategy as the queue/draft
             PendingPanels. Without a cap a long plan grew unbounded and, sitting
             above the composer + the queue/draft scroller, pushed the editor off
@@ -373,7 +385,11 @@ function DesktopPlanRail({
           transition: "width 240ms ease",
         }}
       />
-      <Collapse in={expanded}>
+      <Collapse
+        in={expanded}
+        timeout={COMPOSER_STACK_DISCLOSURE_TIMEOUT}
+        sx={composerStackDisclosureSx(expanded)}
+      >
         <Box
           data-desktop-plan-list="true"
           data-desktop-aux-list="true"

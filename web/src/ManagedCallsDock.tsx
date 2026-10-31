@@ -1,4 +1,9 @@
 import {
+  COMPOSER_STACK_DISCLOSURE_TIMEOUT,
+  composerStackDisclosureSx,
+  swallowStrayDisclosureClick,
+} from "./composerStackDisclosure";
+import {
   alpha,
   Box,
   Button,
@@ -1289,7 +1294,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
       setMobileOpen(true);
     }
   };
-  const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
+  const toggleTap = useReliableTouchTap<HTMLButtonElement>(
+    toggle,
+    swallowStrayDisclosureClick,
+  );
   // An open Mobile page keeps its sheet while its last call is cleaned up;
   // Desktop never shows an empty "0/0" rail.
   if (calls.length === 0 && (observedAt === null || !mobileOpen)) return null;
@@ -1513,7 +1521,11 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           </Stack>
         )}
       {desktop && (
-        <Collapse in={expanded}>
+        <Collapse
+        in={expanded}
+        timeout={COMPOSER_STACK_DISCLOSURE_TIMEOUT}
+        sx={composerStackDisclosureSx(expanded)}
+      >
           {
             /* The Prompt column is narrow beside the Conversation pane, so the
               list and the selected call's detail stack inside one bounded

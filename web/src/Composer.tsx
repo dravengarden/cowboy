@@ -372,6 +372,11 @@ import {
   composerStackExpandedStore,
   toggleComposerStackPanel,
 } from "./composerStackAccordion";
+import {
+  COMPOSER_STACK_DISCLOSURE_TIMEOUT,
+  composerStackDisclosureSx,
+  swallowStrayDisclosureClick,
+} from "./composerStackDisclosure";
 
 const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
@@ -4019,7 +4024,10 @@ export function PendingPanel({
       );
     }
   };
-  const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggleCollapsed);
+  const toggleTap = useReliableTouchTap<HTMLButtonElement>(
+    toggleCollapsed,
+    swallowStrayDisclosureClick,
+  );
   useEffect(() => {
     onEditingChange?.(editingId !== null);
     return (): void => onEditingChange?.(false);
@@ -4585,17 +4593,14 @@ export function PendingPanel({
       }
       <Collapse
         in={!visuallyCollapsed}
+        timeout={COMPOSER_STACK_DISCLOSURE_TIMEOUT}
         onEntered={revealArrivalRow}
         sx={{
-          willChange: "height",
-          // Large attachment previews otherwise re-enter layout + paint on
-          // every clipped-height frame. Isolate the already-laid-out list so
-          // the compositor can reveal it as smoothly as Plan's text-only list.
+          ...composerStackDisclosureSx(!visuallyCollapsed),
           // Layout containment can leave iOS WebKit's parent overflow layer
-          // with the pre-animation scroll range until a later layout pass.
-          // That presents as a temporarily frozen Queue/Drafts stack after a
-          // disclosure. Desktop benefits from the paint isolation; Mobile's
-          // native scrollport must observe every intermediate/final height.
+          // with a stale scroll range until a later layout pass. That
+          // presents as a temporarily frozen Queue/Drafts stack after a
+          // disclosure, so only Desktop takes the paint isolation.
           ...(desktop && {
             "& .MuiCollapse-wrapperInner": { contain: "layout paint" },
           }),
