@@ -2862,7 +2862,7 @@ function SessionList({
                         <ListItemIcon>
                             <ForkRightOutlined fontSize="medium" />
                         </ListItemIcon>
-                        <ListItemText primary="Move or fork" />
+                        <ListItemText primary="Replace or fork" />
                     </MenuItem>
                 )}
                 {menuAnchor && tree.folderOf.get(menuAnchor.row.id) && (
@@ -3001,7 +3001,7 @@ function SessionList({
                             </Button>
                             {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                                 <Button data-session-shortcut="f" data-session-new-from fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewFrom(row.id); }} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move or fork</Box>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Replace or fork</Box>
                                     <Kbd keys="F" />
                                 </Button>
                             )}

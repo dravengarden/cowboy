@@ -26,8 +26,8 @@ Session Settings answers independent questions, each in one place:
   selection applies at once, is not a prompt, and starts no reply. Removing a
   chip or **Cancel** in the Composer cue undoes it. Once a prompt carries a
   selection it joins the links.
-- **Where the work goes**: **Move or fork** opens one form with the
-  target agent and two actions. **Move to new session** moves the work;
+- **Where the work goes**: **Replace or fork** opens one form with the
+  target agent and two actions. **Replace this session** moves the work;
   **Fork to new session** keeps both live.
 
 The form preselects the current installation and subscription, or the staged
@@ -39,7 +39,7 @@ compatible settings** (on by default). Clearing inheritance is the way past a
 target that refuses the source's restrictive permissions; nothing retries
 without it automatically.
 
-**Move to new session** saves the target and links the current session
+**Replace this session** saves the target and links the current session
 ahead of the selected ones, without creating, stopping or starting a worker,
 then closes settings and focuses the Composer. The current session stays a
 removable source in the selection, and the action stays available for an
@@ -56,7 +56,7 @@ it leaves this session's pending links and staged continuation untouched. An
 empty session offers only Continue.
 
 The session menu (mobile long press, Desktop session actions with `F`) offers
-**Move or fork**, which opens that form. A continuation keeps its
+**Replace or fork**, which opens that form. A continuation keeps its
 source's title and links back to it; the mark is the persisted
 `session_continued_from:<id>` setting projected as `continued_from` on the
 session. Continuations created before that mark are recorded once at Controller
@@ -78,7 +78,7 @@ Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
 original away and opens the continuation. Restoring leads to the same state.
 Writing in the original would silently
 split one piece of work in two, so the web offers no way to do it;
-Select sessions, **Move or fork** and the session menu item are
+Select sessions, **Replace or fork** and the session menu item are
 hidden for the same reason. While its agent is still busy the
 Composer stays, so the turn can be observed and stopped. Deleting or trashing
 the continuation returns the original to an ordinary session. The state is

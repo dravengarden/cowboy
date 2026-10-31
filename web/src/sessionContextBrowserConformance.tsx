@@ -373,7 +373,7 @@ export async function runSessionContextBrowserConformance(
         desktop ? 680 : 360
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
-      await until(() => Boolean(button("Move or fork")));
+      await until(() => Boolean(button("Replace or fork")));
       await until(() =>
         contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
       );
@@ -593,7 +593,7 @@ export async function runSessionContextBrowserConformance(
       );
       check(true, `${mode}: the composer says the next prompt reads them`);
       const beforeAgent = writes.length;
-      button("Move or fork").click();
+      button("Replace or fork").click();
       await until(() => Boolean(continueRun()) && !continueRun().disabled);
       check(
         !container.querySelector("[data-context-advanced]") &&
@@ -837,10 +837,10 @@ export async function runSessionContextBrowserConformance(
       delete sessions[0]!.workspace_id;
       flushSync(() => root.render(<Fixture desktop={desktop} />));
       await until(() =>
-        Boolean(button("Move or fork")) &&
-        !button("Move or fork").disabled
+        Boolean(button("Replace or fork")) &&
+        !button("Replace or fork").disabled
       );
-      button("Move or fork").click();
+      button("Replace or fork").click();
       await until(() => Boolean(button("Choose project")));
       check(
         continueRun().disabled &&
@@ -868,10 +868,10 @@ export async function runSessionContextBrowserConformance(
       container.querySelector<HTMLButtonElement>("[data-new-session-fork-run]")!;
     const openForm = async () => {
       await until(() =>
-        Boolean(button("Move or fork")) &&
-        !button("Move or fork").disabled
+        Boolean(button("Replace or fork")) &&
+        !button("Replace or fork").disabled
       );
-      button("Move or fork").click();
+      button("Replace or fork").click();
       await until(() => Boolean(forkMode()) && !forkRun().disabled);
     };
     flushSync(() => root.render(<Fixture desktop />));

@@ -53,7 +53,7 @@ import { newUuid } from "./uuid";
 
 /** Three questions, one place each. How this agent runs lives in the Agent
  *  block above. Here: what the next message can read (Link sessions), and
- *  where the work goes (Move or fork). */
+ *  where the work goes (Replace or fork). */
 export function SessionContextSettings(
   { session, provenance = true, allowFork = true }: {
     session: SessionMeta;
@@ -147,7 +147,7 @@ export function SessionContextSettings(
               onClick={() => setOpen((value) => !value)}
               sx={{ justifyContent: "flex-start", textTransform: "none" }}
             >
-              Move or fork
+              Replace or fork
             </Button>
             {data && stagedAgent && !open && (
               <PendingSwitch session={session} context={data} onBack={() => void reload()} />
@@ -167,7 +167,6 @@ export function SessionContextSettings(
                 requestComposerFocus(session.id);
               }}
               onForked={() => setOpen(false)}
-              onCancel={() => setOpen(false)}
             />
           )}
         </Stack>
@@ -249,14 +248,13 @@ function LinkedSessions(
 /** Where the work goes: one target, then either move the work there or keep
  *  both lines live. How history travels follows from the target. */
 function NewSessionForm(
-  { session, observed, sources, allowFork, onContinued, onForked, onCancel }: {
+  { session, observed, sources, allowFork, onContinued, onForked }: {
     session: SessionMeta;
     observed: SessionContext;
     sources: string[];
     allowFork: boolean;
     onContinued: () => void;
     onForked: () => void;
-    onCancel: () => void;
   },
 ): React.JSX.Element {
   const [snapshot] = useState(observed);
@@ -402,12 +400,12 @@ function NewSessionForm(
       <Stack spacing={0.5} data-new-session-outcome>
         <Typography variant="caption" color="text.secondary" data-new-session-continue>
           {sameAccount && samePlacement
-            ? `Move starts a new session with a fresh conversation on your next message${
+            ? `Replace starts a new session with a fresh conversation on your next message${
               copiesWorktree ? ", with uncommitted changes" : ""
             }. This session then moves to Trash.`
             : copiesWorktree
-            ? "Move continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
-            : "Move continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
+            ? "Replace continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
+            : "Replace continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
         </Typography>
         {allowFork && (
           <Typography
@@ -494,7 +492,7 @@ function NewSessionForm(
           disabled={locked || !ready || full}
           onClick={() => void continueWork()}
         >
-          {busy ? "Saving…" : "Move to new session"}
+          {busy ? "Saving…" : "Replace this session"}
         </Button>
         {allowFork && (
           <Button
@@ -506,7 +504,6 @@ function NewSessionForm(
             Fork to new session
           </Button>
         )}
-        <Button disabled={busy} onClick={onCancel}>Cancel</Button>
       </Stack>
     </Stack>
   );
