@@ -133,17 +133,6 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             "base must be a full 40- or 64-hex commit id, not a short or symbolic ref",
         ));
     }
-    // The review gateway reports a malformed reuse label as a context error;
-    // name the actual rule here, since callers tend to pass prose as task.
-    if input
-        .task
-        .as_deref()
-        .is_some_and(|task| !crate::managed_calls::valid_id(task))
-    {
-        return Err(refuse(
-            "task must be a stable id of up to 128 letters, digits, '-', '_' or '.' (for example f01-awaiting-merge); describe the review in focus",
-        ));
-    }
     // The request contract reports root and file faults together; split the
     // common mistake of attaching absolute paths instead of root-relative ones.
     if input
@@ -157,6 +146,16 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     }
     if review && input.task.is_some() && input.root.is_none() {
         return Err(refuse("a base-bound review needs root"));
+    }
+    // A description passed as task fails later as an opaque context error.
+    if input
+        .task
+        .as_deref()
+        .is_some_and(|task| !crate::managed_calls::valid_id(task))
+    {
+        return Err(refuse(
+            "task must be a short id (letters, digits, '-', '_' or '.', up to 128); put the description in focus",
+        ));
     }
     let purpose = if review {
         if input.design {
@@ -951,12 +950,12 @@ mod tests {
             json!({"root":root,"base":"1ef0ea6f","task":"t"}),
         );
         assert!(short.contains("full 40- or 64-hex"), "{short}");
-        assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
-        let prose = message(
+        let task = message(
             "review.start",
-            json!({"root":root,"base":"a".repeat(40),"task":"Review commit abc on branch x"}),
+            json!({"root":root,"base":"a".repeat(40),"task":"Review commits a..HEAD in apps/x"}),
         );
-        assert!(prose.contains("stable id"), "{prose}");
+        assert!(task.contains("task must be a short id"), "{task}");
+        assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
         let absolute = message(
             "review.start",
             json!({"root":root,"files":["/srv/private/source/design.md"]}),
@@ -983,7 +982,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(context.code, "invalid_argument");
         assert!(context.message.contains("absolute directory"));
-        for value in [short, prose, absolute, unknown, context.message] {
+        for value in [short, task, absolute, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
     }

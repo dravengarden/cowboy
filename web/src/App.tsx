@@ -2079,6 +2079,9 @@ function SessionList({
                             ml: 0.5,
                         },
                         "& .cowboy-folder-trailing [data-folder-activity]": {
+                            // Desktop rows end flush at the pane splitter; the
+                            // filled pill needs its own gap from that edge.
+                            mr: desktopSize(6),
                             transition: "opacity 120ms ease",
                         },
                         "& .cowboy-folder-trailing .cowboy-row-actions": {
