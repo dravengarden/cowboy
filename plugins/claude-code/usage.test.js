@@ -63,7 +63,7 @@ test("balance lookup uses at most two reads and projects no account identifiers"
     }), "Claude credit balance is unavailable.");
   equal(calls, 1);
 });
-import { childEnvironment, collect } from "./collector/index.js";
+import { childEnvironment, collect, planName } from "./collector/index.js";
 import {
   nativeJson,
   quotaView,
@@ -562,4 +562,12 @@ test("subscriber quota remains reachable when the parent disables nonessential t
     if (previous === undefined) delete process.env[key];
     else process.env[key] = previous;
   }
+});
+
+test("the Max 20x rate-limit tier is badged as Ultra; other tiers keep the CLI plan", () => {
+  equal(planName("max", "default_claude_max_20x"), "ultra");
+  equal(planName("max", "default_claude_max_5x"), "max");
+  equal(planName("max", undefined), "max");
+  equal(planName("pro", "default_claude_max_20x"), "pro");
+  equal(planName(undefined, "default_claude_max_20x"), undefined);
 });

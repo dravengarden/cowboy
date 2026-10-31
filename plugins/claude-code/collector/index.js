@@ -13,6 +13,7 @@ import {
   consumeReset,
   fetchResets,
   readCredential,
+  readPlanTier,
   resetClient,
   ResetFailure,
 } from "./resets.js";
@@ -33,7 +34,24 @@ const CHILD_ENV_KEYS = [
 ];
 
 /** Anthropic's own plan identifiers, surfaced verbatim as the card badge. */
-const KNOWN_PLANS = new Set(["max", "pro", "team", "enterprise", "free"]);
+const KNOWN_PLANS = new Set([
+  "max",
+  "ultra",
+  "pro",
+  "team",
+  "enterprise",
+  "free",
+]);
+
+/** Since 2026-10-30 the former Max 20x plan is named Ultra. The CLI still
+ * reports `subscriptionType: "max"` for both tiers; only the credential's
+ * rate-limit tier tells them apart. */
+export function planName(subscriptionType, rateLimitTier) {
+  return subscriptionType === "max" &&
+      rateLimitTier === "default_claude_max_20x"
+    ? "ultra"
+    : subscriptionType;
+}
 
 async function input() {
   const text = await Bun.stdin.text();
@@ -80,8 +98,8 @@ function text(value) {
 }
 
 /** Project only the fields the account card renders. No tokens, no org ids. */
-function accountView(status) {
-  const plan = text(status?.subscriptionType);
+function accountView(status, rateLimitTier) {
+  const plan = planName(text(status?.subscriptionType), rateLimitTier);
   const account = {
     ...(plan
       ? { planType: KNOWN_PLANS.has(plan) ? plan : "subscription" }
@@ -139,6 +157,9 @@ async function collect(options = {}) {
       credits = undefined;
     }
   }
+  const tier = await readPlanTier(
+    execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
+  );
   return {
     provider: "anthropic",
     status: "available",
@@ -148,7 +169,7 @@ async function collect(options = {}) {
       ...status,
       subscriptionType: text(usage.subscription_type) ??
         status.subscriptionType,
-    }),
+    }, tier),
     ...quota,
     ...(quota.rate_limits || balance || credits
       ? {

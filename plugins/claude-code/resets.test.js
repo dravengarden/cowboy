@@ -3,6 +3,7 @@ import { assertEquals, assertRejects } from "@std/assert";
 import {
   consumeReset,
   readCredential,
+  readPlanTier,
   resetClient,
   resetCredits,
   ResetFailure,
@@ -253,6 +254,33 @@ test("credential read uses only the explicitly projected shared directory and ne
       ResetFailure,
       "authentication required",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("plan tier read is best-effort and accepts only a plain identifier", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-tier-test-"));
+  try {
+    const path = join(directory, ".credentials.json");
+    assertEquals(await readPlanTier(directory), undefined);
+    assertEquals(await readPlanTier(undefined), undefined);
+    await writeFile(
+      path,
+      JSON.stringify({
+        claudeAiOauth: { rateLimitTier: "default_claude_max_20x" },
+      }),
+    );
+    assertEquals(await readPlanTier(directory), "default_claude_max_20x");
+    await writeFile(
+      path,
+      JSON.stringify({
+        claudeAiOauth: { rateLimitTier: "Bearer secret value" },
+      }),
+    );
+    assertEquals(await readPlanTier(directory), undefined);
+    await writeFile(path, "not json");
+    assertEquals(await readPlanTier(directory), undefined);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

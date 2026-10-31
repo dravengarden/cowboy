@@ -39,6 +39,20 @@ export async function readCredential(directory) {
   }
 }
 
+/** The credential's plan tier, e.g. `default_claude_max_20x`. Never throws:
+ * the tier only refines the account badge and must not fail a quota read. */
+export async function readPlanTier(directory) {
+  if (!directory || !isAbsolute(directory)) return undefined;
+  try {
+    const file = Bun.file(join(directory, ".credentials.json"));
+    if (file.size > MAX_BYTES) return undefined;
+    const tier = (await file.json()).claudeAiOauth?.rateLimitTier;
+    return typeof tier === "string" && ID.test(tier) ? tier : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function jsonResponse(response) {
   if (!response.ok) {
     await response.body?.cancel();

@@ -51,6 +51,13 @@ transient failures and clears it on authentication failure. Session context
 updates must not change the quota observation time or erase its refresh error.
 Session rate-limit events remain a fallback when no account snapshot exists.
 
+Since 2026-10-30 Anthropic sells the former Max 20x plan as Ultra; Max 5x is now
+just Max. CLI 2.1.314 still reports `subscriptionType: "max"` for both, and only
+the credential's non-secret `rateLimitTier` (`default_claude_max_20x`)
+identifies Ultra. The collector reads that field, best effort, to badge the
+account. A verified Ultra account may also lose its five-hour window; the
+collector omits any window the native response no longer carries.
+
 ## Banked usage resets
 
 Plugin 3.19.39 adds the subscription reset protocol present in the pinned Claude
