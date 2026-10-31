@@ -186,6 +186,18 @@ export function renderElicitationPreview(): void {
     options: [],
     elicitation: parsed(FORM),
   };
+  const tool: PendingPermission = {
+    seq: 2,
+    requestId: "preview-tool",
+    requestKind: "permission",
+    title: "cd /srv/storage/fast0/agent/worktrees/cowboy && just check",
+    options: [
+      { optionId: "once", name: "Allow once", kind: "allow_once" },
+      { optionId: "always", name: "Always allow in this session", kind: "allow_always" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ],
+    elicitation: null,
+  };
   createRoot(container).render(
     <BrowserProductTheme>
       <CssBaseline />
@@ -193,8 +205,9 @@ export function renderElicitationPreview(): void {
         <Stack sx={{ width: 640, border: 1, borderColor: "divider" }}>
           <DesktopPermissionDock item={item} waiting={1} sessionId="s" />
         </Stack>
-        <Stack sx={{ width: 390 }}>
+        <Stack sx={{ width: 390 }} spacing={2}>
           <PermissionOverlay item={item} sessionId="s" />
+          <PermissionOverlay item={tool} sessionId="s" />
         </Stack>
       </Stack>
     </BrowserProductTheme>,

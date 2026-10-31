@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import {
+  alpha,
   Box,
   Button,
   Checkbox,
@@ -10,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import OpenInNew from "@mui/icons-material/OpenInNew";
+import { approvalProseSx } from "./approvalCardStyle";
 import {
   type Elicitation,
   ELICITATION_ACCEPT,
@@ -98,7 +100,7 @@ export function elicitationChoiceOf(optionId: string | null): string | null {
 
 function FieldHeading({ field }: { field: ElicitationField }): React.JSX.Element {
   return (
-    <Box sx={{ mb: 0.25 }}>
+    <Box sx={{ mb: 0.75 }}>
       <Typography variant="body2" sx={{ fontWeight: 650 }}>
         {field.title}
         {field.required && (
@@ -114,18 +116,69 @@ function FieldHeading({ field }: { field: ElicitationField }): React.JSX.Element
   );
 }
 
-function ChoiceLabel(
-  { title, description }: { title: string; description: string | null },
+// One line of choice title; the control box shares it so they align exactly.
+const CHOICE_LINE = "1.375rem";
+
+/** A selectable row: the whole tile is the hit target, the selected one is
+ *  tinted, and the radio/checkbox sits on the title's first line. */
+function ChoiceTile(
+  { title, description, selected, disabled, control }: {
+    title: string;
+    description: string | null;
+    selected: boolean;
+    disabled: boolean;
+    control: React.JSX.Element;
+  },
 ): React.JSX.Element {
   return (
-    <Box sx={{ py: 0.25 }}>
-      <Typography variant="body2">{title}</Typography>
-      {description && (
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
-          {description}
-        </Typography>
-      )}
-    </Box>
+    <FormControlLabel
+      disabled={disabled}
+      data-elicitation-choice
+      data-selected={selected ? "true" : undefined}
+      control={control}
+      label={
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            variant="body2"
+            sx={{ lineHeight: CHOICE_LINE, fontWeight: selected ? 600 : 400 }}
+          >
+            {title}
+          </Typography>
+          {description && (
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", display: "block", lineHeight: 1.4 }}
+            >
+              {description}
+            </Typography>
+          )}
+        </Box>
+      }
+      sx={(t) => ({
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 1,
+        m: 0,
+        px: 1.25,
+        py: 1,
+        borderRadius: 1.5,
+        border: 1,
+        borderColor: selected ? alpha(t.palette.primary.main, 0.55) : "divider",
+        bgcolor: selected
+          ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.08)
+          : alpha(t.palette.background.paper, 0.6),
+        transition: "background-color 120ms ease, border-color 120ms ease",
+        "@media (hover: hover)": {
+          "&:hover": disabled ? {} : { borderColor: alpha(t.palette.primary.main, 0.4) },
+        },
+        "& .MuiFormControlLabel-label": { flex: 1, minWidth: 0 },
+        "& .MuiRadio-root, & .MuiCheckbox-root": {
+          p: 0,
+          height: CHOICE_LINE,
+          "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+        },
+      })}
+    />
   );
 }
 
@@ -143,37 +196,37 @@ function FieldInput({
   switch (field.kind) {
     case "single":
       return (
-        <Box role="radiogroup" aria-label={field.title}>
+        <Stack role="radiogroup" aria-label={field.title} spacing={0.75}>
           {field.choices.map((choice) => (
-            <FormControlLabel
+            <ChoiceTile
               key={choice.value}
+              title={choice.title}
+              description={choice.description}
+              selected={value === choice.value}
               disabled={disabled}
-              sx={{ display: "flex", alignItems: "flex-start", mr: 0 }}
               control={
                 <Radio
-                  size="small"
                   checked={value === choice.value}
                   onChange={() => onChange(choice.value)}
-                  sx={{ py: 0.5 }}
                 />
               }
-              label={<ChoiceLabel title={choice.title} description={choice.description} />}
             />
           ))}
-        </Box>
+        </Stack>
       );
     case "multi": {
       const picked = Array.isArray(value) ? value : [];
       return (
-        <Box role="group" aria-label={field.title}>
+        <Stack role="group" aria-label={field.title} spacing={0.75}>
           {field.choices.map((choice) => (
-            <FormControlLabel
+            <ChoiceTile
               key={choice.value}
+              title={choice.title}
+              description={choice.description}
+              selected={picked.includes(choice.value)}
               disabled={disabled}
-              sx={{ display: "flex", alignItems: "flex-start", mr: 0 }}
               control={
                 <Checkbox
-                  size="small"
                   checked={picked.includes(choice.value)}
                   onChange={(event) =>
                     onChange(
@@ -181,13 +234,11 @@ function FieldInput({
                         ? [...picked, choice.value]
                         : picked.filter((item) => item !== choice.value),
                     )}
-                  sx={{ py: 0.5 }}
                 />
               }
-              label={<ChoiceLabel title={choice.title} description={choice.description} />}
             />
           ))}
-        </Box>
+        </Stack>
       );
     }
     case "boolean":
@@ -245,7 +296,10 @@ export function ElicitationFields({
       data-elicitation={elicitation.mode}
       sx={{ maxHeight: "min(50vh, 420px)", overflow: "auto", pr: 0.5 }}
     >
-      <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+      <Typography
+        variant="body2"
+        sx={{ ...approvalProseSx, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+      >
         {elicitation.message}
       </Typography>
       {elicitation.mode === "url"

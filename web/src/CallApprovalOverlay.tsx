@@ -1,4 +1,5 @@
 import { glyphSize } from "./surface/desktopSize";
+import { approvalButtonSx } from "./approvalCardStyle";
 import type { ReactNode } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import AccountTree from "@mui/icons-material/AccountTree";
@@ -63,11 +64,6 @@ export function CallApprovalOverlay({
         boxSizing: "border-box",
         pointerEvents: "none",
         zIndex: 3,
-        fontFamily: "var(--cowboy-reading-font, inherit)",
-        fontSize: "1rem",
-        "& .MuiTypography-root, & .MuiButton-root": {
-          fontFamily: "inherit",
-        },
       }}
     >
       {desktop?.commands(
@@ -260,10 +256,4 @@ export function CallApprovalOverlay({
   );
 }
 
-const buttonSx = {
-  minHeight: { xs: 48, sm: 40 },
-  py: 0.75,
-  textTransform: "none",
-  fontSize: { xs: "1rem", sm: "0.9375rem" },
-  lineHeight: 1.35,
-} as const;
+const buttonSx = approvalButtonSx;

@@ -60,6 +60,7 @@ import {
   ExpandMore,
   ExtensionOutlined,
   Folder,
+  HelpOutlineRounded,
   InfoOutlined,
   KeyboardArrowDown,
   MyLocation,
@@ -2968,6 +2969,10 @@ function PermissionCard({
   // sticky PermissionOverlay on Mobile. Pending = an amber "Permission
   // requested · cmd" line; resolved = a subtle italic "Allowed/Rejected · cmd"
   // so a glaring card doesn't sit in the log forever.
+  // One line either way: the full request is the card above the Composer (or
+  // the Desktop dock), and the tool row above already names it. Repeating a
+  // long question here showed the same text three times.
+  const question = item.requestKind === "question";
   if (item.resolved) {
     const rejected = item.chosen?.toLowerCase().startsWith("reject") ?? false;
     return (
@@ -2975,11 +2980,13 @@ function PermissionCard({
         direction="row"
         spacing={1}
         alignItems="center"
-        sx={{ alignSelf: "flex-start", color: "text.secondary", px: 0.5 }}
+        sx={{ alignSelf: "stretch", minWidth: 0, color: "text.secondary", px: 0.5 }}
       >
-        <Typography variant="caption" sx={{ fontStyle: "italic" }}>
-          {rejected ? "Rejected" : "Allowed"}
-          {item.chosen ? `: ${item.chosen}` : ""} · {item.title}
+        <Typography variant="caption" noWrap sx={{ fontStyle: "italic", minWidth: 0 }}>
+          {question
+            ? rejected ? "Declined" : "Answered"
+            : rejected ? "Rejected" : "Allowed"}
+          {!question && item.chosen ? `: ${item.chosen}` : ""} · {item.title}
         </Typography>
       </Stack>
     );
@@ -2987,13 +2994,20 @@ function PermissionCard({
   return (
     <Stack
       direction="row"
-      spacing={1}
+      spacing={0.75}
       alignItems="center"
-      sx={{ alignSelf: "flex-start", color: "warning.main", px: 0.5 }}
+      sx={{
+        alignSelf: "stretch",
+        minWidth: 0,
+        color: question ? "primary.main" : "warning.main",
+        px: 0.5,
+      }}
     >
-      <WarningAmberRounded fontSize="medium" sx={{ flexShrink: 0 }} />
-      <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
-        Permission requested · {item.title}
+      {question
+        ? <HelpOutlineRounded sx={{ fontSize: glyphSize(18), flexShrink: 0 }} />
+        : <WarningAmberRounded sx={{ fontSize: glyphSize(18), flexShrink: 0 }} />}
+      <Typography variant="caption" noWrap sx={{ fontWeight: 600, minWidth: 0 }}>
+        {question ? "Waiting for your answer" : `Permission requested · ${item.title}`}
       </Typography>
     </Stack>
   );

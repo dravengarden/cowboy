@@ -20,6 +20,11 @@ import {
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
 import { haptic } from "./haptic";
+import {
+  approvalButtonSx,
+  approvalChoicesInRow,
+  approvalProseSx,
+} from "./approvalCardStyle";
 
 // The pending tool-permission overlay — a sticky frosted surface floating just
 // above the composer, in the SAME slot + material as TurnStatusOverlay (they
@@ -102,11 +107,6 @@ export function PermissionOverlay({
         boxSizing: "border-box",
         pointerEvents: "none",
         zIndex: 3,
-        fontFamily: "var(--cowboy-reading-font, inherit)",
-        fontSize: "1rem",
-        "& .MuiTypography-root, & .MuiButton-root": {
-          fontFamily: "inherit",
-        },
       }}
     >
       {desktop?.commands(
@@ -176,38 +176,46 @@ export function PermissionOverlay({
               py: 0.75,
               borderRadius: 1,
               bgcolor: "action.hover",
-              fontFamily: "inherit",
-              fontSize: "0.875rem",
+              // A tool request names a command; a plain question is prose.
+              ...(isQuestion
+                ? approvalProseSx
+                : { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }),
+              fontSize: isQuestion ? "0.875rem" : "0.8125rem",
               whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
+              // A command fills each line; a long path is one unbreakable "word".
+              wordBreak: isQuestion ? "break-word" : "break-all",
             }}
           >
             {item.title}
           </Box>
             )}
-          <Stack spacing={1}>
+          <Stack
+            direction={approvalChoicesInRow(choices.map((choice) => choice.label))
+              ? "row"
+              : "column"}
+            spacing={1}
+            sx={{ "& > .MuiButton-root": { flex: 1, minWidth: 0 } }}
+          >
             {choices.map((choice, index) => {
               const reject = choice.reject;
+              // Only the first (narrowest) approval is the filled default;
+              // a broader grant such as "always allow" stays secondary.
+              const primary = !reject &&
+                choices.findIndex((other) => !other.reject) === index;
               return (
                 <Button
                   key={choice.id}
                   fullWidth
                   disableElevation
                   disabled={response.busy || choice.disabled}
-                  variant={reject ? "outlined" : "contained"}
+                  variant={primary ? "contained" : "outlined"}
                   color={reject ? "error" : "primary"}
                   startIcon={response.busy && busyChoice === choice.id
                     ? <CircularProgress size={desktopSize(14)} thickness={5} color="inherit" />
                     : undefined}
                   endIcon={desktop?.keycap(index, !response.busy)}
                   onClick={choice.run}
-                  sx={{
-                    minHeight: { xs: 48, sm: 40 },
-                    py: 0.75,
-                    textTransform: "none",
-                    fontSize: { xs: "1rem", sm: "0.9375rem" },
-                    lineHeight: 1.35,
-                  }}
+                  sx={approvalButtonSx}
                 >
                   {choice.label}
                 </Button>

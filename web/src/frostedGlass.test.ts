@@ -38,6 +38,9 @@ const turnStatusSource = await readFile(
 const permissionSource = await readFile(
   new URL("./PermissionOverlay.tsx", import.meta.url), "utf8",
 );
+const approvalStyleSource = await readFile(
+  new URL("./approvalCardStyle.ts", import.meta.url), "utf8",
+);
 
 test("floating composer stack has one border-box geometry owner", () => {
   assertEquals(
@@ -68,9 +71,12 @@ test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
-test("permission actions follow the global reading font scale", () => {
-  assertEquals(permissionSource.includes('fontSize: "1rem"'), true);
-  assertEquals(permissionSource.includes('fontSize: "0.875rem"'), true);
+test("permission actions follow the global font scale", () => {
+  // Buttons share the rem-sized approval style; the request text is rem too.
+  assertEquals(permissionSource.includes("sx={approvalButtonSx}"), true);
+  assertEquals(approvalStyleSource.includes('fontSize: "0.9375rem"'), true);
+  assertEquals(/fontSize: \d/.test(approvalStyleSource), false);
+  assertEquals(permissionSource.includes('"0.875rem"'), true);
   assertEquals(
     permissionSource.includes("fontSize: { xs: 15, sm: 14 }"),
     false,
