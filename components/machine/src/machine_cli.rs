@@ -1381,7 +1381,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .flatten()
         .map(|calls| calls.attach(event_tx.clone()));
     let _memory_uplink = (protocol >= crate::machine_protocol::MEMORY_RELAY_PROTOCOL_VERSION)
-        .then(|| config.memory_relay.as_ref())
+        .then_some(config.memory_relay.as_ref())
         .flatten()
         .map(|relay| relay.attach(event_tx.clone()));
     let _provider_auth_watcher = if protocol >= 6 {
