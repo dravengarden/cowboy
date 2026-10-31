@@ -53,7 +53,7 @@ import { newUuid } from "./uuid";
 
 /** Three questions, one place each. How this agent runs lives in the Agent
  *  block above. Here: what the next message can read (Link sessions), and
- *  where the work goes (Continue or fork). */
+ *  where the work goes (Move or fork). */
 export function SessionContextSettings(
   { session, provenance = true, allowFork = true }: {
     session: SessionMeta;
@@ -147,7 +147,7 @@ export function SessionContextSettings(
               onClick={() => setOpen((value) => !value)}
               sx={{ justifyContent: "flex-start", textTransform: "none" }}
             >
-              Continue or fork
+              Move or fork
             </Button>
             {data && stagedAgent && !open && (
               <PendingSwitch session={session} context={data} onBack={() => void reload()} />
@@ -402,12 +402,12 @@ function NewSessionForm(
       <Stack spacing={0.5} data-new-session-outcome>
         <Typography variant="caption" color="text.secondary" data-new-session-continue>
           {sameAccount && samePlacement
-            ? `Continue starts a fresh conversation with this agent on your next message${
+            ? `Move starts a new session with a fresh conversation on your next message${
               copiesWorktree ? ", with uncommitted changes" : ""
-            }. This session moves to Trash.`
+            }. This session then moves to Trash.`
             : copiesWorktree
-            ? "Continue moves the work to this agent on your next message, with uncommitted changes. This session moves to Trash."
-            : "Continue moves the work to this agent on your next message. This session moves to Trash and keeps uncommitted changes."}
+            ? "Move continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
+            : "Move continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
         </Typography>
         {allowFork && (
           <Typography
@@ -416,10 +416,10 @@ function NewSessionForm(
             data-new-session-fork={!samePlacement ? "unavailable" : forkMode}
           >
             {!samePlacement
-              ? "Fork stays in this project and Machine."
+              ? "Fork needs this project and Machine."
               : forkMode === "fork"
-              ? "Fork keeps both live, copying the conversation and uncommitted changes."
-              : "Fork keeps both live. The new agent reads this conversation; uncommitted changes stay here."}
+              ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
+              : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
             {samePlacement && waitForTurn && " Available after the current turn."}
           </Typography>
         )}
@@ -494,7 +494,7 @@ function NewSessionForm(
           disabled={locked || !ready || full}
           onClick={() => void continueWork()}
         >
-          {busy ? "Saving…" : "Continue on next message"}
+          {busy ? "Saving…" : "Move to new session"}
         </Button>
         {allowFork && (
           <Button
@@ -503,7 +503,7 @@ function NewSessionForm(
             disabled={locked || !ready || !samePlacement || waitForTurn}
             onClick={() => void forkWork()}
           >
-            Fork now
+            Fork to new session
           </Button>
         )}
         <Button disabled={busy} onClick={onCancel}>Cancel</Button>
