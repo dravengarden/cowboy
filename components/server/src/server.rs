@@ -16179,6 +16179,7 @@ async fn handle_machine_ws(
         // every send/open in that window fails with "hawk is not connected".
         let runtime = RemoteRuntime::connecting(
             hub,
+            machine_id.clone(),
             label.clone(),
             generation,
             provider_auth,

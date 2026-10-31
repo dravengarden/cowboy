@@ -84,6 +84,10 @@ impl RemoteBootstrap {
 
 pub struct Shared {
     socket: PathBuf,
+    /// The authenticated Machine behind this connection. Sessions route to a
+    /// runtime only through `meta.machine_id`, so no frame from it may speak
+    /// for another Machine's session. `None` only in test harnesses.
+    machine_id: Option<String>,
     hub: Hub,
     pending: Mutex<HashMap<String, CoreCommand>>,
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
@@ -209,6 +213,7 @@ impl RemoteRuntime {
     /// empty, so a user send fails with "hawk is not connected".
     pub fn connecting(
         hub: Hub,
+        machine_id: String,
         socket: PathBuf,
         desired_generation: String,
         provider_auth: Arc<crate::provider_service::ProviderAuthService>,
@@ -219,6 +224,7 @@ impl RemoteRuntime {
         Arc::new(Self {
             shared: Arc::new(Shared {
                 socket,
+                machine_id: Some(machine_id),
                 hub,
                 pending: Mutex::new(HashMap::new()),
                 steering: Mutex::new(HashMap::new()),
@@ -278,6 +284,7 @@ impl RemoteRuntime {
         Arc::new(Self {
             shared: Arc::new(Shared {
                 socket: bootstrap.socket.clone(),
+                machine_id: None,
                 hub,
                 pending: Mutex::new(HashMap::new()),
                 steering: Mutex::new(HashMap::new()),
@@ -345,6 +352,11 @@ impl RemoteRuntime {
             "test-generation".to_owned(),
             Some("/bin/false".to_owned()),
         )
+    }
+
+    #[cfg(test)]
+    fn shared_mut_for_test(&mut self) -> &mut Arc<Shared> {
+        &mut self.shared
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1894,6 +1906,24 @@ fn acknowledge_pending_ensure_from_snapshot(shared: &Shared, worker: &WorkerSnap
     }
 }
 
+/// A known session placed on a different runtime Machine than this connection.
+/// `meta.machine_id` is the runtime Machine, also when execution is elsewhere.
+fn foreign_session(shared: &Shared, session_id: &str) -> bool {
+    shared
+        .machine_id
+        .as_deref()
+        .is_some_and(|machine| shared.hub.session_runs_elsewhere(session_id, machine))
+}
+
+fn reject_foreign_frame(shared: &Shared, session_id: &str, frame: &str) {
+    tracing::warn!(
+        machine = shared.machine_id.as_deref().unwrap_or_default(),
+        session = %session_id,
+        frame,
+        "Machine frame names another Machine's session; dropped"
+    );
+}
+
 #[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
 async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
@@ -1908,6 +1938,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             mut event,
             diagnostics,
         } => {
+            if foreign_session(shared, &session_id) {
+                // Never projected and never acknowledged: an honest worker
+                // cannot reach this, and an ACK would claim consumption.
+                reject_foreign_frame(shared, &session_id, "worker event");
+                return Ok(());
+            }
             if !shared.current_turn_protocol
                 && let RuntimeEvent::Update { update, .. } = &mut event
                 && crate::runtime_wire::current_turn_support(update).is_some()
@@ -2149,6 +2185,10 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             }
         }
         Frame::Snapshot { worker } => {
+            if foreign_session(shared, &worker.session_id) {
+                reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
+                return Ok(());
+            }
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
                 if shared.resetting.lock().contains(&session_id) {
@@ -2281,6 +2321,10 @@ async fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) 
 
 async fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
     for worker in workers {
+        if foreign_session(shared, &worker.session_id) {
+            reject_foreign_frame(shared, &worker.session_id, "worker inventory");
+            continue;
+        }
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
@@ -2974,7 +3018,11 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
         RuntimeEvent::ScheduleWakeup {
             delay_seconds,
             prompt,
-        } => hub.schedule_wakeup(session_id, delay_seconds, prompt),
+        } if hub.session_info(session_id).is_some() => {
+            hub.schedule_wakeup(session_id, delay_seconds, prompt);
+        }
+        // A session ID nobody owns yet must not hold a future turn for its owner.
+        RuntimeEvent::ScheduleWakeup { .. } => {}
         RuntimeEvent::UndeliveredPrompt {
             cmid,
             content,
@@ -4705,6 +4753,108 @@ mod tests {
             }
             broker.await.unwrap();
         }
+    }
+
+    /// A runtime bound to `machine`, as `connecting` builds in production.
+    fn bound_runtime(hub: Hub, machine: &str, workers: Vec<WorkerSnapshot>) -> Arc<RemoteRuntime> {
+        let mut runtime = RemoteRuntime::for_test(hub, workers);
+        Arc::get_mut(Arc::get_mut(&mut runtime).unwrap().shared_mut_for_test())
+            .unwrap()
+            .machine_id = Some(machine.to_owned());
+        runtime
+    }
+
+    fn wakeup_frame(session_id: &str) -> Frame {
+        Frame::WorkerEvent {
+            session_id: session_id.to_owned(),
+            worker_epoch: "attacker".to_owned(),
+            diagnostics: Vec::new(),
+            runtime_seq: 1,
+            event: RuntimeEvent::ScheduleWakeup {
+                delay_seconds: 60,
+                prompt: "run the attacker's command".to_owned(),
+            },
+        }
+    }
+
+    /// A compromised Machine holds a valid connection, so its only limit is
+    /// that it can speak for its own sessions. Hub state here belongs to the
+    /// session's real Machine (`local`), not the connected `ovh`.
+    #[tokio::test]
+    async fn a_foreign_machine_cannot_project_into_another_machines_session() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "victim".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (scheduler, mut armed) = mpsc::channel(4);
+        hub.set_scheduler_tx(scheduler);
+        let runtime = bound_runtime(hub.clone(), "ovh", Vec::new());
+
+        let mut written = Vec::new();
+        handle_frame(&runtime.shared, wakeup_frame("victim"), &mut written)
+            .await
+            .expect("a foreign frame is dropped, not a transport failure");
+        assert!(armed.try_recv().is_err(), "foreign wakeup was armed");
+        assert!(written.is_empty(), "foreign event was acknowledged");
+        assert!(runtime.shared.highwaters.lock().is_empty());
+
+        let mut forged = snapshot("victim");
+        forged.worker_epoch = "attacker".to_owned();
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(forged.clone()),
+            },
+            &mut written,
+        )
+        .await
+        .unwrap();
+        merge_worker_snapshots(&runtime.shared, vec![forged]).await;
+        assert!(runtime.shared.workers.lock().is_empty());
+        assert!(runtime.shared.declarations.lock().is_empty());
+        assert!(written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_owning_machine_keeps_projecting_including_remote_execution_sessions() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "own".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (scheduler, mut armed) = mpsc::channel(4);
+        hub.set_scheduler_tx(scheduler);
+        // `meta.machine_id` is the runtime Machine for every placement, so a
+        // runtime on OVH executing on Hawk matches its own connection here.
+        let runtime = bound_runtime(hub, "local", Vec::new());
+        let mut written = Vec::new();
+        handle_frame(&runtime.shared, wakeup_frame("own"), &mut written)
+            .await
+            .unwrap();
+        assert!(armed.try_recv().is_ok());
+        assert!(!written.is_empty(), "owned event must be acknowledged");
+    }
+
+    #[tokio::test]
+    async fn a_wakeup_cannot_wait_for_a_session_id_nobody_owns_yet() {
+        let hub = Hub::new();
+        let (scheduler, mut armed) = mpsc::channel(4);
+        hub.set_scheduler_tx(scheduler);
+        let runtime = bound_runtime(hub, "ovh", Vec::new());
+        let mut written = Vec::new();
+        handle_frame(&runtime.shared, wakeup_frame("sess-next"), &mut written)
+            .await
+            .unwrap();
+        assert!(armed.try_recv().is_err());
     }
 
     /// The OVH incident: the reset was acknowledged, the Machine then lost the
