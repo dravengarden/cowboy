@@ -734,6 +734,63 @@ impl UsageService {
     /// processes; running them one after another prevents their RSS peaks
     /// from stacking inside the controller service cgroup. Explicit user
     /// refreshes keep the concurrent path above.
+    /// The Service credential of `plugin_id` changed (login or promoted
+    /// refresh). An account waiting out an authentication failure becomes due
+    /// again under the ordinary budget, without waiting for a client to poll.
+    pub async fn credentials_changed(&self, plugin_id: &str) {
+        #[cfg(not(any(test, feature = "test-support")))]
+        let UsageBindingSource::Catalog(catalog) = &self.bindings;
+        #[cfg(any(test, feature = "test-support"))]
+        let catalog = match &self.bindings {
+            UsageBindingSource::Static(_) => return,
+            UsageBindingSource::Catalog(catalog) => catalog,
+        };
+        let Some(runtime) = catalog.runtime() else {
+            return;
+        };
+        let now = now_ms();
+        let mut released = false;
+        {
+            let mut snapshot = self.snapshot.lock().await;
+            for binding in self.bindings.current() {
+                if !runtime
+                    .exact_usage_hosts(&binding.account)
+                    .iter()
+                    .any(|host| host.id == plugin_id)
+                {
+                    continue;
+                }
+                let key = limiter::Limiter::account_key("service", &binding.account);
+                if !self.limiter.credentials_changed(&key) {
+                    continue;
+                }
+                if let Some(refresh) = snapshot
+                    .providers
+                    .iter_mut()
+                    .find(|usage| usage.provider == binding.account)
+                    .and_then(|usage| usage.refresh.as_mut())
+                {
+                    refresh.manual_refresh_after_ms = now;
+                    refresh.next_auto_refresh_at_ms = now;
+                }
+                tracing::info!(
+                    account = binding.account,
+                    plugin_id,
+                    "new credentials released usage authentication backoff"
+                );
+                released = true;
+            }
+            if released {
+                self.persist_snapshot(&snapshot);
+            }
+        }
+        if released {
+            self.notify();
+            let snapshot = self.snapshot.lock().await.clone();
+            self.maybe_warm(&snapshot);
+        }
+    }
+
     pub async fn refresh_background(&self) -> UsageSnapshot {
         self.refresh_with_policy(true).await
     }

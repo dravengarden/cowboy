@@ -65,7 +65,12 @@ fn overlay_provider_session(
     // A live context update does not refresh an account quota observation or
     // clear its refresh error. Keep session-only Providers as a fallback.
     if provider.rate_limits.is_none() {
+        // An attempted account collection's error (for example an expired
+        // login) is more actionable than the generic empty-state copy. Only
+        // a never-collected placeholder takes the empty text.
+        let collection_failed = provider.refresh.is_some() && provider.error.is_some();
         if provider.status != "available"
+            && !collection_failed
             && let Some(empty) = binding.and_then(|binding| binding.empty.as_deref())
         {
             provider.error = Some(empty.to_owned());
@@ -257,6 +262,35 @@ mod tests {
         assert_eq!(
             fallback.rate_limits.unwrap()["rateLimits"]["utilization"],
             90
+        );
+    }
+
+    #[test]
+    fn live_session_keeps_a_failed_collection_error_over_empty_copy() {
+        let mut binding = binding("future", None);
+        binding.empty = Some("Account quota is not exposed for this session.".to_owned());
+        let usage = crate::agent_model::SessionUsage {
+            used: 30,
+            size: 100,
+            observed_at_ms: 900,
+            raw: json!({}),
+        };
+        let mut failed = unavailable("future", "Account", "Sign in again.");
+        failed.refresh = Some(crate::usage::ProviderRefreshState {
+            last_attempt_at_ms: 800,
+            manual_refresh_after_ms: 830,
+            next_auto_refresh_at_ms: 860,
+            stale: false,
+        });
+        overlay_provider_session(&mut failed, "agent", &usage, Some(&binding));
+        assert_eq!(failed.status, "session-only");
+        assert_eq!(failed.error.as_deref(), Some("Sign in again."));
+
+        let mut placeholder = unavailable("future", "Account", "Not refreshed yet");
+        overlay_provider_session(&mut placeholder, "agent", &usage, Some(&binding));
+        assert_eq!(
+            placeholder.error.as_deref(),
+            Some("Account quota is not exposed for this session.")
         );
     }
 

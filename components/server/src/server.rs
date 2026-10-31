@@ -13879,6 +13879,7 @@ async fn api_provider_auth_commit(
     };
     let (statuses, replicas) = distribute_and_mark_provider_auth(&state, statuses).await;
     recover_failed_provider_sessions(&state, &statuses, &replicas);
+    usage_credentials_changed(&state, &statuses);
     let Some(status) = statuses
         .iter()
         .find(|status| status.provider_id == provider_id)
@@ -14376,6 +14377,7 @@ async fn adopt_shared_provider_authentication(state: &Arc<AppState>) {
     }
     let (statuses, replicas) = distribute_and_mark_provider_auth(state, adopted).await;
     recover_failed_provider_sessions(state, &statuses, &replicas);
+    usage_credentials_changed(state, &statuses);
 }
 
 async fn distribute_and_mark_provider_auth(
@@ -14450,6 +14452,22 @@ fn recoverable_provider_auth_failure(
     }
     let detail = hub.unresolved_crash_detail(session_id)?;
     crate::provider_behavior::is_provider_auth_required_error(&detail).then_some((revision, detail))
+}
+
+/// A committed Service credential supersedes a usage authentication failure.
+/// Machine reconnects re-distribute an unchanged generation and must not call this.
+fn usage_credentials_changed(
+    state: &Arc<AppState>,
+    statuses: &[crate::provider_service::ProviderAuthenticationStatus],
+) {
+    for status in statuses
+        .iter()
+        .filter(|status| status.account_id.is_default())
+    {
+        let usage = state.usage.clone();
+        let provider_id = status.provider_id.clone();
+        tokio::spawn(async move { usage.credentials_changed(&provider_id).await });
+    }
 }
 
 fn recover_failed_provider_sessions(
@@ -14902,6 +14920,7 @@ async fn accept_provider_auth_refresh_candidate(
             );
             let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
             recover_failed_provider_sessions(state, &statuses, &replicas);
+            usage_credentials_changed(state, &statuses);
         }
     }
     Ok(())
@@ -15028,6 +15047,7 @@ async fn accept_service_auth_candidate(
     };
     let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
     recover_failed_provider_sessions(state, &statuses, &replicas);
+    usage_credentials_changed(state, &statuses);
     let mut warnings = Vec::new();
     if !statuses
         .iter()

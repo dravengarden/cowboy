@@ -21,6 +21,9 @@ struct State {
     durable: Durable,
     active: BTreeSet<String>,
     failed_closed: bool,
+    /// Accounts whose latest attempt failed authentication. In memory only:
+    /// after a restart the durable backoff simply runs its course.
+    authentication_failed: BTreeSet<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -121,6 +124,7 @@ impl Limiter {
                 durable,
                 active: BTreeSet::new(),
                 failed_closed,
+                authentication_failed: BTreeSet::new(),
             })),
             config: Handle::new(Config::defaults(Scope::Service)),
             path,
@@ -261,6 +265,11 @@ impl Limiter {
         let interval = super::duration_ms(self.config.get(&schema::USAGE_ACCOUNT_INTERVAL));
         let max_backoff =
             super::duration_ms(self.config.get(&schema::USAGE_FAILURE_BACKOFF_MAX)).max(interval);
+        if outcome == Outcome::Authentication {
+            state.authentication_failed.insert(account.into());
+        } else if outcome != Outcome::Unused {
+            state.authentication_failed.remove(account);
+        }
         let slot = state.durable.accounts.entry(account.into()).or_default();
         match outcome {
             Outcome::Success => slot.failures = 0,
@@ -301,6 +310,30 @@ impl Limiter {
             state.failed_closed = true;
         }
         state.active.remove(provider);
+    }
+
+    /// New credentials supersede an authentication failure: drop that
+    /// account's failure backoff so its next poll may run once the ordinary
+    /// account interval, Provider window and spacing allow. Each release needs
+    /// a fresh failure, so repeated credential changes cannot bypass the budget.
+    pub fn credentials_changed(&self, account: &str) -> bool {
+        let mut state = self.inner.lock();
+        if state.failed_closed || !state.authentication_failed.remove(account) {
+            return false;
+        }
+        let interval = super::duration_ms(self.config.get(&schema::USAGE_ACCOUNT_INTERVAL));
+        let mut next = state.durable.clone();
+        let Some(slot) = next.accounts.get_mut(account) else {
+            return false;
+        };
+        slot.failures = 0;
+        slot.next_allowed_ms = slot.last_attempt_ms.saturating_add(interval);
+        if !self.save(&next) {
+            state.failed_closed = true;
+            return false;
+        }
+        state.durable = next;
+        true
     }
 
     fn save(&self, value: &Durable) -> bool {
@@ -441,6 +474,32 @@ mod tests {
                 .finish(Outcome::Failure, now);
             assert!(limiter.view("anthropic", "lynx", now).next_allowed_ms <= now + 3_600_000);
         }
+    }
+
+    #[test]
+    fn new_credentials_release_only_an_authentication_backoff_once() {
+        let limiter = Limiter::new(None);
+        assert!(!limiter.credentials_changed("lynx"));
+        limiter
+            .start("anthropic", "lynx", 1000)
+            .unwrap_or_else(|_| panic!("start"))
+            .finish(Outcome::Authentication, 2000);
+        assert_eq!(
+            limiter.view("anthropic", "lynx", 2000).next_allowed_ms,
+            3_602_000
+        );
+        assert!(limiter.credentials_changed("lynx"));
+        // The account interval and Provider spacing still apply.
+        assert_eq!(
+            limiter.view("anthropic", "lynx", 2000).next_allowed_ms,
+            301_000
+        );
+        assert!(!limiter.credentials_changed("lynx"));
+        limiter
+            .start("anthropic", "lynx", 301_000)
+            .unwrap_or_else(|_| panic!("restart"))
+            .finish(Outcome::Failure, 302_000);
+        assert!(!limiter.credentials_changed("lynx"));
     }
 
     #[test]
