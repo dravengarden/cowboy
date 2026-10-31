@@ -699,6 +699,7 @@ test:
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && bun run test
+    python3 -m unittest discover -s tools -p ovh_machine_idle_sessions_test.py
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
 # cluster. Never consumes a caller-provided database URL or starts a TCP listener.

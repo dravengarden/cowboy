@@ -56,6 +56,30 @@ exact worker or to have exactly one replacement on the new generation with the
 same session, socket, cwd and Provider generation; it is retried within the
 rollback window while idle workers are being replaced.
 
+Before the receipt records live workers, `--workers` hibernates every idle
+(`running`) OVH session itself, default or named Provider account, through
+`tools/ovh_machine_idle_sessions.py` and this computer's `cowboy login`
+(`cowboy session list --json` is unpaged; `cowboy session hibernate` is the
+Web UI's own refusal-checked action). It waits until the Controller reports
+each one `exited`, so a late stop cannot read as a retained worker changing.
+A hibernated session has nothing to replace in the rollback window and resumes
+on the new generation when next opened. A session that is busy, or that the
+Controller/Machine refuses because work started meanwhile, stays retained and
+under the unchanged acceptance rule; crashed and dormant sessions are not
+touched. The receipt's `hibernation.json` lists both sets. Do not substitute a
+hand-built list: on 2026-10-31 a sweep over the first page of Cowboy MCP
+`sessions.list` (default 50, which then returned no truncation signal) missed
+two retained sessions, and both rollouts were rolled back.
+
+Acceptance deliberately does not excuse a retained session whose replacement
+failed for a session-local reason, such as an expired Provider login: process
+inspection on OVH cannot tell that from a rollout fault, and excusing it would
+weaken the proof that every original healthy session keeps or replaces its
+worker. Hibernation removes idle sessions from that exposure; if a busy one
+still fails, the timer rolls back, the broker falls back to that session's
+previous generation where the failure permits (named accounts included), and
+the operator repairs the session (for example its login) before retrying.
+
 If verification fails the driver exits and the timer restores `previous.conf`.
 The receipt keeps `awaiting-acceptance.json`, `committed.json` or
 `rolled-back.json`. The SSH session that runs the driver may itself be a Cowboy

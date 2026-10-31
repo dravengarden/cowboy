@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Replace the OVH Machine host binary; detached ACP workers keep running.
-# With --workers, also select the release's worker bundle: idle workers adopt
-# it, busy ones at their native safe boundary. See docs/ovh-machine-maintenance.md.
+# With --workers, also select the release's worker bundle: idle sessions are
+# hibernated first (through this computer's `cowboy login`) and adopt it when
+# next opened; busy ones at their native safe boundary.
+# See docs/ovh-machine-maintenance.md.
 # With --max-sessions N, also set the host's worker capacity in the same
 # guarded transition (the flag in the drop-in wins over the Device file).
 # Run on Hawk from the repository root:
@@ -88,9 +90,19 @@ remote "sudo -n install -d -m 0755 /nix/var/nix/gcroots/ovh-cowboy-machine-$shor
   sudo -n python3 -c 'import json,os,sys; m=json.load(open(sys.argv[1])); missing=[p for p in m[\"paths\"] if not os.path.exists(p)]; assert not missing, missing' \
     /nix/var/nix/gcroots/ovh-cowboy-machine-$short/closure-manifest.json" <"$work/manifest.json"
 
+if ((workers)); then
+  # Hibernated sessions need no replacement during the rollback window. A
+  # refused (newly busy) session stays retained under the usual acceptance.
+  echo "== hibernate idle sessions"
+  python3 "$script_dir/ovh_machine_idle_sessions.py" --machine ovh --out "$work/hibernation.json"
+fi
+
 echo "== receipt $receipt"
 remote "sudo -n bash -c 'test ! -e $receipt && install -d -m 0700 -o root -g root $receipt && cat > $receipt/maintenance.py && chmod 0700 $receipt/maintenance.py'" \
   <"$script_dir/ovh_machine_host_maintenance.py"
+if ((workers)); then
+  remote "sudo -n bash -c 'umask 077 && cat > $receipt/hibernation.json'" <"$work/hibernation.json"
+fi
 remote "sudo -n env RELEASE='$release' REVISION='$revision' WORKERS='$workers' MAX_SESSIONS='$max_sessions' D='$receipt' CONF='$unit_dropin' bash -s" <<'EOF'
 set -euo pipefail
 install -m 0600 "$CONF" "$D/previous.conf"
