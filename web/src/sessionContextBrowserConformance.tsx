@@ -6,12 +6,11 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
-import { SessionDuplicateSettings } from "./SessionDuplicateSettings";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
-  requestNewAgent,
+  requestNewFrom,
 } from "./sessionSettingsOpen";
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
@@ -244,13 +243,15 @@ export async function runSessionContextBrowserConformance(
       if (ready()) return;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    throw new Error(`Context fixture timeout: ${container.textContent}`);
+    throw new Error(`Context fixture timeout after "${checks.at(-1)}": ${container.textContent}`);
   };
   const button = (text: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((
       button,
     ) => button.textContent?.includes(text))!;
   // The commit label "Switch" is also a prefix of the section toggle.
+  const continueRun = () =>
+    container.querySelector<HTMLButtonElement>("[data-new-session-continue-run]")!;
   const exactButton = (text: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((
       button,
@@ -319,10 +320,7 @@ export async function runSessionContextBrowserConformance(
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
-            <>
-              <SessionContextSettings session={sessions[0]!} />
-              <SessionDuplicateSettings session={sessions[0]!} />
-            </>
+            <SessionContextSettings session={sessions[0]!} />
           ) : (
             <Sheet
               open
@@ -335,7 +333,6 @@ export async function runSessionContextBrowserConformance(
             >
               <Box sx={{ py: 2 }}>
                 <SessionContextSettings session={sessions[0]!} />
-                <SessionDuplicateSettings session={sessions[0]!} />
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="overline">Session</Typography>
                 <Typography>{sessions[0]!.title}</Typography>
@@ -372,7 +369,7 @@ export async function runSessionContextBrowserConformance(
         desktop ? 680 : 360
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
-      await until(() => Boolean(button("Switch agent or link context")));
+      await until(() => Boolean(button("New session from this…")));
       await until(() =>
         contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
       );
@@ -397,13 +394,9 @@ export async function runSessionContextBrowserConformance(
         !contextReads.some((url) => url.includes(`/${sessions[2]!.id}/context`)),
         `${mode}: a reloaded handoff is read from its synced mark, an ordinary session is not`,
       );
-      button("Switch agent or link context").click();
-      await until(() =>
-        Boolean(container.querySelector("[data-context-editor]"))
-      );
       check(
         writes.length === 0,
-        `${mode}: opening context starts no agent or writes`,
+        `${mode}: opening settings starts no agent or writes`,
       );
       check(
         !button("Save changes") && !button("Cancel pending"),
@@ -572,48 +565,28 @@ export async function runSessionContextBrowserConformance(
       );
       await observe?.(`${mode}-links`);
       button("Save changes").click();
-      await until(() =>
-        context.revision === 1 &&
-        !container.querySelector("[data-context-editor]")
-      );
+      await until(() => context.revision === 1 && !button("Save changes"));
       check(
         writes.length === 1 && writes[0]!.url.endsWith("/context"),
         `${mode}: saving links only writes a preference`,
       );
-      button("Switch agent or link context").click();
-      await until(() =>
-        Boolean(container.querySelector("[data-context-editor]"))
-      );
+      await until(() => Boolean(button("Cancel linked context")));
       check(
-        !button("Save changes") && Boolean(button("Cancel linked context")),
+        Boolean(button("Cancel linked context")),
         `${mode}: saved selection shows pending state and a distinct cancel action`,
       );
-      container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
-        .click();
-      await until(() =>
-        container.querySelectorAll(".MuiChip-root").length === 3
-      );
-      check(
-        container.querySelectorAll(".MuiChip-root").length === 3,
-        `${mode}: fresh agent defaults to linking the current session`,
-      );
-      await until(() =>
-        Boolean(button("Save changes")) && !button("Save changes").disabled
-      );
+      button("New session from this…").click();
+      await until(() => Boolean(continueRun()) && !continueRun().disabled);
       check(
         !container.querySelector("[data-context-advanced]") &&
-          container.querySelector("[data-context-inheritance]")?.textContent
-              ?.includes("Same sidebar folder") === true,
-        `${mode}: continuation inherits placement and settings without expanding extra fields`,
+          container.querySelector("[data-new-session-continue]")?.textContent
+              ?.includes("fresh conversation") === true,
+        `${mode}: an identical target can still start a fresh conversation, with no extra fields`,
       );
       check(
-        container.querySelector("[data-context-files]")?.textContent
-          ?.includes("uncommitted changes stay with this session") === true,
-        `${mode}: inheritance explains that files are not copied`,
-      );
-      check(
-        Boolean(container.querySelector("[data-context-same-agent]")),
-        `${mode}: an identical target explains that live settings change in place`,
+        container.querySelector("[data-new-session-fork]")?.textContent
+          ?.includes("uncommitted changes stay here") === true,
+        `${mode}: the form says what happens to files`,
       );
       button("More options").click();
       await until(() =>
@@ -626,31 +599,31 @@ export async function runSessionContextBrowserConformance(
       );
       button("Fewer options").click();
       container.querySelector<HTMLElement>(
-        '[data-session-subscription] [role="combobox"]',
+        '[data-new-session-editor] [data-session-subscription] [role="combobox"]',
       )!
         .dispatchEvent(
           new MouseEvent("mousedown", { bubbles: true, button: 0 }),
         );
       await until(() => Boolean(option("Claude · Mink")));
       option("Claude · Mink").click();
-      await until(() => !container.querySelector("[data-context-same-agent]"));
-      check(
-        !container.querySelector("[data-context-same-agent]"),
-        `${mode}: another subscription needs no in-place hint`,
+      await until(() =>
+        container.querySelector("[data-new-session-continue]")?.textContent
+          ?.includes("moves the work") === true
       );
+      check(true, `${mode}: another subscription explains that the work moves`);
       await observe?.(`${mode}-selection`);
-      check(
-        Boolean(exactButton("Switch")) && !button("Save changes"),
-        `${mode}: another subscription is committed with Switch`,
-      );
-      exactButton("Switch").click();
+      continueRun().click();
       await until(() =>
         context.revision === 2 &&
-        !container.querySelector("[data-context-editor]")
+        !container.querySelector("[data-new-session-editor]")
       );
       check(
         context.next_agent?.provider === "claude-code" && writes.length === 2,
         `${mode}: agent choice remains staged until send`,
+      );
+      check(
+        context.sources.length === 3 && context.sources[0] === sessions[0]!.id,
+        `${mode}: continuing links the current session ahead of selected ones`,
       );
       check(
         context.next_agent?.provider_account_id === "mink" &&
@@ -671,15 +644,14 @@ export async function runSessionContextBrowserConformance(
         ),
         `${mode}: the composer cue names the pending agent's subscription`,
       );
-      button("Switch agent or link context").click();
-      await until(() => Boolean(button("Back to current agent")));
+      await until(() =>
+        Boolean(container.querySelector("[data-session-switch-back]"))
+      );
       check(
         !button("Save changes"),
         `${mode}: loading a saved agent is not an unsaved edit`,
       );
       await observe?.(`${mode}-pending`);
-      button("Switch agent or link context").click();
-      await until(() => !container.querySelector("[data-context-editor]"));
       await frontPrompt(sessions[0]!.id, "", []);
       check(
         writes.length === 2,
@@ -779,10 +751,6 @@ export async function runSessionContextBrowserConformance(
           writes.filter((write) => write.url.endsWith("/send")).length === 2,
         `${mode}: lost-reply navigation explains the result on the destination without resending`,
       );
-      button("Switch agent or link context").click();
-      await until(() =>
-        Boolean(container.querySelector("[data-context-editor]"))
-      );
       await openChoices(desktop);
       option("Mobile findings").click();
       await until(() =>
@@ -809,80 +777,88 @@ export async function runSessionContextBrowserConformance(
       );
       const writeCount = writes.length;
       button("Discard").click();
-      await until(() => !container.querySelector("[data-context-editor]"));
+      await until(() => !button("Save changes"));
       check(
         writes.length === writeCount,
         `${mode}: discarding a local edit never changes stored context`,
       );
-      button("Switch agent or link context").click();
+      await openChoices(desktop);
+      option("Mobile findings").click();
+      await until(() =>
+        option("Mobile findings")?.getAttribute("aria-selected") === "true"
+      );
+      await closeChoices(desktop);
+      button("Save changes").click();
       await until(() => Boolean(button("Cancel linked context")));
       button("Cancel linked context").click();
       await until(() =>
-        !container.querySelector("[data-context-editor]") &&
-        writes.length > writeCount
+        context.sources.length === 0 &&
+        context.revision === context.applied_revision &&
+        !button("Cancel linked context") && !button("Cancelling")
       );
+      await new Promise((resolve) => setTimeout(resolve, 50));
       check(
-        context.sources.length === 0 && !context.next_agent &&
-          context.revision === context.applied_revision,
+        !context.next_agent,
         `${mode}: cancelling pending context clears only the staged configuration`,
       );
+      await openChoices(desktop);
+      option("API decisions").click();
+      await until(() =>
+        option("API decisions")?.getAttribute("aria-selected") === "true"
+      );
+      await closeChoices(desktop);
+      button("Save changes").click();
+      await until(() => context.sources.length === 1 && !button("Save changes"));
       const surfaceEvents: string[] = [];
       const recordSurface = (event: Event) => surfaceEvents.push(event.type);
       document.addEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
       document.addEventListener(COMPOSER_FOCUS_EVENT, recordSurface);
-      requestNewAgent(sessions[0]!.id);
-      const freshChecked = () =>
-        container.querySelector<HTMLInputElement>(
-          '[data-context-editor] input[type="checkbox"]',
-        )?.checked === true;
-      await until(() =>
-        freshChecked() &&
-        container.querySelectorAll("[data-context-editor] .MuiChip-root")
-            .length >= 1
-      );
+      requestNewFrom(sessions[0]!.id);
+      await until(() => Boolean(continueRun()) && !continueRun().disabled);
       check(
-        freshChecked() &&
-          container.querySelectorAll("[data-context-editor] .MuiChip-root")
-              .length >= 1,
-        `${mode}: the session menu opens a new agent with this session linked`,
+        Boolean(container.querySelector("[data-new-session-editor]")),
+        `${mode}: the session menu opens the new session form`,
       );
-      await until(() =>
-        Boolean(button("Save changes")) && !button("Save changes").disabled
-      );
-      button("Save changes").click();
+      continueRun().click();
       await until(() => surfaceEvents.includes(COMPOSER_FOCUS_EVENT));
       check(
         surfaceEvents.includes(CLOSE_SESSION_SETTINGS_EVENT) &&
           surfaceEvents.includes(COMPOSER_FOCUS_EVENT) &&
           Boolean(context.next_agent),
-        `${mode}: saving a new agent closes settings and returns to the composer`,
+        `${mode}: staging a new agent closes settings and returns to the composer`,
       );
       document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
       document.removeEventListener(COMPOSER_FOCUS_EVENT, recordSurface);
-      button("Switch agent or link context").click();
-      await until(() => Boolean(button("Back to current agent")));
-      button("Back to current agent").click();
       await until(() =>
-        !context.next_agent && context.revision === context.applied_revision
+        Boolean(container.querySelector("[data-session-switch-back]"))
       );
+      container.querySelector<HTMLButtonElement>("[data-session-switch-back]")!
+        .click();
+      await until(() => !context.next_agent);
+      check(
+        context.sources.length === 1 &&
+          !context.sources.includes(sessions[0]!.id),
+        `${mode}: Back cancels the new agent and keeps independent links`,
+      );
+      await until(() => Boolean(button("Cancel linked context")));
+      button("Cancel linked context").click();
+      await until(() => context.revision === context.applied_revision);
       flushSync(() => root.render(null));
       const workspace = sessions[0]!.workspace_id;
       delete sessions[0]!.workspace_id;
       flushSync(() => root.render(<Fixture desktop={desktop} />));
-      await until(() => Boolean(button("Switch agent or link context")));
-      button("Switch agent or link context").click();
       await until(() =>
-        Boolean(container.querySelector("[data-context-editor]"))
+        Boolean(button("New session from this…")) &&
+        !button("New session from this…").disabled
       );
-      container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
-        .click();
+      button("New session from this…").click();
       await until(() => Boolean(button("Choose project")));
       check(
-        button("Save changes").disabled &&
+        continueRun().disabled &&
           container.textContent?.includes(
               "Choose a project in More options",
             ) === true,
-        `${mode}: missing inherited project explains why saving is disabled`,
+        `${mode}: missing inherited project explains why Continue is disabled`,
       );
       button("Choose project").click();
       await until(() =>
@@ -895,77 +871,70 @@ export async function runSessionContextBrowserConformance(
       flushSync(() => root.render(null));
       if (workspace !== undefined) sessions[0]!.workspace_id = workspace;
     }
-    // Duplicate in Session Settings: native fork on the same agent, a linked
-    // copy on another subscription; the source is never changed.
+    // One form, two outcomes: a native fork on the same agent, a linked fork
+    // on another subscription; neither touches this session's pending context.
+    const forkMode = () =>
+      container.querySelector("[data-new-session-fork]")?.getAttribute("data-new-session-fork");
+    const forkRun = () =>
+      container.querySelector<HTMLButtonElement>("[data-new-session-fork-run]")!;
+    const openForm = async () => {
+      await until(() =>
+        Boolean(button("New session from this…")) &&
+        !button("New session from this…").disabled
+      );
+      button("New session from this…").click();
+      await until(() => Boolean(forkMode()) && !forkRun().disabled);
+    };
     flushSync(() => root.render(<Fixture desktop />));
-    await until(() => Boolean(button("Duplicate…")));
-    Socket.active.at(-1)?.publish({
-      type: "config_options",
-      session_id: sessions[0]!.id,
-      options: [{
-        id: "model",
-        name: "Model",
-        category: "model",
-        currentValue: "sonnet",
-        options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
-      }],
-    });
-    button("Duplicate…").click();
-    await until(() => Boolean(container.querySelector("[data-duplicate-mode]")));
+    await openForm();
     check(
-      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "linked",
-      "duplicate: without native fork on the Machine the copy is a linked new agent",
+      forkMode() === "linked",
+      "fork: without native fork on the Machine the fork is a linked new agent",
     );
     Socket.active.at(-1)?.publish({
       type: "machines",
       machines: [{ ...machine, capabilities: { hibernation: true, native_fork: true } }],
       resync: true,
     });
-    await until(() =>
-      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "fork"
-    );
-    check(true, "duplicate: the same agent on a fork-capable Machine forks natively");
-    await until(() => Boolean(container.querySelector('[data-duplicate-option="model"]')));
-    container.querySelector<HTMLElement>('[data-duplicate-option="model"] [role="combobox"]')!
-      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-    await until(() => Boolean(option("Opus")));
-    option("Opus").click();
-    await until(() =>
-      container.querySelector('[data-duplicate-option="model"]')?.textContent?.includes("Opus") === true
-    );
+    await until(() => forkMode() === "fork");
+    check(true, "fork: the same agent on a fork-capable Machine forks natively");
     const beforeFork = writes.length;
-    container.querySelector<HTMLButtonElement>("[data-duplicate-run]")!.click();
+    forkRun().click();
     await until(() => writes.length > beforeFork);
     const forked = writes.at(-1)!;
     check(
-      forked.url.endsWith("/fork") &&
-        JSON.stringify(forked.body.config) === JSON.stringify({ model: "opus" }),
-      "duplicate: a native fork carries only the changed model",
+      forked.url.endsWith("/fork") && forked.body.config === undefined,
+      "fork: a native fork carries no configuration",
     );
     check(
       !writes.slice(beforeFork).some((write) => write.url.endsWith("/context")),
-      "duplicate: the source's context and agent stay unchanged",
+      "fork: the source's context and agent stay unchanged",
     );
     flushSync(() => root.render(null));
     flushSync(() => root.render(<Fixture desktop />));
-    await until(() => Boolean(button("Duplicate…")));
-    button("Duplicate…").click();
-    await until(() => Boolean(container.querySelector("[data-duplicate-editor] [data-session-subscription] [role=\"combobox\"]")));
-    container.querySelector<HTMLElement>("[data-duplicate-editor] [data-session-subscription] [role=\"combobox\"]")!
+    await openForm();
+    button("More options").click();
+    await until(() => Boolean(container.querySelector("[data-context-advanced]")));
+    container.querySelector<HTMLInputElement>('[data-context-advanced] input[type="checkbox"]')!
+      .click();
+    await until(() => forkMode() === "linked");
+    check(true, "fork: clearing inheritance is honored by a linked fork, not ignored");
+    flushSync(() => root.render(null));
+    flushSync(() => root.render(<Fixture desktop />));
+    await openForm();
+    container.querySelector<HTMLElement>("[data-new-session-editor] [data-session-subscription] [role=\"combobox\"]")!
       .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
     await until(() => Boolean(option("Claude · Mink")));
     option("Claude · Mink").click();
-    await until(() =>
-      container.querySelector("[data-duplicate-mode]")?.getAttribute("data-duplicate-mode") === "linked"
-    );
+    await until(() => forkMode() === "linked");
     const beforeCopy = writes.length;
-    container.querySelector<HTMLButtonElement>("[data-duplicate-run]")!.click();
+    forkRun().click();
     await until(() => writes.length > beforeCopy);
     const copied = writes.at(-1)!;
     check(
       copied.url.endsWith("/duplicate") && copied.body.provider_account_id === "mink" &&
         (duplicateKeys.at(-1) ?? "").startsWith("duplicate-"),
-      "duplicate: another subscription creates a linked copy with an idempotency key",
+      "fork: another subscription creates a linked fork with an idempotency key",
     );
     flushSync(() => root.render(null));
     Socket.active.at(-1)?.publish({ type: "machines", machines: [machine], resync: true });

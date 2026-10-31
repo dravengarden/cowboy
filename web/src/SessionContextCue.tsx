@@ -13,6 +13,7 @@ import {
   contextConfigured,
   openContextDestination,
   saveSessionContext,
+  withoutAgentSwitch,
   type SessionContext,
   useSessionContext,
 } from "./sessionContext";
@@ -128,8 +129,9 @@ export function SessionContextCue(
         setBusy(true);
         void saveSessionContext(sessionId, {
           revision: context.revision,
-          sources: [],
-          next_agent: null,
+          ...(cue.kind === "pending_agent"
+            ? withoutAgentSwitch(context, sessionId)
+            : { sources: [], next_agent: null }),
         }).catch(() => undefined).finally(() => setBusy(false));
       },
     }

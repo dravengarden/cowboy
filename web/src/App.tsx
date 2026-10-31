@@ -14,7 +14,6 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { recordUndo } from "./undoActions";
 import { UNDO_NOTICE_MS } from "./undoHistory";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
-import { forkAvailability } from "./sessionFork";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
 import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
@@ -98,7 +97,6 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ForkRightOutlined,
-    ContentCopyOutlined,
     ExpandMore,
     FolderOpenOutlined,
     FolderOutlined,
@@ -147,7 +145,7 @@ import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
-import { openSessionSettings, requestDuplicate, requestNewAgent } from "./sessionSettingsOpen";
+import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
 import { useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
@@ -888,14 +886,6 @@ function SessionList({
             .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
             .catch((error: Error) => documentNotice(error.message));
     };
-    // The anchor keeps the row captured when the menu opened; a turn can end
-    // while it stays open, so read the live session.
-    const menuLiveSession = useStoreSelector((snapshot) =>
-        menuAnchor ? snapshot.sessions.find((session) => session.id === menuAnchor.row.id) : undefined
-    );
-    const menuFork = menuLiveSession && !isManagedChild(menuLiveSession)
-        ? forkAvailability(menuLiveSession, sessionMachines)
-        : null;
     const menuProjection = useExploreSessionState(
         menuAnchor?.row.id ?? "__session-menu-none__",
     ).projection;
@@ -2859,39 +2849,20 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
-                {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
-                    <MenuItem
-                        data-session-duplicate
-                        onClick={(): void => {
-                            const row = menuAnchor.row;
-                            setMenuAnchor(null);
-                            requestPickSession(row.id, row);
-                            requestDuplicate(row.id);
-                        }}
-                    >
-                        <ListItemIcon>
-                            <ContentCopyOutlined fontSize="medium" />
-                        </ListItemIcon>
-                        <ListItemText
-                            primary="Duplicate…"
-                            secondary={menuFork ? "Fork, or copy to another agent" : "Copy to a new agent"}
-                        />
-                    </MenuItem>
-                )}
                 {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                     <MenuItem
-                        data-session-continue-new-agent
+                        data-session-new-from
                         onClick={(): void => {
                             const row = menuAnchor.row;
                             setMenuAnchor(null);
                             requestPickSession(row.id, row);
-                            requestNewAgent(row.id);
+                            requestNewFrom(row.id);
                         }}
                     >
                         <ListItemIcon>
                             <ForkRightOutlined fontSize="medium" />
                         </ListItemIcon>
-                        <ListItemText primary="Continue in new agent…" secondary="Another subscription or Provider" />
+                        <ListItemText primary="New session from this…" secondary="Continue or fork" />
                     </MenuItem>
                 )}
                 {menuAnchor && tree.folderOf.get(menuAnchor.row.id) && (
@@ -3028,16 +2999,10 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
                                 <Kbd keys="M" />
                             </Button>
-                            {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
-                                <Button data-session-shortcut="f" data-session-duplicate fullWidth startIcon={<ContentCopyOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestDuplicate(row.id); }} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Duplicate…</Box>
-                                    <Kbd keys="F" />
-                                </Button>
-                            )}
                             {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
-                                <Button data-session-shortcut="a" data-session-continue-new-agent fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewAgent(row.id); }} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue in new agent…</Box>
-                                    <Kbd keys="A" />
+                                <Button data-session-shortcut="f" data-session-new-from fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewFrom(row.id); }} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New session from this…</Box>
+                                    <Kbd keys="F" />
                                 </Button>
                             )}
                             <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>

@@ -5,6 +5,7 @@ import {
   loadSessionContext,
   saveSessionContext,
   sendWithContext,
+  withoutAgentSwitch,
   type SessionContext,
 } from "./sessionContext";
 import type { Envelope } from "./protocol";
@@ -161,4 +162,11 @@ test("unknown sends retain their operation and never send edited text", async ()
   );
   expect(requests).toHaveLength(2);
   expect(requests[0]!.operation).toBe(requests[1]!.operation);
+});
+
+test("going back from a staged agent keeps independent links", () => {
+  expect(withoutAgentSwitch({ sources: ["self", "other"] }, "self")).toEqual({
+    sources: ["other"],
+    next_agent: null,
+  });
 });

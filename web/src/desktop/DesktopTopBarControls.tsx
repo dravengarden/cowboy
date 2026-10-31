@@ -1,7 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
 import { ConfigRevertBack } from "../ConfigRevertBack";
-import { SessionDuplicateSettings } from "../SessionDuplicateSettings";
-import { isManagedChild } from "../managedCalls";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import {
@@ -2030,9 +2028,6 @@ export function DesktopTopBarControls({
           </Box>
           <Box sx={{ px: 2.25, pb: 1.75 }}>
             {session && <SessionContextSettings session={session} />}
-            {session && !session.system && !isManagedChild(session) && (
-              <SessionDuplicateSettings session={session} />
-            )}
             <SessionToolsSection sessionId={sessionId} />
           </Box>
         </Box>

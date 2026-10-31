@@ -1,40 +1,39 @@
 # Session fork
 
-A fork is a new Cowboy session that continues the same native conversation
-on a separate branch. The source session and its native thread stay intact;
-both can then diverge independently. Unlike
-[Continue in new agent](session-context.md), which links context across
-accounts or Providers through Cowboy MCP, a fork asks the Provider adapter to
-copy its own native transcript with ACP `session/fork`, so the new session
-keeps the complete model context and can reuse the Provider prompt cache.
+In the product, **Fork** means keeping both sessions live, unlike
+[Continue](session-context.md), which moves the work and leaves history. It
+runs in one of two ways, which follow from the target.
+
+A native fork is a new Cowboy session that continues the same native
+conversation on a separate branch. The source session and its native thread
+stay intact; both can then diverge independently. The Provider adapter copies
+its own native transcript with ACP `session/fork`, so the new session keeps the
+complete model context and can reuse the Provider prompt cache. A linked fork
+is a new agent that reads the source through Cowboy MCP.
 
 ## User flow
 
-**Duplicate…** in Session Settings (Mobile settings and Desktop Run
-Configuration, under **Switch agent or link context**; the session menu item
-and Desktop `F` open it) copies a session without changing it. Choose the
-installation and subscription; on the same Provider the form shows the live
-model and reasoning to keep or change, otherwise a preset.
+**Fork now** in **New session from this…** (Session Settings; the session menu
+item and Desktop `F` open it) leaves the source unchanged. Native fork takes no
+model or reasoning fields: configure the opened session. The API keeps `config`.
 
 - Same Provider and subscription on a fork-capable Machine: a native fork
-  (below) of the whole conversation, with the chosen model/reasoning saved on
-  the copy before its first launch (`config`). It waits for the current turn.
-- Another subscription or Provider, or no native fork on the Machine: a new
+  (below) of the whole conversation, with API `config` saved on the copy before
+  its first launch. It waits for the current turn.
+- Another subscription or Provider, a chosen preset, inheritance turned off, or
+  no native fork on the Machine: a new
   session on the source's Machines and project that inherits compatible
   settings and reads the source as linked context on its first message
   (`POST /api/sessions/SESSION/duplicate`, MCP `sessions.duplicate`). A
   stable `operation` returns the same copy on retry, also after a dropped
   request, and refuses a different request; the form starts a new operation
-  whenever a choice changes. **Inherit compatible settings** can be turned
-  off when the target cannot accept the source's settings. It is placed beside
+  whenever a choice changes. It is placed beside
   the source as "SOURCE (copy)"; if a later step fails, the error names the
   created copy to inspect or delete.
 
-The form states which of the two it will do.
+The form states which of the two it will do, and what happens to uncommitted
+changes.
 
-- **Duplicate…** in the session menu (mobile menu, Desktop session actions
-  with `F`) opens Session Settings at Duplicate; forking from there needs an
-  idle source and opens the new session.
 - Forking through an earlier answer is available to agents and scripts with
   `message_id` (below). The Transcript shows no fork action: switches and
   branches are made in Session Settings.
@@ -48,8 +47,7 @@ title is the source title with a ` (fork)` suffix, it is placed directly after
 the source in the same folder, and its list row shows a **Fork** badge. Session
 Settings shows "Forked from SOURCE · Open"; the Transcript itself has no
 marker.
-To use another agent, subscription or project, use **Continue in new agent…**
-instead; native transcripts never move between accounts or Machines.
+To move to another project, use **Continue on next message** instead; native transcripts never move between accounts or Machines.
 
 Queue contents, Pause, one-shot approvals, pending permissions, drafts and
 scheduled wakeups are never copied.
