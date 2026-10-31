@@ -5851,6 +5851,30 @@ impl Hub {
         }
     }
 
+    /// Restore the identity of each child's durable snapshot, so a replay after
+    /// a restart is fenced like one in the same process (I4). The process's own
+    /// marks always win.
+    pub fn warm_subagent_marks(
+        &self,
+        snapshots: Vec<(String, crate::store::transcript_anchors::AnchoredRow)>,
+    ) {
+        let mut background = self.inner.background.lock();
+        for (session_id, row) in snapshots {
+            let Some(child) = row
+                .key
+                .strip_prefix(crate::transcript_anchors::SUBAGENT_PREFIX)
+            else {
+                continue;
+            };
+            background
+                .entry(session_id)
+                .or_default()
+                .marks
+                .entry(child.to_owned())
+                .or_insert_with(|| crate::transcript_anchors::mark_of(&row.update));
+        }
+    }
+
     /// The Hub's subagent observations for a session's bootstrap, or `None`
     /// for an unknown session.
     #[must_use]

@@ -4,9 +4,12 @@ import {
   applySubagentAuthority,
   barSummary,
   buildTaskSummaries,
+  authoritativeSubagent,
   callSummary,
+  forgetSessionAuthority,
   groupTasks,
   originToolKey,
+  reconcileLoadedSubagents,
   reconcileSubagents,
   sessionAuthority,
   setSubagentLookupTransport,
@@ -362,4 +365,111 @@ test("task deep links round-trip and reject other hashes", () => {
   assertEquals(taskKeyFromHash("#task=call%3Acall-1&x=1"), "call:call-1");
   assertEquals(taskKeyFromHash("#task=evil"), null);
   assertEquals(taskKeyFromHash("#other"), null);
+});
+
+// Review regressions.
+function stateOf(session: string, items: Record<string, unknown>[], extra: Partial<SubagentStateWire> = {}): SubagentStateWire {
+  return {
+    session_id: session,
+    epoch: "e1",
+    watermark_seq: 100,
+    complete: true,
+    incarnation: "w1",
+    items: items.map((update, index) => ({ anchor_seq: index + 1, update })),
+    ...extra,
+  };
+}
+
+function snapshot(child: string, state: string, observedSeq: number, incarnation: string): ReturnType<typeof subagentOf> {
+  return subagentOf(subagentUpdate(child, state, observedSeq, { observedSeq, incarnation }) as never)!;
+}
+
+test("a bootstrap copy never lifts a lifecycle fence from the same snapshot", async () => {
+  await reconcileSubagents("fence", stateOf("fence", [
+    subagentUpdate("a", "running", 50, { observedSeq: 50, incarnation: "w1" }),
+  ]), []);
+  const authority = sessionAuthority("fence")!;
+  const fenced = { ...snapshot("a", "running", 50, "w1"), reporting: false, cancellable: false };
+  const resolved = authoritativeSubagent(fenced, authority).subagent;
+  assertEquals([resolved.reporting, resolved.cancellable], [false, false]);
+  const older = { ...snapshot("a", "running", 40, "w1"), reporting: false, cancellable: false };
+  assertEquals(authoritativeSubagent(older, authority).subagent.reporting, false, "a newer copy stays fenced");
+});
+
+test("a snapshot past the watermark is not fenced by the bootstrap's incarnation", async () => {
+  await reconcileSubagents("fresh", stateOf("fresh", []), []);
+  const authority = sessionAuthority("fresh")!;
+  const fresh = authoritativeSubagent(snapshot("a", "running", 150, "w2"), authority).subagent;
+  assertEquals([fresh.reporting, fresh.cancellable], [true, true]);
+  assertEquals(authoritativeSubagent(snapshot("b", "running", 90, "w0"), authority).subagent.reporting, false);
+});
+
+test("a newer live snapshot supersedes not_found", async () => {
+  setSubagentLookupTransport(() => Promise.resolve([{ id: "a", status: "not_found" }]));
+  await reconcileSubagents("gone", stateOf("gone", []), [subagent(1, "a", "running", 1)]);
+  const authority = sessionAuthority("gone")!;
+  assertEquals(authoritativeSubagent(snapshot("a", "running", 1, "w1"), authority).reconciledBy, "not_found");
+  const live = authoritativeSubagent(snapshot("a", "idle", 200, "w1"), authority);
+  assertEquals([live.reconciledBy === "not_found", live.subagent.unavailable ?? false], [false, false]);
+});
+
+test("a superseded reconciliation publishes nothing", async () => {
+  let release: (items: { id: string; status: "found"; update: Record<string, unknown> }[]) => void = () => undefined;
+  setSubagentLookupTransport(() => new Promise((resolve) => {
+    release = resolve;
+  }));
+  const pending = reconcileSubagents("race", stateOf("race", []), [subagent(1, "a", "running", 1)]);
+  forgetSessionAuthority("race");
+  release([{ id: "a", status: "found", update: subagentUpdate("a", "idle", 2) }]);
+  await pending;
+  assertEquals(sessionAuthority("race"), undefined, "Clear is not undone");
+
+  const older = reconcileSubagents("race", stateOf("race", [], { epoch: "old" }), [subagent(1, "a", "running", 1)]);
+  const releaseOlder = release;
+  setSubagentLookupTransport(null);
+  await reconcileSubagents("race", stateOf("race", [], { epoch: "new" }), []);
+  releaseOlder([]);
+  await older;
+  assertEquals(sessionAuthority("race")?.epoch, "new");
+});
+
+test("a row a later history page introduced is reconciled by lookup", async () => {
+  await reconcileSubagents("page", stateOf("page", []), []);
+  const asked: string[][] = [];
+  setSubagentLookupTransport((_, ids) => {
+    asked.push(ids);
+    return Promise.resolve(ids.map((id) => ({
+      id,
+      status: "found" as const,
+      anchor_seq: 3,
+      update: subagentUpdate(id, "idle", 9, { observedSeq: 60 }),
+    })));
+  });
+  const old = snapshot("old", "running", 30, "w1");
+  const live = snapshot("live", "running", 150, "w1");
+  await reconcileLoadedSubagents("page", [old, live, snapshot("done", "idle", 20, "w1")]);
+  assertEquals(asked, [["old"]], "only an unanswered non-terminal row older than the bootstrap");
+  const resolved = authoritativeSubagent(old, sessionAuthority("page")).subagent;
+  assertEquals(resolved.state, "idle");
+  await reconcileLoadedSubagents("page", [old]);
+  assertEquals(asked.length, 1, "an answered id is not asked again");
+});
+
+test("a failed lookup of a loaded row retries on the next change", async () => {
+  await reconcileSubagents("retry", stateOf("retry", []), []);
+  let calls = 0;
+  setSubagentLookupTransport(() => {
+    calls += 1;
+    return Promise.reject(new Error("offline"));
+  });
+  const row = snapshot("a", "running", 30, "w1");
+  await reconcileLoadedSubagents("retry", [row]);
+  await reconcileLoadedSubagents("retry", [row]);
+  assertEquals(calls, 2);
+});
+
+test("the bar never counts a not-reporting row as working", () => {
+  const silent = subagentSummary({ ...snapshot("a", "running", 1, "w1"), reporting: false });
+  const bar = barSummary([silent], 0);
+  assertEquals([bar.working, bar.notReporting, bar.visible], [0, 1, true]);
 });

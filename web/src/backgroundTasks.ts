@@ -29,6 +29,7 @@ import { reportClientLog } from "./observability";
 import type { Envelope } from "./protocol";
 import {
   type DisplayGroup,
+  isWorking,
   orphanedSubagent,
   newerSubagent,
   type Subagent,
@@ -91,6 +92,10 @@ export interface SessionAuthority {
 }
 
 const authorities = new Map<string, SessionAuthority>();
+// Advances on every bootstrap and on Clear or deletion, so a reconciliation
+// still awaiting its lookups cannot publish over what replaced it.
+const generations = new Map<string, number>();
+const lookupsInFlight = new Map<string, Set<string>>();
 const authorityListeners = new Set<() => void>();
 
 function emitAuthority(): void {
@@ -118,7 +123,14 @@ export function useSessionAuthority(sessionId: string | null): SessionAuthority 
 
 /** Forget a session's authority (Clear, deletion, sign-out). */
 export function forgetSessionAuthority(sessionId: string): void {
+  advanceGeneration(sessionId);
   if (authorities.delete(sessionId)) emitAuthority();
+}
+
+function advanceGeneration(sessionId: string): number {
+  const generation = (generations.get(sessionId) ?? 0) + 1;
+  generations.set(sessionId, generation);
+  return generation;
 }
 
 /** The highest seq a cached timeline holds; sent as `since_seq`. */
@@ -187,6 +199,7 @@ export async function reconcileSubagents(
   timeline: readonly Envelope[],
   now: () => number = Date.now,
 ): Promise<ReconcileReport> {
+  const generation = advanceGeneration(sessionId);
   const cached = timelineSubagents(timeline);
   if (state === undefined || state === null) {
     const entries = new Map<string, AuthorityEntry>();
@@ -256,6 +269,7 @@ export async function reconcileSubagents(
       lookupFailed = true;
       break;
     }
+    if (generations.get(sessionId) !== generation) break;
     for (const answer of answers) {
       if (answer.status === "found") {
         const subagent = subagentFromItem(answer.update);
@@ -265,6 +279,9 @@ export async function reconcileSubagents(
         entries.delete(answer.id);
       }
     }
+  }
+  if (generations.get(sessionId) !== generation) {
+    return { checked: 0, changed: 0, notFound: 0, oldestStaleAgeMs: 0, reconciledBy: "bootstrap" };
   }
   const authority: SessionAuthority = {
     supported: true,
@@ -296,8 +313,82 @@ export async function reconcileSubagents(
   return report;
 }
 
+/** The ids a bootstrap's reconciliation has not answered: non-terminal rows a
+ *  later history page or replica merge introduced. A row observed after the
+ *  bootstrap's watermark is on the live stream and needs no lookup. */
+function unreconciledSubagents(
+  subagents: readonly Subagent[],
+  authority: SessionAuthority,
+): string[] {
+  return subagents
+    .filter((subagent) =>
+      !subagentTerminal(subagent) &&
+      !authority.entries.has(subagent.id) &&
+      !authority.notFound.has(subagent.id) &&
+      !observedLive(subagent, authority)
+    )
+    .map((subagent) => subagent.id);
+}
+
+function observedLive(subagent: Subagent, authority: SessionAuthority): boolean {
+  return subagent.observedSeq !== null && subagent.observedSeq > authority.watermarkSeq;
+}
+
+/**
+ * Resolve non-terminal rows that entered the timeline after the bootstrap
+ * (I6): their terminal observation can predate `since_seq`, so neither the
+ * bootstrap nor the immutable page that carried them will ever correct them.
+ * Failed ids stay unanswered and are retried on the next timeline change.
+ */
+export async function reconcileLoadedSubagents(
+  sessionId: string,
+  subagents: readonly Subagent[],
+  now: () => number = Date.now,
+): Promise<void> {
+  const authority = authorities.get(sessionId);
+  if (!authority?.supported) return;
+  const inFlight = lookupsInFlight.get(sessionId) ?? new Set<string>();
+  const ids = unreconciledSubagents(subagents, authority).filter((id) => !inFlight.has(id));
+  if (ids.length === 0) return;
+  lookupsInFlight.set(sessionId, inFlight);
+  for (const id of ids) inFlight.add(id);
+  const generation = generations.get(sessionId);
+  try {
+    for (let start = 0; start < ids.length; start += LOOKUP_PAGE) {
+      const page = ids.slice(start, start + LOOKUP_PAGE);
+      const answers = await lookupTransport(sessionId, page);
+      const current = authorities.get(sessionId);
+      if (!current || generations.get(sessionId) !== generation) return;
+      const entries = new Map(current.entries);
+      const notFound = new Set(current.notFound);
+      const reconciledAt = now();
+      for (const answer of answers) {
+        if (!page.includes(answer.id)) continue;
+        const subagent = answer.status === "found" ? subagentFromItem(answer.update) : null;
+        if (subagent) {
+          entries.set(subagent.id, {
+            subagent,
+            anchorSeq: answer.anchor_seq ?? null,
+            reconciledBy: "lookup",
+            reconciledAt,
+          });
+        } else if (answer.status === "not_found") {
+          notFound.add(answer.id);
+        }
+      }
+      authorities.set(sessionId, { ...current, entries, notFound });
+      emitAuthority();
+    }
+  } catch {
+    // The rows keep their cached state; the next timeline change retries.
+  } finally {
+    for (const id of ids) inFlight.delete(id);
+  }
+}
+
 /** A subagent row as the authority sees it now: the newer of the timeline's
- *  snapshot and the reconciled one, fenced by the current incarnation (I3). */
+ *  snapshot and the reconciled one. The fences apply to the result (I3): the
+ *  timeline's own lifecycle boundary, then the current incarnation. */
 export function authoritativeSubagent(
   subagent: Subagent,
   authority: SessionAuthority | undefined,
@@ -305,7 +396,10 @@ export function authoritativeSubagent(
   if (!authority) {
     return { subagent, reconciledBy: "live", reconciledAt: null, anchorSeq: null };
   }
-  if (authority.notFound.has(subagent.id)) {
+  // A `not_found` answer describes the bootstrap's moment. A snapshot observed
+  // after it (the child was announced again, or the lookup raced its arrival)
+  // supersedes that answer.
+  if (authority.notFound.has(subagent.id) && !observedLive(subagent, authority)) {
     return {
       subagent: { ...subagent, unavailable: true, cancellable: false },
       reconciledBy: "not_found",
@@ -316,16 +410,27 @@ export function authoritativeSubagent(
   const entry = authority.entries.get(subagent.id);
   let chosen = subagent;
   let reconciledBy: ReconciledBy = authority.supported ? "live" : "fallback";
-  if (entry && newerSubagent(subagent, entry.subagent) && entry.subagent !== subagent) {
+  // An equal observation is the same snapshot: keep the timeline's row, which
+  // carries any lifecycle fence applied since.
+  if (entry && strictlyNewerSubagent(subagent, entry.subagent)) {
     chosen = { ...entry.subagent, title: entry.subagent.untitled ? subagent.title : entry.subagent.title };
     reconciledBy = entry.reconciledBy;
   }
   if (
+    !subagent.reporting && isWorking(chosen) && chosen.incarnation === subagent.incarnation
+  ) {
+    // The timeline saw this worker stop; an older reconciled copy of its
+    // snapshot does not bring it back.
+    chosen = orphanedSubagent(chosen);
+  }
+  if (
     authority.incarnation !== null && chosen.incarnation !== null &&
-    chosen.incarnation !== authority.incarnation
+    chosen.incarnation !== authority.incarnation && !observedLive(chosen, authority)
   ) {
     // Reported by a worker that is no longer the session's: its cached work
-    // state and Stop grant are invalid until the new worker reports it.
+    // state and Stop grant are invalid until the new worker reports it. A
+    // snapshot past the watermark is that report; the incarnation the
+    // bootstrap named is the older fact.
     chosen = orphanedSubagent(chosen);
   }
   return {
@@ -334,6 +439,10 @@ export function authoritativeSubagent(
     reconciledAt: entry?.reconciledAt ?? authority.reconciledAt,
     anchorSeq: entry?.anchorSeq ?? null,
   };
+}
+
+function strictlyNewerSubagent(current: Subagent, next: Subagent): boolean {
+  return newerSubagent(current, next) && !newerSubagent(next, current);
 }
 
 const APPLIED = new WeakMap<RenderItem[], { authority: SessionAuthority | undefined; items: RenderItem[] }>();
@@ -712,6 +821,8 @@ export function buildTaskSummaries(inputs: TaskInputs): TaskSummary[] {
 
 export interface BarSummary {
   working: number;
+  /** Active rows whose source lost contact: never counted as working. */
+  notReporting: number;
   needsYou: number;
   failed: number;
   /** The task the bar names: needs-you first, then the newest active one. */
@@ -725,7 +836,9 @@ export interface BarSummary {
  *  `background_tasks` count (max(native, working subagents)) is never added,
  *  only shown as a neutral mark when it exceeds the working subagent rows. */
 export function barSummary(tasks: readonly TaskSummary[], backgroundTasks = 0): BarSummary {
-  const working = tasks.filter((task) => taskSection(task) === "active").length;
+  const active = tasks.filter((task) => taskSection(task) === "active");
+  const notReporting = active.filter((task) => task.group === "not_reporting").length;
+  const working = active.length - notReporting;
   const needsYou = tasks.filter((task) => task.group === "needs_you").length;
   const failed = tasks.filter((task) => task.attention === "failed_unseen").length;
   const workingSubagents = tasks.filter((task) =>
@@ -738,11 +851,12 @@ export function barSummary(tasks: readonly TaskSummary[], backgroundTasks = 0): 
   const extraActivity = backgroundTasks > workingSubagents;
   return {
     working,
+    notReporting,
     needsYou,
     failed,
     lead,
     extraActivity,
-    visible: working > 0 || needsYou > 0 || failed > 0 || extraActivity,
+    visible: active.length > 0 || needsYou > 0 || failed > 0 || extraActivity,
   };
 }
 

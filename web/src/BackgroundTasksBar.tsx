@@ -63,6 +63,7 @@ export function BackgroundTasksBarView({
   if (!summary.visible) return tasks.length > 0 ? marker : null;
   const parts: { key: string; text: string; color: string }[] = [];
   if (summary.working > 0) parts.push({ key: "working", text: `◐ ${String(summary.working)} working`, color: "text.secondary" });
+  if (summary.notReporting > 0) parts.push({ key: "not-reporting", text: `○ ${String(summary.notReporting)} not reporting`, color: "text.secondary" });
   if (summary.needsYou > 0) parts.push({ key: "needs", text: `⚠ ${String(summary.needsYou)} needs you`, color: "warning.main" });
   if (summary.failed > 0) parts.push({ key: "failed", text: `✕ ${String(summary.failed)} failed`, color: "error.main" });
   const lead = summary.lead;

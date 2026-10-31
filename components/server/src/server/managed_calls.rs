@@ -91,7 +91,12 @@ pub(super) async fn inspect(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match store.managed_call(&parent, &call).await {
-        Ok(Some(record)) => Json(json!({"schema":1,"call":record})).into_response(),
+        Ok(Some(record)) => match store.managed_call_dismissed(&parent, &call).await {
+            Ok(dismissed) => {
+                Json(json!({"schema":1,"call":record,"dismissed":dismissed})).into_response()
+            }
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }

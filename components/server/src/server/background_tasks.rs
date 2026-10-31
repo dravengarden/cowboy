@@ -9,7 +9,7 @@
 //! the client still renders as working. Call rows stay ledger-authoritative
 //! (`/calls`, polled); their transcript anchors are written here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -82,12 +82,13 @@ pub(in crate::server) fn push_call_anchor(
     hub.push(parent, Event::Update { update });
 }
 
-/// When this database first ran a Controller that writes Call anchors. Calls
-/// admitted earlier never had one; repairing them would append old history at
-/// the end of their transcripts, so only active ones are anchored.
+/// The newest admission when this database first ran a Controller that writes
+/// Call anchors. Calls admitted earlier never had one; repairing them would
+/// append old history at the end of their transcripts, so only active ones are
+/// anchored.
 const ANCHORS_SINCE_SETTING: &str = crate::core::settings_keys::TRANSCRIPT_ANCHORS_CALLS_SINCE;
 
-async fn anchors_since_ms(store: &Store) -> Option<i64> {
+async fn anchors_since_admission(store: &Store) -> Option<i64> {
     let settings = store.load_settings().await.ok()?;
     if let Some(since) = settings
         .iter()
@@ -96,22 +97,25 @@ async fn anchors_since_ms(store: &Store) -> Option<i64> {
     {
         return Some(since);
     }
-    let now = chrono::Utc::now().timestamp_millis();
+    let boundary = store.managed_call_admission_high_water().await.ok()?;
     store
-        .put_setting(ANCHORS_SINCE_SETTING, &json!(now))
+        .put_setting(ANCHORS_SINCE_SETTING, &json!(boundary))
         .await
         .ok()?;
-    Some(now)
+    Some(boundary)
 }
 
 /// I8: a Call admitted before its anchor was written (a crash between the
 /// ledger commit and the push) gets its anchor at the next start.
 pub(in crate::server) async fn repair_call_anchors(hub: &Hub, store: &Store) {
-    let Some(since) = anchors_since_ms(store).await else {
+    let Some(since) = anchors_since_admission(store).await else {
         tracing::warn!("reading the Call anchor epoch failed; anchors are not repaired");
         return;
     };
-    let missing = match store.calls_missing_anchor(CALL_ANCHOR_REPAIR_LIMIT).await {
+    let missing = match store
+        .calls_missing_anchor(since, CALL_ANCHOR_REPAIR_LIMIT)
+        .await
+    {
         Ok(missing) => missing,
         Err(error) => {
             tracing::warn!(%error, "listing calls without transcript anchors failed");
@@ -126,9 +130,7 @@ pub(in crate::server) async fn repair_call_anchors(hub: &Hub, store: &Store) {
             continue;
         }
         let request_id = match store.managed_call(&parent, &call_id).await {
-            Ok(Some(record)) if !record.state.terminal() || record.created_at_ms >= since => {
-                record.request_id
-            }
+            Ok(Some(record)) => record.request_id,
             _ => continue,
         };
         push_call_anchor(
@@ -189,6 +191,16 @@ pub(in crate::server) async fn subagent_state(
     session_id: &str,
     since_seq: Option<u64>,
 ) -> Option<Value> {
+    let observations = hub.subagent_observations(session_id)?;
+    let observed: HashSet<&str> = observations
+        .items
+        .iter()
+        .filter_map(|(_, update)| child_of(update))
+        .collect();
+    let wanted = |update: &Value| {
+        !subagent_terminal(update)
+            || since_seq.is_some_and(|since| snapshot_order(update).0 > since)
+    };
     let mut complete = true;
     let durable = match store {
         Some(store) => {
@@ -196,7 +208,11 @@ pub(in crate::server) async fn subagent_state(
                 tracing::warn!(%error, session = %session_id, "subagent anchor backfill failed");
                 complete = false;
             }
-            match store.subagent_anchor_rows(session_id).await {
+            let keep = |row: &crate::store::transcript_anchors::AnchoredRow| {
+                wanted(&row.update)
+                    || child_of(&row.update).is_some_and(|child| observed.contains(child))
+            };
+            match store.subagent_anchor_rows(session_id, keep).await {
                 Ok(rows) => rows,
                 Err(error) => {
                     tracing::warn!(%error, session = %session_id, "reading anchored subagents failed");
@@ -207,24 +223,22 @@ pub(in crate::server) async fn subagent_state(
         }
         None => Vec::new(),
     };
-    let observations = hub.subagent_observations(session_id)?;
     if store.is_none() && !observations.memory_only {
         complete = false;
     }
-    let items: Vec<Value> = merge_observations(durable, observations.items)
+    let watermark_seq = observations.watermark_seq;
+    let incarnation = observations.incarnation.clone();
+    let items: Vec<Value> = merge_observations(durable, observations.items.clone())
         .into_values()
-        .filter(|(_, update)| {
-            !subagent_terminal(update)
-                || since_seq.is_some_and(|since| snapshot_order(update).0 > since)
-        })
+        .filter(|(_, update)| wanted(update))
         .map(|(anchor, update)| item(anchor, update))
         .collect();
     Some(json!({
         "session_id": session_id,
         "epoch": hub.boot_epoch(),
-        "watermark_seq": observations.watermark_seq,
+        "watermark_seq": watermark_seq,
         "complete": complete,
-        "incarnation": observations.incarnation,
+        "incarnation": incarnation,
         "items": items,
     }))
 }

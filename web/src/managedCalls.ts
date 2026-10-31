@@ -431,6 +431,24 @@ export async function fetchCalls(
   return Array.isArray(body.calls) ? body.calls : [];
 }
 
+/** `/calls` returns this many newest records; a full page may omit older ones. */
+export const CALLS_PAGE = 100;
+
+/** One Call outside the listed page: `null` only on authoritative evidence that
+ *  its row should go (dismissed, or no longer in the ledger). */
+export async function fetchAnchoredCall(
+  parent: string,
+  call: string,
+): Promise<ManagedCallSummary | null> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(parent)}/calls/${encodeURIComponent(call)}`,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Call unavailable (${String(response.status)})`);
+  const body = await response.json() as { call: ManagedCallSummary; dismissed?: boolean };
+  return body.dismissed === true ? null : body.call;
+}
+
 export async function fetchCall(
   parent: string,
   call: string,

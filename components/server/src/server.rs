@@ -1405,6 +1405,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Ok(anchors) => hub.warm_transcript_anchors(anchors),
                 Err(error) => tracing::warn!(%error, "warming transcript anchors failed"),
             }
+            match store
+                .recent_subagent_snapshots(crate::transcript_anchors::HUB_WARM_ANCHORS)
+                .await
+            {
+                Ok(snapshots) => hub.warm_subagent_marks(snapshots),
+                Err(error) => tracing::warn!(%error, "warming subagent marks failed"),
+            }
             // Detached workers outlive this control-plane process. Keep
             // persisted Busy turns guarded until their Machine runtime has had
             // one bounded reconnect window to prove ownership; only then may a
@@ -2363,6 +2370,7 @@ async fn apply_store_batch(
                         .find(|write| write.session_id == env.session_id && write.key == key)
                         .map(|write| write.seq)
                 });
+                let mut unresolved = None;
                 if let (Some(key), Some(seq)) = (anchor.as_deref(), pending) {
                     reducer.adopt_anchor(&env.session_id, key, seq);
                 } else if let Some(key) = anchor.as_deref()
@@ -2377,32 +2385,41 @@ async fn apply_store_batch(
                         }),
                         Err(error) => {
                             // Never block the transcript on the index: the row
-                            // lands at its own seq and clients merge by id.
+                            // lands at its own seq and clients merge by id. Its
+                            // position is not an anchor; the next write of the
+                            // key resolves the durable one again.
                             tracing::warn!(%error, session = %env.session_id, key, "transcript anchor lookup failed");
+                            unresolved = Some((env.session_id.clone(), key.to_owned()));
                         }
                     }
                 }
                 if let Some(reduced) = reducer.reduce(env) {
                     events.insert((reduced.session_id.clone(), reduced.seq), reduced);
                 }
+                if let Some((session_id, key)) = unresolved {
+                    reducer.forget_anchor(&session_id, &key);
+                }
             }
             StoreWrite::ClearEvents { ref session_id, .. } => {
-                ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
+                ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors)
+                    .await;
                 reducer.clear_session(session_id);
                 ok &= retry_store_write(store, &write).await;
             }
             other => {
-                ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
+                ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors)
+                    .await;
                 ok &= retry_store_write(store, &other).await;
             }
         }
     }
-    ok &= flush_event_batch(store, &mut events, &mut highwaters, &mut anchors).await;
+    ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors).await;
     ok
 }
 
 async fn flush_event_batch(
     store: &Store,
+    reducer: &mut EventReducer,
     events: &mut BTreeMap<(String, u64), Envelope>,
     highwaters: &mut HashMap<String, u64>,
     anchors: &mut Vec<crate::transcript_anchors::AnchorWrite>,
@@ -2435,6 +2452,10 @@ async fn flush_event_batch(
     }
     if let Some(error) = last_error {
         tracing::error!(%error, rows = rows.len(), "store writer exhausted event-batch retries");
+    }
+    // These anchors were never committed; do not treat them as durable.
+    for anchor in &new_anchors {
+        reducer.forget_anchor(&anchor.session_id, &anchor.key);
     }
     false
 }

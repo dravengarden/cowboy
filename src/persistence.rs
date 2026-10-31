@@ -87,6 +87,12 @@ impl EventReducer {
         self.anchors.insert(session_id, key, seq);
     }
 
+    /// Forget a speculative or uncommitted anchor, so the next write of the key
+    /// resolves through the durable table instead of trusting it.
+    pub fn forget_anchor(&mut self, session_id: &str, key: &str) {
+        self.anchors.remove(session_id, key);
+    }
+
     /// The anchor seq this reducer resolves for a key, if it knows one.
     pub fn anchor_seq(&mut self, session_id: &str, key: &str) -> Option<u64> {
         self.anchors.get(session_id, key)

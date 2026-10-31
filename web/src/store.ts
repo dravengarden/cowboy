@@ -2847,6 +2847,7 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
 }
 
 function discardReplicaTimeline(sessionId: string): void {
+  forgetSessionAuthority(sessionId);
   transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);

@@ -40,6 +40,12 @@ impl Lifetime {
                 .await
                 .unwrap(),
         );
+        hub.warm_subagent_marks(
+            store
+                .recent_subagent_snapshots(crate::transcript_anchors::HUB_WARM_ANCHORS)
+                .await
+                .unwrap(),
+        );
         let restored = store
             .load_all()
             .await
@@ -349,7 +355,7 @@ async fn background_tasks_contract(url: &str, root: &FsPath) {
 
     // --- T11 (part 2): a call admitted before its anchor is repaired once.
     let fourth = Lifetime::start(&store).await;
-    let missing = store.calls_missing_anchor(10).await.unwrap();
+    let missing = store.calls_missing_anchor(0, 10).await.unwrap();
     assert!(missing.is_empty(), "anchored calls are not repaired");
     background_tasks::repair_call_anchors(&fourth.hub, &store).await;
     fourth.stop().await;
@@ -461,6 +467,98 @@ async fn postgres_background_tasks_reconciliation_contract() {
     background_tasks_contract(&url, root.path()).await;
 }
 
+/// Review regressions: rows that predate the table, children past any fixed
+/// prefix, a replay after a restart, and a read that fails mid-batch.
+async fn anchor_durability_contract(url: &str, root: &FsPath) {
+    let store = Store::connect(url, root.join("artifacts")).await.unwrap();
+    store.migrate().await.unwrap();
+    store.insert_session(&meta(SESSION)).await.unwrap();
+
+    // Legacy duplicates of one child: the anchor keeps the earliest position
+    // and takes the newest snapshot.
+    let envelope = |seq: u64, event: Event| Envelope {
+        session_id: SESSION.into(),
+        seq,
+        cmid: None,
+        event,
+    };
+    let mut rows = vec![
+        envelope(5, subagent("dup", "running", 1, &json!({}))),
+        envelope(400, subagent("dup", "idle", 9, &json!({}))),
+    ];
+    // More children than any page, so the last one sits past the prefix.
+    for index in 0..2_100u64 {
+        rows.push(envelope(
+            1_000 + index,
+            subagent(&format!("many-{index}"), "running", 1, &json!({})),
+        ));
+    }
+    store
+        .upsert_event_batch(&rows, &HashMap::from([(SESSION.to_owned(), 4_000)]))
+        .await
+        .unwrap();
+
+    let first = Lifetime::start(&store).await;
+    let state = background_tasks::subagent_state(&first.hub, Some(&store), SESSION, None)
+        .await
+        .unwrap();
+    assert_eq!(state["complete"], true);
+    let items = items_by_child(&state);
+    assert_eq!(items.len(), 2_100, "every non-terminal child, no prefix");
+    assert!(!items.contains_key("dup"), "the terminal snapshot won");
+    let last = ["dup".to_owned(), "many-2099".to_owned()];
+    let found = background_tasks::lookup_items(&first.hub, Some(&store), SESSION, &last)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found["items"][0]["status"], "found");
+    assert_eq!(found["items"][0]["anchor_seq"], 5);
+    assert_eq!(found["items"][0]["update"]["state"], "idle");
+    assert_eq!(found["items"][1]["status"], "found");
+
+    // The durable row is at revision 20 of worker-1; a restart must not let a
+    // replay of revision 10 become the newest observation.
+    first.hub.push(
+        SESSION,
+        subagent("fence", "idle", 20, &json!({"incarnation":"worker-1"})),
+    );
+    first.stop().await;
+    let second = Lifetime::start(&store).await;
+    second.hub.push(
+        SESSION,
+        subagent("fence", "running", 10, &json!({"incarnation":"worker-1"})),
+    );
+    second.stop().await;
+    let fenced = rows_of(&store, "cowboy_subagent", "sessionId", "fence").await;
+    assert_eq!(fenced.len(), 1);
+    assert_eq!(
+        fenced[0].1["state"], "idle",
+        "a replay never regresses a row"
+    );
+
+    // A failed durable read leaves no speculative anchor behind.
+    let mut reducer = EventReducer::default();
+    reducer.adopt_anchor(SESSION, "subagent:spec", 77);
+    reducer.forget_anchor(SESSION, "subagent:spec");
+    assert!(!reducer.knows_anchor(SESSION, "subagent:spec"));
+}
+
+#[tokio::test]
+async fn sqlite_anchor_durability_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", root.path().join("fixture.sqlite").display());
+    anchor_durability_contract(&url, root.path()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_anchor_durability_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+        .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+    anchor_durability_contract(&url, root.path()).await;
+}
+
 /// T11 (part 3): a call admitted (ledger committed) before the Controller
 /// crashed without its anchor gets exactly one anchor at the next start.
 async fn call_anchor_repair_contract(url: &str, root: &FsPath) {
@@ -508,13 +606,13 @@ async fn call_anchor_repair_contract(url: &str, root: &FsPath) {
     };
     store.admit_managed_call(&record, &request).await.unwrap();
     assert_eq!(
-        store.calls_missing_anchor(10).await.unwrap(),
+        store.calls_missing_anchor(0, 10).await.unwrap(),
         vec![(SESSION.to_owned(), "call-9".to_owned())]
     );
     let lifetime = Lifetime::start(&store).await;
     background_tasks::repair_call_anchors(&lifetime.hub, &store).await;
     lifetime.stop().await;
-    assert!(store.calls_missing_anchor(10).await.unwrap().is_empty());
+    assert!(store.calls_missing_anchor(0, 10).await.unwrap().is_empty());
     let lifetime = Lifetime::start(&store).await;
     background_tasks::repair_call_anchors(&lifetime.hub, &store).await;
     lifetime.stop().await;
@@ -522,6 +620,42 @@ async fn call_anchor_repair_contract(url: &str, root: &FsPath) {
     assert_eq!(rows.len(), 1, "repair is idempotent");
     assert_eq!(rows[0].1["requestId"], "op-9");
     assert_eq!(rows[0].1["origin"]["kind"], "repaired");
+
+    // Eligibility is decided before the limit: ended Calls older than the
+    // boundary never crowd out a newer one that lost its anchor.
+    let admit = |index: u64| {
+        let mut next = record.clone();
+        next.call_id = format!("call-old-{index}");
+        next.child_session_id = format!("child-old-{index}");
+        next
+    };
+    let boundary = store.managed_call_admission_high_water().await.unwrap();
+    for index in 0..3 {
+        let mut body: Value = serde_json::from_str(r#"{"schema":1,"purpose":"review","instruction":"Review","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
+        body["request_id"] = json!(format!("op-old-{index}"));
+        let request = crate::managed_calls::Request::parse(body.to_string().as_bytes()).unwrap();
+        let mut queued = admit(index);
+        queued.request_id = format!("op-old-{index}");
+        queued.request_digest = request.digest();
+        store.admit_managed_call(&queued, &request).await.unwrap();
+        let mut ended = queued.clone();
+        ended.state = CallState::Cancelled;
+        ended.revision = 2;
+        ended.updated_at_ms = 2;
+        ended.finished_at_ms = Some(2);
+        assert!(store.advance_managed_call(&queued, &ended).await.unwrap());
+    }
+    let high_water = store.managed_call_admission_high_water().await.unwrap();
+    assert_eq!(
+        store.calls_missing_anchor(high_water, 2).await.unwrap(),
+        Vec::new(),
+        "ended Calls from before the boundary are not eligible"
+    );
+    assert_eq!(
+        store.calls_missing_anchor(boundary, 2).await.unwrap().len(),
+        2,
+        "ended Calls after the boundary are"
+    );
 }
 
 #[tokio::test]

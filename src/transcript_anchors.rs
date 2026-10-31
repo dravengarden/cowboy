@@ -138,6 +138,16 @@ impl AnchorIndex {
         self.entries.insert(id, (seq, self.tick));
     }
 
+    /// Forget one anchor: the next write resolves it through the store again.
+    pub fn remove(&mut self, session_id: &str, key: &str) {
+        if let Some((_, tick)) = self
+            .entries
+            .remove(&(session_id.to_owned(), key.to_owned()))
+        {
+            self.order.remove(&tick);
+        }
+    }
+
     pub fn remove_session(&mut self, session_id: &str) {
         self.entries.retain(|(session, _), _| session != session_id);
         self.order.retain(|_, (session, _)| session != session_id);

@@ -11,8 +11,10 @@ import { agentLabel } from "./agentTools";
 // tasks.md §5): the prompt names them in `request_ids` with a
 // `prompt_revision`, and the answer sends exactly that set as `presented`. A
 // request that arrives later never inherits an earlier "once"; the Controller
-// pushes a refreshed prompt for it instead. A Controller older than the
-// binding sends no `request_ids`, and the answer keeps its old shape.
+// pushes a refreshed prompt for it instead. Only a prompt on screen can be
+// answered: an answer never reads the latest prompt when clicked. A Controller
+// older than the binding sends no `request_ids`, and the answer keeps its old
+// shape for such a displayed prompt.
 
 export type CallApprovalDecision = "once" | "session" | "decline";
 
@@ -42,14 +44,14 @@ export interface CallApproval {
  * the Controller supports binding, else the legacy aggregate decision. */
 export function callApprovalDecisionBody(
   decision: CallApprovalDecision,
-  approval: CallApproval | null,
+  approval: CallApproval,
 ): Record<string, unknown> {
-  const presented = approval?.request_ids;
+  const presented = approval.request_ids;
   if (!Array.isArray(presented) || presented.length === 0) return { decision };
   return {
     decision,
     presented,
-    ...(typeof approval?.prompt_revision === "number"
+    ...(typeof approval.prompt_revision === "number"
       ? { prompt_revision: approval.prompt_revision }
       : {}),
   };
@@ -139,7 +141,7 @@ export function callApprovalReason(approval: CallApproval): string {
 export async function decideCallApproval(
   sessionId: string,
   decision: CallApprovalDecision,
-  presented: CallApproval | null = currentCallApproval(sessionId),
+  presented: CallApproval,
 ): Promise<void> {
   const response = await fetch(
     `/api/sessions/${encodeURIComponent(sessionId)}/calls/approval`,
@@ -163,11 +165,11 @@ export async function decideCallApproval(
 
 /** Hide the answered prompt unless a refreshed one (a request that arrived
  * after it was shown) already replaced it. */
-function retireAnswered(sessionId: string, answered: CallApproval | null): void {
+function retireAnswered(sessionId: string, answered: CallApproval): void {
   const current = entries.get(sessionId)?.approval;
   if (current === undefined) return;
   if (
-    answered !== null && current !== answered &&
+    current !== answered &&
     typeof current.prompt_revision === "number" &&
     current.prompt_revision !== answered.prompt_revision
   ) return;
@@ -181,18 +183,21 @@ export interface CallApprovalAnswer {
 }
 
 /** One answer at a time, with the refusal kept for the surface to show. */
-export function useCallApprovalAnswer(sessionId: string): CallApprovalAnswer {
+export function useCallApprovalAnswer(
+  sessionId: string,
+  approval: CallApproval,
+): CallApprovalAnswer {
   const [busy, setBusy] = useState<CallApprovalDecision | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const answer = useCallback((decision: CallApprovalDecision): void => {
     if (busy) return;
     setBusy(decision);
     setFailure(null);
-    decideCallApproval(sessionId, decision).catch((reason: unknown) => {
+    decideCallApproval(sessionId, decision, approval).catch((reason: unknown) => {
       setFailure(
         reason instanceof Error ? reason.message : "Could not answer",
       );
     }).finally(() => setBusy(null));
-  }, [busy, sessionId]);
+  }, [approval, busy, sessionId]);
   return { busy, failure, answer };
 }

@@ -1103,20 +1103,24 @@ async fn start(
     // The inserted call now protects its child; never hold the fence while
     // waiting for the call to start.
     drop(fence);
-    let approval_request_id = state
-        .managed_calls
-        .approvals
-        .admitted(&meta.id, &request.request_id);
-    // I8: one idempotent transcript anchor per accepted Call, after the
-    // ledger commit. A crash before this push is repaired at the next start.
-    super::super::background_tasks::push_call_anchor(
-        &state.hub,
-        &meta.id,
-        &record.call_id,
-        &record.request_id,
-        origin,
-        approval_request_id.as_deref(),
-    );
+    // I8: one transcript anchor per accepted Call, after the ledger commit. A
+    // crash before this push is repaired at the next start. Only the admission
+    // that inserted the record writes it: an identical concurrent admission
+    // observes the same record and must not replace its provenance.
+    if record.call_id == call_id {
+        let approval_request_id = state
+            .managed_calls
+            .approvals
+            .admitted(&meta.id, &request.request_id);
+        super::super::background_tasks::push_call_anchor(
+            &state.hub,
+            &meta.id,
+            &record.call_id,
+            &record.request_id,
+            origin,
+            approval_request_id.as_deref(),
+        );
+    }
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
     envelope(&wait_started(state, ledger, &record, deadline).await)

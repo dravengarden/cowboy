@@ -3073,7 +3073,7 @@ const ItemView = memo(function ItemView({
   selectedToolKey: string | null;
   onOpenTool: (key: string) => void;
   /** Background-task summaries for subagent and Call anchor rows. */
-  tasks?: Pick<BackgroundTasks, "byKey" | "callsObservedAt"> | undefined;
+  tasks?: Pick<BackgroundTasks, "byKey" | "callsObservedAt" | "unresolvedCalls"> | undefined;
   stops?: ReadonlyMap<string, import("./useBackgroundTasks").StopState> | undefined;
 }): React.JSX.Element | null {
   switch (item.kind) {
@@ -3134,9 +3134,11 @@ const ItemView = memo(function ItemView({
     case "call": {
       const task = tasks?.byKey.get(callKey(item.callId));
       if (task) return <TaskRow task={task} sessionId={sessionId} desktop={desktop} stop={stops?.get(task.key)} />;
-      // Until the ledger answers, keep the row's geometry; a call the ledger
-      // no longer lists (cleared) leaves no row behind.
-      return tasks?.callsObservedAt === null ? <PendingCallRow desktop={desktop} /> : null;
+      // Until the ledger answers, keep the row's geometry; only a call it says
+      // is gone (dismissed or cleared) leaves no row behind.
+      return tasks?.callsObservedAt === null || tasks?.unresolvedCalls.has(item.callId)
+        ? <PendingCallRow desktop={desktop} />
+        : null;
     }
     case "lifecycle": {
       if (item.recovered) {

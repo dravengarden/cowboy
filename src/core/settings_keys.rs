@@ -9,7 +9,7 @@ use crate::admin;
 
 /// When this database first ran a Controller that writes Call transcript
 /// anchors (docs/background-tasks.md). Older calls are not anchored.
-pub const TRANSCRIPT_ANCHORS_CALLS_SINCE: &str = "transcript_anchors.calls_since_ms";
+pub const TRANSCRIPT_ANCHORS_CALLS_SINCE: &str = "transcript_anchors.calls_since_admission";
 /// Session id -> first epoch ms a retention pass saw the session dormant.
 pub const SESSION_DORMANT_SINCE: &str = "session_dormant_since";
 /// UI-owned per-Machine maintenance policy; TOML supplies inherited defaults.

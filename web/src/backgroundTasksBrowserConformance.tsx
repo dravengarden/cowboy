@@ -135,6 +135,7 @@ function backgroundOf(
     byKey: new Map(tasks.map((task) => [task.key, task])),
     calls,
     callsObservedAt: Date.now(),
+    unresolvedCalls: new Set(),
     callsError: null,
     refreshCalls: () => undefined,
     backgroundActivity: 0,

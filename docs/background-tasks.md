@@ -183,9 +183,14 @@ transcript_anchors(session_id REFERENCES sessions ON DELETE CASCADE,
 - The Hub adopts the newest 16,384 anchors from the table at start, then the
   restored hot log. The store writer resolves a key it does not know through
   the batch's own pending anchors, then the table, then the one-time session
-  backfill (the earliest `cowboy_subagent` row per child), and only then
-  treats it as new. Counters record hits, misses, evictions, store lookups
+  backfill (the earliest `cowboy_subagent` row per child becomes the anchor and
+  takes that child's newest snapshot; superseded rows stay in history), and
+  only then treats it as new. A failed lookup never caches the row's own seq,
+  and an uncommitted batch forgets its anchors, so the next write resolves
+  again. Counters record hits, misses, evictions, store lookups
   and backfills.
+- The Hub also restores each child's durable snapshot identity at start, so a
+  replay after a restart is fenced like one in the same process (I4).
 - A Hub miss after eviction (more than 16,384 recent anchors) may place the
   next live row at a new hot-log seq; the durable row still resolves to the
   original anchor and clients merge by child id. **[accepted limitation]**
@@ -212,12 +217,15 @@ transcript_anchors(session_id REFERENCES sessions ON DELETE CASCADE,
   Items are every child the Controller knows as non-terminal plus every child
   observed after `since_seq`. `complete` is false when the store or backfill
   failed. A new `epoch` (Controller process) replaces cached ordering; each
-  bootstrap replaces the previous authority.
+  bootstrap replaces the previous authority, and a reconciliation still
+  awaiting lookups never publishes over a newer bootstrap, Clear or deletion.
 - **I6** After a bootstrap the Web looks up every cached child it renders as
   non-terminal that the bootstrap did not list:
   `POST /api/sessions/{id}/subagents/lookup {ids ≤ 200}` (paged) →
   `found` with the latest snapshot or `not_found`, rendered "No longer
-  available", never finished.
+  available", never finished. A snapshot observed past the watermark
+  supersedes `not_found`. Non-terminal rows that enter the timeline later
+  (history pages, gap fills) are looked up the same way.
 - **I7** Without `subagent_state` (an older Controller) cached rows render
   as-is (`reconciled_by: fallback`).
 - **I8** After the admission commit the Controller pushes
@@ -225,8 +233,12 @@ transcript_anchors(session_id REFERENCES sessions ON DELETE CASCADE,
   parent, keyed `call:<id>`; a repeat replaces the same row. Controller start
   repairs missing anchors of non-dismissed Calls of open sessions that are
   active or were admitted after the database first ran an anchor-writing
-  Controller (setting `transcript_anchors.calls_since_ms`) — older history is
-  not appended to the end of transcripts. Metadata updates come from the
+  Controller (setting `transcript_anchors.calls_since_admission`) — older history is
+  not appended to the end of transcripts. Eligibility is part of the query,
+  so ineligible records never occupy the repair limit. Only the admission
+  that inserted the ledger record writes the anchor, so an identical
+  concurrent admission cannot replace its `approvalRequestId`; a repaired
+  anchor has none, because the decision is not stored with the ledger. Metadata updates come from the
   ledger, never add a row. `origin` is `{kind:"mcp", action, operation}` for
   `cowboy_execute` `calls.start` / `review.start`, `{kind:"gateway"}` for the
   private gateway (`cowboy call` / `cowboy review` in a shell), `{kind:"repaired"}`

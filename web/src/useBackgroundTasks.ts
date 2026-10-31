@@ -2,13 +2,14 @@
 // reconciliation authority), Calls (the polled ledger) and pending call
 // admissions. Shared by the transcript rows, the bar and the inspector.
 
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   applySubagentAuthority,
   authoritativeSubagent,
   authorityOnlySubagents,
   buildTaskSummaries,
   callAnchorsOf,
+  reconcileLoadedSubagents,
   type ReconciledBy,
   type TaskSummary,
   useAcknowledgements,
@@ -16,7 +17,15 @@ import {
 } from "./backgroundTasks";
 import { useCallApproval } from "./callApproval";
 import { derive, pendingPermissions, type RenderItem } from "./derive";
-import { cancelCall, type ManagedCallSummary, refreshCalls, useManagedCalls } from "./managedCalls";
+import {
+  CALLS_PAGE,
+  callActive,
+  cancelCall,
+  fetchAnchoredCall,
+  type ManagedCallSummary,
+  refreshCalls,
+  useManagedCalls,
+} from "./managedCalls";
 import type { Envelope } from "./protocol";
 import type { Subagent } from "./subagents";
 import { cancelSubagent, useStoreSelector } from "./store";
@@ -118,6 +127,8 @@ export interface BackgroundTasks {
   callsObservedAt: number | null;
   callsError: string | null;
   refreshCalls: () => void;
+  /** Anchored Calls outside the listed page whose ledger answer is pending. */
+  unresolvedCalls: ReadonlySet<string>;
   /** The legacy aggregate (`SessionMeta.background_tasks`). */
   backgroundActivity: number;
 }
@@ -147,6 +158,56 @@ function settleStops(tasks: readonly TaskSummary[], states: ReadonlyMap<string, 
   }
 }
 
+const EMPTY_CALLS: ManagedCallSummary[] = [];
+const NO_CALL_IDS: ReadonlySet<string> = new Set();
+
+/** Anchored Calls the first ledger page does not list. Absence from a full
+ *  page proves nothing, so each is read by id: only a dismissal or a 404 removes
+ *  its row. A shorter page is the whole ledger and needs no read. */
+function useAnchoredCalls(
+  sessionId: string,
+  items: RenderItem[],
+  listed: readonly ManagedCallSummary[],
+  observedAt: number | null,
+): { calls: ManagedCallSummary[]; unresolved: ReadonlySet<string> } {
+  const [known, setKnown] = useState<ReadonlyMap<string, ManagedCallSummary | null>>(new Map());
+  const reading = useRef(new Set<string>());
+  const session = useRef(sessionId);
+  session.current = sessionId;
+  const missing = useMemo(() => {
+    if (observedAt === null || listed.length < CALLS_PAGE) return [];
+    const ids = new Set(listed.map((call) => call.call_id));
+    return [...callAnchorsOf(items).keys()].filter((id) => !ids.has(id));
+  }, [items, listed, observedAt]);
+  useEffect(() => {
+    for (const id of missing) {
+      const call = known.get(id);
+      const settled = call === null || (call !== undefined && !callActive(call.state));
+      if (settled || reading.current.has(id)) continue;
+      reading.current.add(id);
+      void fetchAnchoredCall(sessionId, id).then((next) => {
+        if (session.current === sessionId) setKnown((previous) => new Map(previous).set(id, next));
+      }).catch((error: unknown) => {
+        console.warn("reading an anchored call failed", error);
+      }).finally(() => reading.current.delete(id));
+    }
+    // `observedAt` paces re-reads of an older Call that is still active.
+  }, [sessionId, missing, known, observedAt]);
+  useEffect(() => {
+    setKnown(new Map());
+  }, [sessionId]);
+  return useMemo(() => {
+    if (missing.length === 0) return { calls: EMPTY_CALLS, unresolved: NO_CALL_IDS };
+    return {
+      calls: missing.flatMap((id) => {
+        const call = known.get(id);
+        return call ? [call] : [];
+      }),
+      unresolved: new Set(missing.filter((id) => !known.has(id))),
+    };
+  }, [known, missing]);
+}
+
 export function useBackgroundTasks(
   sessionId: string,
   providedItems?: RenderItem[],
@@ -166,8 +227,17 @@ export function useBackgroundTasks(
     [providedItems, timeline],
   );
   const items = useMemo(() => applySubagentAuthority(derived, authority), [derived, authority]);
+  useEffect(() => {
+    const subagents = derived.flatMap((item) => item.kind === "subagent" ? [item.subagent] : []);
+    void reconcileLoadedSubagents(sessionId, subagents);
+  }, [derived, sessionId, authority]);
   const pending = useMemo(() => pendingPermissions(timeline), [timeline]);
-  const { calls, observedAt, error, refresh } = useManagedCalls(sessionId);
+  const { calls: listedCalls, observedAt, error, refresh } = useManagedCalls(sessionId);
+  const anchored = useAnchoredCalls(sessionId, items, listedCalls, observedAt);
+  const calls = useMemo(
+    () => anchored.calls.length === 0 ? listedCalls : [...listedCalls, ...anchored.calls],
+    [anchored.calls, listedCalls],
+  );
   const approval = useCallApproval(sessionId);
   const acknowledged = useAcknowledgements();
   const stopStates = useStopStates();
@@ -240,6 +310,7 @@ export function useBackgroundTasks(
     callsObservedAt: observedAt,
     callsError: error,
     refreshCalls: refresh,
+    unresolvedCalls: anchored.unresolved,
     backgroundActivity,
   };
 }
