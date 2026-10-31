@@ -1,6 +1,8 @@
 import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Typography } from "@mui/material";
-import { useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { DifferenceOutlined } from "@mui/icons-material";
+import { IconButton } from "@mui/material";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -33,7 +35,15 @@ import {
   DesktopRailCount,
 } from "./DesktopPaneCollapse";
 import { useStoreSelector } from "../store";
+import { desktopLeaderSequence, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
+import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "../mobile/appPagerMotion";
 import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
+
+const ReviewApp = lazy(async () => {
+  const module = await import("../mobile/review/ReviewApp");
+  return { default: module.ReviewApp };
+});
+const ignoreReviewDrawer = (): void => {};
 
 const PROMPT_MIN = DESKTOP_PROMPT_MIN;
 const CONVERSATION_MIN = DESKTOP_CONVERSATION_MIN;
@@ -221,6 +231,27 @@ export function DesktopWorkspace({
     run: () => focusedSubagentStop()?.click(),
   }), []);
   useDesktopCommand(stopSubagentCommand);
+  // Review takes the Conversation pane and leaves the transcript mounted, so
+  // returning keeps its reading position; the Prompt stays beside the code.
+  const [reviewSession, setReviewSession] = useState<string>();
+  const reviewOpen = reviewSession === sessionId;
+  const toggleReviewCommand = useMemo<DesktopCommand>(() => ({
+    id: "conversation.toggleReview",
+    title: reviewOpen ? "Return to the Conversation" : "Review code",
+    description: "Show this session's changes in the Conversation pane",
+    group: "Conversation",
+    sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.review),
+    run: () => setReviewSession(reviewOpen ? undefined : sessionId),
+  }), [reviewOpen, sessionId]);
+  useDesktopCommand(toggleReviewCommand);
+  useEffect(() => {
+    // Review's Agent action and Send to Agent, which mean the same here.
+    const close = (event: Event): void => {
+      if (mobileProductFromEvent(event) === "agent") setReviewSession(undefined);
+    };
+    globalThis.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, close);
+    return () => globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, close);
+  }, []);
 
   return (
     <Box
@@ -373,6 +404,18 @@ export function DesktopWorkspace({
           shortcut={{ value: DESKTOP_SHORTCUTS.focusConversation, title: "Focus Conversation" }}
           actions={(
             <>
+              <HintTooltip title={reviewOpen ? "Return to the Conversation" : "Review code"}>
+                <IconButton
+                  data-desktop-review-toggle
+                  size="small"
+                  aria-label={reviewOpen ? "Return to the Conversation" : "Review code"}
+                  aria-pressed={reviewOpen}
+                  color={reviewOpen ? "primary" : "default"}
+                  onClick={toggleReviewCommand.run}
+                >
+                  <DifferenceOutlined fontSize="small" />
+                </IconButton>
+              </HintTooltip>
               <DesktopProjectionToggle
                 projection={projection}
                 onChange={onProjectionChange}
@@ -393,7 +436,12 @@ export function DesktopWorkspace({
           data-desktop-navigation="scroll"
           data-desktop-focus-default
           tabIndex={-1}
-          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: reviewOpen ? "none" : "flex",
+            flexDirection: "column",
+          }}
         >
           {conversation}
           {
@@ -402,6 +450,16 @@ export function DesktopWorkspace({
           }
           {!conversationCollapsed && <DesktopApprovalDock sessionId={sessionId} />}
         </Box>
+        {reviewOpen && (
+          <Box
+            data-desktop-review
+            sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+          >
+            <Suspense fallback={null}>
+              <ReviewApp active onDrawerOpenChange={ignoreReviewDrawer} />
+            </Suspense>
+          </Box>
+        )}
       </Box>
       {conversationCollapsed && (
         <DesktopCollapsedPaneRail

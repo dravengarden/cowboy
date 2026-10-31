@@ -32,6 +32,9 @@ read-only package/config source rather than by sharing mutable Zed state.
 The process, licensing, trust, and version-pinning contract is defined in
 [14-zed-code-provider.md](14-zed-code-provider.md).
 
+Desktop shows the same Review in the Conversation pane (`␣V`), so the Prompt
+stays beside the code. Its layout is still the phone's single column.
+
 ## Latency model
 
 The useful first screen is Git changes, followed by the worktree root and the

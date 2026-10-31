@@ -183,6 +183,10 @@ group's slot (the History/Explore toggle's `V`), reached through an item
 verb (row menus and grips), or is not a control at all: read-outs such as
 the status line's mode and pane segments render as text, not buttons.
 
+`␣V` shows the session's code Review in the Conversation pane and returns.
+The transcript stays mounted behind it, the Prompt stays beside the code, and
+Review's Agent action and **Send to Agent** return to the Conversation.
+
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
 so Option+digit types its character again in text fields.
