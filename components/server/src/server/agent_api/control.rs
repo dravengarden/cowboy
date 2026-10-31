@@ -114,14 +114,11 @@ fn route_permission(
         RouteAuth::ProductOperator
         | RouteAuth::ProductOrAdminOperator
         | RouteAuth::ProductSessionMutate => principal.can_reorder(),
-        // Shared Tools defaults have an owner-only writer. The Web route is
-        // on the legacy admin plane; MCP uses the live product account.
-        RouteAuth::AdminOperator if name == "tools.defaults" => principal.can_reorder(),
-        RouteAuth::AdminOperator if name == "tools.defaults_set" => {
-            principal.role == AdminRole::Owner
-        }
         _ => false,
     };
+    // Shared Tools defaults have an owner-only writer, whichever plane the
+    // Web route is classified on.
+    let allowed = allowed && (name != "tools.defaults_set" || principal.role == AdminRole::Owner);
     if allowed {
         Ok(())
     } else {
