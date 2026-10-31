@@ -67,6 +67,7 @@ for (const name of ["log", "info", "warn", "error", "debug"]) {
 const LIST_KEYS = {
   "calls.list": ["calls"],
   "machines.list": ["machines"],
+  "sessions.list": ["sessions"],
   "usage.list": ["accounts"],
   "control.list": ["operations", "domains"],
 };

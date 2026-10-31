@@ -141,6 +141,17 @@ pin. The worker reports what failed generation it is backing up, so Machine can
 reconstruct the quarantine after its own restart. Failed candidates are fenced
 before fallback so late frames cannot corrupt the replacement session.
 
+A named-account (or execution-bound) session is an ordered handoff on its
+stable unit: the old worker stops at its idle boundary, Machine proves that
+exact incarnation's tree exit, and only then does the account journal admit
+the new launch, so one worker epoch still owns the session. The proof is
+normally recorded by the launching broker's reaper; after a Machine host
+restart that reaper is gone, so the replacement itself confirms the collected
+unit and its empty cgroup before launch. A live or unobserved previous worker
+still refuses the launch. If the candidate fails, the fallback is that
+session's own retired generation, which served this exact launch; a fresh
+bound launch never tries the Machine-wide previous generation.
+
 ## Update behavior
 
 | Change | What restarts | In-flight result |
@@ -161,7 +172,8 @@ before fallback so late frames cannot corrupt the replacement session.
 | Machine exits | systemd restarts it; peer reconnect loops use bounded backoff without spawning duplicate workers |
 | New Machine starts and immediately crashes | readiness-gated activation retains the previous host generation while detached workers retain turns/events |
 | Machine reports an ACP generation different from its release | activation remains pending and rolls the Machine profile back; no success receipt is written |
-| Candidate worker cannot exec, handshake, or becomes `Exited/Crashed` before ready | fence/stop candidate, mark generation unhealthy, launch previous generation |
+| Candidate worker cannot exec, handshake, or becomes `Exited/Crashed` before ready | fence/stop candidate, mark generation unhealthy, launch previous generation (a bound session: only its own retired generation) |
+| Named worker's tree-exit proof was not recorded (host restarted during the cutover) | the replacement confirms the collected unit and empty cgroup before the journal admits it; unprovable exit refuses the launch |
 | Worker IPC heartbeat missing for 45 s | isolate and stop only that session unit; publish `Crashed` to the controller |
 | Runtime protocol has no overlap | reject the peer; do not reinterpret frames |
 | Controller disconnects after receiving but before ACK | worker replays its retained suffix after reconnect |

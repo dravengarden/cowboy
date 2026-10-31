@@ -307,3 +307,41 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
         )
     );
 }
+
+#[test]
+fn session_list_pages_signal_truncation_and_resume_after_the_cursor() {
+    let hub = Hub::new();
+    for index in 0..5 {
+        session(&hub, &format!("s{index}"), Some("me"), false);
+    }
+    session(&hub, "s2-system", Some("me"), true);
+    session(&hub, "s3-foreign", Some("other"), false);
+    let page = |args: Value| list(&hub, Some("me"), &args).unwrap();
+    let ids = |page: &Value| -> Vec<String> {
+        page["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|view| view["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // A full page is never mistaken for the whole set.
+    let first = page(json!({"limit":2}));
+    assert_eq!(ids(&first), ["s0", "s1"]);
+    assert_eq!(first["next"], "s1");
+    let second = page(json!({"limit":2,"after":first["next"]}));
+    assert_eq!(ids(&second), ["s2", "s3"]);
+    assert_eq!(second["next"], "s3");
+    // An exactly full final page ends the set; hidden rows are not counted.
+    let last = page(json!({"limit":1,"after":"s3"}));
+    assert_eq!(ids(&last), ["s4"]);
+    assert_eq!(last["next"], Value::Null);
+    let all = page(json!({}));
+    assert_eq!(ids(&all), ["s0", "s1", "s2", "s3", "s4"]);
+    assert_eq!(all["next"], Value::Null);
+    let filtered = page(json!({"limit":1,"query":"s4"}));
+    assert_eq!(ids(&filtered), ["s4"]);
+    assert_eq!(filtered["next"], Value::Null);
+    assert!(list(&hub, Some("me"), &json!({"limit":0})).is_err());
+    assert!(list(&hub, Some("me"), &json!({"cursor":"s1"})).is_err());
+}

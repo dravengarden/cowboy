@@ -432,8 +432,8 @@ export interface Cowboy {
 "#,
 SESSIONS_SDK: r#"
 export interface Cowboy {
-  sessions: { // same owner; id order; last id resumes, default50/max200; live pages
-    list(q?: { after?: string; status?: string; limit?: number;query?:string;provider?:string;machine?:string;workspace?:string }): Promise<SessionView[]>;
+  sessions: { // same owner; id order; default50/max200; live pages; after=next
+    list(q?:{after?:string;status?:string;limit?:number;query?:string;provider?:string;machine?:string;workspace?:string}): Promise<{sessions:SessionView[];next:string|null}>;
     info(id: string): Promise<SessionView>;
     usage(id: string): Promise<SessionUsageView>;
     queue(id: string, q?: MessageQuery): Promise<Message[]>;

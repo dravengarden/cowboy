@@ -362,8 +362,16 @@ return {
 
 `sessions.list` combines exact Provider/runtime-Machine/workspace filters with
 case-insensitive literal metadata search (`query`, at most 256 bytes).
-Pagination still uses stable ID order. Session views name the runtime placement
-and the separate execution placement; neither is inferred from the other.
+It returns `{sessions, next}` in stable ID order, at most `limit` (default 50,
+max 200) per page. `next` is non-null whenever more matching sessions follow;
+pass it as `after` until it is `null`. Like the other paged lists, the page
+also iterates like its `sessions` array (`.map`, `.length`, `for...of`), but
+only `next` says whether the set is complete. A sweep over every session (for
+example hibernating idle ones before maintenance) must follow `next`: the
+earlier bare array made a full first page indistinguishable from the whole
+set, so an operator once missed every session after the first 50. Session
+views name the runtime placement and the separate execution placement; neither
+is inferred from the other.
 
 `session.event(seq)` describes a raw saved or live event behind a summary.
 Select a JSON pointer to read its message blocks, tool inputs/outputs or

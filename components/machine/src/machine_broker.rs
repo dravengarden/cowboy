@@ -2581,9 +2581,19 @@ impl Broker {
     ) -> Result<()> {
         // Previous generations may predate this mandatory launch field. They
         // must never be tried as an implicit recovery path for a bound worker.
-        if session.execution_binding.is_some() || !session.provider_account_id.is_default() {
+        // A cutover's own retired generation is not implicit: it served this
+        // exact launch (account, native binding, execution binding) until the
+        // ordered stop, so it remains the bound session's only fallback.
+        let bound =
+            session.execution_binding.is_some() || !session.provider_account_id.is_default();
+        if bound && session_fallback.is_none() {
             return self.spawn_and_wait_ready(&session).await;
         }
+        let machine_previous = if bound {
+            None
+        } else {
+            self.previous_generation.lock().clone()
+        };
         let generation_key = (session.generation.clone(), session.provider.clone());
         let desired_is_unhealthy = self
             .unhealthy_generations
@@ -2593,7 +2603,7 @@ impl Broker {
         if desired_is_unhealthy
             && let Some(previous) = session_fallback
                 .clone()
-                .or_else(|| self.previous_generation.lock().clone())
+                .or_else(|| machine_previous.clone())
         {
             selected.generation = previous;
             selected.fallback_for = Some(session.generation.clone());
@@ -2632,9 +2642,7 @@ impl Broker {
                         &selected.session_id,
                     );
                 }
-                let fallback = session_fallback
-                    .clone()
-                    .or_else(|| self.previous_generation.lock().clone());
+                let fallback = session_fallback.clone().or(machine_previous);
                 if let Some(previous) = fallback.filter(|previous| *previous != selected.generation)
                 {
                     tracing::warn!(
@@ -3270,7 +3278,7 @@ impl Broker {
                         tracing::debug!(session = %session_id, %error, "deleted session rollout stopped");
                         return;
                     }
-                    tracing::error!(session = %session_id, %old_generation, %error, "worker cutover and fallback failed");
+                    tracing::error!(session = %session_id, %old_generation, error = %format!("{error:#}"), "worker cutover and fallback failed");
                     broker
                         .startup_failures
                         .lock()
@@ -3599,6 +3607,14 @@ impl Broker {
                 let mut command = Command::new("systemd-run");
                 let unit = worker_unit_name(&self.args.socket, &session.session_id);
                 prepare_transient_unit(&unit).await?;
+                if !session.provider_account_id.is_default() {
+                    // The stable unit is collected: prove the previous named
+                    // incarnation's tree exit before the journal admits this
+                    // launch (its own reaper is lost across a host restart).
+                    systemd_exit::confirm_replaced(&self.args.provider_store, &session.session_id)
+                        .await
+                        .context("previous named worker tree exit unconfirmed")?;
+                }
                 command.args([
                     "--user",
                     "--quiet",
@@ -10583,6 +10599,82 @@ mod tests {
         assert!(broker.unhealthy_generations.lock().is_empty());
         assert!(broker.fallback_pins.lock().is_empty());
         assert!(broker.fallback_targets.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn named_cutover_falls_back_only_to_its_own_retired_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: Arc::new(
+                crate::machine_plugins::MachinePluginStore::new(
+                    temp.path(),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".into(),
+                )
+                .unwrap(),
+            ),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
+            worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
+        });
+        *broker.previous_generation.lock() = Some("gen-machine".to_owned());
+        let named = StartSession {
+            session_id: "sess-named".to_owned(),
+            provider: "claude-code".to_owned(),
+            provider_version: "1".to_owned(),
+            provider_generation_digest: "digest".to_owned(),
+            provider_account_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+            provider_auth_generation: Some(7),
+            provider_behavior: None,
+            cwd: "/work".to_owned(),
+            agent_session_id: None,
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-2".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+            execution_binding: None,
+            extensions: None,
+            native_fork: None,
+        };
+
+        // A fresh launch never tries the Machine's previous generation.
+        let error = broker
+            .spawn_with_fallback(named.clone(), None)
+            .await
+            .expect_err("no Provider generation is installed");
+        assert!(!format!("{error:#}").contains("fallback after generation launch failed"));
+        assert!(broker.fallback_pins.lock().is_empty());
+
+        // A cutover retries the generation that served this exact session.
+        let error = broker
+            .spawn_with_fallback(named, Some("gen-1".to_owned()))
+            .await
+            .expect_err("no Provider generation is installed");
+        assert!(format!("{error:#}").contains("fallback after generation launch failed"));
+        assert_eq!(
+            broker
+                .fallback_pins
+                .lock()
+                .get("sess-named")
+                .map(String::as_str),
+            Some("gen-1")
+        );
+        assert_eq!(
+            broker
+                .fallback_targets
+                .lock()
+                .get("sess-named")
+                .map(String::as_str),
+            Some("gen-2")
+        );
     }
 
     #[tokio::test]
