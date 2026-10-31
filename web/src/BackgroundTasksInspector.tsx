@@ -31,6 +31,7 @@ import {
 import {
   acknowledgeTask,
   groupTasks,
+  originToolKey,
   setCallsDockLegacy,
   TASK_SECTION_LABEL,
   taskHash,
@@ -196,6 +197,7 @@ function TaskDetail({
   resumed,
   onOpenConversation,
   onAnswerApproval,
+  onOpenOrigin,
 }: {
   task: TaskSummary;
   sessionId: string;
@@ -203,6 +205,8 @@ function TaskDetail({
   resumed: boolean;
   onOpenConversation: (task: TaskSummary) => void;
   onAnswerApproval: () => void;
+  /** The MCP tool card that started this Call, when one is loaded. */
+  onOpenOrigin?: (() => void) | undefined;
 }): React.JSX.Element {
   const stops = useStopStates();
   const stop = stops.get(task.key);
@@ -257,6 +261,18 @@ function TaskDetail({
       )}
       {task.source === "call" && task.call && (
         <Stack spacing={1}>
+          {onOpenOrigin && (
+            <Box>
+              <Button
+                size="small"
+                data-task-open-origin
+                onClick={onOpenOrigin}
+                sx={{ textTransform: "none" }}
+              >
+                Show the tool call that started it
+              </Button>
+            </Box>
+          )}
           {!desktop && (
             <Box>
               <Button
@@ -350,12 +366,15 @@ export function BackgroundTasksInspector({
   desktop,
   background,
   onLocate,
+  onOpenTool,
 }: {
   sessionId: string;
   desktop: boolean;
   background: BackgroundTasks;
   /** Scroll the transcript to the row anchored at this key. */
   onLocate?: ((key: string) => void) | undefined;
+  /** Open a transcript tool card in the Tool inspector (a Call's origin). */
+  onOpenTool?: ((toolKey: string) => void) | undefined;
 }): React.JSX.Element | null {
   const state = useInspectorState();
   const open = state.sessionId === sessionId;
@@ -523,6 +542,10 @@ export function BackgroundTasksInspector({
         return;
     }
   };
+  // Only a structured MCP identity links a Call to its tool card (I8).
+  const originTool = selected?.source === "call" && selected.call
+    ? originToolKey(background.items, selected.call.request_id)
+    : null;
   const detail = selected
     ? (
       <TaskDetail
@@ -532,6 +555,12 @@ export function BackgroundTasksInspector({
         resumed={resumedChildren.has(selected.key)}
         onOpenConversation={openConversation}
         onAnswerApproval={answerApproval}
+        onOpenOrigin={originTool && onOpenTool
+          ? (): void => {
+            close();
+            onOpenTool(originTool);
+          }
+          : undefined}
       />
     )
     : (

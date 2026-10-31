@@ -6134,6 +6134,7 @@ export function Transcript({
         desktop={desktopNavigation}
         background={background}
         onLocate={locateTask}
+        onOpenTool={openTool}
       />
       <ToolDetailsBrowser
         items={items}

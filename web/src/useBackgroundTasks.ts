@@ -124,6 +124,14 @@ export interface BackgroundTasks {
 
 const EMPTY_TIMELINE: Envelope[] = [];
 
+/** Subagent snapshots, Call anchors and the worker boundaries that fence them. */
+function isBackgroundEnvelope(envelope: Envelope): boolean {
+  if (envelope.kind === "lifecycle") return true;
+  if (envelope.kind !== "update") return false;
+  const kind = envelope.update.sessionUpdate;
+  return kind === "cowboy_subagent" || kind === "cowboy_call_anchor";
+}
+
 /** Subagent rows carry `Stopping` only while the source has not confirmed. */
 function settleStops(tasks: readonly TaskSummary[], states: ReadonlyMap<string, StopState>, now: number): void {
   for (const task of tasks) {
@@ -150,7 +158,13 @@ export function useBackgroundTasks(
   );
   const lastError = useStoreSelector((snapshot) => snapshot.lastError);
   const authority = useSessionAuthority(sessionId);
-  const derived = useMemo(() => providedItems ?? derive(timeline), [providedItems, timeline]);
+  // Without the transcript's own items (the Composer bar), derive only the
+  // envelopes that shape background tasks: a full derive per streamed token
+  // would double the Transcript's work.
+  const derived = useMemo(
+    () => providedItems ?? derive(timeline.filter(isBackgroundEnvelope)),
+    [providedItems, timeline],
+  );
   const items = useMemo(() => applySubagentAuthority(derived, authority), [derived, authority]);
   const pending = useMemo(() => pendingPermissions(timeline), [timeline]);
   const { calls, observedAt, error, refresh } = useManagedCalls(sessionId);

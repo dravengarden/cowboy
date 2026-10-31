@@ -454,6 +454,48 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     await waitFor(() => document.querySelector("[data-calls-dock-legacy-switch]"), "the inspector offers the switch");
     closeBackgroundTasks();
     passed.push("the Calls panel rollback switch is reachable");
+
+    // 10. T11 an MCP-started call links to the tool card that started it.
+    const opened: string[] = [];
+    const withTool = backgroundOf([
+      {
+        session_id: "s",
+        seq: 1,
+        kind: "update",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "mcp-1",
+          title: "cowboy_execute",
+          status: "completed",
+          rawInput: { action: "review.start", operation: "op-1", arguments: {} },
+        } as AcpUpdate,
+      },
+    ], [call()]);
+    openBackgroundTask("s", "call:call-1", "row");
+    surface = DESKTOP;
+    render(
+      <BackgroundTasksInspector
+        sessionId="s"
+        desktop
+        background={withTool}
+        onOpenTool={(key): void => {
+          opened.push(key);
+        }}
+      />,
+    );
+    const origin = await waitFor(
+      () => document.querySelector<HTMLButtonElement>("[data-task-open-origin]"),
+      "an MCP-started call links to its tool card",
+    );
+    origin.click();
+    await waitFor(() => inspector() === null, "following the link closes the inspector");
+    check(opened.join() === "1", "the tool inspector opens that card");
+    openBackgroundTask("s", "call:call-1", "row");
+    render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf([], [call({ request_id: "cli-7" })])} onOpenTool={() => undefined} />);
+    await waitFor(inspector, "the inspector opens");
+    check(!document.querySelector("[data-task-open-origin]"), "a shell-started call has no structured link");
+    closeBackgroundTasks();
+    passed.push("T11 only structured MCP identity links a call to its tool card");
   } finally {
     document.documentElement.style.fontSize = "";
     globalThis.fetch = originalFetch;
