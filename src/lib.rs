@@ -236,7 +236,6 @@ pub mod migration_compat;
 pub mod migration_policy;
 #[cfg(all(test, feature = "full"))]
 pub mod protocol_contract;
-#[cfg(feature = "full")]
 pub mod task_notifications;
 pub mod web_push;
 
