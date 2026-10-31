@@ -14,16 +14,19 @@ accounts.
 
 New Session has an optional **Select sessions** multiselect.
 
-Session Settings answers three independent questions, each in one place:
+Session Settings answers independent questions, each in one place:
 
 - **How this agent runs**: the Agent block (model, reasoning, permissions)
   changes in place. Nothing below repeats it.
-- **What the next message can read**: **Linked sessions** is always visible
+- **What this session has read**: the links list names every session this
+  conversation came from or read (below).
+- **What the next message will read**: **Select sessions** is always visible
   under the Agent block in mobile settings, desktop Run Configuration and the
   empty-session configuration workspace. **Save changes** stages the selection
   for this session's next message, including a staged continuation;
   **Discard** drops the edit and **Cancel linked context** removes a saved one.
-- **Where the work goes**: **New session from this…** opens one form with the
+  Once sent, a selection joins the links.
+- **Where the work goes**: **Continue or fork** opens one form with the
   target agent and two actions. **Continue on next message** moves the work;
   **Fork now** keeps both live.
 
@@ -39,7 +42,7 @@ without it automatically.
 **Continue on next message** saves the target and links the current session
 ahead of the selected ones, without creating, stopping or starting a worker,
 then closes settings and focuses the Composer. The current session stays a
-removable source in Linked sessions, and the action stays available for an
+removable source in the selection, and the action stays available for an
 identical target, which starts a fresh conversation in place of the accumulated
 one. The current agent and its identity remain intact until the send. A saved
 switch shows "Switching to SUBSCRIPTION on your next message · **Back**". Back
@@ -53,7 +56,7 @@ it leaves this session's pending links and staged continuation untouched. An
 empty session offers only Continue.
 
 The session menu (mobile long press, Desktop session actions with `F`) offers
-**New session from this…**, which opens that form. A continuation keeps its
+**Continue or fork**, which opens that form. A continuation keeps its
 source's title and links back to it; the mark is the persisted
 `session_continued_from:<id>` setting projected as `continued_from` on the
 session. Continuations created before that mark are recorded once at Controller
@@ -72,7 +75,7 @@ Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
 original away and opens the continuation. The continuation can read that
 history until Trash retention ends. Writing in the original would silently
 split one piece of work in two, so the web offers no way to do it;
-Linked sessions, **New session from this…** and the session menu item are
+Select sessions, **Continue or fork** and the session menu item are
 hidden for the same reason. While its agent is still busy the
 Composer stays, so the turn can be observed and stopped. Deleting or trashing
 the continuation returns the original to an ordinary session. The state is
@@ -85,13 +88,19 @@ Claude · Mink", or how many sessions it links) with **Cancel**, and the input
 placeholder reads "Message the new agent…" so the cue survives the mobile
 keyboard hiding auxiliary rows. After a handoff the link is history, not a
 next-send choice, so it leaves the Composer. The switch itself stays in Session
-Settings. A continuation opens with one link, "Continued from SOURCE · OLD →
-NEW" (also in its empty and preparing state). Following it opens the original at
-the row where the link was captured, paging history back in and highlighting
-it. A source in Trash stays named but cannot be opened. Session Settings repeats
-the link above Linked sessions, "Continued in a new agent ·
-Open" on the original (with **Hibernate** when available), and "Forked from
-SOURCE · Open" for a fork.
+Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
+its empty and preparing state), with `+N` for its other links.
+
+The links list in Session Settings has one row per link: "Forked from",
+"Continued from" or "Linked", with the title and subscription. A link is
+recorded when its send is accepted (`links` in the context) and survives later
+edits, with the history boundary and title captured then. Following a row opens
+the source at that row, paging history back in and highlighting it. A source can
+go away at any time, so the row follows the live session lists: in Trash it
+stays named with **Restore**, and deleted it stays named from the stored title,
+marked Deleted, with nothing to open. The record of what this conversation read
+cannot be removed. Where the work continued keeps its own row, "Continued in a
+new agent · Open" (with **Hibernate** when available).
 Sessions without announced context or a continuation mark render and fetch
 nothing for this cue.
 

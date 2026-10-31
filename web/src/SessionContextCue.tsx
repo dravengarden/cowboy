@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, ButtonBase, keyframes, Stack, Typography } from "@mui/material";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
+import LinkOffOutlined from "@mui/icons-material/LinkOffOutlined";
 import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import HistoryRounded from "@mui/icons-material/HistoryRounded";
 import { glyphSize } from "./surface/desktopSize";
@@ -21,7 +22,8 @@ import { requestPickSession } from "./sessionPickRequest";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity, sessionAccountIdentity } from "./accountIdentity";
 import { contextCue } from "./contextCue";
-import { trashItems, useStoreSelector } from "./store";
+import { restoreItems, trashItems, useStoreSelector } from "./store";
+import { SESSION_LINK_LABEL, sessionLinks, type SessionLinkRow } from "./sessionLinks";
 import { requestSessionReveal } from "./sessionReveal";
 import type { SessionMeta } from "./protocol";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
@@ -66,10 +68,9 @@ export function useHandedOff(sessionId: string): boolean {
 }
 
 /** Where a context cue renders. A pending choice changes the next send, so
- *  it stays on the Composer. Provenance is history: Session Settings keeps its
- *  actions ("start": where it came from, "end": where it continued), and
- *  `SessionContinuedFrom` opens the conversation with the same link. */
-export type SessionContextCuePlacement = "composer" | "start" | "end";
+ *  it stays on the Composer. Where the work continued stays in Session
+ *  Settings with its actions. */
+export type SessionContextCuePlacement = "composer" | "end";
 
 const arrive = keyframes`
   from { opacity: 0; transform: translateY(6px); }
@@ -77,16 +78,12 @@ const arrive = keyframes`
 `;
 
 function cuePlacement(kind: string): SessionContextCuePlacement {
-  return kind === "continued_from"
-    ? "start"
-    : kind === "continued_in"
-    ? "end"
-    : "composer";
+  return kind === "continued_in" ? "end" : "composer";
 }
 
 /** What the next message does (above the Composer), or where this
- *  conversation came from / continued (Transcript start / end). Ordinary
- *  sessions render nothing and fetch nothing. */
+ *  conversation continued (Session Settings). Ordinary sessions render
+ *  nothing and fetch nothing. */
 export function SessionContextCue(
   { sessionId, desktop = false, placement = "composer" }: {
     sessionId: string;
@@ -119,9 +116,7 @@ export function SessionContextCue(
     ? `Your next message links ${cue.count} session${
       cue.count === 1 ? "" : "s"
     } as context`
-    : cue.kind === "continued_in"
-    ? "Continued in a new agent"
-    : `Continued from ${cue.title}${cue.more > 0 ? ` +${cue.more}` : ""}`;
+    : "Continued in a new agent";
   const action = pending
     ? {
       label: busy ? "Cancelling…" : "Cancel",
@@ -135,19 +130,10 @@ export function SessionContextCue(
         }).catch(() => undefined).finally(() => setBusy(false));
       },
     }
-    : cue.kind === "continued_in"
-    ? {
-      label: "Open",
-      run: () => {
-        if (context.delivery) openContextDestination(context.delivery);
-      },
-    }
     : {
       label: "Open",
       run: () => {
-        if (cue.kind !== "continued_from") return;
-        if (cue.before === undefined) requestPickSession(cue.id);
-        else requestSessionReveal(cue.id, undefined, cue.before);
+        if (context.delivery) openContextDestination(context.delivery);
       },
     };
   const hibernate = (): void => {
@@ -280,6 +266,22 @@ export function SessionContextCue(
   );
 }
 
+function openSessionLink(link: SessionLinkRow, session: SessionMeta | undefined): void {
+  if (link.before === undefined) requestPickSession(link.id, session);
+  else requestSessionReveal(link.id, session, link.before);
+}
+
+/** Announcements are per tab; after a reload the synced marks say to read. */
+function useSessionLinks(sessionId: string): SessionLinkRow[] {
+  const session = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === sessionId)
+  );
+  const context = useAnnouncedSessionContext(sessionId, session?.continued_from !== undefined);
+  const sessions = useStoreSelector((state) => state.sessions);
+  const trashed = useStoreSelector((state) => state.trashedSessions);
+  return sessionLinks(session, context?.links, sessions, trashed);
+}
+
 /** The first thing a continuation shows: one link back to where its work
  *  came from. Following it lands on the moment of the handoff. */
 export function SessionContinuedFrom(
@@ -288,36 +290,28 @@ export function SessionContinuedFrom(
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === sessionId)
   );
-  // Announcements are per tab; after a reload the synced mark says to read.
-  const context = useAnnouncedSessionContext(sessionId, session?.continued_from !== undefined);
+  const links = useSessionLinks(sessionId);
   const { data: accounts } = useSubscriptionAccounts();
-  const cue = contextCue(
-    sessionId,
-    context,
-    (provider, account) => accountIdentity(accounts, provider, account).short,
-  );
-  const source = cue?.kind === "continued_from" ? cue : undefined;
+  const source = links.find((link) => link.kind === "continued");
   const sourceSession = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === source?.id)
   );
-  const trashed = useStoreSelector((state) =>
-    state.trashedSessions.some((entry) => entry.id === source?.id)
-  );
   if (!source || !session) return null;
-  const title = `${source.title}${source.more > 0 ? ` +${source.more}` : ""}`;
+  const openable = source.state === "open";
+  const note = source.state === "trash" ? "in Trash" : source.state === "deleted" ? "deleted" : "";
+  const more = links.length - 1;
+  const title = `${source.title}${more > 0 ? ` +${more}` : ""}`;
   const here = sessionAccountIdentity(accounts, session).short;
-  const change = source.label && source.label !== here ? `${source.label} → ${here}` : "";
+  const was = sourceSession && sessionAccountIdentity(accounts, sourceSession).short;
+  const change = was && was !== here ? `${was} → ${here}` : "";
   return (
     <Box sx={{ display: "flex", justifyContent: "center", flexShrink: 0, px: 1.5, pt: 1, maxWidth: "100%" }}>
       <ButtonBase
         data-session-handoff="start"
-        disabled={trashed}
-        aria-label={`Continued from ${title}${trashed ? ", in Trash" : ""}`}
-        title={trashed ? "This session is in Trash" : "Open where this conversation was handed off"}
-        onClick={(): void => {
-          if (source.before === undefined) requestPickSession(source.id, sourceSession);
-          else requestSessionReveal(source.id, sourceSession, source.before);
-        }}
+        disabled={!openable}
+        aria-label={`Continued from ${title}${note && `, ${note}`}`}
+        title={openable ? "Open where this conversation was handed off" : `This session is ${note}`}
+        onClick={(): void => openSessionLink(source, sourceSession)}
         sx={{
           gap: 0.5,
           minWidth: 0,
@@ -336,9 +330,9 @@ export function SessionContinuedFrom(
         <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
           Continued from{" "}
           <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{title}</Box>
-          {trashed ? " · in Trash" : change && ` · ${change}`}
+          {note ? ` · ${note}` : change && ` · ${change}`}
         </Typography>
-        {!trashed && <ChevronRightRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />}
+        {openable && <ChevronRightRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />}
       </ButtonBase>
     </Box>
   );
@@ -450,18 +444,103 @@ export function SessionHandedOffDock(
   );
 }
 
-/** Where this session came from and where it continued, for Session
- *  Settings. Renders nothing for an ordinary session. */
+/** One session this conversation came from or read. Open while it exists;
+ *  a source in Trash can come back, a deleted one stays as a named record. */
+function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
+  const session = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === link.id)
+  );
+  const { data: accounts } = useSubscriptionAccounts();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState("");
+  const note = link.state === "trash" ? "In Trash" : link.state === "deleted" ? "Deleted" : "";
+  const detail = [
+    SESSION_LINK_LABEL[link.kind],
+    session && sessionAccountIdentity(accounts, session).short,
+    note,
+  ].filter(Boolean).join(" · ");
+  const open = link.state === "open";
+  const Icon = link.state === "deleted"
+    ? LinkOffOutlined
+    : link.kind === "forked"
+    ? CallSplitOutlined
+    : LinkOutlined;
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
+      <ButtonBase
+        data-session-link={link.state}
+        disabled={!open}
+        title={open ? "Open at the point it was linked" : link.title}
+        onClick={(): void => openSessionLink(link, session)}
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 44,
+          gap: 1,
+          px: 0.5,
+          borderRadius: 1,
+          justifyContent: "flex-start",
+          textAlign: "left",
+        }}
+      >
+        <Icon
+          sx={{
+            fontSize: glyphSize(18),
+            flexShrink: 0,
+            color: open ? "primary.main" : "text.disabled",
+          }}
+        />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography
+            variant="body2"
+            noWrap
+            color={open ? "text.primary" : "text.secondary"}
+          >
+            {link.title}
+          </Typography>
+          <Typography
+            variant="caption"
+            noWrap
+            color={failure ? "error" : "text.secondary"}
+            sx={{ display: "block" }}
+          >
+            {failure || detail}
+          </Typography>
+        </Box>
+        {open && (
+          <ChevronRightRounded
+            sx={{ fontSize: glyphSize(18), flexShrink: 0, color: "text.secondary" }}
+          />
+        )}
+      </ButtonBase>
+      {link.state === "trash" && (
+        <Button
+          size="small"
+          disabled={busy}
+          onClick={(): void => {
+            setBusy(true);
+            setFailure("");
+            void restoreItems({ sessions: [link.id] })
+              .catch((error: unknown) =>
+                setFailure(error instanceof Error ? error.message : "Could not restore")
+              )
+              .finally(() => setBusy(false));
+          }}
+          sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
+        >
+          Restore
+        </Button>
+      )}
+    </Stack>
+  );
+}
+
+/** Every link of this session, and where it continued, for Session Settings.
+ *  Renders nothing for an ordinary session. */
 export function SessionProvenance(
   { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
-  const forked = useStoreSelector((state) => {
-    const session = state.sessions.find((entry) => entry.id === sessionId);
-    const source = session?.forked_from;
-    if (!source) return null;
-    const title = state.sessions.find((entry) => entry.id === source)?.title;
-    return { source, title: title || "another session" };
-  });
+  const links = useSessionLinks(sessionId);
   const context = useAnnouncedSessionContext(sessionId);
   const { data: accounts } = useSubscriptionAccounts();
   const cue = contextCue(
@@ -469,34 +548,16 @@ export function SessionProvenance(
     context,
     (provider, account) => accountIdentity(accounts, provider, account).label,
   );
-  const continued = cue?.kind === "continued_from" || cue?.kind === "continued_in";
-  if (!forked && !continued) return null;
+  const continued = cue?.kind === "continued_in";
+  if (links.length === 0 && !continued) return null;
   return (
-    <Stack data-session-provenance-list spacing={0.25} sx={{ minWidth: 0 }}>
-      {forked && (
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.5}
-          data-session-provenance="forked"
-          sx={{ minWidth: 0, color: "text.secondary" }}
-        >
-          <CallSplitOutlined
-            sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "primary.main" }}
-          />
-          <Typography variant="caption" noWrap sx={{ minWidth: 0 }} title={forked.title}>
-            Forked from {forked.title}
-          </Typography>
-          <Button
-            size="small"
-            onClick={() => requestPickSession(forked.source)}
-            sx={{ flexShrink: 0, minWidth: 0, px: 0.75, textTransform: "none" }}
-          >
-            Open
-          </Button>
-        </Stack>
+    <Stack data-session-provenance-list spacing={0.5} sx={{ minWidth: 0, pb: 1.5 }}>
+      {links.length > 0 && (
+        <Typography variant="caption" color="text.secondary">
+          {links.length === 1 ? "1 link" : `${links.length} links`}
+        </Typography>
       )}
-      <SessionContextCue sessionId={sessionId} placement="start" />
+      {links.map((link) => <SessionLink key={link.id} link={link} />)}
       <SessionContextCue sessionId={sessionId} placement="end" />
     </Stack>
   );

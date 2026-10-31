@@ -6,7 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
-import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock } from "./SessionContextCue";
+import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
@@ -313,11 +313,11 @@ export async function runSessionContextBrowserConformance(
             {state.lastError?.message}
           </output>
           <SessionContinuedFrom sessionId={sessions[3]!.id} />
+          <SessionProvenance sessionId={sessions[3]!.id} />
           <SessionContinuedFrom sessionId={sessions[2]!.id} />
           <SessionHandedOffDock sessionId={sessions[1]!.id} desktop={desktop} />
           <SessionHandedOffDock sessionId={sessions[2]!.id} desktop={desktop} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
-          <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
             <SessionContextSettings session={sessions[0]!} />
@@ -357,6 +357,7 @@ export async function runSessionContextBrowserConformance(
         sources: [],
         next_agent: null,
         source_sessions: [],
+        links: [{ id: "deleted-link", available: false, title: "Old work" }],
         delivery: null,
         max_sources: 32,
       };
@@ -369,9 +370,21 @@ export async function runSessionContextBrowserConformance(
         desktop ? 680 : 360
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
-      await until(() => Boolean(button("New session from this…")));
+      await until(() => Boolean(button("Continue or fork")));
       await until(() =>
         contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
+      );
+      await until(() => Boolean(container.querySelector('[data-session-link="deleted"]')));
+      check(
+        container.querySelector('[data-session-link="deleted"]')?.textContent
+          ?.includes("Old work") === true &&
+          container.querySelector<HTMLButtonElement>('[data-session-link="deleted"]')!.disabled,
+        `${mode}: a deleted link stays named and cannot be opened`,
+      );
+      check(
+        Boolean(container.querySelector('[data-session-link="open"]')?.textContent
+          ?.includes("Continued from")),
+        `${mode}: links show how each session relates to this one`,
       );
       await until(() => Boolean(exactButton("Fork")));
       check(
@@ -575,7 +588,7 @@ export async function runSessionContextBrowserConformance(
         Boolean(button("Cancel linked context")),
         `${mode}: saved selection shows pending state and a distinct cancel action`,
       );
-      button("New session from this…").click();
+      button("Continue or fork").click();
       await until(() => Boolean(continueRun()) && !continueRun().disabled);
       check(
         !container.querySelector("[data-context-advanced]") &&
@@ -848,10 +861,10 @@ export async function runSessionContextBrowserConformance(
       delete sessions[0]!.workspace_id;
       flushSync(() => root.render(<Fixture desktop={desktop} />));
       await until(() =>
-        Boolean(button("New session from this…")) &&
-        !button("New session from this…").disabled
+        Boolean(button("Continue or fork")) &&
+        !button("Continue or fork").disabled
       );
-      button("New session from this…").click();
+      button("Continue or fork").click();
       await until(() => Boolean(button("Choose project")));
       check(
         continueRun().disabled &&
@@ -879,10 +892,10 @@ export async function runSessionContextBrowserConformance(
       container.querySelector<HTMLButtonElement>("[data-new-session-fork-run]")!;
     const openForm = async () => {
       await until(() =>
-        Boolean(button("New session from this…")) &&
-        !button("New session from this…").disabled
+        Boolean(button("Continue or fork")) &&
+        !button("Continue or fork").disabled
       );
-      button("New session from this…").click();
+      button("Continue or fork").click();
       await until(() => Boolean(forkMode()) && !forkRun().disabled);
     };
     flushSync(() => root.render(<Fixture desktop />));

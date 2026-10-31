@@ -13,7 +13,7 @@ is a new agent that reads the source through Cowboy MCP.
 
 ## User flow
 
-**Fork now** in **New session from this…** (Session Settings; the session menu
+**Fork now** in **Continue or fork** (Session Settings; the session menu
 item and Desktop `F` open it) leaves the source unchanged. Native fork takes no
 model or reasoning fields: configure the opened session. The API keeps `config`.
 

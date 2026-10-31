@@ -30,6 +30,16 @@ pub struct Source {
     pub before: u64,
 }
 
+/// A session this conversation has read. It outlives later edits and its
+/// source, so the title is kept for when the source is gone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub session_id: String,
+    pub before: u64,
+    #[serde(default)]
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Injection {
     pub cmid: String,
@@ -150,6 +160,48 @@ pub struct Context {
     pub delivery: Option<Delivery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injection: Option<Injection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
+}
+
+impl Context {
+    /// Record delivered links; a session linked again moves to its new point.
+    pub fn remember_links(&mut self, links: Vec<Link>) {
+        for link in links {
+            match self
+                .links
+                .iter_mut()
+                .find(|known| known.session_id == link.session_id)
+            {
+                Some(known) => *known = link,
+                None => self.links.push(link),
+            }
+        }
+    }
+
+    /// Every link, including one whose send has not been recorded as links:
+    /// the injection alone names those.
+    pub fn known_links(&self) -> Vec<Link> {
+        let mut known = self.clone();
+        let carried = self
+            .injection
+            .iter()
+            .flat_map(|injection| &injection.sources)
+            .filter(|source| {
+                !self
+                    .links
+                    .iter()
+                    .any(|link| link.session_id == source.session_id)
+            })
+            .map(|source| Link {
+                session_id: source.session_id.clone(),
+                before: source.before,
+                title: String::new(),
+            })
+            .collect();
+        known.remember_links(carried);
+        known.links
+    }
 }
 
 pub fn key(id: &str) -> String {
@@ -331,6 +383,35 @@ pub fn preamble(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_survive_and_a_relinked_session_moves_to_its_new_point() {
+        let link = |id: &str, before| Link {
+            session_id: id.into(),
+            before,
+            title: format!("title {id}"),
+        };
+        let mut context = Context {
+            injection: Some(Injection {
+                cmid: "cmid".into(),
+                sources: vec![Source {
+                    session_id: "carried".into(),
+                    before: 2,
+                }],
+                follows_first_prompt: false,
+            }),
+            ..Context::default()
+        };
+        context.remember_links(vec![link("a", 3), link("b", 4)]);
+        context.remember_links(vec![link("a", 9)]);
+        let known = context.known_links();
+        let points: Vec<_> = known
+            .iter()
+            .map(|link| (link.session_id.as_str(), link.before))
+            .collect();
+        assert_eq!(points, [("a", 9), ("b", 4), ("carried", 2)]);
+    }
+
     fn session(hub: &crate::core::Hub, id: &str, owner: &str) {
         hub.create_session(crate::core::SessionRegistration {
             id: id.into(),
