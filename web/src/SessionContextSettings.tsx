@@ -18,6 +18,7 @@ import {
   openContextDestination,
   saveSessionContext,
   type SessionContext,
+  pendingSources,
   useSessionContext,
   withoutAgentSwitch,
 } from "./sessionContext";
@@ -50,8 +51,8 @@ import {
 import { newUuid } from "./uuid";
 
 /** Three questions, one place each. How this agent runs lives in the Agent
- *  block above. Here: what the next message can read (Linked sessions), and
- *  where the work goes (New session from this). */
+ *  block above. Here: what the next message can read (Link sessions), and
+ *  where the work goes (Continue or fork). */
 export function SessionContextSettings(
   { session, provenance = true, allowFork = true }: {
     session: SessionMeta;
@@ -132,7 +133,7 @@ export function SessionContextSettings(
               onClick={() => setOpen((value) => !value)}
               sx={{ justifyContent: "flex-start", textTransform: "none" }}
             >
-              New session from this…
+              Continue or fork
             </Button>
             {data && stagedAgent && !open && (
               <PendingSwitch session={session} context={data} onBack={() => void reload()} />
@@ -143,7 +144,7 @@ export function SessionContextSettings(
               key={session.id}
               session={session}
               observed={data}
-              sources={draft?.sources ?? data.sources}
+              sources={draft?.sources ?? pendingSources(data)}
               allowFork={allowFork && !session.system && !isManagedChild(session)}
               onContinued={() => {
                 onSaved();
@@ -161,8 +162,8 @@ export function SessionContextSettings(
   );
 }
 
-/** What the next message can read, whichever agent receives it. A fork leaves
- *  this selection on this session. */
+/** What the next message will read, whichever agent receives it. Links
+ *  already sent are history, shown above. A fork leaves this selection here. */
 function LinkedSessions(
   { session, context, draft, onDraft, onSaved }: {
     session: SessionMeta;
@@ -174,7 +175,7 @@ function LinkedSessions(
 ): React.JSX.Element {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const sources = draft?.sources ?? context.sources;
+  const sources = draft?.sources ?? pendingSources(context);
   const changedElsewhere = draft !== null && draft.revision !== context.revision;
   const unresolved = context.delivery?.state === "preparing" ||
     context.delivery?.state === "unknown";
@@ -198,7 +199,7 @@ function LinkedSessions(
   return (
     <Stack spacing={1} data-context-links>
       <Typography variant="caption" color="text.secondary">
-        Linked sessions · Read with your next message
+        Link sessions · Read with your next message
       </Typography>
       {changedElsewhere && (
         <Alert severity="warning">

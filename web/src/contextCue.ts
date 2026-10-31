@@ -3,15 +3,7 @@ import type { SessionContext } from "./sessionContext";
 export type ContextCue =
   | { kind: "pending_agent"; provider: string; label: string }
   | { kind: "pending_links"; count: number }
-  | { kind: "continued_in"; context: SessionContext }
-  | {
-    kind: "continued_from";
-    id: string;
-    title: string;
-    more: number;
-    label?: string;
-    before?: number;
-  };
+  | { kind: "continued_in"; context: SessionContext };
 
 export function contextCue(
   sessionId: string,
@@ -39,23 +31,5 @@ export function contextCue(
       : null;
   }
   if (delivery?.state !== "accepted") return null;
-  if (delivery.session_id !== sessionId) {
-    return { kind: "continued_in", context };
-  }
-  const sources = context.source_sessions.filter((entry) =>
-    entry.id !== sessionId && entry.available
-  );
-  const source = sources[0];
-  return source
-    ? {
-      kind: "continued_from",
-      id: source.id,
-      title: source.title || "a linked session",
-      more: sources.length - 1,
-      ...(source.provider && {
-        label: label(source.provider, source.provider_account_id ?? "default"),
-      }),
-      ...(typeof source.before === "number" && { before: source.before }),
-    }
-    : null;
+  return delivery.session_id === sessionId ? null : { kind: "continued_in", context };
 }

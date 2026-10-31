@@ -32,11 +32,23 @@ export interface SessionContext {
     title?: string;
     provider?: string;
     provider_account_id?: string;
-    /** Exclusive history boundary captured when this link was sent. */
+  }[];
+  /** Every session this conversation has read, surviving later edits. */
+  links?: {
+    id: string;
+    available: boolean;
+    title?: string;
+    provider?: string;
+    provider_account_id?: string;
     before?: number | null;
   }[];
   delivery: ContextDelivery | null;
   max_sources: number;
+}
+
+/** Sources the next message will read. Once sent they are links instead. */
+export function pendingSources(context: SessionContext): string[] {
+  return context.revision === context.applied_revision ? [] : context.sources;
 }
 
 const reads = new Map<string, Promise<SessionContext>>();
