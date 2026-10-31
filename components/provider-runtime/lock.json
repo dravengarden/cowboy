@@ -125,11 +125,11 @@
     },
     "claude-deepseek-gateway": {
       "kind": "git_go_static",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "repository": "git@github.com:dravengarden/columbus.git",
-      "revision": "d5b5c25d4f6b33a9d6c94f639433123888c481bb",
+      "revision": "920a18efe145a6873d6815a8c24159938daa1a13",
       "subdir": "projects/claude-deepseek",
-      "source_archive_sha256": "4c9de319445a4c888e36449d8d4336e663eff4c163facdbedc3a02d7b069590c",
+      "source_archive_sha256": "4a39f971c6f68f9a6de37ff548a181229348522ddd9a0fba245a527b912d52bf",
       "binary": "claude-deepseek",
       "probe": [
         "--help"

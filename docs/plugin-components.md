@@ -83,6 +83,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.77.0 records provider-runtime 1.1.28 for
+claude-deepseek-gateway 0.1.6. dsh cannot send custom headers, so its launcher
+places the opaque session identity in the loopback gateway URLs and the gateway
+restores it, attributing chat and fetch usage to the session. DeepSeek Harness
+also gains a Recommended preset. Native pins are unchanged.
+
 Component release 3.76.0 records memory-client 0.2.1, which uses the session's
 Machine relay and never fails a launch or holds a turn beyond its budget. Claude
 Code and Codex advance one patch version. Native pins are unchanged.
