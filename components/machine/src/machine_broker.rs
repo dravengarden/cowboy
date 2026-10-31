@@ -684,6 +684,7 @@ impl Broker {
                 current_turn_id: None,
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                supports_subagent_cancel: false,
                 last_runtime_seq: 0,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -1319,6 +1320,7 @@ impl Broker {
                     current_turn_id: None,
                     supports_current_turn: false,
                     delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                    supports_subagent_cancel: false,
                     last_runtime_seq: 0,
                     pending_permissions: Vec::new(),
                     config_options: None,
@@ -4036,6 +4038,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
         | WorkerCommand::Steer { command_id, .. }
         | WorkerCommand::Prompt { command_id, .. }
         | WorkerCommand::Cancel { command_id }
+        | WorkerCommand::CancelSubagent { command_id, .. }
         | WorkerCommand::Permission { command_id, .. }
         | WorkerCommand::SetConfigOption { command_id, .. }
         | WorkerCommand::Stop { command_id } => Some(command_id),
@@ -4555,6 +4558,11 @@ fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
             session_id,
             command_id,
         }
+        | CoreCommand::CancelSubagent {
+            session_id,
+            command_id,
+            ..
+        }
         | CoreCommand::Permission {
             session_id,
             command_id,
@@ -4890,6 +4898,38 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             session_id,
             command_id,
         } => broker.route_worker(&session_id, WorkerCommand::Cancel { command_id }),
+        CoreCommand::CancelSubagent {
+            session_id,
+            command_id,
+            subagent_session_id,
+        } => {
+            // Never queue it for a later worker: the subagent belongs to the
+            // live ACP connection, and an older worker cannot decode it.
+            let tx = broker
+                .workers
+                .lock()
+                .get(&session_id)
+                .filter(|worker| worker.snapshot.supports_subagent_cancel)
+                .map(|worker| worker.tx.clone());
+            let sent = tx.is_some_and(|tx| {
+                tx.send(Frame::WorkerCommand {
+                    session_id: session_id.clone(),
+                    command: WorkerCommand::CancelSubagent {
+                        command_id: command_id.clone(),
+                        subagent_session_id,
+                    },
+                })
+                .is_ok()
+            });
+            if !sent {
+                broker.send_controller(Frame::CommandAck {
+                    session_id,
+                    command_id,
+                    accepted: false,
+                    reason: Some("this worker cannot stop a single subagent".into()),
+                });
+            }
+        }
         CoreCommand::Permission {
             session_id,
             command_id,
@@ -6419,6 +6459,7 @@ mod tests {
                 current_turn_id: Some("turn-1".to_owned()),
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                supports_subagent_cancel: false,
                 last_runtime_seq: 10,
                 pending_permissions: Vec::new(),
                 config_options: None,
@@ -7576,6 +7617,47 @@ mod tests {
         .await;
         assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
         assert!(lineage(&broker).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_subagent_stop_reaches_only_a_worker_that_decodes_it() {
+        let (broker, _launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        while worker_rx.try_recv().is_ok() {}
+        let stop = |command_id: &str| CoreCommand::CancelSubagent {
+            session_id: "sess-1".into(),
+            command_id: command_id.into(),
+            subagent_session_id: "child".into(),
+        };
+        // An older worker never reports the capability: refuse, never queue.
+        handle_core_command(&broker, stop("old")).await;
+        let Some(Frame::CommandAck {
+            command_id,
+            accepted,
+            ..
+        }) = controller_rx.recv().await
+        else {
+            panic!("refusal acknowledgement");
+        };
+        assert_eq!((command_id.as_str(), accepted), ("old", false));
+        assert!(worker_rx.try_recv().is_err());
+
+        let mut current = broker.snapshots().into_iter().next().expect("worker");
+        current.supports_subagent_cancel = true;
+        broker.update_snapshot(current, 1);
+        handle_core_command(&broker, stop("new")).await;
+        let Ok(Frame::WorkerCommand { command, .. }) = worker_rx.try_recv() else {
+            panic!("forwarded subagent stop");
+        };
+        assert_eq!(
+            command,
+            WorkerCommand::CancelSubagent {
+                command_id: "new".into(),
+                subagent_session_id: "child".into(),
+            }
+        );
     }
 
     #[test]
@@ -10582,6 +10664,7 @@ mod tests {
                     current_turn_id: Some("turn-1".to_owned()),
                     supports_current_turn: false,
                     delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                    supports_subagent_cancel: false,
                     last_runtime_seq: 1,
                     pending_permissions: Vec::new(),
                     config_options: None,

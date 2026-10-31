@@ -454,6 +454,8 @@ export type Inbound =
     content?: ContentBlock[];
   }
   | { type: "cancel"; session_id: string }
+  // Stop one ACP subagent (its child session) while the turn continues.
+  | { type: "cancel_subagent"; session_id: string; subagent_session_id: string }
   // ACP bridge-only: remove exactly one queued prompt by its correlation id.
   | { type: "cancel_submitted"; session_id: string; cmid: string }
   | {

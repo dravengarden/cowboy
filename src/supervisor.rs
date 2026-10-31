@@ -600,11 +600,8 @@ impl Supervisor {
         ) {
             return Err("current-turn delivery requires durable asynchronous admission".into());
         }
-        if matches!(command, AgentCommand::Cancel) {
-            // Stopping a retained turn must never require starting or repairing
-            // a worker, including after host policy has denied its placement.
-            self.runtime_for_session(session_id)?.cancel(session_id);
-            return Ok(());
+        if let Some(stopped) = self.stop_without_worker(session_id, &command) {
+            return stopped;
         }
         if matches!(command, AgentCommand::SetConfigOption { .. })
             && self.defer_configuration(session_id)
@@ -685,6 +682,7 @@ impl Supervisor {
                 unreachable!("steering has separate admission")
             }
             AgentCommand::Cancel => runtime.cancel(session_id),
+            AgentCommand::CancelSubagent { .. } => unreachable!("stopped without a worker"),
             AgentCommand::Permission {
                 request_id,
                 option_id,
@@ -704,6 +702,29 @@ impl Supervisor {
             }
         }
         Ok(())
+    }
+
+    /// Stopping a retained turn must never require starting or repairing a
+    /// worker, including after host policy has denied its placement. A
+    /// subagent lives only in its current worker's ACP connection.
+    fn stop_without_worker(
+        &self,
+        session_id: &str,
+        command: &AgentCommand,
+    ) -> Option<Result<(), String>> {
+        match command {
+            AgentCommand::Cancel => Some(
+                self.runtime_for_session(session_id)
+                    .map(|runtime| runtime.cancel(session_id)),
+            ),
+            AgentCommand::CancelSubagent {
+                subagent_session_id,
+            } => Some(
+                self.runtime_for_session(session_id)
+                    .and_then(|runtime| runtime.cancel_subagent(session_id, subagent_session_id)),
+            ),
+            _ => None,
+        }
     }
 
     /// Reconcile a session the client opened without waking it when it is
@@ -1466,6 +1487,7 @@ mod tests {
             current_turn_id: None,
             supports_current_turn: false,
             delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            supports_subagent_cancel: false,
             last_runtime_seq: 1,
             pending_permissions: Vec::new(),
             config_options: None,

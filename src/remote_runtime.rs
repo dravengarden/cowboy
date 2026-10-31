@@ -92,6 +92,10 @@ pub struct Shared {
     /// The Machine starts a `native_fork` launch with `session/fork`; an
     /// older one would ignore the field and open an empty thread.
     native_fork_protocol: bool,
+    /// The negotiated Machine protocol. A Machine before
+    /// `SUBAGENT_CANCEL_PROTOCOL_VERSION` would reject a `CancelSubagent`
+    /// frame and drop the whole connection.
+    machine_protocol: u16,
     account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
@@ -224,6 +228,7 @@ impl RemoteRuntime {
                     >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
                 native_fork_protocol: machine_protocol
                     >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+                machine_protocol,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
@@ -279,6 +284,7 @@ impl RemoteRuntime {
                 current_turn_protocol: true,
                 delivery_controls_protocol: true,
                 native_fork_protocol: true,
+                machine_protocol: crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
@@ -1062,6 +1068,43 @@ impl RemoteRuntime {
         );
     }
 
+    /// Stop one ACP subagent of the session's live worker, leaving its turn
+    /// running. Refused, never queued for later, when the connected Machine or
+    /// worker cannot carry it: a late stop could reach a later run.
+    pub fn cancel_subagent(
+        &self,
+        session_id: &str,
+        subagent_session_id: &str,
+    ) -> Result<(), String> {
+        if !subagent_cancel_supported(&self.shared) {
+            return Err(
+                "the connected Machine cannot stop a single subagent; update it first".into(),
+            );
+        }
+        if !self.connected() {
+            return Err("runtime is disconnected".into());
+        }
+        let supported = self
+            .shared
+            .workers
+            .lock()
+            .get(session_id)
+            .is_some_and(|worker| worker.has_connected_owner() && worker.supports_subagent_cancel);
+        if !supported {
+            return Err("this session's worker cannot stop a single subagent".into());
+        }
+        let command_id = self.next_id("cancel-subagent");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::CancelSubagent {
+                session_id: session_id.to_owned(),
+                command_id,
+                subagent_session_id: subagent_session_id.to_owned(),
+            },
+        );
+        Ok(())
+    }
+
     pub fn permission(&self, session_id: &str, request_id: String, option_id: Option<String>) {
         let command_id = self.next_id("permission");
         self.queue(
@@ -1720,6 +1763,10 @@ fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
     }
 }
 
+fn subagent_cancel_supported(shared: &Shared) -> bool {
+    shared.machine_protocol >= crate::machine_protocol::SUBAGENT_CANCEL_PROTOCOL_VERSION
+}
+
 fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
     let forking = match command {
         CoreCommand::EnsureSession { session } => session.native_fork.is_some(),
@@ -1727,6 +1774,9 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
         _ => false,
     };
     if forking && !shared.native_fork_protocol {
+        return false;
+    }
+    if matches!(command, CoreCommand::CancelSubagent { .. }) && !subagent_cancel_supported(shared) {
         return false;
     }
     if shared.protocol.load(Ordering::Acquire)
@@ -2005,6 +2055,14 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 let _ = waiter.send("unknown".into());
             }
             shared.sent.lock().remove(&command_id);
+            if !accepted && matches!(&command, Some(CoreCommand::CancelSubagent { .. })) {
+                shared.hub.broadcast_error(
+                    Some(session_id.clone()),
+                    reason
+                        .clone()
+                        .unwrap_or_else(|| "the subagent could not be stopped".to_owned()),
+                );
+            }
             if matches!(
                 &command,
                 Some(
@@ -3997,6 +4055,7 @@ mod tests {
             current_turn_id: Some("turn-1".to_owned()),
             supports_current_turn: false,
             delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            supports_subagent_cancel: false,
             last_runtime_seq: 4,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -4390,6 +4449,38 @@ mod tests {
         runtime.shared.resetting.lock().remove("s");
         runtime.shared.connected.store(false, Ordering::Release);
         assert!(runtime.observed_configuration("s").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_subagent_stop_needs_a_capable_worker_and_is_never_deferred() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let mut worker = snapshot("s");
+        let runtime = RemoteRuntime::for_test(hub, vec![worker.clone()]);
+        runtime.shared.connected.store(true, Ordering::Release);
+        assert!(runtime.cancel_subagent("s", "child").is_err());
+        assert!(pending_wire_commands(&runtime).await.is_empty());
+        worker.supports_subagent_cancel = true;
+        runtime.shared.workers.lock().insert("s".into(), worker);
+        runtime.cancel_subagent("s", "child").unwrap();
+        let commands = pending_wire_commands(&runtime).await;
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [CoreCommand::CancelSubagent { session_id, subagent_session_id, .. }]
+                    if session_id == "s" && subagent_session_id == "child"
+            ),
+            "{commands:?}"
+        );
+        runtime.shared.connected.store(false, Ordering::Release);
+        assert!(runtime.cancel_subagent("s", "child").is_err());
     }
 
     async fn pending_wire_commands(runtime: &RemoteRuntime) -> Vec<CoreCommand> {

@@ -89,6 +89,11 @@ pub struct WorkerSnapshot {
     pub supports_current_turn: bool,
     #[serde(default)]
     pub delivery_controls: DeliveryControls,
+    /// The worker accepts [`WorkerCommand::CancelSubagent`]. Absent from older
+    /// workers, which must never receive it: their frame decoder would reject
+    /// the whole connection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_subagent_cancel: bool,
     #[serde(default)]
     pub last_runtime_seq: u64,
     #[serde(default)]
@@ -162,6 +167,17 @@ pub fn native_cycle(update: &serde_json::Value) -> Option<Option<String>> {
             .map(str::to_owned)
     })
 }
+
+/// Cowboy-owned `sessionUpdate` presenting one ACP subagent (a child session
+/// the agent announced with `subagent_update`) in its root session.
+///
+/// The worker never mixes a child's own messages and tool calls into the
+/// parent transcript. It folds them into a bounded, self-contained snapshot of
+/// the child, identified by `sessionId` and ordered by `revision`. Each
+/// snapshot replaces the previous one for that child, so the Controller may
+/// keep only the latest durably and a Client renders the highest revision. A
+/// peer that predates it stores and ignores it like any unknown update.
+pub const SUBAGENT_UPDATE: &str = "cowboy_subagent";
 
 pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -441,6 +457,16 @@ pub enum CoreCommand {
         session_id: String,
         command_id: String,
     },
+    /// Stop one ACP subagent (a child session of this session's agent) without
+    /// cancelling the session's turn. Sent only to Machines at
+    /// [`crate::machine_protocol::SUBAGENT_CANCEL_PROTOCOL_VERSION`]; the
+    /// Machine forwards it only to a worker whose snapshot reports
+    /// `supports_subagent_cancel` and refuses it otherwise.
+    CancelSubagent {
+        session_id: String,
+        command_id: String,
+        subagent_session_id: String,
+    },
     Permission {
         session_id: String,
         command_id: String,
@@ -510,6 +536,7 @@ impl CoreCommand {
             | Self::Steer { session_id, .. }
             | Self::Prompt { session_id, .. }
             | Self::Cancel { session_id, .. }
+            | Self::CancelSubagent { session_id, .. }
             | Self::Permission { session_id, .. }
             | Self::SetConfigOption { session_id, .. }
             | Self::DrainSession { session_id, .. }
@@ -558,6 +585,11 @@ pub enum WorkerCommand {
     },
     Cancel {
         command_id: String,
+    },
+    /// See [`CoreCommand::CancelSubagent`].
+    CancelSubagent {
+        command_id: String,
+        subagent_session_id: String,
     },
     Permission {
         command_id: String,
@@ -939,6 +971,7 @@ mod tests {
             current_turn_id: None,
             supports_current_turn: false,
             delivery_controls: DeliveryControls::default(),
+            supports_subagent_cancel: false,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -1068,6 +1101,44 @@ mod tests {
         let mut legacy = present;
         legacy["unknown_future_field"] = serde_json::json!(true);
         assert!(serde_json::from_value::<WorkerSnapshot>(legacy).is_ok());
+    }
+
+    #[test]
+    fn subagent_cancel_is_a_separate_command_older_snapshots_never_advertise() {
+        let mut snapshot = native_snapshot(None, None);
+        let legacy = serde_json::to_value(&snapshot).unwrap();
+        assert!(legacy.get("supports_subagent_cancel").is_none());
+        assert!(
+            !serde_json::from_value::<WorkerSnapshot>(legacy)
+                .unwrap()
+                .supports_subagent_cancel
+        );
+        snapshot.supports_subagent_cancel = true;
+        let current = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(current["supports_subagent_cancel"], true);
+        assert_eq!(
+            serde_json::from_value::<WorkerSnapshot>(current).unwrap(),
+            snapshot
+        );
+        // Its own tag: an older peer refuses it rather than reading it as
+        // `cancel`, which would stop the whole turn.
+        let command = serde_json::to_value(CoreCommand::CancelSubagent {
+            session_id: "s".into(),
+            command_id: "c".into(),
+            subagent_session_id: "child".into(),
+        })
+        .unwrap();
+        assert_eq!(command["command"], "cancel_subagent");
+        let worker = serde_json::to_value(WorkerCommand::CancelSubagent {
+            command_id: "c".into(),
+            subagent_session_id: "child".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            worker,
+            serde_json::json!({"command": "cancel_subagent", "command_id": "c", "subagent_session_id": "child"})
+        );
+        assert!(serde_json::from_value::<WorkerCommand>(worker).is_ok());
     }
 
     #[test]

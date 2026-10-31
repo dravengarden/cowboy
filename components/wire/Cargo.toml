@@ -13,7 +13,7 @@ machine-host = []
 test-fixtures = []
 
 [dependencies]
-agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage", "unstable_subagents"] }
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }

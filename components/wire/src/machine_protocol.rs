@@ -27,7 +27,10 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 39;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 40;
+/// Machines route `CoreCommand::CancelSubagent` to a worker that reports
+/// `supports_subagent_cancel`, and refuse it for any other worker.
+pub const SUBAGENT_CANCEL_PROTOCOL_VERSION: u16 = 40;
 /// Workers create a session's first thread with ACP `session/fork`
 /// (`StartSession::native_fork`), and workspace preparation can start an
 /// isolated worktree from another session's worktree state.

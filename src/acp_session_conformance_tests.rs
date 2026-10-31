@@ -144,6 +144,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         cgroup: None,
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
+        subagents: Mutex::new(subagents::Subagents::default()),
     });
     (state, sink)
 }
@@ -1734,4 +1735,328 @@ async fn a_self_started_cycle_is_steerable_only_by_its_exact_name() {
     })
     .await
     .expect("bounded native-cycle fixture");
+}
+
+const CHILD: &str = "child-session";
+
+fn update_of(session: &str, update: Value) -> Value {
+    let mut notification = json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": session
+    }});
+    notification["params"]["update"] = update;
+    notification
+}
+
+fn timeline_updates(sink: &HubSink) -> Vec<Value> {
+    sink.hub
+        .snapshot(SESSION)
+        .unwrap()
+        .0
+        .into_iter()
+        .filter_map(|entry| match entry.event {
+            Event::Update { update } => Some(update),
+            _ => None,
+        })
+        .collect()
+}
+
+fn subagent_row(sink: &HubSink, child: &str) -> Option<Value> {
+    timeline_updates(sink).into_iter().rev().find(|update| {
+        update["sessionUpdate"] == subagents::SUBAGENT_UPDATE && update["sessionId"] == child
+    })
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One subagent's complete wire lifecycle, in order.
+async fn a_child_session_is_one_live_row_and_stops_alone() {
+    let (state, sink) = activity_fixture("fixture-provider");
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let (observed_tx, mut observed_rx) = watch::channel(0_usize);
+    let notifications = state.clone();
+    let main_state = state.clone();
+    let client = Client
+        .builder()
+        .on_receive_notification(
+            async move |notification: SessionNotification,
+                        _: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_session_notification(&notifications, &notification);
+                observed_tx.send_modify(|count| *count += 1);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ByteStreams::new(client_write.compat_write(), client_read.compat()),
+            async move |cx: ConnectionTo<Agent>| {
+                run_session(
+                    &main_state,
+                    cx,
+                    None.into(),
+                    PathBuf::from(CWD),
+                    &mut command_rx,
+                    "fixture-provider",
+                    &startup,
+                )
+                .await
+            },
+        );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        let mut next = async || -> Value {
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
+        };
+        let initialize = next().await;
+        assert_eq!(initialize["method"], "initialize");
+        assert_eq!(
+            initialize["params"]["clientCapabilities"]["subagents"],
+            json!({})
+        );
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":initialize["id"],"result":{
+                "protocolVersion":1,"agentCapabilities":{}
+            }}),
+        )
+        .await;
+        let new = next().await;
+        assert_eq!(new["method"], "session/new");
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":new["id"],"result":{"sessionId":NATIVE}}),
+        )
+        .await;
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        command_tx
+            .send(AgentCommand::Prompt(
+                vec![ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new("delegate"),
+                )],
+                None,
+                None,
+            ))
+            .unwrap();
+        let prompt = next().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        let baseline = *observed_rx.borrow();
+        // The scripted adapter's RFD form: announce, delegate, then the
+        // child's own traffic on its own session id.
+        let wire = [
+            update_of(
+                NATIVE,
+                json!({
+                    "sessionUpdate": "subagent_update", "sessionId": CHILD,
+                    "title": "Explore", "description": "Explore",
+                    "capabilities": {"cancel": {}}, "state": {"state": "running"},
+                }),
+            ),
+            update_of(
+                NATIVE,
+                json!({
+                    "sessionUpdate": "session_message", "messageId": "toolu_1",
+                    "senderSessionId": NATIVE, "recipientSessionId": CHILD,
+                    "recipientMessageId": "toolu_1",
+                    "content": [{"type": "text", "text": "Find the flaky test"}],
+                }),
+            ),
+            update_of(
+                CHILD,
+                json!({
+                    "sessionUpdate": "config_option_update",
+                    "configOptions": [{"id": "model", "name": "Model", "type": "select",
+                        "currentValue": "child-model", "options": [{"value": "child-model", "name": "Child"}]}],
+                }),
+            ),
+            update_of(
+                CHILD,
+                json!({
+                    "sessionUpdate": "tool_call", "toolCallId": "child-tool",
+                    "title": "Read tests.rs", "kind": "read", "status": "in_progress",
+                }),
+            ),
+            update_of(
+                CHILD,
+                json!({
+                    "sessionUpdate": "agent_message_chunk", "messageId": "child-message",
+                    "content": {"type": "text", "text": "Looking"},
+                }),
+            ),
+            update_of(
+                NATIVE,
+                json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "Parent waits."},
+                }),
+            ),
+        ];
+        for (index, notification) in wire.into_iter().enumerate() {
+            send_json(&mut writer, notification).await;
+            observed_rx
+                .wait_for(|count| *count > baseline + index)
+                .await
+                .unwrap();
+        }
+        let updates = timeline_updates(&sink);
+        assert!(
+            updates
+                .iter()
+                .all(|update| update["toolCallId"] != "child-tool"
+                    && update["content"]["text"] != "Looking"
+                    && update["sessionUpdate"] != "session_message"),
+            "child traffic never enters the parent timeline: {updates:?}"
+        );
+        assert!(
+            !sink
+                .hub
+                .config_options(SESSION)
+                .unwrap_or_default()
+                .to_string()
+                .contains("child-model"),
+            "a child's configuration is not the parent's"
+        );
+        assert_eq!(
+            updates
+                .iter()
+                .filter(|update| update["sessionUpdate"] == subagents::SUBAGENT_UPDATE)
+                .count(),
+            1,
+            "one durable row per child: {updates:?}"
+        );
+        let row = subagent_row(&sink, CHILD).expect("subagent row");
+        assert_eq!(row["title"], "Explore");
+        assert_eq!(row["state"], "running");
+        assert_eq!(row["cancellable"], true);
+        assert_eq!(row["prompt"], "Find the flaky test");
+        assert_eq!(row["toolCalls"], 1);
+        assert_eq!(row["activity"][0]["title"], "Read tests.rs");
+        assert_eq!(row["activity"][1]["text"], "Looking");
+        assert!(
+            updates
+                .iter()
+                .any(|update| update["content"]["text"] == "Parent waits.")
+        );
+        assert_eq!(
+            sink.hub
+                .session_info(SESSION)
+                .unwrap()
+                .meta
+                .background_tasks,
+            1,
+            "a working subagent is activity"
+        );
+
+        command_tx
+            .send(AgentCommand::CancelSubagent {
+                subagent_session_id: CHILD.to_owned(),
+            })
+            .unwrap();
+        let cancel = next().await;
+        assert_eq!(cancel["method"], "session/cancel");
+        assert_eq!(
+            cancel["params"]["sessionId"], CHILD,
+            "only the child is cancelled"
+        );
+        let baseline = *observed_rx.borrow();
+        for (index, notification) in [
+            update_of(
+                NATIVE,
+                json!({
+                    "sessionUpdate": "subagent_update", "sessionId": CHILD,
+                    "state": {"state": "idle", "stopReason": "cancelled"},
+                }),
+            ),
+            update_of(
+                NATIVE,
+                json!({
+                    "sessionUpdate": "subagent_update", "sessionId": CHILD,
+                    "capabilities": {"cancel": null},
+                }),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            send_json(&mut writer, notification).await;
+            observed_rx
+                .wait_for(|count| *count > baseline + index)
+                .await
+                .unwrap();
+        }
+        let row = subagent_row(&sink, CHILD).expect("subagent row");
+        assert_eq!(row["state"], "idle");
+        assert_eq!(row["stopReason"], "cancelled");
+        assert_eq!(row["cancellable"], false);
+        assert_eq!(
+            sink.hub
+                .session_info(SESSION)
+                .unwrap()
+                .meta
+                .background_tasks,
+            0
+        );
+        // A stop for a child that no longer works never reaches the adapter.
+        command_tx
+            .send(AgentCommand::CancelSubagent {
+                subagent_session_id: CHILD.to_owned(),
+            })
+            .unwrap();
+        command_tx
+            .send(AgentCommand::CancelSubagent {
+                subagent_session_id: NATIVE.to_owned(),
+            })
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), lines.next_line())
+                .await
+                .is_err(),
+            "no session/cancel for an idle or unknown subagent"
+        );
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}}),
+        )
+        .await;
+        while sink.prompt_completions.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded subagent fixture");
+}
+
+#[test]
+fn a_child_request_names_its_subagent_and_a_root_request_does_not() {
+    let (state, _sink) = activity_fixture("fixture-provider");
+    state.subagents.lock().route(
+        NATIVE,
+        &json!({"sessionUpdate": "subagent_update", "sessionId": CHILD, "title": "Reviewer"}),
+        std::time::Instant::now(),
+        1,
+    );
+    let mut child = json!({"toolCallId": "t", "title": "Run tests"});
+    tag_subagent_request(&state, CHILD, &mut child);
+    assert_eq!(
+        child["_cowboy"]["subagent"],
+        json!({"sessionId": CHILD, "title": "Reviewer"})
+    );
+    let mut elicitation = json!({"title": "Pick", "_cowboy": {"elicitation": {"mode": "form"}}});
+    tag_subagent_request(&state, CHILD, &mut elicitation);
+    assert_eq!(elicitation["_cowboy"]["elicitation"]["mode"], "form");
+    assert_eq!(elicitation["_cowboy"]["subagent"]["title"], "Reviewer");
+    let mut root = json!({"toolCallId": "t", "title": "Run tests"});
+    tag_subagent_request(&state, NATIVE, &mut root);
+    assert!(root.get("_cowboy").is_none());
 }

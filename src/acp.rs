@@ -48,7 +48,7 @@ use agent_client_protocol::schema::v1::{
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
     SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest,
+    SetSessionModeRequest, SubagentCapabilities,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
@@ -1010,6 +1010,11 @@ fn projected_auth_error(
 ///
 /// It also answers form and URL elicitations. Without them, Claude disables
 /// `AskUserQuestion` and Codex answers every `request_user_input` with nothing.
+///
+/// It declares `subagents`: each subagent becomes its own child ACP session
+/// that Cowboy presents as one live row of the parent (see [`subagents`]),
+/// and whose work it can stop alone. Without it, adapters render a subagent
+/// as an opaque tool call of the parent.
 fn initialize_request() -> InitializeRequest {
     InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
         ClientCapabilities::new()
@@ -1022,7 +1027,8 @@ fn initialize_request() -> InitializeRequest {
                 ElicitationCapabilities::new()
                     .form(ElicitationFormCapabilities::new())
                     .url(ElicitationUrlCapabilities::new()),
-            ),
+            )
+            .subagents(SubagentCapabilities::new()),
     )
 }
 
@@ -1069,6 +1075,19 @@ fn elicitation_permission(
         },
     ]);
     (tool_call, options)
+}
+
+/// The session a session-scoped elicitation belongs to.
+fn elicitation_session_id(request: &CreateElicitationRequest) -> Option<&str> {
+    let scope = match &request.mode {
+        ElicitationMode::Form(form) => &form.scope,
+        ElicitationMode::Url(url) => &url.scope,
+        _ => return None,
+    };
+    match scope {
+        ElicitationScope::Session(session) => Some(session.session_id.0.as_ref()),
+        _ => None,
+    }
 }
 
 fn elicitation_tool_call_id(scope: &ElicitationScope) -> Option<String> {
@@ -1178,6 +1197,9 @@ fn load_session_request(
     LoadSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
 }
 
+#[path = "acp_subagents.rs"]
+mod subagents;
+
 #[cfg(test)]
 #[path = "acp_session_conformance_tests.rs"]
 mod session_conformance_tests;
@@ -1210,7 +1232,7 @@ mod startup_mode_tests {
     use tokio::sync::{Notify, mpsc};
 
     #[test]
-    fn initialize_advertises_typed_compaction_notices_and_elicitation() {
+    fn initialize_advertises_typed_compaction_notices_elicitation_and_subagents() {
         let request = serde_json::to_value(initialize_request()).unwrap();
         assert_eq!(request["protocolVersion"], 1);
         assert_eq!(
@@ -1220,6 +1242,13 @@ mod startup_mode_tests {
         assert_eq!(
             request["clientCapabilities"]["elicitation"],
             serde_json::json!({ "form": {}, "url": {} })
+        );
+        // Both production adapters test for a JSON object here, not for
+        // particular members (claude `clientSupportsSubagents`, codex
+        // `subagentProtocol`).
+        assert_eq!(
+            request["clientCapabilities"]["subagents"],
+            serde_json::json!({})
         );
     }
 
@@ -2281,6 +2310,10 @@ pub enum AgentCommand {
     ),
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
+    /// Stop one subagent's current work: ACP `session/cancel` addressed to
+    /// that child session only, when the adapter granted it `cancel`. The
+    /// parent turn and every other subagent continue.
+    CancelSubagent { subagent_session_id: String },
     CancelTurn {
         target: crate::send_delivery::DeliveryTarget,
         cmid: String,
@@ -2336,6 +2369,11 @@ struct SessionActivity {
     /// Live background tasks the SDK counts as activity. Presentation only:
     /// a long-lived background server must never hold the prompt queue.
     background_tasks: u32,
+    /// The SDK's own level, before subagents are folded in.
+    native_background_tasks: u32,
+    /// Subagents whose work is in progress. A subagent can outlive the
+    /// prompt that launched it; while it works, the session is not settled.
+    working_subagents: u32,
 }
 
 impl Default for SessionActivity {
@@ -2346,11 +2384,19 @@ impl Default for SessionActivity {
             prompt_failed: false,
             native_busy: false,
             background_tasks: 0,
+            native_background_tasks: 0,
+            working_subagents: 0,
         }
     }
 }
 
 impl SessionActivity {
+    /// The reported background level. The SDK may already count a
+    /// subagent's task, so the two levels are not added.
+    fn reported_background_tasks(&self) -> u32 {
+        self.native_background_tasks.max(self.working_subagents)
+    }
+
     fn status(&self) -> Status {
         if self.prompt_status == Status::Running && !self.prompt_failed && self.native_busy {
             Status::Busy
@@ -2437,6 +2483,9 @@ struct ClientState {
     /// agent's config-option snapshots. Rate limits are per model bucket, so
     /// naming the model is what turns "wait an hour" into "switch and continue".
     model_label: Mutex<Option<String>>,
+    /// Child sessions the agent announced with `subagent_update`, folded into
+    /// bounded snapshots in this session's timeline (see [`subagents`]).
+    subagents: Mutex<subagents::Subagents>,
 }
 
 /// Retry and completion state belongs to one serialized prompt. Keeping it
@@ -2739,6 +2788,7 @@ async fn agent_main(
         cgroup: agent_cgroup.clone(),
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
+        subagents: Mutex::new(subagents::Subagents::default()),
     });
 
     let notif_state = state.clone();
@@ -2831,6 +2881,8 @@ async fn agent_main(
                 let request_id = serde_json::to_string(responder.id())
                     .unwrap_or_else(|_| responder.id().to_string());
                 let options = serde_json::to_value(&req.options).unwrap_or(serde_json::Value::Null);
+                let mut tool_call = tool_call;
+                tag_subagent_request(&perm_state, req.session_id.0.as_ref(), &mut tool_call);
 
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 perm_state.pending.lock().insert(request_id.clone(), tx);
@@ -2899,7 +2951,10 @@ async fn agent_main(
                 }
                 let request_id = serde_json::to_string(responder.id())
                     .unwrap_or_else(|_| responder.id().to_string());
-                let (tool_call, options) = elicitation_permission(&request_id, &req);
+                let (mut tool_call, options) = elicitation_permission(&request_id, &req);
+                if let Some(session) = elicitation_session_id(&req) {
+                    tag_subagent_request(&elicit_state, session, &mut tool_call);
+                }
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 elicit_state.pending.lock().insert(request_id.clone(), tx);
                 elicit_state.elicitations.lock().insert(request_id.clone());
@@ -3364,13 +3419,20 @@ fn handle_native_background_tasks(state: &ClientState, notif: &ClaudeSdkMessageN
         .count();
     let count = u32::try_from(count).unwrap_or(u32::MAX);
     let mut activity = state.activity.lock();
-    if activity.native_session_id.as_deref() != Some(notif.session_id.as_str())
-        || activity.background_tasks == count
-    {
+    if activity.native_session_id.as_deref() != Some(notif.session_id.as_str()) {
         return;
     }
-    activity.background_tasks = count;
-    state.sink.set_background_tasks(&state.session_id, count);
+    activity.native_background_tasks = count;
+    report_background_tasks(state, &mut activity);
+}
+
+/// Publish the combined background level when it changed.
+fn report_background_tasks(state: &ClientState, activity: &mut SessionActivity) {
+    let count = activity.reported_background_tasks();
+    if activity.background_tasks != count {
+        activity.background_tasks = count;
+        state.sink.set_background_tasks(&state.session_id, count);
+    }
 }
 
 fn visible_config_options(
@@ -3397,6 +3459,11 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     // During a `session/load` resume the agent replays prior turns; drop them
     // — cowboy already has this history persisted (see field docs).
     if state.suppress_updates.load(Ordering::SeqCst) {
+        return;
+    }
+    // Subagents first: a child's configuration, usage and messages are never
+    // the parent's, so nothing below may see a child notification.
+    if !route_subagent_notification(state, notif) {
         return;
     }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
@@ -3476,6 +3543,77 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     note_turn_progress(state, &update);
     state.sink.push(&state.session_id, Event::Update { update });
+}
+
+/// Route a notification that concerns subagents: a child session's own
+/// update, or the root's `subagent_update` / linked `session_message`. Returns
+/// whether the notification still belongs to the root timeline.
+fn route_subagent_notification(state: &ClientState, notif: &SessionNotification) -> bool {
+    let session = notif.session_id.0.as_ref();
+    let concerns_subagents = matches!(
+        notif.update,
+        SessionUpdate::SubagentUpdate(_)
+            | SessionUpdate::SessionMessage(_)
+            | SessionUpdate::SessionMessageChunk(_)
+    ) || state.subagents.lock().owns(session);
+    let now = Instant::now();
+    let now_ms = u64::try_from(observed_at_ms()).unwrap_or_default();
+    if !concerns_subagents {
+        let due = state.subagents.lock().due(now, now_ms);
+        publish_subagents(state, due);
+        return true;
+    }
+    let update = match serde_json::to_value(&notif.update) {
+        Ok(update) => update,
+        Err(error) => {
+            tracing::warn!(%error, "serializing subagent update");
+            return false;
+        }
+    };
+    let routed = state.subagents.lock().route(session, &update, now, now_ms);
+    publish_subagents(state, routed.snapshots);
+    if !routed.root {
+        // A working child proves the turn is alive even while the parent is
+        // silent: the watchdog must not cancel a parent that waits on it, and
+        // a prompt whose child already acted must never be replayed.
+        state.backoff.lock().take();
+        *state.last_progress.lock() = Instant::now();
+        if let Some(prompt) = state.current_prompt() {
+            prompt.visible_update.store(true, Ordering::SeqCst);
+        }
+    }
+    routed.root
+}
+
+fn publish_subagents(state: &ClientState, snapshots: Vec<serde_json::Value>) {
+    if snapshots.is_empty() {
+        return;
+    }
+    for update in snapshots {
+        state.sink.push(&state.session_id, Event::Update { update });
+    }
+    let working = state.subagents.lock().working();
+    let mut activity = state.activity.lock();
+    activity.working_subagents = working;
+    report_background_tasks(state, &mut activity);
+}
+
+/// Mark a permission or elicitation request that a child session raised with
+/// that subagent's identity. The request still travels the ordinary
+/// permission channel; only its presentation names who asks.
+fn tag_subagent_request(state: &ClientState, session_id: &str, tool_call: &mut serde_json::Value) {
+    let Some(tag) = state.subagents.lock().request_tag(session_id) else {
+        return;
+    };
+    let Some(tool_call) = tool_call.as_object_mut() else {
+        return;
+    };
+    let cowboy = tool_call
+        .entry("_cowboy")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(cowboy) = cowboy.as_object_mut() {
+        cowboy.insert("subagent".to_owned(), tag);
+    }
 }
 
 fn is_empty_stream_message_update(update: &serde_json::Value) -> bool {
@@ -3732,10 +3870,8 @@ async fn run_session(
         // starts with no background work of its own.
         let mut activity = state.activity.lock();
         activity.native_session_id = Some(acp_id.0.to_string());
-        if activity.background_tasks != 0 {
-            activity.background_tasks = 0;
-            state.sink.set_background_tasks(&state.session_id, 0);
-        }
+        activity.native_background_tasks = 0;
+        report_background_tasks(state, &mut activity);
     }
     startup_phase.send_replace(StartupPhase::Configure);
     if crate::provider::uses_config_full_access(provider_id) {
@@ -4442,6 +4578,24 @@ async fn run_session(
                     .prompt_cancellation
                     .send_modify(|generation| *generation = generation.wrapping_add(1));
                 let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+            }
+            AgentCommand::CancelSubagent {
+                subagent_session_id,
+            } => {
+                // Only a child that is working and whose adapter currently
+                // grants `cancel` is addressed; anything else would reach an
+                // adapter that may treat an unknown id as the whole session.
+                if state.subagents.lock().can_cancel(&subagent_session_id) {
+                    tracing::info!(session = %session_id, subagent = %subagent_session_id, "cancelling one subagent");
+                    let _ = cx.send_notification(CancelNotification::new(SessionId::new(
+                        subagent_session_id.as_str(),
+                    )));
+                } else {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        "This subagent can no longer be stopped.".to_owned(),
+                    );
+                }
             }
             AgentCommand::Permission {
                 request_id,

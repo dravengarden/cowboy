@@ -1326,6 +1326,12 @@ pub enum Inbound {
     },
     /// Cancel a session's current turn.
     Cancel { session_id: String },
+    /// Stop one ACP subagent of the session (its child session
+    /// `subagent_session_id`) while the turn and other subagents continue.
+    CancelSubagent {
+        session_id: String,
+        subagent_session_id: String,
+    },
     /// Cancel a prompt submitted by an ACP bridge before it becomes the active
     /// turn. `cmid` is the bridge-generated correlation id. This deliberately
     /// removes only that queued prompt and never disturbs another surface's
@@ -8463,6 +8469,7 @@ mod runtime_reconciliation_tests {
             current_turn_id: Some("turn-1".to_owned()),
             supports_current_turn: false,
             delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            supports_subagent_cancel: false,
             last_runtime_seq: 7,
             pending_permissions: Vec::new(),
             config_options: None,

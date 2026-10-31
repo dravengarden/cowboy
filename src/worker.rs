@@ -688,6 +688,9 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 version: 1,
                 next_checkpoint: false,
             },
+            // This worker decodes and executes the command itself; whether a
+            // given subagent may be stopped is decided per child in ACP.
+            supports_subagent_cancel: true,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
             config_options: None,
@@ -1146,6 +1149,21 @@ pub fn handle_command(
                 }
                 (command_id, Some(AgentCommand::Cancel), None)
             }
+            WorkerCommand::CancelSubagent {
+                command_id,
+                subagent_session_id,
+            } => {
+                if !shared.mark_command(&command_id) {
+                    return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
+                }
+                (
+                    command_id,
+                    Some(AgentCommand::CancelSubagent {
+                        subagent_session_id,
+                    }),
+                    None,
+                )
+            }
             WorkerCommand::Permission {
                 command_id,
                 request_id,
@@ -1285,6 +1303,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 current_turn_id: None,
                 supports_current_turn: false,
                 delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                supports_subagent_cancel: false,
                 last_runtime_seq: 0,
                 pending_permissions: vec![],
                 config_options: None,

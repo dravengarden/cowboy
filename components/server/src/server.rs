@@ -12436,6 +12436,7 @@ fn allowed_on_trashed_session(cmd: &Inbound) -> bool {
         cmd,
         Inbound::DeleteSession { .. }
             | Inbound::Cancel { .. }
+            | Inbound::CancelSubagent { .. }
             | Inbound::CancelSubmitted { .. }
             | Inbound::OpenSession { .. }
             | Inbound::RenameSession { .. }
@@ -22074,6 +22075,7 @@ fn handle_command(
     let session_id_for_err: Option<String> = match &cmd {
         Inbound::Prompt { session_id, .. }
         | Inbound::Cancel { session_id }
+        | Inbound::CancelSubagent { session_id, .. }
         | Inbound::CancelSubmitted { session_id, .. }
         | Inbound::Permission { session_id, .. }
         | Inbound::DeleteSession { session_id }
@@ -22286,6 +22288,21 @@ fn handle_command(
             result
         }
         Inbound::Cancel { session_id } => state.supervisor.send(&session_id, AgentCommand::Cancel),
+        Inbound::CancelSubagent {
+            session_id,
+            subagent_session_id,
+        } => {
+            if subagent_session_id.is_empty() || subagent_session_id.len() > 256 {
+                Err("invalid subagent".to_owned())
+            } else {
+                state.supervisor.send(
+                    &session_id,
+                    AgentCommand::CancelSubagent {
+                        subagent_session_id,
+                    },
+                )
+            }
+        }
         Inbound::CancelSubmitted { session_id, cmid } => {
             if state.hub.remove_queued_by_cmid(&session_id, &cmid) {
                 // Explicit acknowledgement for the ACP bridge. Absence of this

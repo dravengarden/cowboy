@@ -203,6 +203,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         command,
         CoreCommand::StopSession { .. }
             | CoreCommand::Cancel { .. }
+            | CoreCommand::CancelSubagent { .. }
             | CoreCommand::QuiesceAccountSession { .. }
     ) {
         write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
