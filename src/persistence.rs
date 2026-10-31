@@ -47,17 +47,42 @@ struct TextSlot {
     envelope: Envelope,
 }
 
+/// Subagent rows remembered across all sessions before the oldest are
+/// forgotten. A forgotten child's next snapshot simply starts a new row,
+/// which clients merge by its child session id.
+const MAX_SUBAGENT_ROWS: usize = 4096;
+
 #[derive(Default)]
 pub struct EventReducer {
     text: HashMap<String, TextSlot>,
     tools: HashMap<(String, String), Envelope>,
+    /// `(session, child session)` → seq of that subagent's row.
+    subagents: HashMap<(String, String), u64>,
 }
 
 impl EventReducer {
     pub fn clear_session(&mut self, session_id: &str) {
         self.text.remove(session_id);
         self.tools.retain(|(session, _), _| session != session_id);
+        self.subagents
+            .retain(|(session, _), _| session != session_id);
         self.shrink_tools_if_sparse();
+    }
+
+    /// A subagent snapshot is complete, so its row is replaced in place. It
+    /// survives turn ends (a subagent can outlive the prompt that launched
+    /// it) and never interrupts the parent's streamed message.
+    fn reduce_subagent(&mut self, mut env: Envelope, child: &str) -> Envelope {
+        let key = (env.session_id.clone(), child.to_owned());
+        if let Some(seq) = self.subagents.get(&key) {
+            env.seq = *seq;
+            return env;
+        }
+        if self.subagents.len() >= MAX_SUBAGENT_ROWS {
+            self.subagents.clear();
+        }
+        self.subagents.insert(key, env.seq);
+        env
     }
 
     /// Convert the high-frequency ACP event stream into stable history rows.
@@ -83,6 +108,15 @@ impl EventReducer {
             .and_then(serde_json::Value::as_str);
         if matches!(kind, Some("usage_update" | "session_info_update")) {
             return None;
+        }
+        if kind == Some(crate::runtime_wire::SUBAGENT_UPDATE)
+            && let Some(child) = update
+                .get("sessionId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|child| !child.is_empty())
+        {
+            let child = child.to_owned();
+            return Some(self.reduce_subagent(env, &child));
         }
         // Codex exposes terminal stdout/stderr as an extension-only delta. It
         // is useful to connected clients while a command is running, but it is
@@ -378,6 +412,59 @@ mod tests {
         let next = reducer.reduce(summary(3, "c-2", "Later.")).expect("next");
         assert_eq!(next.seq, 3);
         assert_eq!(text(&next).as_deref(), Some("Later."));
+    }
+
+    #[test]
+    fn a_subagent_keeps_one_row_across_turns_without_splitting_parent_text() {
+        let event = |seq, update: serde_json::Value| Envelope {
+            session_id: "session".to_owned(),
+            seq,
+            event: Event::Update { update },
+            cmid: None,
+        };
+        let subagent = |seq, child: &str, revision: u64| {
+            event(
+                seq,
+                serde_json::json!({
+                    "sessionUpdate": crate::runtime_wire::SUBAGENT_UPDATE,
+                    "sessionId": child,
+                    "revision": revision,
+                }),
+            )
+        };
+        let text = |seq, text: &str| {
+            event(
+                seq,
+                serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "type": "text", "text": text },
+                }),
+            )
+        };
+        let mut reducer = EventReducer::default();
+        assert_eq!(reducer.reduce(text(1, "Delegating ")).unwrap().seq, 1);
+        assert_eq!(reducer.reduce(subagent(2, "child", 10)).unwrap().seq, 2);
+        let joined = reducer.reduce(text(3, "now.")).unwrap();
+        assert_eq!(joined.seq, 1, "a subagent row is out of band");
+        let turn_end = Envelope {
+            session_id: "session".to_owned(),
+            seq: 4,
+            event: Event::TurnEnd {
+                usage: None,
+                stop_reason: "end_turn".to_owned(),
+            },
+            cmid: None,
+        };
+        assert!(reducer.reduce(turn_end).is_some());
+        let later = reducer.reduce(subagent(5, "child", 11)).unwrap();
+        assert_eq!(later.seq, 2, "the latest snapshot replaces the first row");
+        let Event::Update { update } = &later.event else {
+            panic!("update");
+        };
+        assert_eq!(update["revision"], 11);
+        assert_eq!(reducer.reduce(subagent(6, "other", 12)).unwrap().seq, 6);
+        reducer.clear_session("session");
+        assert_eq!(reducer.reduce(subagent(7, "child", 13)).unwrap().seq, 7);
     }
 
     #[test]
