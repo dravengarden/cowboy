@@ -14,8 +14,106 @@ struct RefreshProbe {
     )>,
 }
 
+/// First retry delay after a failed probe; doubles per failure of the same
+/// exact candidate up to [`PROBE_RETRY_MAX`].
+const PROBE_RETRY_INITIAL: Duration = Duration::from_secs(30);
+const PROBE_RETRY_MAX: Duration = Duration::from_mins(30);
+/// Bounded memory: forget the oldest deadlines first.
+const PROBE_FAILURE_ENTRIES: usize = 64;
+
+#[derive(Default)]
+pub(super) struct ProbeFailures(BTreeMap<[u8; 32], ProbeFailure>);
+
+struct ProbeFailure {
+    failures: u32,
+    retry_at: Instant,
+}
+
+/// The exact candidate failed its probe recently; it was not probed again.
+#[derive(Debug)]
+pub struct RefreshProbeBackoff;
+
+impl std::fmt::Display for RefreshProbeBackoff {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("unchanged credentials recently failed the Plugin authentication probe")
+    }
+}
+
+impl std::error::Error for RefreshProbeBackoff {}
+
+fn candidate_digest(candidate: &ProviderAuthRefreshCandidate) -> Result<[u8; 32]> {
+    let mut hash = Sha256::new();
+    for part in [
+        candidate.provider_id.as_bytes(),
+        candidate.account_id.as_str().as_bytes(),
+        &candidate.expected_generation.to_be_bytes(),
+        candidate.generation_digest.as_bytes(),
+        &serde_json::to_vec(&candidate.bundle)?,
+    ] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part);
+    }
+    Ok(hash.finalize().into())
+}
+
+impl ProbeFailures {
+    fn suppressed(&self, digest: &[u8; 32], now: Instant) -> bool {
+        self.0
+            .get(digest)
+            .is_some_and(|failure| now < failure.retry_at)
+    }
+
+    fn record(&mut self, digest: [u8; 32], now: Instant) {
+        let failures = self.0.get(&digest).map_or(0, |failure| failure.failures) + 1;
+        let delay = PROBE_RETRY_INITIAL
+            .saturating_mul(1 << (failures - 1).min(10))
+            .min(PROBE_RETRY_MAX);
+        self.0.insert(
+            digest,
+            ProbeFailure {
+                failures,
+                retry_at: now + delay,
+            },
+        );
+        while self.0.len() > PROBE_FAILURE_ENTRIES {
+            let Some(oldest) = self
+                .0
+                .iter()
+                .min_by_key(|(_, failure)| failure.retry_at)
+                .map(|(digest, _)| *digest)
+            else {
+                break;
+            };
+            self.0.remove(&oldest);
+        }
+    }
+}
+
 impl MachinePluginStore {
     pub async fn validate_auth_refresh_candidate(
+        self: &std::sync::Arc<Self>,
+        candidate: &ProviderAuthRefreshCandidate,
+    ) -> Result<Option<crate::provider_account::NativeIdentity>> {
+        let digest = candidate_digest(candidate)?;
+        if self
+            .refresh_probe_failures
+            .lock()
+            .suppressed(&digest, Instant::now())
+        {
+            return Err(RefreshProbeBackoff.into());
+        }
+        let result = self.probe_auth_refresh_candidate(candidate).await;
+        let mut failures = self.refresh_probe_failures.lock();
+        match &result {
+            Ok(_) => {
+                failures.0.remove(&digest);
+            }
+            Err(_) => failures.record(digest, Instant::now()),
+        }
+        result
+    }
+
+    async fn probe_auth_refresh_candidate(
         self: &std::sync::Arc<Self>,
         candidate: &ProviderAuthRefreshCandidate,
     ) -> Result<Option<crate::provider_account::NativeIdentity>> {
@@ -166,6 +264,30 @@ impl MachinePluginStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_probe_backs_off_per_exact_candidate_and_stays_bounded() {
+        let mut failures = ProbeFailures::default();
+        let start = Instant::now();
+        let digest = [1; 32];
+        assert!(!failures.suppressed(&digest, start));
+        failures.record(digest, start);
+        assert!(failures.suppressed(&digest, start + Duration::from_secs(29)));
+        assert!(!failures.suppressed(&digest, start + PROBE_RETRY_INITIAL));
+        assert!(!failures.suppressed(&[2; 32], start));
+        let later = start + PROBE_RETRY_INITIAL;
+        failures.record(digest, later);
+        assert!(failures.suppressed(&digest, later + Duration::from_secs(59)));
+        assert!(!failures.suppressed(&digest, later + Duration::from_secs(60)));
+        for _ in 0..20 {
+            failures.record(digest, later);
+        }
+        assert!(!failures.suppressed(&digest, later + PROBE_RETRY_MAX));
+        for index in 0..=u8::try_from(PROBE_FAILURE_ENTRIES).unwrap() {
+            failures.record([index.wrapping_add(10); 32], later);
+        }
+        assert_eq!(failures.0.len(), PROBE_FAILURE_ENTRIES);
+    }
 
     #[tokio::test]
     #[ignore = "requires an explicit immutable native CLI; uses synthetic credentials only"]

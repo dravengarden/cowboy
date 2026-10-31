@@ -286,6 +286,10 @@ pub struct MachinePluginStore {
     lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
     native_observations: std::sync::Arc<native_usage::Observations>,
     auth_candidates: std::sync::Arc<parking_lot::Mutex<()>>,
+    /// Exact refresh candidates whose native auth probe failed, with their
+    /// retry deadline. A rejected projection stays on disk until replaced, so
+    /// without this every credential-directory event would probe it again.
+    refresh_probe_failures: std::sync::Arc<parking_lot::Mutex<auth_refresh::ProbeFailures>>,
     telemetry_export: std::sync::Arc<tokio::sync::Mutex<()>>,
     code_runtimes: std::sync::Arc<CodeRuntimeHost>,
     operations: std::sync::Arc<operations::Journal>,
@@ -337,6 +341,7 @@ mod auth_candidate;
 #[cfg(test)]
 mod startup_tests;
 pub use auth_candidate::AuthCandidateCleanup;
+pub use auth_refresh::RefreshProbeBackoff;
 
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {
@@ -373,6 +378,7 @@ impl MachinePluginStore {
             lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             native_observations: std::sync::Arc::default(),
             auth_candidates: std::sync::Arc::default(),
+            refresh_probe_failures: std::sync::Arc::default(),
             telemetry_export: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             code_runtimes: std::sync::Arc::new(CodeRuntimeHost::default()),
             operations: std::sync::Arc::new(operations),

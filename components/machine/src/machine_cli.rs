@@ -1851,6 +1851,10 @@ async fn publish_provider_auth_observations(
     }
     let mut pending = BTreeMap::new();
     let mut refresh_events = Vec::new();
+    // Only a new observation is worth publishing: an incomplete projection,
+    // a fresh probe result, or a candidate. A rejected candidate that is still
+    // backing off was already reported as Failed.
+    let mut changed = force_inventory || !observations.failed_provider_ids.is_empty();
     for (index, candidate) in observations.candidates.into_iter().enumerate() {
         if !candidate.account_id.is_default()
             && protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
@@ -1863,10 +1867,19 @@ async fn publish_provider_auth_observations(
                 observations
                     .failed_provider_ids
                     .insert((candidate.account_id.clone(), candidate.provider_id.clone()));
-                tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+                if error
+                    .downcast_ref::<crate::machine_plugins::RefreshProbeBackoff>()
+                    .is_some()
+                {
+                    tracing::debug!(provider = %candidate.provider_id, "rejected credential refresh is backing off");
+                } else {
+                    changed = true;
+                    tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+                }
                 continue;
             }
         };
+        changed = true;
         pending.insert(
             (candidate.account_id.clone(), candidate.provider_id.clone()),
             candidate.expected_generation,
@@ -1889,6 +1902,9 @@ async fn publish_provider_auth_observations(
             auth_method: candidate.bundle.method_id,
             bundle: candidate.bundle.values,
         });
+    }
+    if !changed {
+        return;
     }
     let store = Arc::clone(providers);
     let mut plugins = match tokio::task::spawn_blocking(move || store.inventory()).await {
