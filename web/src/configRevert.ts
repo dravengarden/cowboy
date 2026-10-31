@@ -78,7 +78,10 @@ export function useConfigRevert(id: string): {
     const refresh = () => {
       void loadConfigRevert(id)
         .then((revert) => {
-          if (alive) setLoaded({ id, revert });
+          if (!alive) return;
+          setLoaded({ id, revert });
+          // A refreshed record supersedes an earlier refusal.
+          setError("");
         })
         .catch(() => undefined);
     };

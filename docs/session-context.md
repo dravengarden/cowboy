@@ -117,13 +117,15 @@ The first change of each option since the last sent message records the value
 it replaced (`session_config_revert:<id>`, announced to every device). The
 Agent block then shows "Changed from Opus · High · **Back**"; Back re-applies
 those values through the same configuration path. Setting an option back to
-its recorded value forgets it. Dispatching any message to the agent (typed,
-queued, scheduled or a wakeup) clears the record, so Back is never available
+its recorded value forgets it. Sending any message to the agent (typed,
+queued, scheduled, steered or a wakeup) clears the record once it reaches the
+agent, so Back is never available
 for a conversation that already used the new values. Agents use
 `sessions.config_revert` and `sessions.config_revert_restore`; the HTTP
 contract is `GET /api/sessions/SESSION/config-revert` and
 `POST /api/sessions/SESSION/config-revert/restore` (409 once a message was
-sent).
+sent, on a trashed session or during a Provider change). Restore applies values
+in the agent's option order and keeps Back for any value it could not apply.
 
 ## What changes in place
 

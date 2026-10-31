@@ -3614,9 +3614,6 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         cmid,
         explicit,
     } = req;
-    // A sent message makes the latest in-place agent change part of the
-    // conversation; Settings can no longer go Back to the previous values.
-    config_revert::clear(hub, &session_id);
     let retain = |session_id: String, text, content, cmid, error: &str| {
         let session = session_id.clone();
         retain_failed_dispatch(hub, session_id, text, content, cmid, error);
@@ -3674,6 +3671,9 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
     );
     match sent {
         Ok(()) => {
+            // The message reached the agent: the latest in-place agent change
+            // is now part of the conversation, so Settings loses its Back.
+            config_revert::clear(hub, &session_id);
             // Successful sends synchronously enter the runtime pending set.
             // Failed sends retain dispatch ownership until requeue completes.
             drop(_ownership);

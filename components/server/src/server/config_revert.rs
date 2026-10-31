@@ -148,6 +148,23 @@ pub(super) async fn restore(
     if state.hub.session_info(&id).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // The same admission as a live option change from Settings: never on a
+    // trashed session, never across a Provider lifecycle change.
+    if state.hub.session_is_trashed(&id) {
+        return (
+            StatusCode::CONFLICT,
+            "Restore this session from Trash first",
+        )
+            .into_response();
+    }
+    let fences = state.plugin_lifecycle_fences.read();
+    if let Some(refusal) = provider_fence_key_for_session(&state.hub, &id)
+        .as_ref()
+        .and_then(|key| fences.get(key))
+        .and_then(|fence| provider_fence_refusal(*fence))
+    {
+        return (StatusCode::CONFLICT, refusal).into_response();
+    }
     let values = {
         let _guard = REVERT_LOCK.lock();
         let mut revert = read(&state.hub, &id);
@@ -163,11 +180,43 @@ pub(super) async fn restore(
         write(&state.hub, &id, &revert);
         values
     };
-    for (config_id, value) in values {
-        if let Err(error) = apply(&state, &id, config_id, value, false) {
+    // The agent's own option order (model before reasoning), so a value that
+    // depends on the earlier one is applied after it.
+    let order = state
+        .hub
+        .persisted_config_options(&id)
+        .and_then(|options| options.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|option| {
+            option
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    let mut pending = values.into_iter().collect::<Vec<_>>();
+    pending.sort_by_key(|(config_id, _)| {
+        order
+            .iter()
+            .position(|known| known == config_id)
+            .unwrap_or(usize::MAX)
+    });
+    let mut remaining = pending.into_iter();
+    while let Some((config_id, value)) = remaining.next() {
+        if let Err(error) = apply(&state, &id, config_id.clone(), value.clone(), false) {
+            // Keep Back for what was not applied.
+            let _guard = REVERT_LOCK.lock();
+            let mut revert = read(&state.hub, &id);
+            for (config_id, value) in std::iter::once((config_id, value)).chain(remaining) {
+                revert.values.entry(config_id).or_insert(value);
+            }
+            revert.revision += 1;
+            write(&state.hub, &id, &revert);
             return (StatusCode::CONFLICT, error).into_response();
         }
     }
+    drop(fences);
     Json(read(&state.hub, &id)).into_response()
 }
 

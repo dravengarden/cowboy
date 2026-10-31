@@ -558,6 +558,7 @@ function PendingSwitch(
 ): React.JSX.Element {
   const { data: accounts } = useSubscriptionAccounts();
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState("");
   const next = context.next_agent;
   const text = next
     ? `Switching to ${
@@ -572,8 +573,14 @@ function PendingSwitch(
       data-session-pending-switch
       sx={{ minWidth: 0 }}
     >
-      <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0 }} title={text}>
-        {text}
+      <Typography
+        variant="caption"
+        color={failure ? "error" : "text.secondary"}
+        noWrap
+        sx={{ minWidth: 0 }}
+        title={failure || text}
+      >
+        {failure || text}
       </Typography>
       <Button
         size="small"
@@ -581,11 +588,14 @@ function PendingSwitch(
         data-session-switch-back
         onClick={() => {
           setBusy(true);
+          setFailure("");
           void saveSessionContext(session.id, {
             revision: context.revision,
             sources: [],
             next_agent: null,
-          }).catch(() => undefined).finally(() => {
+          }).catch((error: unknown) =>
+            setFailure(error instanceof Error ? error.message : "Could not go back")
+          ).finally(() => {
             setBusy(false);
             onBack();
           });
