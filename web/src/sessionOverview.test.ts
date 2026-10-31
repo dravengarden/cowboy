@@ -170,3 +170,37 @@ test("session info surfaces render the shared overview sections", () => {
     false,
   );
 });
+
+test("a session on several models lists each model's usage; one model adds nothing", () => {
+  const usage = (rows: unknown[]): SessionInfoPayload["usage"] => ({
+    used: 50_000,
+    size: 200_000,
+    observed_at_ms: 1,
+    raw: { _meta: { "_claude/model": "claude-opus-4-5" }, _cowboy: { modelUsage: rows } },
+  });
+  const both = rowMap(info({
+    context_used: 50_000,
+    context_size: 200_000,
+    usage: usage([
+      { model: "claude-haiku-4-5", totalTokens: 9_000, turns: 2 },
+      { model: "claude-opus-4-5", totalTokens: 1_250_000, turns: 3 },
+    ]),
+  }));
+  assertEquals(both["claude-opus-4-5"], "1.3M tokens · 3 turns");
+  assertEquals(both["claude-haiku-4-5"], "9k tokens · 2 turns");
+  assertEquals(both.Context, "50,000 / 200,000 · 25% · claude-opus-4-5");
+  const labels = sessionOverviewSections(info({
+    usage: usage([
+      { model: "claude-haiku-4-5", totalTokens: 9_000, turns: 2 },
+      { model: "claude-opus-4-5", totalTokens: 1_250_000, turns: 3 },
+    ]),
+  })).find((section) => section.key === "activity")?.rows.map((row) => row.label);
+  assertEquals(labels?.slice(0, 3), ["Context", "claude-opus-4-5", "claude-haiku-4-5"]);
+  const one = rowMap(info({
+    context_used: 50_000,
+    context_size: 200_000,
+    usage: usage([{ model: "claude-opus-4-5", totalTokens: 10, turns: 1 }]),
+  }));
+  assertEquals(one["claude-opus-4-5"], undefined);
+  assertEquals(one.Context, "50,000 / 200,000 · 25%");
+});

@@ -1268,6 +1268,13 @@ fn load_session_request(
 #[path = "acp_subagents.rs"]
 mod subagents;
 
+#[path = "acp_model_usage.rs"]
+mod model_usage;
+
+/// How often a session whose parent turn ended looks for subagents that
+/// stopped reporting (see [`subagents::QUIET_AFTER`]).
+const SUBAGENT_QUIET_TICK: Duration = Duration::from_mins(1);
+
 #[cfg(test)]
 #[path = "acp_session_conformance_tests.rs"]
 mod session_conformance_tests;
@@ -2669,6 +2676,9 @@ struct ClientState {
     /// Child sessions the agent announced with `subagent_update`, folded into
     /// bounded snapshots in this session's timeline (see [`subagents`]).
     subagents: Mutex<subagents::Subagents>,
+    /// Token usage per model, added up from prompt responses and carried on
+    /// the reported session usage (see [`model_usage`]).
+    model_usage: Mutex<model_usage::ModelUsage>,
 }
 
 /// Retry and completion state belongs to one serialized prompt. Keeping it
@@ -2973,6 +2983,7 @@ async fn agent_main(
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
         subagents: Mutex::new(subagents::Subagents::default()),
+        model_usage: Mutex::new(model_usage::ModelUsage::default()),
     });
 
     let notif_state = state.clone();
@@ -3704,15 +3715,13 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     if let SessionUpdate::UsageUpdate(ref usage) = notif.update {
         let raw = serde_json::to_value(&notif.update).unwrap_or(serde_json::Value::Null);
-        state.sink.set_session_usage(
-            &state.session_id,
-            SessionUsage {
-                used: usage.used,
-                size: usage.size,
-                raw,
-                observed_at_ms: observed_at_ms(),
-            },
-        );
+        let usage = state.model_usage.lock().annotate(SessionUsage {
+            used: usage.used,
+            size: usage.size,
+            raw,
+            observed_at_ms: observed_at_ms(),
+        });
+        state.sink.set_session_usage(&state.session_id, usage);
         return;
     }
     let mut update = match serde_json::to_value(&notif.update) {
@@ -4307,6 +4316,18 @@ async fn run_session(
     // RPCs. A prompt waits for the config commands submitted before it; later
     // changes may still run concurrently with the turn. Cancel and Permission
     // never wait behind an upstream configuration RPC.
+    let quiet_state = Arc::clone(state);
+    cx.clone().spawn(async move {
+        loop {
+            tokio::time::sleep(SUBAGENT_QUIET_TICK).await;
+            if quiet_state.current_prompt().is_some() {
+                continue;
+            }
+            let now_ms = u64::try_from(observed_at_ms()).unwrap_or_default();
+            let quiet = quiet_state.subagents.lock().quiet(Instant::now(), now_ms);
+            publish_subagents(&quiet_state, quiet);
+        }
+    })?;
     let mut config_fences: HashMap<String, ConfigFence> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
         if state.sink.session_is_managed_read_only(&session_id)
@@ -4579,6 +4600,9 @@ async fn run_session(
                         }
                     };
                     state.clear_prompt(&prompt);
+                    // Only silence after the parent's turn counts against a
+                    // subagent that is still running.
+                    state.subagents.lock().parent_turn_ended(Instant::now());
                     if let Some(reason) = backoff_failure.take()
                         && !recycled_by_watchdog
                     {
@@ -4668,6 +4692,11 @@ async fn run_session(
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
                             sink.prompt_completed(&sid, cmid.as_deref(), &format!("{:?}", r.stop_reason));
+                            if let Some(usage) =
+                                state.model_usage.lock().record_turn(r.meta.as_ref())
+                            {
+                                sink.set_session_usage(&sid, usage);
+                            }
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {

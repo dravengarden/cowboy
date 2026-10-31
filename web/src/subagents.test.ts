@@ -105,14 +105,51 @@ test("a re-announced subagent without labels keeps the earlier ones", () => {
   assertEquals(rows[0]?.subagent.state, "running");
 });
 
-test("a worker exit settles a working subagent and disables its stop", () => {
-  const items = derive([
-    snapshot(1, { revision: 1, state: "running", cancellable: true }),
-    { session_id: "s", seq: 2, kind: "lifecycle", status: "crashed", detail: "boom" },
-  ]);
-  const row = subagentRows(items)[0];
-  assertEquals(row?.subagent.state, "unknown");
-  assertEquals(row?.subagent.cancellable, false);
+test("a worker exit or a new worker leaves a working subagent no longer reporting", () => {
+  for (const status of ["crashed", "starting"] as const) {
+    const items = derive([
+      snapshot(1, { revision: 1, state: "running", cancellable: true }),
+      { session_id: "s", seq: 2, kind: "lifecycle", status, detail: null },
+    ]);
+    const subagent = subagentRows(items)[0]?.subagent;
+    if (!subagent) throw new Error("expected a subagent");
+    assertEquals(subagent.cancellable, false);
+    assertEquals(subagentStatus(subagent), { label: "No longer reporting", tone: "unknown" });
+  }
+  // A subagent the new worker announces again reports again.
+  const again = subagentRows(derive([
+    snapshot(1, { revision: 1, title: "Explore", state: "running", cancellable: true }),
+    { session_id: "s", seq: 2, kind: "lifecycle", status: "starting", detail: null },
+    snapshot(3, { revision: 2, state: "running", cancellable: true }),
+  ]))[0]?.subagent;
+  assertEquals(again?.reporting, true);
+  assertEquals(again?.title, "Explore");
+  // A finished subagent keeps its outcome.
+  const done = subagentRows(derive([
+    snapshot(1, { revision: 1, state: "idle", stopReason: "end_turn" }),
+    { session_id: "s", seq: 2, kind: "lifecycle", status: "exited", detail: null },
+  ]))[0]?.subagent;
+  assertEquals(subagentStatus(done!).label, "Done");
+});
+
+test("a silent subagent is neutral and its model and usage join the counts", () => {
+  const quiet = subagentOf({
+    sessionUpdate: "cowboy_subagent",
+    sessionId: "c",
+    state: "running",
+    reporting: false,
+    model: "Haiku 4.5",
+    toolCalls: 1,
+    usage: { totalTokens: 12_345 },
+  });
+  if (!quiet) throw new Error("expected a subagent");
+  assertEquals(subagentStatus(quiet), { label: "No longer reporting", tone: "unknown" });
+  assertEquals(subagentCounts(quiet), "Haiku 4.5 · 1 tool call · 12k tokens");
+  const relabeled = subagentRows(derive([
+    snapshot(1, { revision: 1, title: "Explore", model: "Haiku 4.5", state: "running" }),
+    snapshot(2, { revision: 2, state: "idle" }),
+  ]))[0]?.subagent;
+  assertEquals(relabeled?.model, "Haiku 4.5");
 });
 
 test("a subagent's request names it and outlives the parent turn", () => {

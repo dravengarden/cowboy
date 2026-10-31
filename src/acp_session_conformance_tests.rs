@@ -146,6 +146,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         backoff: Mutex::new(None),
         model_label: Mutex::new(None),
         subagents: Mutex::new(subagents::Subagents::default()),
+        model_usage: Mutex::new(model_usage::ModelUsage::default()),
     });
     (state, sink)
 }

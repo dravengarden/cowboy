@@ -6,9 +6,23 @@
 // Controller keeps one durable row per child, while a live client may also
 // hold intermediate snapshots. See src/acp_subagents.rs.
 
+import { compactTokens } from "./modelUsage";
 import type { AcpUpdate } from "./protocol";
 
 export const SUBAGENT_UPDATE = "cowboy_subagent";
+
+/** Desktop: stop the subagent whose row has focus (FOCUS.md "Conversation
+ *  reader"). It opens the same confirmation as the row's Stop button. */
+export const SUBAGENT_STOP_KEY = "X";
+
+/** The enabled Stop of the subagent row that holds focus, if any. */
+export function focusedSubagentStop(): HTMLButtonElement | null {
+  const active = globalThis.document?.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const stop = active.closest<HTMLElement>("[data-subagent-row]")
+    ?.querySelector<HTMLButtonElement>("[data-subagent-stop]");
+  return stop && !stop.disabled ? stop : null;
+}
 
 export interface SubagentActivity {
   kind: "message" | "tool";
@@ -43,6 +57,14 @@ export interface Subagent {
   messages: number;
   activity: SubagentActivity[];
   omittedActivity: number;
+  /** The model the subagent runs on, as its adapter names it. */
+  model: string | null;
+  /** Tokens the subagent reported with its last idle state; 0 when none. */
+  tokens: number;
+  /** False once a working subagent stopped reporting: it stayed silent after
+   *  the parent's turn ended, or its worker was replaced without announcing
+   *  it again. Its outcome is unknown, not success or failure. */
+  reporting: boolean;
 }
 
 function text(value: unknown): string | null {
@@ -103,13 +125,18 @@ export function subagentOf(update: AcpUpdate): Subagent | null {
     messages: count(update["messages"]),
     activity,
     omittedActivity: count(update["omittedActivity"]),
+    model: text(update["model"]),
+    tokens: count((update["usage"] as { totalTokens?: unknown } | null | undefined)?.totalTokens),
+    reporting: update["reporting"] !== false,
   };
 }
 
-/** The worker that owned this subagent is gone: its work stopped with it. */
+/** The worker that owned this subagent is gone, or a new one has not
+ *  announced it: nobody reports on its work any more. A newer snapshot
+ *  replaces this. */
 export function orphanedSubagent(subagent: Subagent): Subagent {
   return isWorking(subagent)
-    ? { ...subagent, state: "unknown", cancellable: false }
+    ? { ...subagent, reporting: false, cancellable: false }
     : subagent;
 }
 
@@ -125,6 +152,9 @@ export interface SubagentStatus {
 }
 
 export function subagentStatus(subagent: Subagent): SubagentStatus {
+  if (isWorking(subagent) && !subagent.reporting) {
+    return { label: "No longer reporting", tone: "unknown" };
+  }
   switch (subagent.state) {
     case "running":
       return { label: "Working", tone: "working" };
@@ -155,11 +185,14 @@ function plural(value: number, one: string, many: string): string {
   return `${String(value)} ${value === 1 ? one : many}`;
 }
 
-/** "3 tool calls · 2 messages", or "" before any activity. */
+/** "Haiku 4.5 · 3 tool calls · 2 messages · 12k tokens", or "" before any
+ *  activity. */
 export function subagentCounts(subagent: Subagent): string {
   const parts: string[] = [];
+  if (subagent.model) parts.push(subagent.model);
   if (subagent.toolCalls) parts.push(plural(subagent.toolCalls, "tool call", "tool calls"));
   if (subagent.messages) parts.push(plural(subagent.messages, "message", "messages"));
+  if (subagent.tokens) parts.push(`${compactTokens(subagent.tokens)} tokens`);
   return parts.join(" · ");
 }
 
@@ -192,6 +225,7 @@ export function mergeSubagent(current: Subagent, next: Subagent): Subagent {
     untitled: false,
     description: next.description ?? current.description,
     prompt: next.prompt ?? current.prompt,
+    model: next.model ?? current.model,
   };
 }
 

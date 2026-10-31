@@ -654,6 +654,10 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;
+- `x` on a selected subagent row that can be stopped opens that row's Stop
+  confirmation (`Mod+Enter` stops it, `Esc` keeps it running). The row draws
+  the key on its Stop button only while it holds focus; with no subagent row
+  selected the key does nothing.
 
 Any navigation away from the latest output pauses following. `G`, or enabling
 Following again, returns to the latest output. The status line exposes this

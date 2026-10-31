@@ -114,6 +114,12 @@ The bridge supports:
   session being idle again, even when no further live event arrives;
 - provider-filtered import/load, preventing a thread from acquiring the wrong
   provider identity;
+- ACP subagents: each subagent row of the session reaches Zed as the standard
+  `subagent_update`, linked `session_message`s and child-session activity when
+  Zed declares `clientCapabilities.subagents`, otherwise as one ordinary
+  `tool_call` per subagent updated in place. A subagent's permission request
+  names it, and cancelling its child session stops only that subagent. See
+  [ACP subagents](../subagents.md#acp-bridge-clients);
 - `_cowboy/session/status` snapshots and
   `_cowboy/session/status_changed` notifications. `turnRunning` is derived from
   the Hub's authoritative `Busy` lifecycle and the original `session/prompt`

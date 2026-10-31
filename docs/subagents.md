@@ -46,8 +46,29 @@ Each change publishes a complete `cowboy_subagent` snapshot as an ordinary
 counts and the latest 24 activity entries (tool title/status, message text).
 Text is bounded (600 bytes per entry, 8 KiB for prompt/result); streamed text
 alone republishes at most once per second and is flushed by the next
-structural change or root update. Thoughts, plans and configuration of a child
-are not kept.
+structural change or root update. Thoughts and plans of a child are not kept.
+
+A snapshot also carries the child's `model` and `usage`. The model is the
+display name of the child's own `model` configuration option (both adapters
+send the child a `config_option_update` with one choice: Claude
+`childModelOption`, Codex `subagentConfigurationOptions`), else
+`_meta["_claude/model"]` of its `usage_update`, else the only row of an idle
+state's `_meta.quota.model_usage`. `usage` holds the counters of an idle
+state's ACP `usage` when an adapter reports one; neither production adapter
+does today (Claude `rfdEndState`, Codex `turnEndState`), so the row shows tokens
+only once one does.
+
+## No longer reporting
+
+A snapshot's `reporting` is `false` while a child is `running`, the parent has
+no turn in progress, and the child sent nothing for ten minutes since the
+parent's turn ended (`QUIET_AFTER`, checked once a minute). A child waiting on
+the person (`requires_action`) is never quiet. Any later traffic of the child
+publishes it as reporting again. Clients also treat a working row as not
+reporting after a worker exit, crash or a new worker's `starting` lifecycle,
+until a newer snapshot arrives. The row then reads "No longer reporting" in a
+neutral tone: Cowboy claims neither success nor failure, and Stop is offered
+only while the worker still grants it.
 
 ## Persistence and presentation
 
@@ -59,10 +80,35 @@ intermediate snapshots, a Controller restart (new row) or an older Controller
 (one row per snapshot) all converge.
 
 `web/src/SubagentCard.tsx` draws the row on Desktop and Mobile: title, state,
-counts and a one-line preview, a Stop button while `cancellable`, and a
+model, counts and a one-line preview, a Stop button while `cancellable`, and a
 collapsed activity list with the prompt, the bounded activity and the result.
-Its expand toggle is the row's Desktop default action. A worker exit settles a
-working row as ended.
+Its expand toggle is the row's Desktop default action and a Conversation
+widget (`Tab` selects it). Stop asks first with the same `ConfirmSheet` as the
+session's Stop (Mobile's inset card, Desktop's centered dialog); `Keep running`
+sends nothing. On Desktop, `x` on the selected row opens that confirmation
+(`conversation.stopSubagent`, see `web/src/desktop/FOCUS.md`).
+
+## Per-model usage
+
+Both adapters end a prompt with `_meta.quota.model_usage`, one row per model
+with the turn's `token_count`:
+
+- claude-agent-acp 0.99.1 `turnQuotaMeta`/`quotaMeta` (`dist/acp-agent.js`):
+  rows from the SDK's `result.modelUsage` increments, which also count Task
+  subagents, sidechains and internal calls; its `usage_update` names the
+  model in `_meta["_claude/model"]` (`attachUsageModel`, since 0.81).
+- codex-acp 2.5.0 `buildQuotaMeta` (`dist/index.js`): one row for the current
+  model (`currentModelId` without a `[…]` suffix); its `usage_update` has no
+  model, and a subagent's `usage_update` reports only its last turn's context.
+
+The worker (`src/acp_model_usage.rs`) adds the rows of every turn it ran and
+carries the totals on the session usage as `raw._cowboy.modelUsage` (model,
+total/input/output/cached-input tokens, turns), republishing the last usage
+when a turn adds rows. Session info lists one row per model when there is
+more than one, and names the context's model when the adapter does. The totals
+cover the current worker: a new worker starts again from zero, like the
+context figures. A Codex subagent on another model shows that model on its
+own row only; codex-acp reports no per-model tokens for it.
 
 ## Permissions and elicitations
 
@@ -112,17 +158,41 @@ unchanged.
 | Part | Component |
 |---|---|
 | Capability, routing, snapshots, child stop | worker generation (Machine release) |
+| Child model/usage, `reporting`, per-model usage totals | worker generation (Machine release) |
 | `CancelSubagent` routing, protocol 40 | Machine |
 | Durable row coalescing, `cancel_subagent` inbound and MCP action, protocol gate | Controller |
-| Row, activity, Stop, request attribution | Web |
+| Bridge forwarding (`cowboy serve-acp`) | the `cowboy` CLI the ACP client starts |
+| Row, activity, Stop confirmation and key, request attribution, not reporting, model breakdown | Web |
 
 A Web without the row ignores `cowboy_subagent` updates. A Controller without
 coalescing stores one row per snapshot. Without a protocol-40 Machine and a
-current worker, Stop is refused.
+current worker, Stop is refused. Snapshots from an older worker carry no
+`model`, `usage` or `reporting` (read as reporting) and its usage has no
+breakdown; the Web then shows neither, and still marks a row not reporting
+after a worker change. Every addition is an optional field.
+
+## ACP bridge clients
+
+`cowboy serve-acp` (`src/acp_bridge_subagents.rs`) projects each
+`cowboy_subagent` snapshot for its client. A client whose `initialize`
+declared `clientCapabilities.subagents` gets the standard form: a
+`subagent_update` on the parent (or on the child that launched it) with the
+labels, `capabilities.cancel` while Stop is possible and the state (`unknown`
+while not reporting); the delegation prompt and result as linked
+`session_message`s; and the child's tool calls and message text as updates of
+the child session, each delivered once. Its `session/cancel` for a child
+session becomes `cancel_subagent`, and a child's permission request is asked in
+the child session. Any other client gets one `tool_call` per subagent
+(`cowboy-subagent:<child>`, kind `think`, title `Subagent: <title>`), updated in
+place with a status (`in_progress` while working or not reporting, `failed`
+when stopped or failed, else `completed`) and a text naming the prompt,
+progress, model and result; a child's permission request is asked in the
+parent with `Subagent <title>:` in its title. The projection follows the
+bridge's replay and catch-up order, ignores older revisions and restarts when
+the client reloads the thread.
 
 ## Known gaps
 
-- The ACP bridge (Cowboy as an ACP agent for other clients) does not forward
-  subagent rows; its clients no longer see the hidden parent tool call.
-- A child that never reports `idle` (an adapter defect) stays working until
-  its worker exits.
+- Per-model totals live in the worker and restart with it.
+- A bridge client sees a child's tool titles and statuses and its message
+  text, not tool output or thoughts; the snapshot does not keep them.

@@ -709,8 +709,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         if (env.status === "crashed" || env.status === "interrupted") {
           settleOutstandingTools(items, "interrupted");
         }
-        if (permissionWaiterGone(env.status)) {
-          // Subagents live in their worker's ACP connection.
+        if (permissionWaiterGone(env.status) || env.status === "starting") {
+          // Subagents live in their worker's ACP connection. A new worker
+          // reports only the subagents it announces again.
           for (const item of items) {
             if (item.kind === "subagent") item.subagent = orphanedSubagent(item.subagent);
           }
