@@ -36,6 +36,10 @@ const LABEL_BYTES: usize = 240;
 /// Streaming text alone republishes a child at most this often. Structural
 /// changes (state, tool calls, a new message) publish at once.
 const TEXT_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
+/// A child still `running` after the parent's turn ended that sends nothing
+/// for this long is published as no longer reporting. It is not presented as
+/// finished: any later traffic of the child makes it report again.
+pub const QUIET_AFTER: Duration = Duration::from_mins(10);
 
 /// The outcome of routing one notification.
 #[derive(Debug, Default)]
@@ -145,6 +149,15 @@ struct Child {
     omitted: u32,
     last_publish: Option<Instant>,
     dirty: bool,
+    /// The model the child runs on, as its own configuration or usage names
+    /// it. Display text; the adapter may report an alias or a display name.
+    model: Option<Text>,
+    /// Token usage the child reported with its last `idle` state.
+    usage: Option<Value>,
+    /// The last time this child's own traffic or a `subagent_update` arrived.
+    last_traffic: Option<Instant>,
+    /// Published as no longer reporting (see [`QUIET_AFTER`]).
+    quiet: bool,
 }
 
 impl Child {
@@ -218,6 +231,55 @@ fn chunk_text(update: &Value) -> Option<&str> {
         .flatten()
 }
 
+/// The model a `config_option_update` names: the `model` option's current
+/// value, as its display name when the option lists one.
+fn configured_model(update: &Value) -> Option<String> {
+    let option = update
+        .get("configOptions")?
+        .as_array()?
+        .iter()
+        .find(|option| option["id"] == "model" || option["category"] == "model")?;
+    let current = option.get("currentValue")?;
+    option
+        .get("options")
+        .and_then(Value::as_array)
+        .and_then(|choices| {
+            choices
+                .iter()
+                .find(|choice| choice["value"] == *current)
+                .and_then(|choice| choice["name"].as_str())
+        })
+        .or_else(|| current.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned)
+}
+
+/// The counters of an ACP `Usage` object worth showing for one child.
+fn idle_usage(usage: &Value) -> Option<Value> {
+    let total = usage.get("totalTokens").and_then(Value::as_u64)?;
+    Some(json!({
+        "totalTokens": total,
+        "inputTokens": usage.get("inputTokens").and_then(Value::as_u64),
+        "outputTokens": usage.get("outputTokens").and_then(Value::as_u64),
+    }))
+}
+
+/// Record the child's model; returns whether it changed.
+fn set_model(child: &mut Child, model: &str) -> bool {
+    let model = model.trim();
+    if model.is_empty()
+        || child
+            .model
+            .as_ref()
+            .is_some_and(|known| known.value == model)
+    {
+        return false;
+    }
+    child.model = Some(label(model));
+    true
+}
+
 impl Subagents {
     /// Whether `session_id` is a child (or an evicted child) of this session.
     #[must_use]
@@ -275,13 +337,19 @@ impl Subagents {
             .get("sessionUpdate")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if self.children.contains_key(session_id) {
+        if let Some(child) = self.children.get_mut(session_id) {
+            child.last_traffic = Some(now);
+            // A quiet child that speaks again reports again at once.
+            let resumed = std::mem::take(&mut child.quiet);
             let mut routed = Routed::default();
             if kind == "subagent_update" {
                 if let Some(snapshot) = self.announce(Some(session_id), update, now, now_ms) {
                     routed.snapshots.push(snapshot);
                 }
-            } else if self.absorb(session_id, kind, update, now) {
+                if resumed {
+                    routed.snapshots.push(self.publish(session_id, now, now_ms));
+                }
+            } else if self.absorb(session_id, kind, update, now) || resumed {
                 routed.snapshots.push(self.publish(session_id, now, now_ms));
             }
             return routed;
@@ -334,6 +402,46 @@ impl Subagents {
             .collect()
     }
 
+    /// Children still `running` while the parent has no turn in progress
+    /// that sent nothing for [`QUIET_AFTER`]: published once as no longer
+    /// reporting. A child waiting on the person (`requires_action`) is not
+    /// silent; it waits.
+    pub fn quiet(&mut self, now: Instant, now_ms: u64) -> Vec<Value> {
+        let silent: Vec<String> = self
+            .order
+            .iter()
+            .filter(|id| {
+                self.children.get(id.as_str()).is_some_and(|child| {
+                    !child.quiet
+                        && child.state.as_deref() == Some("running")
+                        && child
+                            .last_traffic
+                            .is_some_and(|at| now.duration_since(at) >= QUIET_AFTER)
+                })
+            })
+            .cloned()
+            .collect();
+        silent
+            .into_iter()
+            .map(|id| {
+                if let Some(child) = self.children.get_mut(&id) {
+                    child.quiet = true;
+                }
+                self.publish(&id, now, now_ms)
+            })
+            .collect()
+    }
+
+    /// Restart the silence clock of every working child: the parent's turn
+    /// just ended, and only silence after that point counts.
+    pub fn parent_turn_ended(&mut self, now: Instant) {
+        for child in self.children.values_mut() {
+            if child.working() {
+                child.last_traffic = Some(now);
+            }
+        }
+    }
+
     /// Apply a `subagent_update` whose transcript is `parent` (`None`: the
     /// root session). Every field is a patch: absent leaves it, `null`
     /// clears it.
@@ -353,6 +461,8 @@ impl Subagents {
             self.insert(&id, parent);
         }
         let child = self.children.get_mut(&id)?;
+        child.last_traffic = Some(now);
+        child.quiet = false;
         patch_label(&mut child.title, update, "title");
         patch_label(&mut child.description, update, "description");
         if let Some(capabilities) = update.get("capabilities") {
@@ -369,6 +479,22 @@ impl Subagents {
                 // Resumed: the earlier run's outcome no longer describes it.
                 child.reply = Text::default();
                 child.last_message = Text::default();
+                child.usage = None;
+            }
+            if next.as_deref() == Some("idle") {
+                if let Some(usage) = state.get("usage").and_then(idle_usage) {
+                    child.usage = Some(usage);
+                }
+                // A per-model breakdown of one model names the child's model.
+                if let Some([row]) = state
+                    .pointer("/_meta/quota/model_usage")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    && let Some(model) = row.get("model").and_then(Value::as_str)
+                    && child.model.is_none()
+                {
+                    child.model = Some(label(model));
+                }
             }
             child.state = next;
             child.stop_reason = state
@@ -541,8 +667,16 @@ impl Subagents {
                 }
                 changed
             }
-            // Thoughts, plans, usage, configuration and session metadata of
-            // a child are the child's own; the root shows only its outline.
+            // Only the model of a child's configuration and usage is shown.
+            "config_option_update" => {
+                configured_model(update).is_some_and(|model| set_model(child, &model))
+            }
+            "usage_update" => update
+                .pointer("/_meta/_claude~1model")
+                .and_then(Value::as_str)
+                .is_some_and(|model| set_model(child, model)),
+            // Thoughts, plans and session metadata of a child are its own;
+            // the root shows only its outline.
             _ => false,
         }
     }
@@ -610,6 +744,9 @@ impl Subagents {
             "messages": child.messages,
             "activity": child.activity.iter().map(Activity::to_json).collect::<Vec<_>>(),
             "omittedActivity": child.omitted,
+            "model": child.model.as_ref().map(|text| text.value.as_str()),
+            "usage": child.usage,
+            "reporting": !child.quiet,
         })
     }
 }
@@ -937,5 +1074,124 @@ mod tests {
             subagents.children.contains_key("child"),
             "working children are evicted last"
         );
+    }
+
+    #[test]
+    fn a_child_reports_its_model_and_its_idle_usage() {
+        let mut subagents = Subagents::default();
+        let now = Instant::now();
+        subagents.route(
+            ROOT,
+            &announce("child", &json!({ "state": { "state": "running" } })),
+            now,
+            1,
+        );
+        // claude-agent-acp: the child's `model` option, a single choice.
+        let configured = subagents.route(
+            "child",
+            &json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [{
+                    "id": "model", "name": "Model", "category": "model", "type": "select",
+                    "currentValue": "claude-haiku-4-5",
+                    "options": [{ "value": "claude-haiku-4-5", "name": "Haiku 4.5" }],
+                }],
+            }),
+            now,
+            2,
+        );
+        assert!(!configured.root);
+        assert_eq!(configured.snapshots[0]["model"], "Haiku 4.5");
+        // The same model again republishes nothing.
+        let usage = json!({
+            "sessionUpdate": "usage_update", "used": 10, "size": 100,
+            "_meta": { "_claude/model": "Haiku 4.5" },
+        });
+        assert!(
+            subagents
+                .route("child", &usage, now, 3)
+                .snapshots
+                .is_empty()
+        );
+        let idle = subagents.route(
+            ROOT,
+            &announce(
+                "child",
+                &json!({ "state": {
+                    "state": "idle", "stopReason": "end_turn",
+                    "usage": { "totalTokens": 120, "inputTokens": 100, "outputTokens": 20 },
+                } }),
+            ),
+            now,
+            4,
+        );
+        assert_eq!(idle.snapshots[0]["usage"]["totalTokens"], 120);
+        assert_eq!(idle.snapshots[0]["reporting"], true);
+        // An idle state whose breakdown names one model names an unnamed child.
+        let other = subagents.route(
+            ROOT,
+            &announce(
+                "other",
+                &json!({ "state": {
+                    "state": "idle", "stopReason": "end_turn",
+                    "_meta": { "quota": { "model_usage": [{ "model": "gpt-5-mini", "token_count": {} }] } },
+                } }),
+            ),
+            now,
+            5,
+        );
+        assert_eq!(other.snapshots[0]["model"], "gpt-5-mini");
+    }
+
+    #[test]
+    fn a_silent_running_child_stops_reporting_until_it_speaks_again() {
+        let mut subagents = Subagents::default();
+        let start = Instant::now();
+        subagents.route(
+            ROOT,
+            &announce("child", &json!({ "state": { "state": "running" } })),
+            start,
+            1,
+        );
+        subagents.route(
+            ROOT,
+            &announce(
+                "waiting",
+                &json!({ "state": { "state": "requires_action" } }),
+            ),
+            start,
+            2,
+        );
+        let ended = start + Duration::from_secs(30);
+        subagents.parent_turn_ended(ended);
+        assert!(
+            subagents
+                .quiet(
+                    ended + QUIET_AFTER.saturating_sub(Duration::from_secs(1)),
+                    3
+                )
+                .is_empty()
+        );
+        let quiet = subagents.quiet(ended + QUIET_AFTER, 4);
+        assert_eq!(
+            quiet.len(),
+            1,
+            "a child waiting on the person is not silent"
+        );
+        assert_eq!(quiet[0]["sessionId"], "child");
+        assert_eq!(quiet[0]["reporting"], false);
+        assert_eq!(quiet[0]["state"], "running", "silence claims no outcome");
+        assert!(
+            subagents.quiet(ended + QUIET_AFTER * 2, 5).is_empty(),
+            "published once"
+        );
+        let spoke = subagents.route(
+            "child",
+            &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "unknown", "status": "completed" }),
+            ended + QUIET_AFTER * 2,
+            6,
+        );
+        assert_eq!(spoke.snapshots.len(), 1);
+        assert_eq!(spoke.snapshots[0]["reporting"], true);
     }
 }

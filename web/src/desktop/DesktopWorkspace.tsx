@@ -33,6 +33,7 @@ import {
   DesktopRailCount,
 } from "./DesktopPaneCollapse";
 import { useStoreSelector } from "../store";
+import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
 
 const PROMPT_MIN = DESKTOP_PROMPT_MIN;
 const CONVERSATION_MIN = DESKTOP_CONVERSATION_MIN;
@@ -205,6 +206,21 @@ export function DesktopWorkspace({
     ),
   }), [onProjectionChange, projection]);
   useDesktopCommand(toggleProjectionCommand);
+  // A subagent row's Stop, from the keyboard: Tab selects the row's widget,
+  // the key opens the row's own Stop confirmation.
+  const stopSubagentCommand = useMemo<DesktopCommand>(() => ({
+    id: "conversation.stopSubagent",
+    title: "Stop the focused subagent",
+    description: "Ask to stop the subagent whose row has focus",
+    group: "Conversation",
+    shortcut: SUBAGENT_STOP_KEY,
+    contexts: ["conversation"],
+    regions: ["conversation.transcript"],
+    when: () => focusedSubagentStop() !== null,
+    disabledReason: "Focus a subagent row that can be stopped",
+    run: () => focusedSubagentStop()?.click(),
+  }), []);
+  useDesktopCommand(stopSubagentCommand);
 
   return (
     <Box

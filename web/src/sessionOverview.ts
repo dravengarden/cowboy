@@ -1,5 +1,6 @@
 import { originLabel, type SessionMeta, type Status } from "./protocol";
 import { providerName } from "./providerPresentation";
+import { contextModel, modelUsageSummary, sessionModelUsage } from "./modelUsage";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { sessionProjectLabel } from "./sessionProject";
 import {
@@ -78,8 +79,17 @@ export function sessionOverviewSections(
     ...sessionOverviewPaths(info),
   ];
 
+  // Per-model usage is shown only when the session ran on more than one
+  // model; with one, it would repeat the Provider row.
+  const models = sessionModelUsage(info);
+  const breakdown = models.length > 1;
+  const context = sessionOverviewContext(info);
+  const onModel = breakdown ? contextModel(info) : null;
   const activity: SessionOverviewRow[] = [
-    { label: "Context", value: sessionOverviewContext(info) },
+    { label: "Context", value: onModel && context !== "Not reported" ? `${context} · ${onModel}` : context },
+    ...(breakdown
+      ? models.map((row) => ({ label: row.model, value: modelUsageSummary(row) }))
+      : []),
     { label: "Events", value: info.event_count.toLocaleString("en-US") },
     { label: "Queued", value: String(info.queue_count) },
     { label: "Drafts", value: String(info.drafts_count) },

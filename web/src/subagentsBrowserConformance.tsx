@@ -1,6 +1,7 @@
 /** Actual subagent rows and the approval surfaces that name a subagent,
  *  derived from a scripted timeline and driven through the DOM. A stop is
- *  captured instead of sent. */
+ *  captured instead of sent. Mobile and Desktop rows run under their own
+ *  surface profile, so each gets its own confirmation surface. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { CssBaseline, Stack } from "@mui/material";
@@ -10,6 +11,24 @@ import { DesktopPermissionDock } from "./desktop/DesktopApprovalDock";
 import { PermissionOverlay } from "./PermissionOverlay";
 import type { AcpUpdate, Envelope } from "./protocol";
 import { SubagentCard } from "./SubagentCard";
+import { focusedSubagentStop } from "./subagents";
+import { classifySurface } from "./surface/profile";
+import { SurfaceContext } from "./surface/SurfaceProfile";
+
+const DESKTOP = classifySurface({
+  finePointer: true,
+  hover: true,
+  tabletWidth: true,
+  touchCapable: false,
+  desktopHost: true,
+});
+const MOBILE = classifySurface({
+  finePointer: false,
+  hover: false,
+  tabletWidth: false,
+  touchCapable: true,
+  desktopHost: false,
+});
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
@@ -57,18 +76,22 @@ export async function runSubagentsBrowserConformance(): Promise<string[]> {
   document.body.append(container);
   const root = createRoot(container);
   const stops: string[] = [];
+  let surface = MOBILE;
   const render = (node: React.JSX.Element): void =>
     flushSync(() =>
       root.render(
-        <BrowserProductTheme>
-          <CssBaseline />
-          <Stack sx={{ width: 420, p: 2 }}>{node}</Stack>
-        </BrowserProductTheme>,
+        <SurfaceContext.Provider value={surface}>
+          <BrowserProductTheme>
+            <CssBaseline />
+            <Stack sx={{ width: 420, p: 2 }}>{node}</Stack>
+          </BrowserProductTheme>
+        </SurfaceContext.Provider>,
       )
     );
   let mounts = 0;
   // `remount` starts a fresh row; without it, an update keeps its UI state.
-  const card = (timeline: Envelope[], desktop = false, remount = true): void =>
+  const card = (timeline: Envelope[], desktop = false, remount = true): void => {
+    surface = desktop ? DESKTOP : MOBILE;
     render(
       <SubagentCard
         key={remount ? ++mounts : mounts}
@@ -81,6 +104,13 @@ export async function runSubagentsBrowserConformance(): Promise<string[]> {
         }}
       />,
     );
+  };
+  const confirmButton = (): HTMLButtonElement | null =>
+    document.querySelector<HTMLButtonElement>("[data-subagent-stop-confirm]");
+  const waitFor = async (ready: () => boolean, label: string): Promise<void> => {
+    for (let attempt = 0; attempt < 100 && !ready(); attempt++) await settle();
+    check(ready(), label);
+  };
 
   // 1. A working subagent is one collapsed row: who, state, what it is doing.
   card([snapshot(1, RUNNING)]);
@@ -117,19 +147,62 @@ export async function runSubagentsBrowserConformance(): Promise<string[]> {
   check(activity.textContent?.includes("3 earlier steps not shown"), "omitted steps are counted");
   passed.push("activity expands in place");
 
-  // 3. Stop addresses this subagent only, once.
+  // 3. On Mobile, Stop asks first; keeping it running sends nothing, and the
+  // confirmed Stop addresses this subagent only, once.
   const stop = container.querySelector<HTMLButtonElement>("[data-subagent-stop]");
   check(stop && !stop.disabled, "a cancellable subagent offers Stop");
   stop.click();
-  await settle();
-  check(stops.join() === "s/child", "Stop sends exactly this subagent");
+  await waitFor(() => confirmButton() !== null, "Stop opens a confirmation");
+  check(stops.length === 0, "nothing is sent before the confirmation");
+  check(document.body.textContent?.includes("Stop subagent Explore?"), "the confirmation names the subagent");
+  const keep = [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent?.startsWith("Keep running"));
+  check(keep, "the confirmation can keep the subagent running");
+  keep.click();
+  await waitFor(() => confirmButton() === null, "Keep running closes the confirmation");
+  check(stops.length === 0, "keeping it running sends nothing");
+  stop.click();
+  await waitFor(() => confirmButton() !== null, "Stop asks again");
+  confirmButton()?.click();
+  await waitFor(() => confirmButton() === null, "confirming closes the confirmation");
+  check(stops.join() === "s/child", "the confirmed Stop sends exactly this subagent");
   check(
     container.querySelector<HTMLButtonElement>("[data-subagent-stop]")?.disabled,
     "Stop waits for the subagent to report",
   );
-  passed.push("stop addresses one subagent");
+  passed.push("mobile stop confirms and addresses one subagent");
 
-  // 4. A newer snapshot settles it: no Stop, the result is its outcome.
+  // 4. On Desktop the row is a Conversation widget: focusing it gives the
+  // Stop key a target and draws its hint; the key's command confirms too.
+  stops.length = 0;
+  card([snapshot(1, { ...RUNNING, model: "Haiku 4.5" })], true);
+  check(
+    container.querySelector('[data-subagent-row="child"]')?.textContent?.includes("Haiku 4.5"),
+    "the row names the subagent's model",
+  );
+  const widget = container.querySelector<HTMLButtonElement>(
+    '[data-subagent-row="child"] [data-desktop-widget-toggle="subagent"]',
+  );
+  check(widget, "the Desktop row is a selectable Conversation widget");
+  check(focusedSubagentStop() === null, "no row has focus, so the key has no target");
+  check(
+    container.querySelector("[data-subagent-stop]")?.textContent?.trim() === "Stop",
+    "the Stop key is drawn only on the focused row",
+  );
+  widget.focus();
+  await settle();
+  const target = focusedSubagentStop();
+  check(target && target.matches("[data-subagent-stop]"), "the focused row's Stop is the key's target");
+  check(target.textContent?.includes("X"), "the focused row draws its Stop key");
+  target.click();
+  await waitFor(() => confirmButton() !== null, "the Desktop Stop confirms in a dialog");
+  check(stops.length === 0, "nothing is sent before the Desktop confirmation");
+  confirmButton()?.click();
+  await waitFor(() => confirmButton() === null, "the Desktop confirmation closes");
+  check(stops.join() === "s/child", "the Desktop Stop sends exactly this subagent");
+  passed.push("desktop stop is a focused-row key with a confirmation");
+
+  // 5. A newer snapshot settles it: no Stop, the result is its outcome.
   card([snapshot(1, RUNNING)], true);
   card([
     snapshot(1, RUNNING),
@@ -156,12 +229,30 @@ export async function runSubagentsBrowserConformance(): Promise<string[]> {
   );
   passed.push("a newer snapshot settles the row");
 
-  // 5. A subagent that stopped is not presented as done.
+  // 6. A subagent that stopped is not presented as done; one that stopped
+  // reporting claims neither success nor failure.
   card([snapshot(1, { ...RUNNING, state: "idle", stopReason: "cancelled", cancellable: false })]);
   check(container.querySelector('[data-subagent-row="child"]')?.textContent?.includes("Stopped"), "a cancelled subagent reads Stopped");
-  passed.push("a stopped subagent reads Stopped");
+  card([snapshot(1, { ...RUNNING, reporting: false })]);
+  const quiet = container.querySelector<HTMLElement>('[data-subagent-row="child"]');
+  check(quiet?.dataset["subagentReporting"] === "false", "the row marks that it stopped reporting");
+  check(quiet.textContent?.includes("No longer reporting"), "a silent subagent reads No longer reporting");
+  check(
+    !/Working|Done|Failed/.test(quiet.textContent ?? ""),
+    "a silent subagent is neither working nor finished",
+  );
+  card([
+    snapshot(1, RUNNING),
+    { session_id: "s", seq: 2, kind: "lifecycle", status: "starting", detail: null },
+  ]);
+  check(
+    container.querySelector('[data-subagent-row="child"]')?.textContent?.includes("No longer reporting"),
+    "a new worker that did not announce it leaves it not reporting",
+  );
+  check(!container.querySelector("[data-subagent-stop]"), "a subagent nobody reports on cannot be stopped");
+  passed.push("stopped and silent subagents are told apart");
 
-  // 6. Both approval surfaces name the subagent that asks.
+  // 7. Both approval surfaces name the subagent that asks.
   const [request] = pendingPermissions([
     {
       session_id: "s",
@@ -180,8 +271,10 @@ export async function runSubagentsBrowserConformance(): Promise<string[]> {
     },
   ]);
   check(request?.subagent === "Explore", "the pending request names its subagent");
+  surface = DESKTOP;
   render(<DesktopPermissionDock item={request} waiting={1} sessionId="s" />);
   check(container.textContent?.includes("Asked by subagent Explore"), "the Desktop dock names the subagent");
+  surface = MOBILE;
   render(<PermissionOverlay item={request} sessionId="s" />);
   check(
     container.querySelector("[data-permission-subagent]")?.textContent === "Explore",
@@ -206,13 +299,18 @@ export function renderSubagentsPreview(): void {
     cancellable: false,
     result: "No blocking findings.",
   })]).subagent;
+  const quiet = row([snapshot(1, { ...RUNNING, title: "Indexer", reporting: false, model: "Haiku 4.5" })])
+    .subagent;
   createRoot(container).render(
-    <BrowserProductTheme>
-      <CssBaseline />
-      <Stack spacing={1} sx={{ width: 520, p: 2 }}>
-        <SubagentCard subagent={row([snapshot(1, RUNNING)]).subagent} sessionId="s" desktop={false} stop={() => true} />
-        <SubagentCard subagent={finished} sessionId="s" desktop />
-      </Stack>
-    </BrowserProductTheme>,
+    <SurfaceContext.Provider value={DESKTOP}>
+      <BrowserProductTheme>
+        <CssBaseline />
+        <Stack spacing={1} sx={{ width: 520, p: 2 }}>
+          <SubagentCard subagent={row([snapshot(1, RUNNING)]).subagent} sessionId="s" desktop={false} stop={() => true} />
+          <SubagentCard subagent={finished} sessionId="s" desktop />
+          <SubagentCard subagent={quiet} sessionId="s" desktop stop={() => true} />
+        </Stack>
+      </BrowserProductTheme>
+    </SurfaceContext.Provider>,
   );
 }

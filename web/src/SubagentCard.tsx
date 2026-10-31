@@ -3,7 +3,17 @@
 // collapsed, bounded activity list. Shared by Desktop and Mobile.
 
 import { useEffect, useState } from "react";
-import { Box, Button, Chip, Collapse, IconButton, Paper, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Chip,
+  Collapse,
+  DialogContentText,
+  IconButton,
+  Paper,
+  Stack,
+  Typography,
+} from "@mui/material";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
   AccountTreeOutlined,
@@ -13,10 +23,14 @@ import {
   Terminal,
 } from "@mui/icons-material";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
+import { Kbd, useConfirmEnter } from "./Kbd";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ConfirmSheet } from "./Sheet";
 import { glyphSize } from "./surface/desktopSize";
 import { cancelSubagent } from "./store";
 import {
   type Subagent,
+  SUBAGENT_STOP_KEY,
   type SubagentTone,
   subagentCounts,
   subagentPreview,
@@ -80,6 +94,52 @@ function Section({ label, children }: { label: string; children: string }): Reac
   );
 }
 
+/** Stopping a subagent ends its work for good, so one tap or key must not do
+ *  it: the same confirmation as the session's own Stop. */
+function SubagentStopConfirm({
+  open,
+  title,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}): React.JSX.Element {
+  useConfirmEnter(open, onConfirm);
+  return (
+    <ConfirmSheet
+      open={open}
+      onClose={onClose}
+      title={`Stop subagent ${title}?`}
+      actions={
+        <>
+          <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+            Keep running
+            <Kbd keys="Esc" />
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            data-subagent-stop-confirm
+            onClick={onConfirm}
+            sx={{ textTransform: "none" }}
+          >
+            Stop
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
+        </>
+      }
+    >
+      <DialogContentText>
+        Only this subagent stops; the session and its other subagents keep
+        working. What it did so far stays in its activity.
+      </DialogContentText>
+    </ConfirmSheet>
+  );
+}
+
 export function SubagentCard({
   subagent,
   sessionId,
@@ -95,9 +155,19 @@ export function SubagentCard({
   const [open, setOpen] = useState(false);
   // A stop is a request: the subagent reports `idle` once it actually stopped.
   const [stopping, setStopping] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  // Desktop draws the Stop key only on the focused row (item-scoped hints).
+  const [focused, setFocused] = useState(false);
   useEffect(() => {
-    if (!subagent.cancellable) setStopping(false);
+    if (!subagent.cancellable) {
+      setStopping(false);
+      setConfirming(false);
+    }
   }, [subagent.cancellable]);
+  const confirmStop = (): void => {
+    setConfirming(false);
+    if (stop(sessionId, subagent.id)) setStopping(true);
+  };
   const status = subagentStatus(subagent);
   const counts = subagentCounts(subagent);
   const preview = subagentPreview(subagent);
@@ -109,6 +179,11 @@ export function SubagentCard({
       elevation={0}
       data-subagent-row={subagent.id}
       data-subagent-state={subagent.state}
+      data-subagent-reporting={subagent.reporting ? undefined : "false"}
+      onFocus={(): void => setFocused(true)}
+      onBlur={(event: React.FocusEvent<HTMLElement>): void => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+      }}
       sx={(theme) => ({
         alignSelf: "stretch",
         overflow: "hidden",
@@ -162,17 +237,17 @@ export function SubagentCard({
             disabled={stopping}
             startIcon={<StopCircleOutlined />}
             aria-label={`Stop subagent ${subagent.title}`}
-            onClick={(): void => {
-              if (stop(sessionId, subagent.id)) setStopping(true);
-            }}
+            onClick={(): void => setConfirming(true)}
             sx={{ minWidth: 0, minHeight: { xs: 40, sm: 30 }, textTransform: "none" }}
           >
             {stopping ? "Stopping…" : "Stop"}
+            {desktop && focused && !stopping && <Kbd keys={SUBAGENT_STOP_KEY} variant="context" />}
           </Button>
         )}
         <IconButton
           size={desktop ? "small" : "medium"}
           data-desktop-item-action="default"
+          {...(desktop ? { "data-desktop-widget-toggle": "subagent" } : {})}
           aria-expanded={open}
           aria-controls={activityId}
           aria-label={open ? "Hide subagent activity" : "Show subagent activity"}
@@ -236,6 +311,12 @@ export function SubagentCard({
           )}
         </Box>
       </Collapse>
+      <SubagentStopConfirm
+        open={confirming && subagent.cancellable}
+        title={subagent.title}
+        onClose={(): void => setConfirming(false)}
+        onConfirm={confirmStop}
+      />
     </Paper>
   );
 }
