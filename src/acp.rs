@@ -39,16 +39,17 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ClientNotification, ClientSessionCapabilities,
-    CompactionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
-    ElicitationAction, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode,
-    ElicitationScope, ElicitationUrlCapabilities, ExtNotification, ForkSessionRequest,
-    InitializeRequest, LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities,
-    PermissionOption, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
-    SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, SubagentCapabilities,
+    CompactionCapabilities, CompleteElicitationNotification, ContentBlock,
+    CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
+    ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode, ElicitationScope,
+    ElicitationUrlCapabilities, ExtNotification, ForkSessionRequest, InitializeRequest,
+    LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities, PermissionOption,
+    PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SubagentCapabilities,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
@@ -1077,6 +1078,37 @@ fn elicitation_permission(
     (tool_call, options)
 }
 
+/// The agent finished a URL elicitation on its own (`elicitation/complete`):
+/// the browser flow ended where Cowboy cannot see it. Accept the request that
+/// still presents it, so the adapter stops waiting, and resolve it on every
+/// surface. Returns whether a pending request was resolved; an unknown or
+/// already-answered id changes nothing.
+fn complete_url_elicitation(state: &ClientState, elicitation_id: &str) -> bool {
+    let Some(request_id) = state.url_elicitations.lock().remove(elicitation_id) else {
+        return false;
+    };
+    let Some(tx) = state.pending.lock().remove(&request_id) else {
+        return false;
+    };
+    state.elicitations.lock().remove(&request_id);
+    let _ = tx.send(Some(ELICITATION_ACCEPT.to_owned()));
+    state.sink.push(
+        &state.session_id,
+        Event::PermissionResolved {
+            request_id,
+            option_id: Some(ELICITATION_ACCEPT.to_owned()),
+        },
+    );
+    true
+}
+
+fn forget_url_elicitation(state: &ClientState, request_id: &str) {
+    state
+        .url_elicitations
+        .lock()
+        .retain(|_, pending| pending != request_id);
+}
+
 /// The session a session-scoped elicitation belongs to.
 fn elicitation_session_id(request: &CreateElicitationRequest) -> Option<&str> {
     let scope = match &request.mode {
@@ -1132,8 +1164,44 @@ fn elicitation_outcome(answer: Option<&str>) -> Option<String> {
     }
 }
 
+/// How long Codex ACP may hold `session/new`, `session/resume` or
+/// `session/fork` open while the MCP servers declared in that request start
+/// (`_meta.mcpStartupAwaitTimeoutMs`, codex-acp 2.x), so the first turn
+/// already sees their tools; a server that failed is reported as a failed
+/// `mcp__<server>__startup` tool call. Codex's own per-server default startup
+/// timeout is 10 s, so 15 s lets a default server settle while staying far
+/// below the shortest startup watchdog phase that carries it.
+const CODEX_MCP_STARTUP_AWAIT: Duration = Duration::from_secs(15);
+const CODEX_MCP_STARTUP_AWAIT_META_KEY: &str = "mcpStartupAwaitTimeoutMs";
+
+// The adapter's wait happens inside the request the startup watchdog times, so
+// it must leave that phase most of its budget (`startup_phase_timeout`).
+const _: () = assert!(
+    CODEX_MCP_STARTUP_AWAIT.as_secs() * 2 < STARTUP_PHASE_TIMEOUT.as_secs()
+        && CODEX_MCP_STARTUP_AWAIT.as_secs() * 2 < NEW_PHASE_TIMEOUT.as_secs()
+        && CODEX_MCP_STARTUP_AWAIT.as_secs() * 2 < RESUME_PHASE_TIMEOUT.as_secs()
+);
+
+/// Session metadata for a request that opens a thread: the Provider's own
+/// keys plus, for the Codex ACP behavior family, the bounded MCP startup wait.
+/// Only codex-acp reads the key, and it covers only servers declared in the
+/// request's `mcpServers`; servers configured through Codex's own config start
+/// as before. `session/load` is not given the key because codex-acp ignores it
+/// there.
+fn opening_session_meta(provider_id: &str) -> Option<Meta> {
+    let mut meta = provider_session_meta(provider_id);
+    if crate::provider::uses_config_full_access(provider_id) {
+        let wait = u64::try_from(CODEX_MCP_STARTUP_AWAIT.as_millis()).unwrap_or(u64::MAX);
+        meta.get_or_insert_with(Meta::new).insert(
+            CODEX_MCP_STARTUP_AWAIT_META_KEY.to_owned(),
+            serde_json::json!(wait),
+        );
+    }
+    meta
+}
+
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
-    NewSessionRequest::new(cwd).meta(provider_session_meta(provider_id))
+    NewSessionRequest::new(cwd).meta(opening_session_meta(provider_id))
 }
 
 fn resume_session_request(
@@ -1141,7 +1209,7 @@ fn resume_session_request(
     session_id: SessionId,
     cwd: PathBuf,
 ) -> ResumeSessionRequest {
-    ResumeSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
+    ResumeSessionRequest::new(session_id, cwd).meta(opening_session_meta(provider_id))
 }
 
 /// How a worker establishes its native thread.
@@ -1177,7 +1245,7 @@ fn fork_session_request(
     fork: &crate::runtime_wire::NativeFork,
     cwd: PathBuf,
 ) -> ForkSessionRequest {
-    let mut meta = provider_session_meta(provider_id);
+    let mut meta = opening_session_meta(provider_id);
     if let Some(message_id) = &fork.message_id {
         meta.get_or_insert_with(Meta::new).insert(
             "jetbrains".to_owned(),
@@ -1215,9 +1283,9 @@ mod startup_mode_tests {
         grok_model_request, grok_permission_notification, grok_session_usage, initialize_request,
         is_empty_stream_message_update, is_turn_progress_update, load_session_request,
         new_session_request, note_tool_liveness, parse_provider_backoff,
-        permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
-        resume_session_request, run_serial_config_queue, select_resume_method,
-        session_config_value, startup_full_access_mode, turn_is_wedged,
+        permission_auto_approve_enabled, preferred_allow_option, programmatic_tool_name,
+        projected_auth_error, resume_session_request, run_serial_config_queue,
+        select_resume_method, session_config_value, startup_full_access_mode, turn_is_wedged,
     };
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
@@ -1418,7 +1486,118 @@ mod startup_mode_tests {
 
         let request =
             serde_json::to_value(new_session_request("codex", cwd)).expect("non-Claude request");
-        assert!(request.get("_meta").is_none());
+        assert!(request.pointer("/_meta/systemPrompt").is_none());
+        assert!(request.pointer("/_meta/claudeCode").is_none());
+    }
+
+    #[test]
+    fn codex_thread_openers_wait_a_bounded_time_for_mcp_startup() {
+        let cwd = PathBuf::from("/tmp/workspace");
+        for provider in ["codex", "codex-deepseek"] {
+            let fork = crate::runtime_wire::NativeFork {
+                agent_session_id: "source".to_owned(),
+                message_id: Some("message-7".to_owned()),
+            };
+            let requests = [
+                serde_json::to_value(new_session_request(provider, cwd.clone())).unwrap(),
+                serde_json::to_value(resume_session_request(
+                    provider,
+                    SessionId::new("session"),
+                    cwd.clone(),
+                ))
+                .unwrap(),
+                serde_json::to_value(super::fork_session_request(provider, &fork, cwd.clone()))
+                    .unwrap(),
+            ];
+            for request in &requests {
+                assert_eq!(
+                    request.pointer("/_meta/mcpStartupAwaitTimeoutMs"),
+                    Some(&serde_json::json!(15_000)),
+                    "{provider}: {request}"
+                );
+            }
+            // The fork point merges with the wait instead of replacing it.
+            assert_eq!(
+                requests[2].pointer("/_meta/jetbrains/air/fork/messageId"),
+                Some(&serde_json::json!("message-7"))
+            );
+            let load = serde_json::to_value(load_session_request(
+                provider,
+                SessionId::new("session"),
+                cwd.clone(),
+            ))
+            .unwrap();
+            assert!(load.pointer("/_meta/mcpStartupAwaitTimeoutMs").is_none());
+        }
+        // Other Provider families keep their own metadata and gain no key.
+        for provider in ["claude-code", "grok"] {
+            let request = serde_json::to_value(new_session_request(provider, cwd.clone())).unwrap();
+            assert!(request.pointer("/_meta/mcpStartupAwaitTimeoutMs").is_none());
+            assert!(request.get("_meta").is_some());
+        }
+        let portable = serde_json::to_value(new_session_request("fixture-provider", cwd)).unwrap();
+        assert!(portable.get("_meta").is_none());
+    }
+
+    #[test]
+    fn the_standard_tool_name_wins_over_the_claude_meta_name() {
+        assert_eq!(
+            programmatic_tool_name(&serde_json::json!({
+                "name": "ScheduleWakeup",
+                "_meta": {"claudeCode": {"toolName": "Other"}},
+            })),
+            Some("ScheduleWakeup")
+        );
+        assert_eq!(
+            programmatic_tool_name(&serde_json::json!({
+                "name": "",
+                "_meta": {"claudeCode": {"toolName": "ScheduleWakeup"}},
+            })),
+            Some("ScheduleWakeup")
+        );
+        assert_eq!(
+            programmatic_tool_name(&serde_json::json!({"title": "x"})),
+            None
+        );
+    }
+
+    #[test]
+    fn elicitation_payloads_keep_option_previews_and_codex_auto_resolution() {
+        // Shapes from claude-agent-acp 0.99.1 `askUserQuestionsToCreateRequest`
+        // and codex-acp 2.5.0 `buildUserInputRequest`.
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "mode": "form",
+                "sessionId": "native",
+                "toolCallId": "tool-1",
+                "message": "Pick",
+                "requestedSchema": {"type": "object", "properties": {
+                    "question_0": {"type": "string", "title": "One", "oneOf": [{
+                        "const": "A", "title": "A",
+                        "_meta": {"_claude/askUserQuestionOption": {"preview": "fn a() {}"}},
+                    }]},
+                    "question_1": {"type": "array", "title": "Many", "items": {"anyOf": [{
+                        "const": "B", "title": "B",
+                        "_meta": {"_claude/askUserQuestionOption": {"preview": "b"}},
+                    }]}},
+                }},
+                "_meta": {"codex": {"autoResolutionMs": 60_000}},
+            }))
+            .unwrap();
+        let (tool_call, _) = elicitation_permission("3", &request);
+        let presented = &tool_call["_cowboy"]["elicitation"];
+        assert_eq!(
+            presented.pointer("/requestedSchema/properties/question_0/oneOf/0/_meta/_claude~1askUserQuestionOption/preview"),
+            Some(&serde_json::json!("fn a() {}"))
+        );
+        assert_eq!(
+            presented.pointer("/requestedSchema/properties/question_1/items/anyOf/0/_meta/_claude~1askUserQuestionOption/preview"),
+            Some(&serde_json::json!("b"))
+        );
+        assert_eq!(
+            presented.pointer("/_meta/codex/autoResolutionMs"),
+            Some(&serde_json::json!(60_000))
+        );
     }
 
     #[test]
@@ -2423,6 +2602,10 @@ struct ClientState {
     /// The subset of `pending` that are elicitations, whose answers carry form
     /// content and are recorded only as an outcome.
     elicitations: Mutex<HashSet<String>>,
+    /// Pending URL elicitations by their ACP `elicitationId`, naming the
+    /// request id that presents each one. `elicitation/complete` resolves the
+    /// request it names here.
+    url_elicitations: Mutex<HashMap<String, String>>,
     /// Serialize `session/prompt` RPCs while leaving the outer command loop
     /// responsive to Cancel, permission answers, and config changes.
     prompt_lock: tokio::sync::Mutex<()>,
@@ -2773,6 +2956,7 @@ async fn agent_main(
         service_auth_projected,
         pending: Mutex::new(HashMap::new()),
         elicitations: Mutex::new(HashSet::new()),
+        url_elicitations: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         steering_gate: tokio::sync::Mutex::new(()),
@@ -2795,6 +2979,7 @@ async fn agent_main(
     let activity_state = state.clone();
     let perm_state = state.clone();
     let elicit_state = state.clone();
+    let complete_state = state.clone();
     let main_state = state.clone();
 
     // `run_session` advances this marker before every startup request. The
@@ -2820,6 +3005,15 @@ async fn agent_main(
                         _cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
                 handle_native_activity(&activity_state, &notif);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            async move |notif: CompleteElicitationNotification,
+                        _cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                complete_url_elicitation(&complete_state, notif.elicitation_id.0.as_ref());
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -2958,6 +3152,12 @@ async fn agent_main(
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 elicit_state.pending.lock().insert(request_id.clone(), tx);
                 elicit_state.elicitations.lock().insert(request_id.clone());
+                if let ElicitationMode::Url(url) = &req.mode {
+                    elicit_state
+                        .url_elicitations
+                        .lock()
+                        .insert(url.elicitation_id.0.to_string(), request_id.clone());
+                }
                 elicit_state.sink.push(
                     &elicit_state.session_id,
                     Event::PermissionRequest {
@@ -2974,6 +3174,7 @@ async fn agent_main(
                         () = cancellation.cancelled() => {
                             cancelled_state.pending.lock().remove(&request_id);
                             cancelled_state.elicitations.lock().remove(&request_id);
+                            forget_url_elicitation(&cancelled_state, &request_id);
                             cancelled_state.sink.push(
                                 &cancelled_state.session_id,
                                 Event::PermissionResolved {
@@ -3635,6 +3836,21 @@ fn is_adapter_empty_stream_message(text: &str) -> bool {
     text.trim() == CLAUDE_EMPTY_STREAM_MESSAGE
 }
 
+/// The programmatic name of the tool a `tool_call`/`tool_call_update` reports:
+/// ACP's standard `name` (schema 1.8+), else the Claude adapter's older
+/// `_meta.claudeCode.toolName`.
+fn programmatic_tool_name(update: &serde_json::Value) -> Option<&str> {
+    update
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            update
+                .pointer("/_meta/claudeCode/toolName")
+                .and_then(serde_json::Value::as_str)
+        })
+}
+
 /// If `update` is a `ScheduleWakeup` tool call carrying `rawInput.{prompt,
 /// delaySeconds}`, arm cowboy's scheduler. The agent expects its `/loop` runtime
 /// to re-invoke it at the scheduled time; under ACP cowboy IS that runtime, so we
@@ -3642,11 +3858,7 @@ fn is_adapter_empty_stream_message(text: &str) -> bool {
 /// input arms — the bare `tool_call` and the result `tool_call_update` lack it,
 /// so this is effectively once per `ScheduleWakeup` call.
 fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
-    if update
-        .pointer("/_meta/claudeCode/toolName")
-        .and_then(serde_json::Value::as_str)
-        != Some("ScheduleWakeup")
-    {
+    if programmatic_tool_name(update) != Some("ScheduleWakeup") {
         return;
     }
     let prompt = update
@@ -4612,6 +4824,7 @@ async fn run_session(
                 if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
+                forget_url_elicitation(state, &request_id);
                 let option_id = if state.elicitations.lock().remove(&request_id) {
                     elicitation_outcome(option_id.as_deref())
                 } else {

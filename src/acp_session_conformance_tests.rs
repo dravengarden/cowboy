@@ -129,6 +129,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         service_auth_projected: true,
         pending: Mutex::new(HashMap::new()),
         elicitations: Mutex::new(HashSet::new()),
+        url_elicitations: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
@@ -2059,4 +2060,55 @@ fn a_child_request_names_its_subagent_and_a_root_request_does_not() {
     let mut root = json!({"toolCallId": "t", "title": "Run tests"});
     tag_subagent_request(&state, NATIVE, &mut root);
     assert!(root.get("_cowboy").is_none());
+}
+
+#[test]
+fn an_agent_completed_url_elicitation_is_accepted_and_resolved_once() {
+    let (state, sink) = fixture_state(false);
+    let (tx, mut rx) = oneshot::channel::<Option<String>>();
+    state.pending.lock().insert("7".to_owned(), tx);
+    state.elicitations.lock().insert("7".to_owned());
+    state
+        .url_elicitations
+        .lock()
+        .insert("login-1".to_owned(), "7".to_owned());
+
+    assert!(!complete_url_elicitation(&state, "unknown"));
+    assert!(complete_url_elicitation(&state, "login-1"));
+    assert_eq!(rx.try_recv().unwrap(), Some(ELICITATION_ACCEPT.to_owned()));
+    assert!(state.pending.lock().is_empty());
+    assert!(state.elicitations.lock().is_empty());
+    assert!(state.url_elicitations.lock().is_empty());
+    // A repeated notification, or one after the user answered, is a no-op.
+    assert!(!complete_url_elicitation(&state, "login-1"));
+
+    let resolved: Vec<_> = sink
+        .hub
+        .snapshot(SESSION)
+        .unwrap()
+        .0
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::PermissionResolved {
+                request_id,
+                option_id,
+            } => Some((request_id, option_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![("7".to_owned(), Some(ELICITATION_ACCEPT.to_owned()))]
+    );
+}
+
+#[test]
+fn an_answered_url_elicitation_forgets_its_completion_id() {
+    let (state, _sink) = fixture_state(false);
+    state
+        .url_elicitations
+        .lock()
+        .insert("login-2".to_owned(), "9".to_owned());
+    forget_url_elicitation(&state, "9");
+    assert!(state.url_elicitations.lock().is_empty());
 }
