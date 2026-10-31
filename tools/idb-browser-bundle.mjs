@@ -26,7 +26,8 @@ if (
   suite !== "loading-progress" &&
   suite !== "subscriptions" && suite !== "client-update" &&
   suite !== "session-context" && suite !== "boot-snapshot" &&
-  suite !== "elicitation" && suite !== "subagents"
+  suite !== "elicitation" && suite !== "subagents" &&
+  suite !== "background-tasks"
 ) {
   throw new Error("unknown suite");
 }
@@ -61,7 +62,7 @@ await build({
         suite === "loading-progress" || suite === "review-context" ||
         suite === "subscriptions" || suite === "client-update" ||
         suite === "session-context" || suite === "elicitation" ||
-        suite === "subagents"
+        suite === "subagents" || suite === "background-tasks"
         ? "development"
         : "production",
     ),
@@ -108,7 +109,7 @@ await build({
         suite === "review-context" || suite === "loading-progress" ||
         suite === "client-update" || suite === "subscriptions" ||
         suite === "session-context" || suite === "elicitation" ||
-        suite === "subagents"
+        suite === "subagents" || suite === "background-tasks"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
@@ -119,6 +120,8 @@ await build({
           ? "../web/src/elicitationBrowserConformance.tsx"
           : suite === "subagents"
           ? "../web/src/subagentsBrowserConformance.tsx"
+          : suite === "background-tasks"
+          ? "../web/src/backgroundTasksBrowserConformance.tsx"
           : suite === "boot-snapshot"
           ? "../web/src/bootSnapshotBrowserConformance.ts"
           : suite === "client-update"

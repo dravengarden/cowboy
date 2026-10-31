@@ -37,6 +37,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "dormant-session": ["runDormantSessionBrowserConformance", 29],
   "elicitation": ["runElicitationBrowserConformance", 6],
   "subagents": ["runSubagentsBrowserConformance", 7],
+  "background-tasks": ["runBackgroundTasksBrowserConformance", 9],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

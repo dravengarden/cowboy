@@ -74,7 +74,10 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
-import { SubagentCard } from "./SubagentCard";
+import { PendingCallRow, TaskRow } from "./TaskRow";
+import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
+import { applySubagentAuthority, callKey, subagentKey, useSessionAuthority } from "./backgroundTasks";
+import { type BackgroundTasks, useBackgroundTasks, useStopStates } from "./useBackgroundTasks";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
@@ -3049,6 +3052,8 @@ const ItemView = memo(function ItemView({
   desktop,
   selectedToolKey,
   onOpenTool,
+  tasks,
+  stops,
 }: {
   item: RenderItem;
   sessionId: string;
@@ -3064,6 +3069,9 @@ const ItemView = memo(function ItemView({
   desktop: boolean;
   selectedToolKey: string | null;
   onOpenTool: (key: string) => void;
+  /** Background-task summaries for subagent and Call anchor rows. */
+  tasks?: Pick<BackgroundTasks, "byKey" | "callsObservedAt"> | undefined;
+  stops?: ReadonlyMap<string, import("./useBackgroundTasks").StopState> | undefined;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message": {
@@ -3114,8 +3122,19 @@ const ItemView = memo(function ItemView({
       );
     case "permission":
       return <PermissionCard item={item} />;
-    case "subagent":
-      return <SubagentCard subagent={item.subagent} sessionId={sessionId} desktop={desktop} />;
+    case "subagent": {
+      const task = tasks?.byKey.get(subagentKey(item.subagent.id));
+      return task
+        ? <TaskRow task={task} sessionId={sessionId} desktop={desktop} stop={stops?.get(task.key)} />
+        : null;
+    }
+    case "call": {
+      const task = tasks?.byKey.get(callKey(item.callId));
+      if (task) return <TaskRow task={task} sessionId={sessionId} desktop={desktop} stop={stops?.get(task.key)} />;
+      // Until the ledger answers, keep the row's geometry; a call the ledger
+      // no longer lists (cleared) leaves no row behind.
+      return tasks?.callsObservedAt === null ? <PendingCallRow desktop={desktop} /> : null;
+    }
     case "lifecycle": {
       if (item.recovered) {
         return (
@@ -3517,6 +3536,8 @@ function itemProgressSignature(
       }`;
     case "subagent":
       return `${count}:${item.key}:subagent:${item.subagent.revision}:${item.subagent.state}`;
+    case "call":
+      return `${count}:${item.key}:call:${item.callId}`;
     case "lifecycle":
       return `${count}:${item.key}:lifecycle:${item.status}:${item.recovered ?? false}`;
     case "cleared":
@@ -3720,9 +3741,21 @@ export function Transcript({
     });
     return () => cancelAnimationFrame(frame);
   }, [drawerCatchupStep, sessionId]);
-  const allItems = useMemo(() => derive(presentedTimeline), [
-    presentedTimeline,
-  ]);
+  // Subagent rows show their reconciled snapshot: a terminal state the bounded
+  // tail could not deliver still reaches the row (docs/background-tasks.md).
+  const subagentAuthority = useSessionAuthority(sessionId);
+  const allItems = useMemo(
+    () => applySubagentAuthority(derive(presentedTimeline), subagentAuthority),
+    [presentedTimeline, subagentAuthority],
+  );
+  const background = useBackgroundTasks(sessionId, allItems);
+  const taskStops = useStopStates();
+  const locateTask = useCallback((key: string): void => {
+    const row = document.querySelector<HTMLElement>(`[data-task-row="${CSS.escape(key)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center" });
+    row.querySelector<HTMLElement>("[data-task-open]")?.focus({ preventScroll: true });
+  }, []);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const liveItems = useMemo(
     () => {
@@ -6012,6 +6045,8 @@ export function Transcript({
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}
                       onOpenTool={openTool}
+                      tasks={item.kind === "subagent" || item.kind === "call" ? background : undefined}
+                      stops={item.kind === "subagent" || item.kind === "call" ? taskStops : undefined}
                     />
                   </Box>
                 ))}
@@ -6094,6 +6129,12 @@ export function Transcript({
           />
         </Box>
       )}
+      <BackgroundTasksInspector
+        sessionId={sessionId}
+        desktop={desktopNavigation}
+        background={background}
+        onLocate={locateTask}
+      />
       <ToolDetailsBrowser
         items={items}
         runs={runs}

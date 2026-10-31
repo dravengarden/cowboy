@@ -264,7 +264,7 @@ export function DesktopStatusLine({
       focusedRegion !== "prompt.composer"
     ? [
       { keys: DESKTOP_FOCUS_PLAN_SHORTCUT, label: "Plan" },
-      { keys: DESKTOP_SHORTCUTS.focusCalls, label: "Calls" },
+      { keys: DESKTOP_SHORTCUTS.focusCalls, label: "Tasks" },
       { keys: DESKTOP_SHORTCUTS.focusQueue, label: "Queue" },
       { keys: DESKTOP_SHORTCUTS.focusDrafts, label: "Drafts" },
       { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },

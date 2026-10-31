@@ -92,7 +92,7 @@ import {
   useCallClock,
 } from "./managedCalls";
 
-function StateChip(
+export function StateChip(
   { call, desktop = false }: { call: ManagedCallSummary; desktop?: boolean },
 ): React.JSX.Element {
   const tone = callTone(call.state);
@@ -132,7 +132,7 @@ function StateChip(
 
 /** Review verdicts are separate from execution success: a completed call can
  * still need attention, and a failed call has no verdict at all. */
-function VerdictChip(
+export function VerdictChip(
   { verdict, findings, desktop = false }: {
     verdict?: string | null;
     findings?: number | undefined;
@@ -425,7 +425,7 @@ function ResultSection(
   return <Markdown text={result.text ?? ""} touchWrap={touch} />;
 }
 
-function CallDetailView({
+export function CallDetailView({
   parent,
   call,
   desktop,
@@ -618,7 +618,7 @@ function CallDetailView({
 
 /** A call's title as a heading ("Correctness · Round 1"); list rows get the
  * same effect from CSS, but sheet titles are plain strings. */
-function displayTitle(call: ManagedCallSummary): string {
+export function displayTitle(call: ManagedCallSummary): string {
   return callTitle(call).replace(
     /(^|[\s·-])(\p{Ll})/gu,
     (_, lead, letter) => `${lead}${letter.toUpperCase()}`,
@@ -679,7 +679,7 @@ function CallAccountDetails({ call }: { call: Pick<ManagedCallSummary, "provider
 
 /** A compact phone header: title above status, placement, time and recorded configuration.
  * It replaces the sheet's grab handle. */
-function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
+export function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
   const now = useCallClock();
   const end = callActive(call.state) ? now : call.finished_at_ms ?? call.updated_at_ms;
   const parameters = callExecutionParameters(call).filter(({ label, value }) =>
@@ -806,7 +806,7 @@ const MOBILE_FOOTER_CLEARANCE = "calc(76px + env(safe-area-inset-bottom, 0px))";
 
 /** Level 2: the child's own conversation, headed by the call's state; its
  * details are one step further. */
-function CallConversation({
+export function CallConversation({
   call,
   desktop,
   detailsOpen,

@@ -54,7 +54,7 @@ test("a snapshot becomes a bounded subagent model with a status and preview", ()
   assertEquals(subagent.title, "Explore");
   assertEquals(subagent.description, null, "a description equal to the title is not repeated");
   assertEquals(subagent.activity.length, 2);
-  assertEquals(subagentStatus(subagent), { label: "Working", tone: "working" });
+  assertEquals(subagentStatus(subagent), { label: "Working", tone: "working", group: "active" });
   assertEquals(subagentCounts(subagent), "2 tool calls · 1 message");
   assertEquals(subagentPreview(subagent), "Looking at the parser");
   assertEquals(subagentOf({ sessionUpdate: "cowboy_subagent" }), null);
@@ -70,7 +70,19 @@ test("an ended subagent previews its result and names how it ended", () => {
   assertEquals(subagentStatus(subagentOf({ ...base, stopReason: "cancelled" })!).label, "Stopped");
   assertEquals(subagentStatus(subagentOf({ ...base, stopReason: "error" })!).tone, "failed");
   assertEquals(subagentStatus(subagentOf({ ...base, state: "requires_action" })!).tone, "waiting");
-  assertEquals(subagentStatus(subagentOf({ ...base, state: "unknown" })!).label, "Ended");
+  // R4: "Needs your answer" only with a request this client can answer.
+  assertEquals(subagentStatus(subagentOf({ ...base, state: "requires_action" })!).label, "Waiting");
+  assertEquals(
+    subagentStatus(subagentOf({ ...base, state: "requires_action" })!, { pendingRequests: 1 }).group,
+    "needs_you",
+  );
+  // T13: `unknown` is not terminal; idle without a stop reason is Ended (R1).
+  assertEquals(subagentStatus(subagentOf({ ...base, state: "unknown" })!).label, "Not reporting");
+  assertEquals(
+    subagentStatus(subagentOf({ ...base, result: "a reply" })!),
+    { label: "Ended: outcome unreported", tone: "unknown", group: "ended" },
+  );
+  assertEquals(subagentStatus(subagentOf({ ...base, stopReason: "max_tokens" })!).group, "failed");
 });
 
 test("snapshots of one child are one row at its first position, newest revision wins", () => {
@@ -114,7 +126,7 @@ test("a worker exit or a new worker leaves a working subagent no longer reportin
     const subagent = subagentRows(items)[0]?.subagent;
     if (!subagent) throw new Error("expected a subagent");
     assertEquals(subagent.cancellable, false);
-    assertEquals(subagentStatus(subagent), { label: "No longer reporting", tone: "unknown" });
+    assertEquals(subagentStatus(subagent), { label: "Not reporting", tone: "unknown", group: "not_reporting" });
   }
   // A subagent the new worker announces again reports again.
   const again = subagentRows(derive([
@@ -143,7 +155,7 @@ test("a silent subagent is neutral and its model and usage join the counts", () 
     usage: { totalTokens: 12_345 },
   });
   if (!quiet) throw new Error("expected a subagent");
-  assertEquals(subagentStatus(quiet), { label: "No longer reporting", tone: "unknown" });
+  assertEquals(subagentStatus(quiet), { label: "Not reporting", tone: "unknown", group: "not_reporting" });
   assertEquals(subagentCounts(quiet), "Haiku 4.5 · 1 tool call · 12k tokens");
   const relabeled = subagentRows(derive([
     snapshot(1, { revision: 1, title: "Explore", model: "Haiku 4.5", state: "running" }),

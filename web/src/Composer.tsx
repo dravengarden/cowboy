@@ -184,6 +184,8 @@ import { HintTooltip } from "./HintTooltip";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { ManagedCallsDock } from "./ManagedCallsDock";
+import { BackgroundTasksBar } from "./BackgroundTasksBar";
+import { useCallsDockLegacy } from "./backgroundTasks";
 import { SessionToolsSection } from "./AgentToolsPanel";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { isManagedChild } from "./managedCalls";
@@ -1122,6 +1124,8 @@ export function ComposerWorkspace({
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
+  // Rollback switch for the Calls panel (docs/background-tasks.md §6.3).
+  const callsDockLegacy = useCallsDockLegacy();
   const touchInput = useTouchComposer();
   const keyboardOpen = useKeyboardOpen();
   const [mobileInputResetBlocked, setMobileInputResetBlocked] = useState(false);
@@ -2132,21 +2136,41 @@ export function ComposerWorkspace({
           : {})}
         sx={{ "&:empty": { display: "none" } }}
       >
-        <ManagedCallsDock
-          sessionId={sessionId}
-          desktop={desktop}
-          shortcut={desktop
-            ? (
-              <Suspense fallback={null}>
-                <DesktopRegionShortcut
-                  shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                  title="Focus Calls"
-                  singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                />
-              </Suspense>
-            )
-            : undefined}
-        />
+        {callsDockLegacy
+          ? (
+            <ManagedCallsDock
+              sessionId={sessionId}
+              desktop={desktop}
+              shortcut={desktop
+                ? (
+                  <Suspense fallback={null}>
+                    <DesktopRegionShortcut
+                      shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                      title="Focus Calls"
+                      singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                    />
+                  </Suspense>
+                )
+                : undefined}
+            />
+          )
+          : (
+            <BackgroundTasksBar
+              sessionId={sessionId}
+              desktop={desktop}
+              shortcut={desktop
+                ? (
+                  <Suspense fallback={null}>
+                    <DesktopRegionShortcut
+                      shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                      title="Background tasks"
+                      singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                    />
+                  </Suspense>
+                )
+                : undefined}
+            />
+          )}
       </Box>
       {showPlan && plan && (
         <Box

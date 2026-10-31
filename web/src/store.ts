@@ -165,6 +165,7 @@ import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
 import type { UsageSnapshot } from "./usageLimits";
 import { receiveCallApproval } from "./callApproval";
+import { forgetSessionAuthority, reconcileSubagents, timelineHighWater } from "./backgroundTasks";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import { editorHoldsUpdate } from "./updateIdleGate";
 import {
@@ -1845,6 +1846,8 @@ function handle(msg: Outbound): void {
       }
       const clearsContext = env.kind === "update" &&
         env.update.sessionUpdate === "context_cleared";
+      // Clear deletes every anchored row; their reconciled state goes too.
+      if (clearsContext) forgetSessionAuthority(env.session_id);
       // Attention alert — a permission request needs a decision. Snapshot/history
       // replays take another reducer path, so past requests never re-alert.
       if (env.kind === "permission_request") fireAlert("decision");
@@ -2057,8 +2060,13 @@ async function hydrateSession(
   const promise = (async (): Promise<void> => {
     let retryableFailure = false;
     try {
+      // The highest seq this device already holds: the Controller then also
+      // returns every subagent observed after it, even when terminal.
+      const sinceSeq = timelineHighWater(state.timelines.get(sessionId));
       const response = await fetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
+        `/api/sessions/${encodeURIComponent(sessionId)}/bootstrap${
+          sinceSeq === null ? "" : `?since_seq=${String(sinceSeq)}`
+        }`,
         { cache: "no-store", signal: controller.signal },
       );
       if (!response.ok) {
@@ -2079,6 +2087,13 @@ async function hydrateSession(
       if (!bootstrap.messages.some((message) => message.type === "snapshot" && message.session_id === sessionId)) {
         throw new Error("session bootstrap contained no transcript snapshot");
       }
+      // Repair cached subagent rows the bounded tail cannot (I5/I6). A
+      // Controller without the contract leaves them as rendered (I7).
+      void reconcileSubagents(
+        sessionId,
+        bootstrap.subagent_state,
+        state.timelines.get(sessionId) ?? [],
+      ).catch((error: unknown) => console.warn("subagent reconciliation failed", error));
       // HTTP 200 is not a source acknowledgement: creation can still be racing,
       // or another terminal may have removed it. Bound retries in both cases.
       retryableFailure = needsDraftSource(sessionId);
