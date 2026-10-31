@@ -3732,7 +3732,11 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         retain_failed_dispatch(hub, session_id, text, content, cmid, &wait);
         return;
     }
-    if let Err(error) = session_context::claim_carrier(&state, &session_id, cmid.as_deref()).await {
+    // Links wait for a real message: a preamble would break a slash command.
+    if !crate::session_context::is_command(&text)
+        && let Err(error) =
+            session_context::claim_carrier(&state, &session_id, cmid.as_deref()).await
+    {
         retain(session_id, text, content, cmid, &error);
         return;
     }

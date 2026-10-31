@@ -658,6 +658,9 @@ async fn deliver(
     {
         return Err("A nonempty message and a stable operation id are required".into());
     }
+    if context.next_agent.is_some() && crate::session_context::is_command(&request.text) {
+        return Err("A command needs a conversation, so it cannot start the new agent. Write its first message, or go Back to run this here.".into());
+    }
     // Sending names its own carrier, for callers that want a receipt.
     let links_waiting = context.next_agent.is_none() && !context.waiting.is_empty();
     if request.revision != context.revision

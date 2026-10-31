@@ -253,6 +253,10 @@ first attempted resend observes that receipt and opens the destination once,
 with an explanatory notice, instead of duplicating the message. Returning to the
 original session then permits a deliberate new message there.
 
+A slash command cannot start a new agent: it needs a conversation, and the
+source would go to Trash for nothing. The send is refused with the staged choice
+intact, so the user writes the first message or goes Back.
+
 A send reserves its operation and destination before creation. A duplicate with
 the same operation and payload observes that receipt; another payload cannot
 reuse the operation. Source and destination mutation locks protect first-send
@@ -309,7 +313,8 @@ the carrier receives the preamble, including on retries of the same prompt. If
 the bootstrap row leaves the queue undispatched (removed, cleared by an edit) or
 a front insert overtakes it, the next dispatched prompt becomes the carrier and
 the overtaken row is later sent as an ordinary message. Scheduled wakeups,
-retries and managed-call prompts never carry or consume the links; current-turn
+retries, managed-call prompts and slash commands such as `/compact` never carry
+or consume the links; current-turn
 steering bypasses dispatch and leaves them for the next queued prompt. If the
 record cannot be written, the prompt stays queued instead of being sent without
 durable evidence, so a Controller restart cannot apply the links twice. A prompt
