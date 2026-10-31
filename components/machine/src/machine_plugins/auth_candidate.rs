@@ -385,16 +385,14 @@ mod tests {
         let root = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
         let id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         let store = Arc::new(root.for_account(&id).unwrap());
-        let home = store
-            .create_auth_candidate_home("gemini", "request")
-            .unwrap();
-        let mut guard = AuthCandidateCleanup::new(store.clone(), "gemini", "request");
+        let home = store.create_auth_candidate_home("grok", "request").unwrap();
+        let mut guard = AuthCandidateCleanup::new(store.clone(), "grok", "request");
         guard.process_started();
         store
-            .mark_auth_candidate_tree_exited("gemini", "request")
+            .mark_auth_candidate_tree_exited("grok", "request")
             .unwrap();
         guard.process_exited();
-        let receipts = store.auth_provider_root("gemini").join("login-receipts");
+        let receipts = store.auth_provider_root("grok").join("login-receipts");
         fs::write(&receipts, "obstruction").unwrap();
         assert!(guard.discard().is_err());
         assert!(home.exists());
@@ -405,22 +403,22 @@ mod tests {
         let root = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
         let store = root.for_account(&id).unwrap();
         let receipt = store
-            .auth_candidate_stop("gemini", "request")
+            .auth_candidate_stop("grok", "request")
             .unwrap()
             .unwrap();
         assert!(receipt.process_tree_exited && receipt.leader_exited && receipt.candidate_removed);
         assert!(!home.exists());
         assert!(
             store
-                .mark_auth_candidate_tree_exited("gemini", "request")
+                .mark_auth_candidate_tree_exited("grok", "request")
                 .is_err()
         );
         store
-            .discard_stopped_auth_candidate("gemini", "request", true)
+            .discard_stopped_auth_candidate("grok", "request", true)
             .unwrap();
         assert_eq!(
             store
-                .auth_candidate_stop("gemini", "request")
+                .auth_candidate_stop("grok", "request")
                 .unwrap()
                 .unwrap(),
             receipt
@@ -842,38 +840,32 @@ mod tests {
         let store = Arc::new(
             MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap(),
         );
-        let home = store
-            .create_auth_candidate_home("gemini", "request")
-            .unwrap();
-        let mut guard = AuthCandidateCleanup::new(store.clone(), "gemini", "request");
+        let home = store.create_auth_candidate_home("grok", "request").unwrap();
+        let mut guard = AuthCandidateCleanup::new(store.clone(), "grok", "request");
         guard.process_started();
         assert!(guard.discard().is_err());
         assert!(
             store
-                .auth_candidate_stop("gemini", "request")
+                .auth_candidate_stop("grok", "request")
                 .unwrap()
                 .is_none()
         );
         guard.process_exited();
         guard.discard().unwrap();
         let receipt = store
-            .auth_candidate_stop("gemini", "request")
+            .auth_candidate_stop("grok", "request")
             .unwrap()
             .unwrap();
         assert!(receipt.process_started && receipt.leader_exited && receipt.candidate_removed);
         assert!(
             store
-                .auth_candidate_stop("gemini", "other")
+                .auth_candidate_stop("grok", "other")
                 .unwrap()
                 .is_none()
         );
-        assert!(
-            store
-                .create_auth_candidate_home("gemini", "request")
-                .is_err()
-        );
+        assert!(store.create_auth_candidate_home("grok", "request").is_err());
         let receipt_path = store
-            .auth_provider_root("gemini")
+            .auth_provider_root("grok")
             .join("login-receipts/request.json");
         let mut partial: serde_json::Value =
             serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
@@ -895,32 +887,28 @@ mod tests {
         assert!(!home.exists());
         assert!(
             store
-                .auth_candidate_stop("gemini", "request")
+                .auth_candidate_stop("grok", "request")
                 .unwrap()
                 .unwrap()
                 .candidate_removed
         );
+        assert!(store.create_auth_candidate_home("grok", "request").is_err());
         assert!(
             store
-                .create_auth_candidate_home("gemini", "request")
-                .is_err()
-        );
-        assert!(
-            store
-                .create_auth_candidate_home("gemini", "new-request")
+                .create_auth_candidate_home("grok", "new-request")
                 .is_ok()
         );
         let id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         let other = store.for_account(&id).unwrap();
         assert!(
             other
-                .auth_candidate_stop("gemini", "request")
+                .auth_candidate_stop("grok", "request")
                 .unwrap()
                 .is_none()
         );
         partial["request"] = "other".into();
         fs::write(receipt_path, serde_json::to_vec(&partial).unwrap()).unwrap();
-        assert!(store.auth_candidate_stop("gemini", "request").is_err());
+        assert!(store.auth_candidate_stop("grok", "request").is_err());
     }
 
     #[test]
@@ -930,16 +918,14 @@ mod tests {
         let store = Arc::new(
             MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap(),
         );
-        store
-            .create_auth_candidate_home("gemini", "request")
-            .unwrap();
-        let root = store.auth_candidate_root("gemini");
+        store.create_auth_candidate_home("grok", "request").unwrap();
+        let root = store.auth_candidate_root("grok");
         fs::rename(&root, root.with_file_name("retained-candidates")).unwrap();
         fs::create_dir(external.path().join("request")).unwrap();
         let private = external.path().join("request/private");
         fs::write(&private, "must remain").unwrap();
         std::os::unix::fs::symlink(external.path(), &root).unwrap();
-        let mut guard = AuthCandidateCleanup::new(store, "gemini", "request");
+        let mut guard = AuthCandidateCleanup::new(store, "grok", "request");
         assert!(guard.discard().is_err());
         assert_eq!(fs::read_to_string(private).unwrap(), "must remain");
     }
@@ -952,20 +938,18 @@ mod tests {
         let store = Arc::new(root.for_account(&id).unwrap());
         let request = crate::provider_account::LoginStopRequest {
             account_id: id,
-            provider_id: "gemini".into(),
+            provider_id: "grok".into(),
             login_request_id: "request".into(),
         };
         assert!(store.observe_login_stop(&request).unwrap().is_none());
         assert!(
             !store
-                .auth_provider_root("gemini")
+                .auth_provider_root("grok")
                 .join("login-receipts")
                 .exists()
         );
-        let home = store
-            .create_auth_candidate_home("gemini", "request")
-            .unwrap();
-        let mut guard = AuthCandidateCleanup::new(store.clone(), "gemini", "request");
+        let home = store.create_auth_candidate_home("grok", "request").unwrap();
+        let mut guard = AuthCandidateCleanup::new(store.clone(), "grok", "request");
         guard.process_started();
         assert!(store.observe_login_stop(&request).unwrap().is_none());
         assert!(home.exists());

@@ -107,6 +107,7 @@ mod tests {
                     "session",
                     &binding.workspace.id,
                     binding.runtime.clone(),
+                    None,
                     &workspaces
                 )
                 .await
@@ -123,6 +124,7 @@ mod tests {
                     "session",
                     &binding.workspace.id,
                     binding.runtime.clone(),
+                    None,
                     &workspaces
                 )
                 .await,

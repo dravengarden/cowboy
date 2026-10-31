@@ -92,20 +92,20 @@ async fn disabled_provider_stays_out_of_catalog_and_bootstrap_hosts_after_refres
         catalog
             .entries()
             .iter()
-            .any(|entry| entry.plugin_id == "gemini")
+            .any(|entry| entry.plugin_id == "grok")
     );
-    catalog.configure_disabled(vec!["gemini".into()]).unwrap();
+    catalog.configure_disabled(vec!["grok".into()]).unwrap();
     let storage = crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
     let runtime = catalog.activate_runtime(&storage).await.unwrap();
-    assert!(runtime.default_host("gemini").is_none());
+    assert!(runtime.default_host("grok").is_none());
     assert!(
         !catalog
             .entries()
             .iter()
-            .any(|entry| entry.plugin_id == "gemini")
+            .any(|entry| entry.plugin_id == "grok")
     );
     catalog.refresh_with_runtime(&storage).await.unwrap();
-    assert!(catalog.runtime().unwrap().default_host("gemini").is_none());
+    assert!(catalog.runtime().unwrap().default_host("grok").is_none());
     assert!(catalog.configure_disabled(Vec::new()).is_err());
     let catalog = Arc::new(catalog);
     let providers = crate::provider_catalog::ProviderCatalog::open(root.path(), catalog).unwrap();
@@ -113,7 +113,7 @@ async fn disabled_provider_stays_out_of_catalog_and_bootstrap_hosts_after_refres
         !providers
             .entries()
             .iter()
-            .any(|entry| entry.provider_id == "gemini")
+            .any(|entry| entry.provider_id == "grok")
     );
     assert!(
         providers
@@ -121,7 +121,7 @@ async fn disabled_provider_stays_out_of_catalog_and_bootstrap_hosts_after_refres
             .iter()
             .any(|entry| entry.provider_id == "codex")
     );
-    assert!(providers.latest_package("gemini").is_none());
+    assert!(providers.latest_package("grok").is_none());
 }
 
 struct ReaderFixture(PathBuf);

@@ -36,11 +36,12 @@ export const loadingProgress: Components<Theme>["MuiCircularProgress"] = {
         "--cowboy-loading-offset": `${-loadingCircumference(ownerState.thickness ?? 3.6)}px`,
         "& .MuiCircularProgress-svg": { overflow: "visible" },
         "& .MuiCircularProgress-circle": {
-          animation: "cowboy-loading-rotate 800ms linear infinite",
-          strokeDasharray: `${loadingCircumference(ownerState.thickness ?? 3.6) * 0.65}px ${loadingCircumference(ownerState.thickness ?? 3.6) * 0.35}px`,
+          animation: "cowboy-loading-rotate 600ms linear infinite",
+          // A one-third arc reads as motion; a longer one looks like a closed ring.
+          strokeDasharray: `${loadingCircumference(ownerState.thickness ?? 3.6) / 3}px ${loadingCircumference(ownerState.thickness ?? 3.6) * 2 / 3}px`,
         },
-        // The full ring must remain readable in the 12–16px status slots.
-        "& .MuiCircularProgress-track": { opacity: 0.55 },
+        // A faint full track keeps the slot's footprint without competing with the arc.
+        "& .MuiCircularProgress-track": { opacity: 0.2 },
         "& .MuiCircularProgress-svg, & .MuiCircularProgress-circle": {
           animationPlayState: "inherit",
         },

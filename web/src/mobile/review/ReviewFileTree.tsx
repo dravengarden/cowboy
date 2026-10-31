@@ -130,7 +130,7 @@ function DirectoryRows({
                 <ChevronRight
                   sx={{
                     mr: 0.5,
-                    fontSize: 18,
+                    fontSize: "1.125rem",
                     color: "text.secondary",
                     transform: open ? "rotate(90deg)" : "none",
                     transition: "transform 140ms ease",

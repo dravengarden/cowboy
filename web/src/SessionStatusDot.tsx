@@ -9,7 +9,7 @@ import {
   providerUpdateProgress,
   waitingOnBackground,
 } from "./backgroundActivity";
-import { desktopSize } from "./surface/desktopSize";
+import { glyphSize } from "./surface/desktopSize";
 
 // Status is shown as a single color-coded activity mark (no text label), so the
 // hue has to carry the whole meaning. The palette tokens are chosen so the
@@ -80,7 +80,7 @@ export function StatusDot({
   const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
   if (resourceWait && status !== "busy" && status !== "starting") {
     const label = `Waiting for resources: ${resourceWait}`;
-    return <Tooltip title={label}><Schedule aria-label={label} sx={[{ fontSize: desktopSize(12), color: "info.main", flexShrink: 0 }, ...extra]} /></Tooltip>;
+    return <Tooltip title={label}><Schedule aria-label={label} sx={[{ fontSize: glyphSize(12), color: "info.main", flexShrink: 0 }, ...extra]} /></Tooltip>;
   }
   // "busy" and "starting" are the *active* states — a turn is in flight, or the
   // process is spinning up — so a static dot would read as idle/stuck. Render the
@@ -162,7 +162,7 @@ function ProviderUpdateRing({
     return () => clearInterval(timer);
   }, []);
   const progress = providerUpdateProgress(startedAtMs, now);
-  const size = desktopSize(11);
+  const size = glyphSize(11);
   return (
     <Tooltip title={`${label} (~${String(progress)}%)`} enterDelay={300}>
       <Box

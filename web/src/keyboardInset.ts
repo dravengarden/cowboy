@@ -308,6 +308,30 @@ function hasEditableFocus(doc: Document): boolean {
     active.closest("[contenteditable='true']") !== null;
 }
 
+// The keyboard-free viewport height, shared by every useKeyboardOpen. Each
+// hook used to learn it on mount; one mounted while the keyboard was already
+// up (a sheet's footer that appears when its field gains focus) learned the
+// keyboard-sized height and reported the keyboard closed. That is fatal where
+// the host resizes the layout viewport too (the native shell), because only
+// the baseline can reveal the keyboard there. Seeded at startup, before any
+// field can hold focus, and kept in step by every instance.
+let sharedKeyboardFreeHeight = 0;
+
+function seedKeyboardFreeHeight(): void {
+  const vv = globalThis.visualViewport;
+  const doc = globalThis.document;
+  if (!vv || !doc || sharedKeyboardFreeHeight !== 0 || hasEditableFocus(doc)) return;
+  const layoutHeight = globalThis.innerHeight;
+  if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
+  sharedKeyboardFreeHeight = Math.max(layoutHeight, vv.height);
+}
+seedKeyboardFreeHeight();
+
+/** Test seam: the shared keyboard-free height. */
+export function keyboardFreeHeightForTest(): number {
+  return sharedKeyboardFreeHeight;
+}
+
 // Reactive "is the on-screen keyboard open?" — true when it overlaps the layout
 // viewport by more than a flicker threshold. Drives the compose sheet's
 // full-screen ↔ content-height switch: full-screen while typing, snug when the
@@ -332,7 +356,8 @@ export function useKeyboardOpen(): boolean {
       const editableFocused = hasEditableFocus(doc);
       const visibleHeight = Math.min(layoutHeight, visualHeight);
       if (baselineHeightRef.current === 0) {
-        baselineHeightRef.current = Math.max(layoutHeight, visualHeight);
+        baselineHeightRef.current = sharedKeyboardFreeHeight ||
+          Math.max(layoutHeight, visualHeight);
       }
       const next = inferKeyboardOpen({
         layoutHeight,
@@ -358,6 +383,9 @@ export function useKeyboardOpen(): boolean {
           baselineHeightRef.current,
           visibleHeight,
         );
+      }
+      if (!editableFocused && !next) {
+        sharedKeyboardFreeHeight = baselineHeightRef.current;
       }
     };
     const applyNow = (): void => {
@@ -391,6 +419,7 @@ export function useKeyboardOpen(): boolean {
     };
     const onOrientation = (): void => {
       baselineHeightRef.current = 0;
+      sharedKeyboardFreeHeight = 0;
       schedule();
     };
     vv.addEventListener("resize", schedule);

@@ -196,6 +196,7 @@ export function mountApprovalKeyboardAcceptance(): void {
     requestId: id,
     requestKind: "permission",
     title,
+    elicitation: null,
     options: [
       { optionId: "once", name: "Yes", kind: "allow_once" },
       {

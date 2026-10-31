@@ -831,6 +831,10 @@ impl MachineSnapshots {
                             &machine_id,
                             crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
                         ),
+                        native_fork: self.machine_control.machine_supports(
+                            &machine_id,
+                            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+                        ),
                     },
                     pending_updates,
                     convergence: Vec::new(),
@@ -1395,6 +1399,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             hub.restore_reconciling_runtime(restored);
             crate::session_context::restore_announcements(&hub);
             hub.restore_continuations();
+            hub.restore_forks();
             hub.set_artifacts(store.artifacts());
             tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.
@@ -11060,6 +11065,7 @@ async fn serve_axum(
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
+        .route("/api/sessions/{id}/fork", post(session_context::fork))
         .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
         .route("/api/sessions/{id}/delivery-options", get(send_delivery::options))
         .route("/api/sessions/{id}/delivery-policy", put(send_delivery::set_policy))
@@ -17479,6 +17485,8 @@ fn resolve_provider_generation(
 }
 
 enum SchedulingAuthentication<'a> {
+    /// Installation discovery only; never use this result to launch a session.
+    Discovery,
     Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
     Native(&'a crate::provider_account::NativeProfileReceipt),
 }
@@ -17533,6 +17541,7 @@ fn resolve_provider_generation_with_auth(
         );
     }
     let auth_generation = match authentication {
+        SchedulingAuthentication::Discovery => None,
         SchedulingAuthentication::Service(service_auth) => resolve_scheduling_auth_generation(
             installed,
             package.manifest.authentication.required,
@@ -18122,7 +18131,7 @@ mod machine_provider_tests {
 
     fn installed_auth(generation: u64) -> crate::machine_protocol::PluginInventory {
         crate::machine_protocol::PluginInventory {
-            plugin_id: "gemini".to_owned(),
+            plugin_id: "claude-code".to_owned(),
             plugin_version: "1.0.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: format!("sha256:{}", "1".repeat(64)),
@@ -18203,7 +18212,7 @@ mod machine_provider_tests {
                 crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
                 tx,
             ),
-            provider_id: "gemini".to_owned(),
+            provider_id: "claude-code".to_owned(),
             provider_version: "1.0.0".to_owned(),
             generation_digest: "sha256:release".to_owned(),
             auth_contract_fingerprint: "sha256:auth".to_owned(),
@@ -18215,7 +18224,7 @@ mod machine_provider_tests {
         assert!(executor.accepts_candidate(
             "hawk",
             &Default::default(),
-            "gemini",
+            "claude-code",
             "api-key",
             "1.0.0",
             "sha256:release",
@@ -18224,7 +18233,7 @@ mod machine_provider_tests {
         assert!(!executor.accepts_candidate(
             "hawk",
             &Default::default(),
-            "gemini",
+            "claude-code",
             "api-key",
             "1.0.0",
             "sha256:other-release",
@@ -18234,7 +18243,7 @@ mod machine_provider_tests {
         assert!(!executor.accepts_candidate(
             "hawk",
             &another_account,
-            "gemini",
+            "claude-code",
             "api-key",
             "1.0.0",
             "sha256:release",
@@ -18247,16 +18256,16 @@ mod machine_provider_tests {
         state: crate::provider_service::ServiceAuthenticationState,
     ) -> crate::provider_service::ProviderAuthenticationStatus {
         crate::provider_service::ProviderAuthenticationStatus {
-            provider_id: "gemini".to_owned(),
+            provider_id: "claude-code".to_owned(),
             account_id: crate::provider_account::ProviderAccountId::default(),
             recipient_key: None,
             auth_generation: generation,
             authentication_state: state,
             distribution_state: crate::provider_service::ServiceDistributionState::Current,
             auth_contract_fingerprint: format!("sha256:{}", "3".repeat(64)),
-            authentication_scope: "gemini-auth-v1".to_owned(),
-            portable_schema: "gemini-auth-v1".to_owned(),
-            projection_schema: "gemini-home-v1".to_owned(),
+            authentication_scope: "claude-code-auth-v1".to_owned(),
+            portable_schema: "claude-code-auth-v1".to_owned(),
+            projection_schema: "claude-code-home-v1".to_owned(),
             account_label: None,
             updated_at_ms: 1,
         }
@@ -18408,7 +18417,7 @@ mod machine_provider_tests {
 
         assert_eq!(
             failed_provider_auth_projection_ids(&[failed, refreshing, absent]),
-            vec!["gemini".to_owned()]
+            vec!["claude-code".to_owned()]
         );
     }
 
@@ -18417,7 +18426,7 @@ mod machine_provider_tests {
         let hub = Hub::new();
         hub.create_session(crate::core::SessionRegistration {
             id: "s".to_owned(),
-            provider: "gemini".to_owned(),
+            provider: "claude-code".to_owned(),
             provider_version: "1.0.0".to_owned(),
             provider_generation_digest: "sha256:provider".to_owned(),
             provider_account_id: crate::provider_account::ProviderAccountId::default(),
@@ -18448,7 +18457,8 @@ mod machine_provider_tests {
             "s",
             Status::Crashed,
             Some(crate::provider::provider_auth_required_detail(
-                "gemini", true,
+                "claude-code",
+                true,
             )),
         );
         assert!(recoverable_provider_auth_failure(&hub, "s").is_some());

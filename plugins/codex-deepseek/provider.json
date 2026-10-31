@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.46",
+  "version": "3.1.49",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.15",
+  "sdk_version": "3.1.17",
   "display": {
     "name": "Codex \u00b7 DeepSeek",
     "vendor": "DeepSeek",
@@ -133,7 +133,16 @@
       "-c",
       "model_reasoning_effort=\"max\"",
       "-c",
-      "model_catalog_json=\"/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json\"",
+      {
+        "source": "component_file",
+        "component": {
+          "kind": "provider_gateway",
+          "slot": "codex-deepseek"
+        },
+        "file": "codex-models.json",
+        "prefix": "model_catalog_json=\"",
+        "suffix": "\""
+      },
       "-c",
       "web_search=\"disabled\"",
       "-c",
@@ -218,16 +227,16 @@
     "dependencies": [
       {
         "id": "codex-acp",
-        "version": "2.3.0",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.3.0.tgz",
-        "integrity": "sha512-VdTYaOGXqLh/aVuAKIgFG7BIzbeq537FHGo28kgBhybDbeOdFVFTtc43k/tCpScFhZyqPQWHuWf8w/QQd0qtXQ==",
+        "version": "2.5.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.5.0.tgz",
+        "integrity": "sha512-7e/4OhJwpvSTqsjiokoVYRV7O1XGem1CAsQgO1opmGYbRD5LvmydwDlJrldzQYO5TcPWueGzQ2Jdvyvp6l3qDw==",
         "private": true
       },
       {
         "id": "openai-codex",
-        "version": "0.164.0",
-        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.164.0.tgz",
-        "integrity": "sha512-TWj7UGyPRe3Pj/A3ddNAxs1te3a/W/xAd+J0LHrrFTmsSfahGMOLF/vn88D3QCIgAT3B1rm1y/Z3NYE0rx6cZQ==",
+        "version": "0.165.0",
+        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.165.0.tgz",
+        "integrity": "sha512-aiwtQVp2KBhJld966CuU5bVfQ46VNB4mNTl6giX3WGZdt4euI3tv2RUqJpnupPNA8DXHg2z+RoQ0Zfw87dy8Lw==",
         "private": true
       },
       {

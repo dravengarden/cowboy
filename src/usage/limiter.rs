@@ -379,6 +379,8 @@ mod tests {
             );
             assert!(!report.is_valid(), "{text}");
         }
+        // The retired Gemini identity remains a valid disabled entry, so an
+        // existing Service configuration keeps loading after its removal.
         let report = crate::config::check_text(
             Scope::Service,
             "schema = 1\n[plugins]\ndisabled = ['gemini']\n",

@@ -416,7 +416,7 @@ mod service_catalog {
             };
 
             let source: StandardProviderSource =
-                serde_json::from_str(include_str!("../plugins/gemini/provider.json")).unwrap();
+                serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
             let package = build_package(source.compile().unwrap()).unwrap();
             let bytes = package.canonical_bytes().unwrap();
             let runtime_artifacts: Vec<PlatformRuntimeArtifacts> = package
@@ -464,7 +464,7 @@ mod service_catalog {
                 provider_version: package.manifest.version.clone(),
                 package_digest: ProviderPackage::artifact_digest(&bytes),
                 artifact_digest: String::new(),
-                artifact_url: "https://example.invalid/gemini.cowboy-provider".to_owned(),
+                artifact_url: "https://example.invalid/grok.cowboy-provider".to_owned(),
                 publisher: package.manifest.publisher.clone(),
                 contract_fingerprint: package.contract_fingerprint.clone(),
                 signature: String::new(),

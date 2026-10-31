@@ -83,6 +83,22 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.72.0 retires the Gemini Agent Provider, sunset on
+2026-10-20. Its explicit `plugin_removals: ["gemini"]` migration drops
+`gemini` from the active Plugin set and closure; every earlier release that
+records it stays unchanged. Removing the Gemini CLI pin and package from the
+shared runtime records provider-runtime 1.1.25, and replacing the Gemini
+fixtures in the SDK's own tests records provider-sdk 3.1.17 with its exact
+Cargo consumer plugin-sdk 1.12.4. provider-ui 3.1.23 accepts that SDK version
+for package validation, and provider-authoring 1.0.11 follows its exact peer
+pin. Every remaining Plugin pins plugin-sdk, so
+all ten advance one patch version without changing their upstream executable
+pins; the Zed adapter package follows its Plugin identity. Because a package
+requires a Machine whose Plugin and Provider SDK are at least its pins, a
+Machine needs a host built from this release before it accepts these Plugin
+versions. Historical sessions, usage and Catalog entries naming `gemini`
+resolve through generic package-less behavior.
+
 Candidate release 3.60.0 records provider-sdk 3.1.15 for optional signed native
 identity recipes, provider-ui 3.1.21 for exact authentication Machine discovery,
 and their transitive package consumers plugin-sdk 1.12.2 and provider-authoring
@@ -513,7 +529,10 @@ the complete tree in the pinned shell (Cargo metadata inherits that shell).
 
 An explicit `plugin_additions` list permits new first-party Plugin identities in
 a post-baseline closure release. It must exactly account for the additional
-nodes; removal, identity reuse, duplicates and undeclared additions are refused.
+nodes; identity reuse, duplicates and undeclared additions are refused.
+An explicit `plugin_removals` list likewise retires existing identities: each
+must be present in the previous release and absent from the new one, and a
+retired identity can never be added back. Undeclared removals are refused.
 Existing release snapshots and component-change version rules remain immutable.
 
 ## Owned preference state

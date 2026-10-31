@@ -3108,8 +3108,8 @@ mod tests {
                 MachineCommand::BeginLogin {
                     request_id: "request".to_owned(),
                     account_id: crate::provider_account::ProviderAccountId::default(),
-                    provider: "gemini".to_owned(),
-                    auth_method: Some("code-assist".to_owned()),
+                    provider: "grok".to_owned(),
+                    auth_method: Some("xai-account".to_owned()),
                 },
             )
             .unwrap_err();
@@ -3126,12 +3126,12 @@ mod tests {
         for command in [
             MachineCommand::UninstallPlugin {
                 request_id: "uninstall".to_owned(),
-                plugin_id: "gemini".to_owned(),
+                plugin_id: "grok".to_owned(),
                 generation_digest: digest.clone(),
             },
             MachineCommand::ReactivatePlugin {
                 request_id: "reactivate".to_owned(),
-                plugin_id: "gemini".to_owned(),
+                plugin_id: "grok".to_owned(),
                 generation_digest: digest.clone(),
             },
         ] {

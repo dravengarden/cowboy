@@ -16,7 +16,7 @@ async fn prepare(store: &Store, key: &str) -> Receipt {
             &Mutation {
                 expected_revision: 0,
                 change: Change::Create {
-                    provider_id: "gemini".into(),
+                    provider_id: "grok".into(),
                     label: "Personal".into(),
                 },
             },
@@ -33,13 +33,10 @@ async fn prepare(store: &Store, key: &str) -> Receipt {
             &Prepare {
                 expected_revision: created.registry.revision,
                 account_id: created.account_id,
-                provider_id: "gemini".into(),
+                provider_id: "grok".into(),
                 machine_id: "machine-a".into(),
                 recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
-                candidate_fingerprint: candidate_hash(
-                    &package("gemini"),
-                    &bundle(&package("gemini")),
-                ),
+                candidate_fingerprint: candidate_hash(&package("grok"), &bundle(&package("grok"))),
                 expected_generation: 0,
                 identity: NativeIdentity {
                     authority: "native".into(),
@@ -88,7 +85,7 @@ async fn crash_after_vault_commit_recovers_exact_db_intent() {
         .unwrap()
         .machine_grant(&key)
         .unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     assert!(grant.recover_grant(&intent).unwrap().is_none());
     let proof = grant.commit_grant(&package, &credentials, &intent).unwrap();
@@ -104,7 +101,7 @@ async fn crash_after_vault_commit_recovers_exact_db_intent() {
     );
     let mut changed = credentials.clone();
     changed.values.insert(
-        "settings_json".into(),
+        "auth_json".into(),
         base64::engine::general_purpose::STANDARD.encode(b"changed"),
     );
     assert!(grant.commit_grant(&package, &changed, &intent).is_err());
@@ -143,7 +140,7 @@ async fn crash_after_vault_commit_recovers_exact_db_intent() {
             .unwrap(),
         committed
     );
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 1);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 1);
     // An ordinary later write supersedes the operation: recovery may not use a
     // stale sidecar or a coincidentally newer generation as its proof.
     grant.commit(&package, &credentials, None, Some(1)).unwrap();
@@ -159,11 +156,11 @@ fn promotion_commitment_is_authenticated_not_just_metadata() {
     let key = base64::engine::general_purpose::STANDARD
         .encode(PublicKey::from(&StaticSecret::from([7; 32])).as_bytes());
     let grant = service.account(&id).unwrap().machine_grant(&key).unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     grant
         .commit(&package, &bundle(&package), None, Some(0))
         .unwrap();
-    let mut stored = grant.providers.read().get("gemini").unwrap().clone();
+    let mut stored = grant.providers.read().get("grok").unwrap().clone();
     stored.promotion_commitment = Some("a".repeat(64));
     assert!(grant.open_vault(&stored).is_err());
     drop(grant);
@@ -189,7 +186,7 @@ async fn cancelled_commit_cleanup_is_exact_and_cannot_erase_a_newer_login() {
         .unwrap()
         .machine_grant(&key)
         .unwrap();
-    let package = package("gemini");
+    let package = package("grok");
     let credentials = bundle(&package);
     let proof = grant.commit_grant(&package, &credentials, &intent).unwrap();
     assert!(grant.discard_cancelled_grant(&intent).is_err());
@@ -217,7 +214,7 @@ async fn cancelled_commit_cleanup_is_exact_and_cannot_erase_a_newer_login() {
             .cleanup_applied
     );
     assert!(grant.discard_revoking_grant(&cancelled).unwrap());
-    let status = grant.status("gemini").unwrap();
+    let status = grant.status("grok").unwrap();
     assert_eq!(status.auth_generation, 2);
     assert_eq!(
         status.authentication_state,
@@ -229,15 +226,15 @@ async fn cancelled_commit_cleanup_is_exact_and_cannot_erase_a_newer_login() {
     );
     assert!(grant.recover_grant(&intent).unwrap().is_none());
     assert_eq!(
-        grant.seal_for_machine("gemini", &key).unwrap().action,
+        grant.seal_for_machine("grok", &key).unwrap().action,
         ProviderAuthAction::Wipe
     );
     grant.commit(&package, &credentials, None, Some(2)).unwrap();
     assert!(!grant.discard_cancelled_grant(&cancelled).unwrap());
     assert!(!grant.discard_revoking_grant(&cancelled).unwrap());
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 3);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 3);
     assert_eq!(
-        grant.status("gemini").unwrap().authentication_state,
+        grant.status("grok").unwrap().authentication_state,
         ServiceAuthenticationState::Ready
     );
 }
@@ -248,20 +245,20 @@ fn assert_pending_grant_is_not_runtime_authority(
     credentials: &PortableCredentialBundle,
     key: &str,
 ) {
-    assert!(grant.seal_for_machine("gemini", key).is_err());
+    assert!(grant.seal_for_machine("grok", key).is_err());
     assert!(
         grant
-            .with_scheduling_generation("gemini", true, Some(1), || panic!(
+            .with_scheduling_generation("grok", true, Some(1), || panic!(
                 "pending grant scheduled a session"
             ))
             .is_err()
     );
     assert!(
         grant
-            .compare_and_swap_refresh(std::slice::from_ref(package), credentials, "gemini", 1)
+            .compare_and_swap_refresh(std::slice::from_ref(package), credentials, "grok", 1)
             .is_err()
     );
-    assert_eq!(grant.status("gemini").unwrap().auth_generation, 1);
+    assert_eq!(grant.status("grok").unwrap().auth_generation, 1);
 }
 
 async fn recovery_rejects_wrong_scope(service: &ProviderAuthService, store: &Store, key: &str) {

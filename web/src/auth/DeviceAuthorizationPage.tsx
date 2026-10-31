@@ -1,4 +1,4 @@
-import { desktopSize } from "../surface/desktopSize";
+import { desktopSize, glyphSize } from "../surface/desktopSize";
 import {
   Alert,
   Box,
@@ -313,7 +313,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                 alignItems="center"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                <CheckCircleOutline color="success" sx={{ fontSize: desktopSize(52) }} />
+                <CheckCircleOutline color="success" sx={{ fontSize: glyphSize(52) }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Client authorized
                 </Typography>
@@ -328,7 +328,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                 alignItems="center"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                <ShieldOutlined color="action" sx={{ fontSize: desktopSize(48) }} />
+                <ShieldOutlined color="action" sx={{ fontSize: glyphSize(48) }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Request denied
                 </Typography>

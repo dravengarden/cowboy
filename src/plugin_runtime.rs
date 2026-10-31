@@ -1044,7 +1044,6 @@ mod tests {
             "claude-code",
             "claude-deepseek",
             "codex-deepseek",
-            "gemini",
         ] {
             assert!(ids.contains(&id), "expected bundled host {id}, got {ids:?}");
         }

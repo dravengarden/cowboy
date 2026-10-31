@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { useState } from "react";
 import { Box, Button, Stack, Typography, useTheme } from "@mui/material";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
@@ -135,7 +135,7 @@ function AgentOriginNote({
               color: visual.primary,
               display: "grid",
               placeItems: "center",
-              "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
+              "& .MuiSvgIcon-root": { fontSize: glyphSize(18) },
             }}
           >
             {mark ?? (

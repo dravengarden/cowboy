@@ -13,7 +13,7 @@ machine-host = []
 test-fixtures = []
 
 [dependencies]
-agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage"] }
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -25,8 +25,8 @@ libc = "0.2"
 rand = "0.8"
 rustix = { version = "1", features = ["process", "fs"] }
 tokio = { version = "1", features = ["io-util"] }
-cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
-cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
+cowboy-provider-sdk = { version = "=3.1.17", path = "../provider-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.4", path = "../plugin-sdk" }
 opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
 prost = "0.14"
 uuid = { version = "1", default-features = false, features = ["std", "serde", "v4"] }

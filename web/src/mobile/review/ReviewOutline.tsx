@@ -390,7 +390,7 @@ export function ReviewOutline({
                           color: (theme) => categoryColor(theme, category),
                           bgcolor: (theme) =>
                             alpha(categoryColor(theme, category), 0.12),
-                          "& svg": { fontSize: 16 },
+                          "& svg": { fontSize: "1rem" },
                         }}
                       >
                         <SymbolCategoryIcon category={category} />

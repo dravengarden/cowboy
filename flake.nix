@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=753fd866150274feb44d6a13e6afa4f265618959";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=da27c88bb0dc56e44c9cd28c113655f7700c2a88";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -372,7 +372,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-iLpIgrV2YjTUoXh18hSFozAKAoiFYAqfKFtvqwJejkI=";
+        hash = "sha256-sgQTKVhQoin0hvnIhnKq2/1p3v2c/wk3ZP60wYxZJW4=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -814,7 +814,7 @@
         test ! -e ${machine-src}/contracts/code-buffer-sync-budget.fixture.json
         test ! -e ${machine-src}/contracts/code-buffer-navigation.fixture.json
         test ! -e ${machine-src}/contracts/code-buffer-destination.fixture.json
-        test -e ${machine-src}/plugins/gemini/provider.json
+        test -e ${machine-src}/plugins/grok/provider.json
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml

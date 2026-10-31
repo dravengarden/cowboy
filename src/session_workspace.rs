@@ -178,11 +178,22 @@ impl WorktreeRoots {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct PrepareWorkspaceRequest {
     pub root: String,
     pub session_id: String,
+    /// A fork starts its new worktree from this session's worktree state.
+    #[serde(default)]
+    pub base_session_id: Option<String>,
+    /// The base session's worktree, resolved by the caller from
+    /// `base_session_id` against its own worktree roots.
+    #[serde(skip)]
+    pub base_worktree: Option<PathBuf>,
 }
+
+/// Untracked files a fork copies are bounded: a large untracked tree is build
+/// output that belongs in `.gitignore`, not branch state.
+const FORK_UNTRACKED_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedWorkspace {
@@ -204,7 +215,20 @@ pub async fn prepare(
     worktree_root: &Path,
 ) -> Result<PreparedWorkspace> {
     validate_session_id(&request.session_id)?;
+    if let Some(base) = &request.base_session_id {
+        validate_session_id(base)?;
+        if *base == request.session_id || request.base_worktree.is_none() {
+            bail!("invalid fork base session {base:?}");
+        }
+    }
     let _session_lock = acquire_session_lock(worktree_root, &request.session_id).await?;
+    let fork_marker = worktree_root.join(".forks").join(&request.session_id);
+    if tokio::fs::try_exists(&fork_marker).await? {
+        // A worktree or branch alone does not prove its copied state is complete.
+        bail!(
+            "copying the fork's source files was interrupted; delete this session and fork again"
+        );
+    }
     let source = PathBuf::from(&request.root)
         .canonicalize()
         .with_context(|| format!("canonicalizing session workspace {:?}", request.root))?;
@@ -259,6 +283,10 @@ pub async fn prepare(
 
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
     let branch_existed = git_ref_exists(&repository, &session_branch_ref).await?;
+    let fork_base = match (&request.base_worktree, branch_existed) {
+        (Some(base), false) => Some(fork_base(&repository, base).await?),
+        _ => None,
+    };
     let (revision, head_ref, base_ref_created) = if branch_existed {
         (
             git_output(
@@ -270,6 +298,8 @@ pub async fn prepare(
             None,
             false,
         )
+    } else if let Some(base) = &fork_base {
+        (base.revision.clone(), None, false)
     } else if git_output(&repository, ["remote"]).await?.is_empty() {
         (
             git_output(&repository, ["rev-parse", "--verify", "HEAD^{commit}"])
@@ -279,9 +309,10 @@ pub async fn prepare(
             false,
         )
     } else {
-        let remote_head = git_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
-            .await
-            .context("resolving origin default branch")?;
+        let remote_head =
+            git_remote_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
+                .await
+                .context("resolving origin default branch")?;
         let head_ref = parse_remote_head(&remote_head)?;
         let remote_branch = head_ref
             .strip_prefix("refs/heads/")
@@ -290,7 +321,7 @@ pub async fn prepare(
             .await
             .context("validating origin default branch")?;
         let refspec = format!("+{head_ref}:{base_ref}");
-        git_output(&repository, ["fetch", "origin", refspec.as_str()])
+        git_remote_output(&repository, ["fetch", "origin", refspec.as_str()])
             .await
             .context("fetching origin default branch for isolated session")?;
         let revision_spec = format!("{base_ref}^{{commit}}");
@@ -306,6 +337,14 @@ pub async fn prepare(
     tokio::fs::create_dir_all(worktree_root)
         .await
         .with_context(|| format!("creating worktree root {}", worktree_root.display()))?;
+    if fork_base.is_some() {
+        tokio::fs::create_dir_all(fork_marker.parent().expect("marker has a parent"))
+            .await
+            .context("creating fork marker directory")?;
+        tokio::fs::write(&fork_marker, b"")
+            .await
+            .context("recording fork preparation")?;
+    }
     if branch_existed {
         remove_stale_destination_registration(&repository, &destination).await?;
     }
@@ -349,6 +388,12 @@ pub async fn prepare(
         return Err(error);
     }
     let validated = async {
+        if let Some(base) = &fork_base {
+            copy_fork_state(base, &destination).await?;
+            tokio::fs::remove_file(&fork_marker)
+                .await
+                .context("completing fork preparation")?;
+        }
         let checkout = destination
             .canonicalize()
             .with_context(|| format!("canonicalizing new worktree {}", destination.display()))?;
@@ -394,6 +439,155 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
+}
+
+/// The committed and uncommitted state of a fork's source worktree.
+struct ForkBase {
+    worktree: PathBuf,
+    revision: String,
+    /// `git stash create` commit of staged and unstaged tracked changes.
+    stash: Option<String>,
+}
+
+/// Read the source worktree without writing it. `git stash create` stores a
+/// dangling commit and leaves the worktree, index and stash list unchanged.
+async fn fork_base(repository: &Path, worktree: &Path) -> Result<ForkBase> {
+    let worktree = worktree
+        .canonicalize()
+        .with_context(|| format!("fork source worktree {} is unavailable", worktree.display()))?;
+    let common = |path: PathBuf| async move {
+        let dir = git_output(
+            &path,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .await?;
+        PathBuf::from(dir)
+            .canonicalize()
+            .context("canonicalizing Git common directory")
+    };
+    if common(worktree.clone()).await? != common(repository.to_path_buf()).await? {
+        bail!(
+            "fork source worktree {} belongs to another repository",
+            worktree.display()
+        );
+    }
+    let revision = git_output(&worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
+        .await
+        .context("resolving fork source HEAD")?;
+    let stash = git_output(&worktree, ["stash", "create"])
+        .await
+        .context("capturing fork source changes")?;
+    Ok(ForkBase {
+        worktree,
+        revision,
+        stash: (!stash.is_empty()).then_some(stash),
+    })
+}
+
+/// Apply the source's tracked changes (keeping what was staged) and copy its
+/// untracked, non-ignored files into the new worktree.
+async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
+    if let Some(stash) = &base.stash {
+        git_output(destination, ["stash", "apply", "--index", stash.as_str()])
+            .await
+            .context("applying fork source changes")?;
+    }
+    let listed = git_command(
+        &base.worktree,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .await?;
+    if !listed.status.success() {
+        bail!(
+            "listing fork source untracked files: {}",
+            String::from_utf8_lossy(&listed.stderr).trim()
+        );
+    }
+    let source = base.worktree.clone();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut copied = 0_u64;
+        for relative in listed.stdout.split(|byte| *byte == 0) {
+            if relative.is_empty() {
+                continue;
+            }
+            let relative = Path::new(OsStr::from_bytes(relative));
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                bail!("unexpected untracked path {}", relative.display());
+            }
+            let from = source.join(relative);
+            let to = destination.join(relative);
+            // Neither tree may route a path through a symlinked directory: a
+            // copy must stay inside the destination and read only the source.
+            real_ancestors(&source, relative, false)?;
+            real_ancestors(&destination, relative, true)?;
+            let metadata = std::fs::symlink_metadata(&from)
+                .with_context(|| format!("reading {}", from.display()))?;
+            if metadata.file_type().is_symlink() {
+                std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)
+                    .with_context(|| format!("copying symlink {}", relative.display()))?;
+            } else if metadata.is_file() {
+                copied += metadata.len();
+                if copied > FORK_UNTRACKED_LIMIT_BYTES {
+                    bail!(
+                        "the source worktree has more than {} MiB of untracked files; ignore build output or commit it before forking",
+                        FORK_UNTRACKED_LIMIT_BYTES / 1024 / 1024
+                    );
+                }
+                copy_no_follow(&from, &to, metadata.permissions())
+                    .with_context(|| format!("copying {}", relative.display()))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .context("joining fork file copy")?
+}
+
+/// Require every directory above `relative` in `root` to be a real directory,
+/// creating missing ones one level at a time when `create` is set.
+fn real_ancestors(root: &Path, relative: &Path, create: bool) -> Result<()> {
+    let mut current = root.to_path_buf();
+    let Some(parent) = relative.parent() else {
+        return Ok(());
+    };
+    for part in parent.components() {
+        current.push(part);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => bail!("{} is not a real directory", current.display()),
+            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)
+                    .with_context(|| format!("creating {}", current.display()))?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy one regular file without following a symlink at either end.
+fn copy_no_follow(from: &Path, to: &Path, permissions: std::fs::Permissions) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut input = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(to)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.set_permissions(permissions)?;
+    Ok(())
 }
 
 async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<File> {
@@ -1535,6 +1729,54 @@ where
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
+/// Delays before retrying a remote Git operation that failed in transport.
+const GIT_REMOTE_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
+
+/// A remote operation (`ls-remote`, idempotent `fetch`) retried across a brief
+/// network or SSH interruption, so one dropped connection does not crash a new
+/// session. Repository or permission failures are returned at once.
+async fn git_remote_output<const N: usize>(repository: &Path, args: [&str; N]) -> Result<String> {
+    let mut delays = GIT_REMOTE_RETRY_DELAYS.iter();
+    loop {
+        match git_output(repository, args).await {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                let Some(delay) = delays
+                    .next()
+                    .filter(|_| is_transient_git_transport_failure(&format!("{error:#}")))
+                else {
+                    return Err(error);
+                };
+                tracing::warn!(
+                    repository = %repository.display(),
+                    operation = args[0],
+                    retry_in_ms = delay.as_millis(),
+                    error = %format!("{error:#}"),
+                    "remote Git operation failed in transport; retrying"
+                );
+                tokio::time::sleep(*delay).await;
+            }
+        }
+    }
+}
+
+fn is_transient_git_transport_failure(message: &str) -> bool {
+    const TRANSIENT: [&str; 11] = [
+        "git timed out in",
+        "Could not resolve hostname",
+        "Temporary failure in name resolution",
+        "Connection closed by",
+        "Connection reset by",
+        "Connection timed out",
+        "Operation timed out",
+        "kex_exchange_identification",
+        "Network is unreachable",
+        "the remote end hung up unexpectedly",
+        "early EOF",
+    ];
+    TRANSIENT.iter().any(|needle| message.contains(needle))
+}
+
 async fn git_command<I, S>(repository: &Path, args: I) -> Result<std::process::Output>
 where
     I: IntoIterator<Item = S>,
@@ -1560,6 +1802,28 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn only_transport_failures_are_retried() {
+        for transient in [
+            "resolving origin default branch: git timed out in /work: deadline has elapsed",
+            "git failed in /work: ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+            "git failed in /work: Connection closed by 140.82.112.3 port 22\nfatal: Could not read from remote repository.",
+            "git failed in /work: fatal: the remote end hung up unexpectedly",
+        ] {
+            assert!(is_transient_git_transport_failure(transient), "{transient}");
+        }
+        for permanent in [
+            "git failed in /work: fatal: 'origin' does not appear to be a git repository",
+            "git failed in /work: git@github.com: Permission denied (publickey).",
+            "git failed in /work: fatal: couldn't find remote ref refs/heads/main",
+        ] {
+            assert!(
+                !is_transient_git_transport_failure(permanent),
+                "{permanent}"
+            );
+        }
+    }
 
     struct TestDir(PathBuf);
 
@@ -2887,6 +3151,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-1".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -2929,6 +3194,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: unpublished.display().to_string(),
                 session_id: "sess-missing-subdir".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -2980,6 +3246,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: selected.display().to_string(),
                 session_id: "sess-nested".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -2997,6 +3264,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-1".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3010,6 +3278,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-recoverable".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3032,6 +3301,7 @@ mod tests {
         let restore_request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-recoverable".to_owned(),
+            ..Default::default()
         };
         let (restored, concurrent) = tokio::join!(
             prepare(restore_request(), &managed),
@@ -3066,6 +3336,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-legacy".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3106,6 +3377,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
                 session_id: "sess-divergent".to_owned(),
+                ..Default::default()
             },
             &managed,
         )
@@ -3129,6 +3401,7 @@ mod tests {
         let request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-local".to_owned(),
+            ..Default::default()
         };
         assert!(
             prepare(request(), &managed)
@@ -3166,11 +3439,123 @@ mod tests {
         let remote_request = || PrepareWorkspaceRequest {
             root: source.display().to_string(),
             session_id: "sess-remote".to_owned(),
+            ..Default::default()
         };
         assert!(prepare(remote_request(), &managed).await.is_err());
         git(&source, &["remote", "rename", "origin", "upstream"]);
         assert!(prepare(remote_request(), &managed).await.is_err());
         assert!(!managed.join("sess-remote").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_fork_worktree_starts_from_its_source_state_without_writing_it() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
+        std::fs::write(source.join(".gitignore"), "build/\n").unwrap();
+        std::fs::write(source.join("tracked.txt"), "base").unwrap();
+        std::fs::write(source.join("staged.txt"), "base").unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-m", "initial"]);
+        let request = |id: &str, base: Option<&str>| PrepareWorkspaceRequest {
+            root: source.display().to_string(),
+            session_id: id.to_owned(),
+            base_session_id: base.map(str::to_owned),
+            base_worktree: base.map(|base| managed.join(base)),
+        };
+
+        let parent = prepare(request("sess-parent", None), &managed)
+            .await
+            .unwrap();
+        let parent_path = PathBuf::from(&parent.path);
+        std::fs::write(parent_path.join("committed.txt"), "on branch").unwrap();
+        git(&parent_path, &["add", "committed.txt"]);
+        git(&parent_path, &["commit", "-m", "session work"]);
+        std::fs::write(parent_path.join("tracked.txt"), "unstaged edit").unwrap();
+        std::fs::write(parent_path.join("staged.txt"), "staged edit").unwrap();
+        git(&parent_path, &["add", "staged.txt"]);
+        std::fs::create_dir_all(parent_path.join("notes")).unwrap();
+        std::fs::write(parent_path.join("notes/new.txt"), "untracked").unwrap();
+        std::fs::create_dir_all(parent_path.join("build")).unwrap();
+        std::fs::write(parent_path.join("build/out.bin"), "ignored").unwrap();
+        let status = || {
+            std::process::Command::new("git")
+                .args(["status", "--porcelain=v1", "--untracked-files=all"])
+                .current_dir(&parent_path)
+                .output()
+                .unwrap()
+                .stdout
+        };
+        let parent_status = status();
+
+        let fork = prepare(request("sess-fork", Some("sess-parent")), &managed)
+            .await
+            .unwrap();
+        let fork_path = PathBuf::from(&fork.path);
+        assert!(fork.isolated && fork.created);
+        assert_eq!(
+            fork.revision,
+            Some(
+                git_output(&parent_path, ["rev-parse", "HEAD"])
+                    .await
+                    .unwrap()
+            )
+        );
+        let read = |name: &str| std::fs::read_to_string(fork_path.join(name)).unwrap();
+        assert_eq!(read("committed.txt"), "on branch");
+        assert_eq!(read("tracked.txt"), "unstaged edit");
+        assert_eq!(read("staged.txt"), "staged edit");
+        assert_eq!(read("notes/new.txt"), "untracked");
+        assert!(!fork_path.join("build").exists());
+        assert_eq!(
+            git_output(&fork_path, ["diff", "--cached", "--name-only"])
+                .await
+                .unwrap(),
+            "staged.txt"
+        );
+        assert_eq!(
+            git_output(&fork_path, ["branch", "--show-current"])
+                .await
+                .unwrap(),
+            "cowboy/sess-fork"
+        );
+        // The source worktree, its index and its stash list are untouched.
+        assert_eq!(status(), parent_status);
+        assert_eq!(
+            git_output(&parent_path, ["stash", "list"]).await.unwrap(),
+            ""
+        );
+
+        // An interrupted copy is never mistaken for a complete fork.
+        std::fs::create_dir_all(managed.join(".forks")).unwrap();
+        std::fs::write(managed.join(".forks").join("sess-fork"), b"").unwrap();
+        assert!(
+            prepare(request("sess-fork", Some("sess-parent")), &managed)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("interrupted")
+        );
+
+        // Neither tree may route an untracked copy through a symlinked directory.
+        let outside = temp.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, fork_path.join("linked")).unwrap();
+        assert!(real_ancestors(&fork_path, Path::new("linked/file.txt"), true).is_err());
+        assert!(real_ancestors(&fork_path, Path::new("fresh/dir/file.txt"), true).is_ok());
+        assert!(fork_path.join("fresh/dir").is_dir());
+
+        // A missing source worktree refuses rather than starting elsewhere.
+        assert!(
+            prepare(request("sess-orphan", Some("sess-gone")), &managed)
+                .await
+                .is_err()
+        );
+        assert!(!managed.join("sess-orphan").exists());
     }
 
     #[tokio::test]
@@ -3195,6 +3580,7 @@ mod tests {
         let request = |root: &Path, id: &str| PrepareWorkspaceRequest {
             root: root.display().to_string(),
             session_id: id.to_owned(),
+            ..Default::default()
         };
         let error = prepare(request(&source.join("nested"), "sess-new"), &managed)
             .await
@@ -3270,6 +3656,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: temp.0.display().to_string(),
                 session_id: "sess-2".to_owned(),
+                ..Default::default()
             },
             &temp.0.join("managed"),
         )
@@ -3287,6 +3674,7 @@ mod tests {
             PrepareWorkspaceRequest {
                 root: temp.0.display().to_string(),
                 session_id: "sess-3".to_owned(),
+                ..Default::default()
             },
             &temp.0.join("managed"),
         )

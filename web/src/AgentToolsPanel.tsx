@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import Check from "@mui/icons-material/Check";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import {
@@ -160,7 +160,7 @@ function PresetChoice(
         aria-hidden
         sx={{ width: desktopSize(18), display: "grid", placeItems: "center", flexShrink: 0 }}
       >
-        {selected && <Check sx={{ fontSize: desktopSize(18) }} />}
+        {selected && <Check sx={{ fontSize: glyphSize(18) }} />}
       </Box>
     </ButtonBase>
   );

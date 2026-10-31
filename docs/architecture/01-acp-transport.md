@@ -100,14 +100,17 @@ flowchart TB
   ambiguous session operation is surfaced once with its actual method name.
 - **Mode setup** uses a Zed-style default: if the agent advertises a
   provider-specific full-access mode, cowboy selects it to avoid permission UX
-  friction (`bypassPermissions` for Claude Code and `yolo` for Gemini; Codex
-  exposes the equivalent as a config option).
+  friction (`bypassPermissions` for Claude Code, and `yolo` for a Provider
+  package that selects `acp_session_mode_yolo_v1`; Codex exposes the equivalent
+  as a config option).
 - **Config options** (mode / model / effort chips in the UI) come from the agent.
   Codex returns them in the session response; Claude sends them later via a
   notification. The Zed bridge waits briefly for the first options before
-  completing `session/new`, then continues forwarding live updates. **Gemini**
-  uses session *modes* instead of config options for
-  approval selection, so cowboy synthesizes a `"mode"` config chip for the UI.
+  completing `session/new`, then continues forwarding live updates. A
+  `acp_session_mode_yolo_v1` Provider uses session *modes* instead of config
+  options for approval selection, so cowboy synthesizes a `"mode"` config chip
+  for the UI. No first-party Provider selects that contract since Gemini's
+  retirement; it remains a supported Provider SDK behavior.
   **Grok** exposes model/reasoning choices through `x.ai/sessionConfig`; Cowboy
   projects them as standard chips and maps its permission extension to a
   dedicated Default / Auto / Always Approve selector.
@@ -122,7 +125,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 | `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd`, then `Running` once native execution is also idle; Grok additionally queues a local `_x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered by the idle prompt watchdog after 15 minutes of no turn progress (see *Turn liveness*). |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
-| `SetConfigOption { config_id, value }` | Gemini's synthesized `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `_x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |
+| `SetConfigOption { config_id, value }` | A synthesized session-mode `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `_x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |
 
 **Prompt origin:** every Cowboy-echoed `user_message_chunk` carries a durable
 `promptOrigin` object so the timeline can tell senders apart. The role stays

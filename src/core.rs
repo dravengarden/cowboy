@@ -29,6 +29,8 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 mod code_scope;
 mod review_defaults;
 mod session_continuation;
+mod session_fork;
+pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
@@ -220,6 +222,11 @@ pub const MODEL_REFUSAL_DETAIL: &str = "The model declined this request. Review 
 fn current_context_has_user_message(session: &Session) -> bool {
     for envelope in session.log.iter().rev() {
         if is_user_message_chunk(envelope) {
+            return true;
+        }
+        if matches!(&envelope.event, Event::Update { update } if session_fork::is_fork_origin(update))
+        {
+            // A forked native thread holds the copied conversation.
             return true;
         }
         if is_context_cleared(envelope) {
@@ -448,6 +455,10 @@ pub struct SessionMeta {
     /// `session_continued_from:` setting and restored onto the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_from: Option<String>,
+    /// The session this one forks natively. Persisted in the `session_fork:`
+    /// setting and restored onto the projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
     /// Resolved once at creation; independent of runtime Machine and auth generation.
     #[serde(default)]
     pub provider_account_id: crate::provider_account::ProviderAccountId,
@@ -1416,7 +1427,7 @@ pub enum Inbound {
     OpenSession { session_id: String },
 
     /// Reset a session's agent context ("clear conversation"). Over ACP, clearing
-    /// is the CLIENT's job — Claude/Codex/Gemini expose no `clear` agent command
+    /// is the CLIENT's job — Claude/Codex expose no `clear` agent command
     /// (only `compact`), so this can't be a slash command. The daemon tears the
     /// agent down and respawns it with a FRESH `session/new` (dropping the prior
     /// `agent_session_id` so it does NOT `session/load`), then drops a
@@ -2968,12 +2979,15 @@ impl Hub {
                                 final_text.push_str(text);
                             }
                         }
+                        // Advisory notices are not part of the reply and may
+                        // arrive after it.
                         Some(
                             "agent_thought_chunk"
                             | "usage_update"
                             | "available_commands_update"
                             | "current_mode_update"
-                            | "config_option_update",
+                            | "config_option_update"
+                            | "notice",
                         )
                         | None => {}
                         Some(_) => {
@@ -3506,6 +3520,7 @@ impl Hub {
         } = registration;
         SessionMeta {
             continued_from: None,
+            forked_from: None,
             id: id.clone(),
             provider,
             provider_account_id,
@@ -3663,6 +3678,7 @@ impl Hub {
                 settings_keys::SESSION_CONTEXT_PREFIX,
                 settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
                 settings_keys::SESSION_CONTINUED_FROM_PREFIX,
+                settings_keys::SESSION_FORK_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -4695,19 +4711,26 @@ impl Hub {
     /// current context receives its first user turn; only then is it safe to
     /// persist for a future `session/load`. Unknown ids are ignored.
     pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
+        // A fork's first thread holds the copied conversation before any prompt.
+        let forking = self.native_fork_pending(session_id);
         let persist = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             s.meta.agent_session_id = Some(agent_session_id.clone());
-            current_context_has_user_message(s)
+            forking || current_context_has_user_message(s)
         };
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
                 session_id: session_id.to_owned(),
                 agent_session_id: Some(agent_session_id),
             });
+        }
+        // Queued after the native ID on the same writer: a crash between the two
+        // leaves a pending fork whose ID is already saved, which never re-forks.
+        if forking {
+            self.settle_native_fork(session_id);
         }
     }
 
@@ -4724,9 +4747,10 @@ impl Hub {
     }
 
     pub fn agent_session_id_for_resume(&self, session_id: &str) -> Option<String> {
+        let forked = self.native_fork_settled(session_id);
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
-        current_context_has_user_message(session)
+        (forked || current_context_has_user_message(session))
             .then(|| session.meta.agent_session_id.clone())
             .flatten()
     }
@@ -5291,6 +5315,8 @@ impl Hub {
     /// dormant session has no worker snapshot to re-seed it, so leaving them
     /// here would keep the old context ring and Usage panel after Clear.
     pub fn prepare_context_reset(&self, session_id: &str) {
+        // Clearing a fork, even before its first launch, discards the copy.
+        self.discard_native_fork(session_id);
         let usage_changed = {
             let mut sessions = self.inner.sessions.lock();
             sessions.get_mut(session_id).is_some_and(|s| {
@@ -7518,6 +7544,7 @@ mod managed_call_tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         });
         // An owner on another placement is neither adopted nor reconciled.
         hub.reconcile_provider_release(&worker);
@@ -7589,6 +7616,7 @@ mod managed_call_tests {
             adopt_only: false,
             execution_binding: binding,
             extensions: None,
+            native_fork: None,
         });
 
         hub.reconcile_provider_release(&worker);
@@ -7696,6 +7724,36 @@ mod managed_call_tests {
         let turn = hub.managed_turn("child", 0).unwrap();
         assert_eq!(turn.final_text, "{\"verdict\":\"needs-attention\"}");
         assert!(serde_json::from_str::<serde_json::Value>(&turn.final_text).is_ok());
+    }
+
+    #[test]
+    fn managed_turn_keeps_its_final_message_across_a_trailing_notice() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        hub.push("child", update("user_message_chunk", "review"));
+        hub.push(
+            "child",
+            update("agent_message_chunk", "{\"verdict\":\"approve\"}"),
+        );
+        hub.push(
+            "child",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "notice",
+                    "severity": "warning",
+                    "title": "Model fallback",
+                }),
+            },
+        );
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                usage: None,
+                stop_reason: "end_turn".into(),
+            },
+        );
+        let turn = hub.managed_turn("child", 0).unwrap();
+        assert_eq!(turn.final_text, "{\"verdict\":\"approve\"}");
     }
 
     #[test]
@@ -8344,6 +8402,7 @@ mod runtime_reconciliation_tests {
         RestoredSession {
             meta: SessionMeta {
                 continued_from: None,
+                forked_from: None,
                 id: id.to_owned(),
                 provider: "codex".to_owned(),
                 provider_version: String::new(),
@@ -8413,6 +8472,7 @@ mod runtime_reconciliation_tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            native_cycle_id: None,
             incarnation: None,
         }
     }
@@ -11770,6 +11830,7 @@ mod core_tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            native_fork: None,
         });
         let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();
         for mismatch in ["native", "home", "cwd", "placeholder"] {

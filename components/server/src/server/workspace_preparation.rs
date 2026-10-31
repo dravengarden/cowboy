@@ -163,6 +163,21 @@ async fn prepare(
     source_path: &str,
     eager: bool,
 ) -> Result<(), String> {
+    let base_session_id = state
+        .hub
+        .session_fork(session_id)
+        .map(|record| record.source_session_id);
+    // An older Machine ignores the base and would start from the default branch.
+    if base_session_id.is_some()
+        && !state.machine_control.machine_supports(
+            machine_id,
+            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+        )
+    {
+        return Err(format!(
+            "Machine {machine_id} must be updated before it can prepare a forked workspace"
+        ));
+    }
     let prepared = state
         .machine_control
         .adapter_request(
@@ -171,6 +186,7 @@ async fn prepare(
             serde_json::json!({
                 "root": source_path,
                 "session_id": session_id,
+                "base_session_id": base_session_id,
             }),
         )
         .await

@@ -303,6 +303,7 @@ export async function runInfoMetricsBrowserConformance(
             account: { balanceInfos: [{ currency: "USD", total_balance: "12.34" }] },
           },
           {
+            // A retired Provider's last stale reading still renders.
             provider: "Gemini",
             status: "unavailable",
             source: "Gemini ACP",

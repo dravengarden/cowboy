@@ -15,7 +15,7 @@ async fn fixture(store: &Store) -> Evidence {
             &Mutation {
                 expected_revision: 0,
                 change: Change::Create {
-                    provider_id: "gemini".into(),
+                    provider_id: "grok".into(),
                     label: "Personal".into(),
                 },
             },
@@ -82,7 +82,7 @@ async fn fixture(store: &Store) -> Evidence {
         observation: LoginStopObservation {
             request: LoginStopRequest {
                 account_id: created.account_id,
-                provider_id: "gemini".into(),
+                provider_id: "grok".into(),
                 login_request_id: claim.receipt.request_id,
             },
             process_started: true,

@@ -27,7 +27,11 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 38;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 39;
+/// Workers create a session's first thread with ACP `session/fork`
+/// (`StartSession::native_fork`), and workspace preparation can start an
+/// isolated worktree from another session's worktree state.
+pub const NATIVE_FORK_PROTOCOL_VERSION: u16 = 39;
 /// Machines move an existing named session's worker binding to a release its
 /// login carries over to (identical signed authentication), keeping the
 /// native session and login generation.
@@ -349,6 +353,9 @@ pub struct MachineCapabilities {
     /// Accepts non-destructive session hibernation.
     #[serde(default)]
     pub hibernation: bool,
+    /// Starts sessions with a native `session/fork` and forked worktrees.
+    #[serde(default)]
+    pub native_fork: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

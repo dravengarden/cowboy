@@ -36,7 +36,7 @@ flowchart LR
     MM --> MZ["Zed generation(s)"]
     FM --> FA["ACP generation"]
     FM --> FZ["Zed generation(s)"]
-    HA --> HC["Codex / Claude / Gemini"]
+    HA --> HC["Codex / Claude / Grok"]
     HZ --> HZS["isolated Zed adapter + server"]
 ```
 
@@ -74,13 +74,13 @@ versioned internal payloads:
 |---|---|---|
 | `acp-runtime` | ACP SDK, worker, provider launch policy | ACP SDK/worker change |
 | `provider-adapter:<id>` | `codex-acp`, `claude-agent-acp`, or a native CLI ACP entry | adapter release |
-| `provider-cli:<id>` | Codex, Claude Code, Gemini CLI, or Grok Build | Agent Plugin release |
+| `provider-cli:<id>` | Codex, Claude Code, or Grok Build | Agent Plugin release |
 | `zed-adapter:<abi>` | Cowboy's GPL-isolated stable product adapter | adapter contract change |
 | `zed-server:<zed-version>` | official server matching one Zed revision | matching Zed client/update |
 
 Each domain has its own desired generation, readiness gate, drain set, rollback
 target, and update policy. Updating Zed must not drain ACP turns. Updating
-Codex must not restart Claude/Gemini workers or Zed language servers. Updating
+Codex must not restart Claude/Grok workers or Zed language servers. Updating
 the Machine host must leave all content-addressed payload executables running;
 the replacement host adopts them from snapshots after reconnect.
 
@@ -127,9 +127,6 @@ auth-replicas/<provider>/<generation>/...  # Service-issued sealed replica
   alpha status, install the official npm package into a Machine-owned prefix.
   Its own auto-updater is disabled; Cowboy stages and activates reviewed
   versions explicitly.
-- **Gemini:** install the official stable npm package into a Machine-owned
-  prefix. OAuth remains inside the official CLI. API-key/Vertex modes remain
-  supported provider choices.
 - **ACP adapters:** install as explicit versioned payloads. Session startup
   executes the active immutable path directly; it never installs packages.
 
@@ -344,11 +341,10 @@ scope:
   release cannot claim compatibility until it can transform the result into a
   typed portable bundle or a safe Service-brokered projection; leaving it only
   in one CLI state directory is transitional behavior.
-- Gemini's API-key or supported Enterprise flow is entered once through the
-  Provider's Service surface. The typed auth contract validates the non-secret
-  project requirements and defines the Machine projection. Missing upstream
-  export or status APIs are compatibility blockers, not reasons to expose local
-  Machine remediation.
+- An API-key flow is entered once through the Provider's Service surface. The
+  typed auth contract validates the non-secret project requirements and defines
+  the Machine projection. Missing upstream export or status APIs are
+  compatibility blockers, not reasons to expose local Machine remediation.
 
 Every Service login request has an id, expiry, cancellation, one active owner,
 and one resulting generation. Login frames are never replayed into a different
@@ -516,7 +512,6 @@ silently runs its session on Hawk.
 - [Codex installation](https://github.com/openai/codex/blob/main/README.md)
   and [App Server account/login API](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
 - [Claude Code setup and update channels](https://docs.anthropic.com/en/docs/claude-code/getting-started)
-- [Gemini CLI releases and authentication](https://github.com/google-gemini/gemini-cli)
 - [Grok Build source and ACP entrypoint](https://github.com/xai-org/grok-build)
 - [Zed remote development and exact server matching](https://zed.dev/docs/remote-development)
 - [Zed release artifacts](https://github.com/zed-industries/zed/releases)

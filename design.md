@@ -54,6 +54,21 @@ cowboy stays a **session manager + permission broker + fan-out hub** and does
 single biggest scope-reducer in the design. (Capabilities can be turned on
 later per provider if a future agent needs the client to mediate fs/terminal.)
 
+The session presentation capabilities are a separate matter: Cowboy persists
+and renders the stable typed `session.compaction` (`compaction_update`,
+`compaction_summary_chunk`) and `session.notices` (`notice`) updates, so it
+advertises both. Adapters otherwise fall back to presentation-specific
+transcript text or tool calls whose identifying `_meta` they now reserve for
+other clients.
+
+Cowboy also advertises form and URL `elicitation`. Without it, Claude disables
+`AskUserQuestion` and Codex answers every `request_user_input` with nothing.
+The worker presents each `elicitation/create` through the existing permission
+channel: a permission request whose tool call carries the request under
+`_cowboy.elicitation`, with `accept`/`decline` options. Current Web surfaces
+render the form and answer `accept:<content JSON>`; older clients still offer
+the two choices. The transcript records only the outcome, never the content.
+
 ## 3. Topology
 
 ```

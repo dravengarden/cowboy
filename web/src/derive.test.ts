@@ -115,9 +115,9 @@ test("derive collapses equivalent crash JSON dumps onto one row", () => {
 });
 
 test("derive collapses repeated terminal lifecycle projections", () => {
-  const detail = "Gemini personal access retired";
+  const detail = "Provider personal access retired";
   const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({
-    session_id: "gemini-session",
+    session_id: "grok-session",
     seq: index + 1,
     kind: "lifecycle",
     status: "crashed",
@@ -913,4 +913,99 @@ test("unrenderable first block keeps its identity across status frames and image
       throw new Error("renderable continuation must inherit the exact submission identity");
     }
   }
+});
+
+test("typed compaction updates drive the compact state and keep the summary", () => {
+  const update = (seq: number, body: Record<string, unknown>): Envelope => ({
+    session_id: "s1",
+    seq,
+    kind: "update",
+    update: { sessionUpdate: "compaction_update", compactionId: "c-1", ...body },
+  });
+  const summary = (seq: number, text: string): Envelope => ({
+    session_id: "s1",
+    seq,
+    kind: "update",
+    update: {
+      sessionUpdate: "compaction_summary_chunk",
+      compactionId: "c-1",
+      content: { type: "text", text },
+    },
+  });
+  // A summary chunk may arrive before the compaction's first lifecycle update.
+  const started = [summary(20, "Kept "), update(21, { status: "in_progress" })];
+  if (!isCompactingTail(started)) throw new Error("typed compaction should be active");
+  const completed = [...started, summary(22, "context."), update(23, { status: "completed" })];
+  if (isCompactingTail(completed)) throw new Error("completed compaction should not be active");
+  if (!isCompactionCompletionTail(completed)) throw new Error("typed completion should be the tail");
+  assertEquals(latestCompactionCompletionSeq(completed), 23);
+  const items = derive(completed);
+  assertEquals(items.length, 1);
+  const item = items[0];
+  if (item?.kind !== "compaction") throw new Error("expected one compaction row");
+  assertEquals([item.status, item.summary, item.key], ["completed", "Kept context.", "20"]);
+
+  const failed = derive([update(30, {}), update(31, { status: "failed", error: "overloaded" })]);
+  assertEquals(failed.map((row) => row.kind === "compaction" ? [row.status, row.error] : null), [[
+    "failed",
+    "overloaded",
+  ]]);
+});
+
+test("an unfinished typed compaction settles with its turn", () => {
+  const timeline: Envelope[] = [
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: { sessionUpdate: "compaction_update", compactionId: "c-1", status: "in_progress" },
+    },
+    { session_id: "s1", seq: 2, kind: "turn_end", stop_reason: "cancelled" },
+  ];
+  const item = derive(timeline)[0];
+  if (item?.kind !== "compaction") throw new Error("expected compaction row");
+  assertEquals(item.status, "cancelled");
+});
+
+test("notices render as advisory rows and end the current message", () => {
+  const timeline: Envelope[] = [
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "a" } },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "notice",
+        severity: "warning",
+        title: "Model fallback",
+        description: "Using a smaller model.",
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "update",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "b" } },
+    },
+    {
+      session_id: "s1",
+      seq: 4,
+      kind: "update",
+      update: { sessionUpdate: "notice", severity: "info", title: "   " },
+    },
+  ];
+  const items = derive(timeline);
+  assertEquals(items.map((item) => item.kind), ["message", "notice", "message"]);
+  const notice = items[1];
+  if (notice?.kind !== "notice") throw new Error("expected notice");
+  assertEquals([notice.severity, notice.title, notice.description], [
+    "warning",
+    "Model fallback",
+    "Using a smaller model.",
+  ]);
 });

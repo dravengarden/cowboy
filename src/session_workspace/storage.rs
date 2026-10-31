@@ -465,6 +465,7 @@ mod tests {
                 crate::session_workspace::PrepareWorkspaceRequest {
                     root: route.source.display().to_string(),
                     session_id: "sess-route".into(),
+                    ..Default::default()
                 },
                 roots.for_source("sess-route", &route.source).unwrap(),
             )

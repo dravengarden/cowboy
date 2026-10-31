@@ -104,12 +104,6 @@ impl LaunchSpec {
 /// - `codex`: the `@agentclientprotocol/codex-acp` adapter, run via `npx`.
 ///   Built on Codex App Server. Requires Codex auth (`ChatGPT` subscription
 ///   login in `~/.codex`, or `CODEX_API_KEY` / `OPENAI_API_KEY`).
-/// - `gemini`: the Gemini CLI's own ACP mode — `@google/gemini-cli --acp`, run via
-///   `npx` (the CLI is the adapter; no separate package). Requires Gemini auth (a
-///   `GEMINI_API_KEY`, Vertex AI, or a Code Assist Standard/Enterprise Google
-///   Login with `GOOGLE_CLOUD_PROJECT`. Consumer Google Login is retired and
-///   belongs to Antigravity, which does not currently expose Cowboy's ACP
-///   session transport.
 /// - `grok`: the official Grok Build CLI's own ACP stdio agent —
 ///   `@xai-official/grok agent stdio`. Requires a prior `grok login` or
 ///   `XAI_API_KEY`.
@@ -657,6 +651,31 @@ fn component_command<'a>(
         .context("Provider runtime component command is not bound")
 }
 
+/// A data file shipped beside a private component's command. The command is
+/// already canonical inside the verified runtime artifact; the file must be a
+/// regular file in that same directory.
+fn component_file(
+    component: &AuthComponent,
+    file: &str,
+    payload: &PlatformPayload,
+    commands: &BTreeMap<String, PathBuf>,
+) -> Result<PathBuf> {
+    ensure!(
+        !file.is_empty() && !file.contains('/') && file != "." && file != "..",
+        "Provider component file name is invalid"
+    );
+    let path = component_command(component, payload, commands)?
+        .parent()
+        .context("Provider component command has no directory")?
+        .join(file);
+    ensure!(
+        path.symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_file()),
+        "Provider component file {file:?} is missing"
+    );
+    Ok(path)
+}
+
 /// Credential directories bound by the Machine. Only declared credential
 /// files resolve, and each directory must be an existing absolute directory
 /// that actually holds that credential file: the shared refresh lock is only
@@ -710,6 +729,18 @@ fn resolve_runtime_value(
         }) => (
             prefix,
             component_command(component, payload, commands)?
+                .display()
+                .to_string(),
+            suffix,
+        ),
+        RuntimeValue::Binding(RuntimeBinding::ComponentFile {
+            component,
+            file,
+            prefix,
+            suffix,
+        }) => (
+            prefix,
+            component_file(component, file, payload, commands)?
                 .display()
                 .to_string(),
             suffix,
@@ -1202,6 +1233,80 @@ mod tests {
         );
     }
 
+    /// The model catalog travels inside the signed gateway artifact; a
+    /// missing, linked or traversing file must fail the launch instead of
+    /// pointing the CLI at some other path.
+    #[test]
+    fn component_file_binding_resolves_only_data_beside_the_command() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/codex-deepseek/provider.json"))
+                .unwrap();
+        let manifest = source.compile().unwrap();
+        let payload = manifest
+            .runtime
+            .platforms
+            .iter()
+            .find(|platform| platform.os == cowboy_provider_sdk::OperatingSystem::Linux)
+            .unwrap()
+            .clone();
+        let binding = manifest
+            .runtime
+            .arguments
+            .iter()
+            .find(|value| {
+                matches!(
+                    value,
+                    cowboy_provider_sdk::RuntimeValue::Binding(
+                        cowboy_provider_sdk::RuntimeBinding::ComponentFile { .. }
+                    )
+                )
+            })
+            .unwrap()
+            .clone();
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let command = bin.join("codex-deepseek-gateway");
+        std::fs::write(&command, b"#!/bin/sh\n").unwrap();
+        let commands = std::collections::BTreeMap::from([(
+            "codex-deepseek-gateway".to_owned(),
+            command.clone(),
+        )]);
+        let resolve = || {
+            super::resolve_runtime_value(
+                &binding,
+                &payload,
+                &commands,
+                &std::collections::BTreeMap::new(),
+                &std::collections::BTreeMap::new(),
+            )
+        };
+        assert!(resolve().is_err(), "a missing catalog must not resolve");
+        std::os::unix::fs::symlink("/etc/hostname", bin.join("codex-models.json")).unwrap();
+        assert!(resolve().is_err(), "a linked catalog must not resolve");
+        std::fs::remove_file(bin.join("codex-models.json")).unwrap();
+        std::fs::write(bin.join("codex-models.json"), b"{}").unwrap();
+        assert_eq!(
+            resolve().unwrap(),
+            format!(
+                "model_catalog_json=\"{}\"",
+                bin.join("codex-models.json").display()
+            )
+        );
+        assert!(
+            super::component_file(
+                &cowboy_provider_sdk::AuthComponent {
+                    kind: cowboy_provider_sdk::PrivateComponentKind::ProviderGateway,
+                    slot: "codex-deepseek".to_owned(),
+                },
+                "../codex-models.json",
+                &payload,
+                &commands,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn worker_accepts_machine_validated_historical_provider_package() {
         let source: StandardProviderSource =
@@ -1291,10 +1396,8 @@ mod tests {
                 .copied(),
         );
         assert_eq!(codex.args, codex_npx_args);
-        assert_eq!(
-            lookup_with(&[], "gemini").map(|s| s.command),
-            Some("npx".to_owned())
-        );
+        // The retired Gemini Provider has no launch recipe.
+        assert!(lookup_with(&[], "gemini").is_none());
         let grok = lookup_with(&[], "grok").expect("grok registered");
         assert_eq!(grok.command, "npx");
         let mut grok_npx_args = vec!["-y", "@xai-official/grok"];
@@ -1560,7 +1663,7 @@ mod tests {
             assert!(!claude_deepseek.removes_inherited_env(preserved));
         }
 
-        // _ARGS overrides independently (e.g. gemini's `--acp`).
+        // _ARGS overrides independently of the command override.
         assert_eq!(
             lookup_with(
                 &[

@@ -417,7 +417,6 @@ test("Provider activity renderer consumes only typed generic strategies", () => 
     const provider of [
       "claude-code",
       "codex-deepseek",
-      "gemini",
       "grok",
     ]
   ) {
@@ -473,7 +472,6 @@ test("Provider Transcript renderer consumes only closed presentation variants", 
       '"claude-code"',
       '"codex"',
       '"codex-deepseek"',
-      '"gemini"',
       '"grok"',
     ]
   ) {

@@ -24,8 +24,14 @@ struct Args {
     provider_account_id: cowboy::provider_account::ProviderAccountId,
     #[arg(long)]
     cwd: PathBuf,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "fork_from")]
     resume: Option<String>,
+    /// Native session to fork with ACP `session/fork` for the first thread.
+    #[arg(long)]
+    fork_from: Option<String>,
+    /// Fork through this turn-final assistant message only.
+    #[arg(long, requires = "fork_from")]
+    fork_message_id: Option<String>,
     #[arg(long, default_value_t = false)]
     system: bool,
     #[arg(long)]
@@ -70,6 +76,12 @@ async fn main() -> anyhow::Result<()> {
                 provider_auth_generation: args.provider_auth_generation,
                 cwd: args.cwd,
                 resume: args.resume,
+                native_fork: args.fork_from.map(|agent_session_id| {
+                    cowboy::runtime_wire::NativeFork {
+                        agent_session_id,
+                        message_id: args.fork_message_id,
+                    }
+                }),
                 system: args.system,
                 generation: args.generation,
                 worker_epoch: args.worker_epoch,

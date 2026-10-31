@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ChecklistOutlined } from "@mui/icons-material";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
@@ -14,6 +14,7 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { recordUndo } from "./undoActions";
 import { UNDO_NOTICE_MS } from "./undoHistory";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
+import { forkAvailability, forkSession } from "./sessionFork";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
 import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
@@ -97,6 +98,7 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ForkRightOutlined,
+    CallSplitOutlined,
     ExpandMore,
     FolderOpenOutlined,
     FolderOutlined,
@@ -145,7 +147,7 @@ import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
-import { openSessionSettings, requestNewAgent } from "./sessionSettingsOpen";
+import { openSessionSettings, requestComposerFocus, requestNewAgent } from "./sessionSettingsOpen";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -560,13 +562,13 @@ function FolderActivityBadges({
             key: "attention",
             count: activity.attention,
             label: activity.attention === 1 ? "needs attention" : "need attention",
-            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("interrupted") }} />,
+            glyph: <Circle sx={{ fontSize: glyphSize(8), color: statusColor("interrupted") }} />,
         },
         {
             key: "live",
             count: activity.live,
             label: "ready",
-            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("running") }} />,
+            glyph: <Circle sx={{ fontSize: glyphSize(8), color: statusColor("running") }} />,
         },
     ].filter((part) => part.count > 0);
     if (parts.length === 0) return null;
@@ -627,7 +629,7 @@ function ScheduleBadgeIcon({ ms }: { ms: number }): React.JSX.Element {
     }, []);
     return (
         <Tooltip title={`定时发送 · ${fireLabel(ms, now)}（${fireRel(ms, now)}）`} enterDelay={300}>
-            <Schedule sx={{ fontSize: desktopSize(15), flexShrink: 0, color: "info.main" }} />
+            <Schedule sx={{ fontSize: glyphSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );
 }
@@ -876,6 +878,29 @@ function SessionList({
         setMenuAnchor(null);
         void hibernateSession(session.id)
             .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
+            .catch((error: Error) => documentNotice(error.message));
+    };
+    // The anchor keeps the row captured when the menu opened; a turn can end
+    // while it stays open, so read the live session.
+    const menuLiveSession = useStoreSelector((snapshot) =>
+        menuAnchor ? snapshot.sessions.find((session) => session.id === menuAnchor.row.id) : undefined
+    );
+    const menuFork = menuLiveSession && !isManagedChild(menuLiveSession)
+        ? forkAvailability(menuLiveSession, sessionMachines)
+        : null;
+    const forkMenuSession = (): void => {
+        if (!menuAnchor || menuFork !== "ready") return;
+        const session = menuAnchor.row;
+        setMenuAnchor(null);
+        void forkSession(session.id)
+            .then((receipt) => {
+                requestPickSession(receipt.session_id, receipt.session ?? undefined);
+                // Mobile keeps the keyboard down: a focus outside the tap's own
+                // gesture would show a caret without raising the keyboard.
+                if (desktop) {
+                    setTimeout(() => requestComposerFocus(receipt.session_id), 150);
+                }
+            })
             .catch((error: Error) => documentNotice(error.message));
     };
     const menuProjection = useExploreSessionState(
@@ -2424,7 +2449,7 @@ function SessionList({
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
                             keeps the Apple HIG touch target stable while the
-                            1.5rem glyph follows the global font-size preference.
+                            1.25rem glyph follows the global font-size preference.
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
                         <Box
@@ -2458,7 +2483,7 @@ function SessionList({
                                             aria-label="Drag to reorder"
                                             sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
                                         >
-                                            <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                            <DragIndicator sx={{ fontSize: "1.25rem" }} />
                                         </IconButton>
                                     </HintTooltip>
                                 )
@@ -2470,11 +2495,10 @@ function SessionList({
                                         aria-label="Drag to reorder"
                                         sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
                                     >
-                                        <DragIndicator sx={{ fontSize: "1.5rem" }} />
+                                        <DragIndicator sx={{ fontSize: "1.25rem" }} />
                                     </IconButton>
                                 )}
                         </Box>
-                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} sx={{ mr: 0.75 }} />
                         <ListItemText
                             sx={{ my: 0.25, minWidth: 0 }}
                             primary={
@@ -2484,12 +2508,19 @@ function SessionList({
                                     alignItems="center"
                                     sx={{ minWidth: 0 }}
                                 >
+                                    {/* Status, Provider mark and title share
+                                        the title line: the status no longer
+                                        floats to the row's middle, and the
+                                        mark keeps the title's optical size
+                                        instead of towering over it. All three
+                                        are rem, so they follow the global
+                                        font size together. */}
+                                    <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} />
                                     <ProviderIcon
                                         provider={s.provider}
                                         providerVersion={s.provider_version}
                                         providerDigest={s.provider_generation_digest}
-                                        fontSize="medium"
-                                        sx={{ flexShrink: 0 }}
+                                        sx={{ fontSize: "1.125rem", flexShrink: 0 }}
                                     />
                                     <Typography
                                         variant="body2"
@@ -2534,6 +2565,16 @@ function SessionList({
                                             variant="outlined"
                                             label="Continued"
                                             title="Continues an earlier session with a new agent"
+                                            sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
+                                        />
+                                    )}
+                                    {s.forked_from && (
+                                        <Chip
+                                            data-session-forked
+                                            size="small"
+                                            variant="outlined"
+                                            label="Fork"
+                                            title="Forks an earlier session's conversation with the same agent"
                                             sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
                                         />
                                     )}
@@ -2819,6 +2860,17 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
+                {menuFork && (
+                    <MenuItem data-session-fork disabled={menuFork === "busy"} onClick={forkMenuSession}>
+                        <ListItemIcon>
+                            <CallSplitOutlined fontSize="medium" />
+                        </ListItemIcon>
+                        <ListItemText
+                            primary="Fork"
+                            secondary={menuFork === "busy" ? "Available after the current turn" : "Same agent and conversation, new branch"}
+                        />
+                    </MenuItem>
+                )}
                 {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                     <MenuItem
                         data-session-continue-new-agent
@@ -2969,6 +3021,12 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
                                 <Kbd keys="M" />
                             </Button>
+                            {menuFork && (
+                                <Button data-session-shortcut="f" data-session-fork fullWidth disabled={menuFork === "busy"} startIcon={<CallSplitOutlined />} onClick={forkMenuSession} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuFork === "busy" ? "Fork after this turn" : "Fork"}</Box>
+                                    <Kbd keys="F" />
+                                </Button>
+                            )}
                             {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                                 <Button data-session-shortcut="a" data-session-continue-new-agent fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewAgent(row.id); }} sx={{ justifyContent: "flex-start" }}>
                                     <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue in new agent…</Box>

@@ -832,6 +832,17 @@ pub enum RuntimeBinding {
         #[serde(default)]
         suffix: String,
     },
+    /// Absolute path of a read-only data file shipped beside a private
+    /// component's command in the same signed runtime artifact, such as a
+    /// model catalog the native CLI reads. Never a host-provided path.
+    ComponentFile {
+        component: AuthComponent,
+        file: String,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        suffix: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1575,16 +1586,9 @@ impl ProviderManifest {
         self.validate_with_sdk_policy(true)
     }
 
-    fn validate_with_sdk_policy(&self, require_current_sdk: bool) -> Result<()> {
-        validate_id(&self.id, "Provider id")?;
-        validate_semantic_version(&self.version, "Provider version")?;
-        validate_id(&self.publisher, "Provider publisher")?;
-        if require_current_sdk {
-            validate_provider_sdk_version(&self.sdk_version)?;
-        } else {
-            validate_semantic_version(&self.sdk_version, "Provider SDK version")?;
-        }
-        validate_display(&self.display)?;
+    /// Every runtime feature that older Provider SDKs cannot express names
+    /// the first SDK release that understands it.
+    fn validate_feature_sdk_floors(&self) -> Result<()> {
         if self
             .runtime
             .managed_profiles
@@ -1606,6 +1610,22 @@ impl ProviderManifest {
                 "native identity recipes require Provider SDK 3.1.15 or newer"
             );
         }
+        if self
+            .runtime
+            .argument_values()
+            .chain(self.runtime.environment.values())
+            .any(|value| {
+                matches!(
+                    value,
+                    RuntimeValue::Binding(RuntimeBinding::ComponentFile { .. })
+                )
+            })
+        {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 1, 16),
+                "component file bindings require Provider SDK 3.1.16 or newer"
+            );
+        }
         if !self.runtime.managed_profiles.is_empty() {
             ensure!(
                 semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 1, 13),
@@ -1622,6 +1642,20 @@ impl ProviderManifest {
                 "execution environments require Provider SDK 3.1.12 or newer"
             );
         }
+        Ok(())
+    }
+
+    fn validate_with_sdk_policy(&self, require_current_sdk: bool) -> Result<()> {
+        validate_id(&self.id, "Provider id")?;
+        validate_semantic_version(&self.version, "Provider version")?;
+        validate_id(&self.publisher, "Provider publisher")?;
+        if require_current_sdk {
+            validate_provider_sdk_version(&self.sdk_version)?;
+        } else {
+            validate_semantic_version(&self.sdk_version, "Provider SDK version")?;
+        }
+        validate_display(&self.display)?;
+        self.validate_feature_sdk_floors()?;
         self.logic.validate()?;
         self.ui.validate(&self.logic)?;
         let logo = self
@@ -2406,7 +2440,10 @@ impl RuntimeContract {
         for value in self.argument_values().chain(self.environment.values()) {
             match value {
                 RuntimeValue::Literal(_) => {}
-                RuntimeValue::Binding(RuntimeBinding::ComponentCommand { component, .. }) => {
+                RuntimeValue::Binding(
+                    RuntimeBinding::ComponentCommand { component, .. }
+                    | RuntimeBinding::ComponentFile { component, .. },
+                ) => {
                     ensure!(
                         self.platforms.iter().all(|platform| {
                             platform.private_components.iter().any(|candidate| {
@@ -2485,6 +2522,16 @@ impl RuntimeBinding {
                 suffix,
             } => {
                 validate_id(bundle_key, "runtime credential directory binding")?;
+                (prefix, suffix)
+            }
+            Self::ComponentFile {
+                component,
+                file,
+                prefix,
+                suffix,
+            } => {
+                validate_id(&component.slot, "runtime component file binding")?;
+                validate_id(file, "runtime component file name")?;
                 (prefix, suffix)
             }
         };
@@ -4319,7 +4366,6 @@ mod tests {
         let sources = [
             include_str!("../../../plugins/claude-code/provider.json"),
             include_str!("../../../plugins/codex/provider.json"),
-            include_str!("../../../plugins/gemini/provider.json"),
             include_str!("../../../plugins/grok/provider.json"),
             include_str!("../../../plugins/claude-deepseek/provider.json"),
             include_str!("../../../plugins/codex-deepseek/provider.json"),
@@ -4329,7 +4375,6 @@ mod tests {
             ("claude-deepseek", ThoughtVariant::Timeline),
             ("codex", ThoughtVariant::Workcell),
             ("codex-deepseek", ThoughtVariant::Workcell),
-            ("gemini", ThoughtVariant::Signal),
             ("grok", ThoughtVariant::Signal),
         ]);
         let expected_auth_presentations = BTreeMap::from([
@@ -4337,7 +4382,6 @@ mod tests {
             ("claude-deepseek", AuthenticationPresentation::ApiKey),
             ("codex", AuthenticationPresentation::Account),
             ("codex-deepseek", AuthenticationPresentation::ApiKey),
-            ("gemini", AuthenticationPresentation::Account),
             ("grok", AuthenticationPresentation::Account),
         ]);
         let mut ids = BTreeSet::new();
@@ -4399,8 +4443,7 @@ mod tests {
                     .is_empty()
             );
         }
-        assert_eq!(ids.len(), 6);
-        assert!(ids.contains("gemini"));
+        assert_eq!(ids.len(), 5);
     }
 
     #[test]
@@ -4474,6 +4517,44 @@ mod tests {
         assert_eq!(tool.renderer, ToolRenderer::TodoListV1);
         manifest.host.tool_presentations.push(tool);
         assert!(build_package(manifest).is_err());
+    }
+
+    #[test]
+    fn component_files_are_named_artifact_data_behind_an_sdk_floor() {
+        let source: StandardProviderSource = serde_json::from_str(include_str!(
+            "../../../plugins/codex-deepseek/provider.json"
+        ))
+        .unwrap();
+        let manifest = source.clone().compile().unwrap();
+        assert!(manifest.runtime.arguments.iter().any(|value| matches!(
+            value,
+            RuntimeValue::Binding(RuntimeBinding::ComponentFile { component, file, .. })
+                if component.kind == PrivateComponentKind::ProviderGateway
+                    && file == "codex-models.json"
+        )));
+        build_package(manifest.clone()).unwrap();
+
+        let mut old_sdk = manifest.clone();
+        old_sdk.sdk_version = "3.1.15".to_owned();
+        assert!(build_package(old_sdk).is_err());
+
+        for invalid in ["../catalog.json", "nested/file.json", "Upper.json", ".."] {
+            let mut bad = manifest.clone();
+            for value in &mut bad.runtime.arguments {
+                if let RuntimeValue::Binding(RuntimeBinding::ComponentFile { file, .. }) = value {
+                    *file = invalid.to_owned();
+                }
+            }
+            assert!(build_package(bad).is_err(), "{invalid} was accepted");
+        }
+
+        let mut missing = manifest;
+        for value in &mut missing.runtime.arguments {
+            if let RuntimeValue::Binding(RuntimeBinding::ComponentFile { component, .. }) = value {
+                component.slot = "absent".to_owned();
+            }
+        }
+        assert!(build_package(missing).is_err());
     }
 
     #[test]
@@ -4556,7 +4637,7 @@ mod tests {
     #[test]
     fn downloaded_artifact_rejects_contract_and_ui_link_tampering() {
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
         let mut bad_contract = package.clone();
         bad_contract.contract_fingerprint = format!("sha256:{}", "0".repeat(64));
@@ -4575,7 +4656,7 @@ mod tests {
 
     #[test]
     fn release_requires_a_complete_exact_runtime_binding() {
-        let package = first_party_package("../../../plugins/gemini/provider.json");
+        let package = first_party_package("../../../plugins/grok/provider.json");
         let bytes = package.canonical_bytes().unwrap();
         let release = complete_release(&package, &bytes);
         release.validate_bytes(&bytes).unwrap();
@@ -4627,7 +4708,7 @@ mod tests {
     #[test]
     fn lifecycle_effects_cannot_escape_their_typed_ui_surface() {
         let source: StandardProviderSource =
-            serde_json::from_str(include_str!("../../../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let mut manifest = source.compile().unwrap();
         let service_auth = manifest
             .ui
@@ -4766,8 +4847,8 @@ mod tests {
 
     fn first_party_package(path: &str) -> ProviderPackage {
         let source = match path {
-            "../../../plugins/gemini/provider.json" => {
-                include_str!("../../../plugins/gemini/provider.json")
+            "../../../plugins/grok/provider.json" => {
+                include_str!("../../../plugins/grok/provider.json")
             }
             other => panic!("unknown test Provider source {other}"),
         };
@@ -4843,7 +4924,7 @@ mod tests {
 
     #[test]
     fn machine_contract_inventory_rejects_new_host_schema_before_install() {
-        let package = first_party_package("../../../plugins/gemini/provider.json");
+        let package = first_party_package("../../../plugins/grok/provider.json");
         let bytes = package.canonical_bytes().unwrap();
         let release = complete_release(&package, &bytes);
         let target = release.supported_platforms[0].clone();

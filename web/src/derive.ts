@@ -5,6 +5,7 @@
 
 import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
+import { type Elicitation, elicitationOf } from "./elicitation";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import { isTurnActivityUpdate } from "./turnWaiting";
@@ -48,6 +49,10 @@ export type RenderItem = { key: string } & (
     origin?: PromptOrigin | undefined;
     /** Originating client id on the first `user_message_chunk` of a prompt. */
     cmid?: string | undefined;
+    /** Provider message ID of an assistant message, when the agent sends one. */
+    messageId?: string | undefined;
+    /** A user message steered into the running turn; it does not end it. */
+    steered?: boolean | undefined;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -78,6 +83,23 @@ export type RenderItem = { key: string } & (
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
   | { kind: "cleared"; at: number }
+  // A typed context compaction (`compaction_update`), negotiated through the
+  // `session.compaction` client capability. `summary` accumulates the retained
+  // context the agent streams as `compaction_summary_chunk`s.
+  | {
+    kind: "compaction";
+    id: string;
+    status: string;
+    summary: string;
+    error: string | null;
+    /// Timeline sequence of the update that completed it, else 0.
+    completedSeq: number;
+  }
+  // An advisory `notice` (`session.notices` client capability), e.g. a model
+  // fallback or a rate-limit warning. Not part of the agent's reply.
+  | { kind: "notice"; severity: string; title: string; description: string | null }
+  // First row of a fork: the agent natively continues this source conversation.
+  | { kind: "forked"; sourceSessionId: string; sourceTitle: string; atMessage: boolean }
 );
 
 // Store timelines are immutable arrays. Transcript and Composer often derive
@@ -129,7 +151,8 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
   switch (a.kind) {
     case "message":
       return b.kind === "message" && a.role === b.role &&
-        a.cmid === b.cmid &&
+        a.cmid === b.cmid && a.messageId === b.messageId &&
+        a.steered === b.steered &&
         samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
@@ -148,6 +171,16 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         a.turnFailure === b.turnFailure && a.recovered === b.recovered;
     case "cleared":
       return b.kind === "cleared" && a.at === b.at;
+    case "compaction":
+      return b.kind === "compaction" && a.id === b.id && a.status === b.status &&
+        a.summary === b.summary && a.error === b.error &&
+        a.completedSeq === b.completedSeq;
+    case "notice":
+      return b.kind === "notice" && a.severity === b.severity &&
+        a.title === b.title && a.description === b.description;
+    case "forked":
+      return b.kind === "forked" && a.sourceSessionId === b.sourceSessionId &&
+        a.sourceTitle === b.sourceTitle && a.atMessage === b.atMessage;
   }
 }
 
@@ -360,6 +393,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const permIndex = new Map<string, number>();
   // toolCallId -> index of the permission marker that asked for it.
   const permByTool = new Map<string, number>();
+  const compactionIndex = new Map<string, number>();
   const runtimeFailures = new Set<Extract<RenderItem, { kind: "lifecycle" }>>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
@@ -427,6 +461,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 ...(role === "user" && userCmid !== undefined
                   ? { cmid: userCmid }
                   : {}),
+                ...(role === "assistant" && messageId ? { messageId } : {}),
+                ...(role === "user" && isSteeringEcho(u) ? { steered: true } : {}),
               });
               cursor = { kind: "message", role, ...(messageId ? { messageId } : {}) };
             }
@@ -488,6 +524,67 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               if (input !== undefined) existing.rawInput = input;
               if (content !== undefined) existing.content = content;
             }
+            break;
+          }
+          case "compaction_update":
+          case "compaction_summary_chunk": {
+            const id = typeof u["compactionId"] === "string" ? u["compactionId"] : "";
+            const idx = compactionIndex.get(id);
+            let item = idx === undefined ? undefined : items[idx];
+            if (item?.kind !== "compaction") {
+              // The status defaults to in progress: a summary chunk may arrive
+              // before its compaction's first lifecycle update.
+              item = {
+                kind: "compaction",
+                key: String(env.seq),
+                id,
+                status: "in_progress",
+                summary: "",
+                error: null,
+                completedSeq: 0,
+              };
+              items.push(item);
+              compactionIndex.set(id, items.length - 1);
+            }
+            if (u.sessionUpdate === "compaction_summary_chunk") {
+              item.summary += textOf(u);
+            } else {
+              if (typeof u.status === "string") item.status = u.status;
+              if (typeof u["summary"] === "string") item.summary = u["summary"];
+              if (typeof u["error"] === "string") item.error = u["error"];
+              if (item.status === "completed") item.completedSeq = env.seq;
+            }
+            cursor = null;
+            break;
+          }
+          case "notice": {
+            const title = typeof u.title === "string" ? u.title.trim() : "";
+            if (!title) break;
+            const description = typeof u["description"] === "string"
+              ? u["description"].trim()
+              : "";
+            items.push({
+              kind: "notice",
+              key: String(env.seq),
+              severity: typeof u["severity"] === "string" ? u["severity"] : "info",
+              title,
+              description: description || null,
+            });
+            cursor = null;
+            break;
+          }
+          case "cowboy_fork_origin": {
+            const source = u["sourceSessionId"];
+            if (typeof source !== "string" || !source) break;
+            const title = u["sourceTitle"];
+            items.push({
+              kind: "forked",
+              key: String(env.seq),
+              sourceSessionId: source,
+              sourceTitle: typeof title === "string" ? title : "",
+              atMessage: typeof u["messageId"] === "string",
+            });
+            cursor = null;
             break;
           }
           case "context_cleared": {
@@ -634,6 +731,9 @@ function settleOutstandingTools(items: RenderItem[], status: string): void {
   for (const item of items) {
     if (item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")) {
       item.status = status;
+    } else if (item.kind === "compaction" && item.status === "in_progress") {
+      // A compaction cannot outlive its turn; never leave it spinning.
+      item.status = status === "interrupted" ? "cancelled" : "completed";
     }
   }
 }
@@ -695,6 +795,8 @@ export interface PendingPermission {
   requestKind: "permission" | "question";
   title: string;
   options: PermissionOption[];
+  /** The form or link an elicitation asks for; null for a tool permission. */
+  elicitation: Elicitation | null;
 }
 /// Every request still waiting for an answer, oldest first: parallel tool
 /// calls each block on their own answer, so the surface answers them in
@@ -727,6 +829,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         requestKind: permissionRequestKind(env.tool_call),
         title: titleOfToolCall(env.tool_call),
         options: env.options,
+        elicitation: elicitationOf(env.tool_call),
       });
       const tool = toolCallIdOf(env.tool_call);
       if (tool !== null) byTool.set(tool, env.request_id);
@@ -808,6 +911,9 @@ export function latestCompactionCompletionSeq(timeline: Envelope[]): number {
   const items = derive(timeline);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
+    if (item?.kind === "compaction" && item.status === "completed") {
+      return item.completedSeq;
+    }
     if (item?.kind !== "message" || item.role !== "assistant") continue;
     const text = messageText(item);
     if (text && isCompactionCompletionText(text)) return Number(item.key);
@@ -817,6 +923,7 @@ export function latestCompactionCompletionSeq(timeline: Envelope[]): number {
 
 export function isCompactionCompletionTail(timeline: Envelope[]): boolean {
   const last = derive(timeline).at(-1);
+  if (last?.kind === "compaction") return last.status === "completed";
   if (last?.kind !== "message" || last.role !== "assistant") return false;
   const text = messageText(last);
   return text !== null && isCompactionCompletionText(text);
@@ -844,6 +951,7 @@ export function isCompactionRequestTail(timeline: Envelope[]): boolean {
 export function isCompactingTail(timeline: Envelope[]): boolean {
   const items = derive(timeline);
   const last = items[items.length - 1];
+  if (last?.kind === "compaction") return last.status === "in_progress";
   if (last?.kind !== "message") return false;
   const text = messageText(last);
   if (text === null) return false;
@@ -861,10 +969,45 @@ function titleOfToolCall(tc: unknown): string {
 }
 
 function permissionRequestKind(tc: unknown): "permission" | "question" {
+  if (elicitationOf(tc)) return "question";
   if (!tc || typeof tc !== "object" || !("rawInput" in tc)) return "permission";
   const input = (tc as { rawInput?: unknown }).rawInput;
   if (!input || typeof input !== "object") return "permission";
   const question = (input as { question?: unknown }).question;
   const options = (input as { options?: unknown }).options;
   return typeof question === "string" && Array.isArray(options) ? "question" : "permission";
+}
+
+/**
+ * Keys of assistant messages a fork may start from: the last assistant
+ * message of each turn that has ended, when the agent sent its message ID.
+ * The newest turn counts only once the session is no longer working.
+ */
+export function forkableAnswerKeys(
+  items: readonly RenderItem[],
+  working: boolean,
+): Map<string, string> {
+  const keys = new Map<string, string>();
+  let last: { key: string; messageId?: string | undefined } | null = null;
+  const settle = (): void => {
+    if (last?.messageId) keys.set(last.key, last.messageId);
+    last = null;
+  };
+  for (const item of items) {
+    if (item.kind === "cleared") {
+      last = null;
+    } else if (item.kind === "message" && item.role === "user") {
+      if (!item.steered) settle();
+    } else if (item.kind === "message" && item.role === "assistant") {
+      last = { key: item.key, messageId: item.messageId };
+    }
+  }
+  if (!working) settle();
+  return keys;
+}
+
+function isSteeringEcho(update: Record<string, unknown>): boolean {
+  const meta = update["_meta"];
+  return meta !== null && typeof meta === "object" &&
+    (meta as Record<string, unknown>)["cowboyDelivery"] === "current_turn";
 }

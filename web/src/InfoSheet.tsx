@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
 import { DEFAULT_ABOUT_VALUES, useAboutPreferences } from "./aboutPreferences";
 import { Children, useCallback, useEffect, useMemo, useState } from "react";
@@ -357,7 +357,7 @@ function ProviderUsageCardBody({
               >
                 {refreshBusy
                   ? <CircularProgress size={desktopSize(17)} color="inherit" aria-label={`Refreshing ${title}`} />
-                  : <Refresh sx={{ fontSize: desktopSize(17) }} />}
+                  : <Refresh sx={{ fontSize: glyphSize(17) }} />}
               </NetworkIconButton>
             )}
           </Stack>
@@ -534,7 +534,7 @@ function ProviderUsageCardBody({
             target="_blank"
             rel="noopener noreferrer"
             size="small"
-            endIcon={<OpenInNew sx={{ fontSize: desktopSize(15) }} />}
+            endIcon={<OpenInNew sx={{ fontSize: glyphSize(15) }} />}
             sx={{
               alignSelf: "flex-start",
               px: 0.5,

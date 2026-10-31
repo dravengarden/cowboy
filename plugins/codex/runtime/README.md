@@ -43,6 +43,33 @@ delivers it as an artifact. Managed calls skip the extra model-generated title.
 See [native capabilities](../../../docs/managed-native-capabilities.md) for
 ownership, limits, fallback and acceptance evidence.
 
+The pin moves to ACP `2.5.0` at
+`34e08970aa324a2be985f5080674d5aa91d7666f` with native Codex `0.165.0`. ACP
+2.5 declares `@openai/codex ^0.165.0`, so native `0.166.0` stays unadopted
+until an ACP release declares it.
+
+ACP 2.4 and 2.5 add standard subagent sessions (only for clients that declare
+`clientCapabilities.subagents`, which Cowboy does not), AIR-only prompt
+suggestions and batch session lookup, and move to ACP SDK 2.1. Upstream now
+parses the steering `idleBehavior: "promptRequired"` opt-in itself (#593), so
+the rebased patch drops its own request parsing and response types and keeps:
+
+- advertising `idleBehavior: "promptRequired"` in `initialize`, which upstream
+  does not, because Cowboy admits current-turn steering only on that signal;
+- the ambiguous-error rule: a host that opted in may replay only an explicit
+  native no-active-turn refusal, never a lost reply;
+- the managed-profile reconfiguration refusals on upstream's new
+  `getSessionState`, and the managed title suppression around the new
+  turn-completion path.
+
+Type checks and all 2,222 enabled upstream tests pass with the patch (40
+remain skipped upstream). Authoritative sources:
+[ACP 2.4.0](https://github.com/agentclientprotocol/codex-acp/releases/tag/v2.4.0),
+[ACP 2.5.0](https://github.com/agentclientprotocol/codex-acp/releases/tag/v2.5.0),
+[Codex 0.165.0](https://github.com/openai/codex/releases/tag/rust-v0.165.0).
+
+### ACP 2.3.0 (2026-10-28)
+
 The pin moves to ACP `2.3.0` at
 `344a520632e4c8c02f781a7a20490dfac52d4d0a` with native Codex `0.164.0`. ACP
 2.3 declares `@openai/codex ^0.164.0`, so native `0.165.0` stays unadopted

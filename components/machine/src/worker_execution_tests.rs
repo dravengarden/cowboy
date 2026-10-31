@@ -258,6 +258,7 @@ async fn native_worker_execution() {
                 machine_id: "runtime".into(),
                 cwd: runtime.display().to_string(),
             },
+            base_session_id: None,
         },
     };
     let MachineResponse::Prepared { binding } = manager.request(prepare.clone(), &workspaces).await
@@ -631,7 +632,8 @@ async fn native_worker_execution() {
                     action: Action::Prepare {
                         session_id: "session".into(),
                         workspace_id: "fixture".into(),
-                        runtime: binding.runtime
+                        runtime: binding.runtime,
+                        base_session_id: None,
                     }
                 },
                 &workspaces

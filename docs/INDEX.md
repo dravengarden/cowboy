@@ -26,6 +26,7 @@ primary phone/desktop product path.
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
+- [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
 - [`tool-results.md`](tool-results.md) — Provider-independent MCP result retention, Cowboy/Matrix tool presentation and Desktop/Mobile inspection
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
@@ -57,6 +58,10 @@ primary phone/desktop product path.
 - [`releases/session-extension-plugins-2026-10-16.md`](releases/session-extension-plugins-2026-10-16.md) — matrix and review as session extension Plugins, component release 3.53.0, OVH rollout and the pending Hawk worker pin
 - [`releases/agent-runtimes-2026-10-11.md`](releases/agent-runtimes-2026-10-11.md) — Claude 2.1.296, Codex 0.160.1 with ACP 2.2.2, Gemini 0.63.0 and Grok 1.0.50; component release 3.49.0, native difference table and remote acceptance
 - [`releases/agent-runtimes-2026-10-28.md`](releases/agent-runtimes-2026-10-28.md) — Claude Code 2.1.312, Codex 0.164.0 with ACP 2.3.0 and Grok 1.0.70 upgrades
+- [`releases/agent-runtimes-2026-10-30.md`](releases/agent-runtimes-2026-10-30.md) — Claude Code 2.1.314 with ACP 0.99.1, Codex 0.165.0 with ACP 2.5.0 and dsh rc.5; component release 3.71.0
+- [`releases/gemini-retirement-2026-10-30.md`](releases/gemini-retirement-2026-10-30.md) — Gemini retired from source, component release 3.72.0 and its fleet rollout
+- [`releases/steer-native-cycle-2026-10-29.md`](releases/steer-native-cycle-2026-10-29.md) — Steer joins a cycle Claude starts on its own after a background task
+- [`releases/acp-typed-updates-elicitation-2026-10-29.md`](releases/acp-typed-updates-elicitation-2026-10-29.md) — typed compaction, notices and elicitation; ACP SDK 3.6
 - [`releases/agent-runtimes-send-2026-10-18.md`](releases/agent-runtimes-send-2026-10-18.md) — runtime upgrade candidates, compatibility constraints and explicit send delivery design
 - [`releases/bun-toolchain-2026-10-10.md`](releases/bun-toolchain-2026-10-10.md) — Bun toolchain, component release 3.45.0, six Agent Plugins republished with byte-identical runtimes; Zed 1.20.6 built but not published
 - [`releases/remote-parity-2026-10-05.md`](releases/remote-parity-2026-10-05.md) — OVH Claude 3.4.8 output/cancellation fixes, exact acceptance and retained parity gaps

@@ -38,6 +38,9 @@ import {
 import { editorPluginHost } from "./editorPlugins/appHost";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { isMac } from "./platform";
+import { managementEntryFixture } from "./providerManagement.fixture";
+import codexProvider from "../../plugins/codex/provider.json";
+import claudeProvider from "../../plugins/claude-code/provider.json";
 import { useKeyboardInset } from "./keyboardInset";
 
 /** Visible operable controls without any keyboard slot (FOCUS.md "Leader").
@@ -341,6 +344,29 @@ export async function runDraftDocumentsBrowserConformance(
             resync: true,
           },
         ],
+      }));
+    }
+    if (path === "/api/plugins") {
+      // Rows show the installed Providers' real marks, as in production, so
+      // the font-size audits measure them beside the session title.
+      return Promise.resolve(Response.json({
+        providers: [codexProvider, claudeProvider].map((source) => {
+          const entry = managementEntryFixture(source.id);
+          const icon = entry.manifest.ui.assets.find((asset) =>
+            asset.id === entry.manifest.display.icon_asset
+          )!;
+          icon.content = {
+            kind: "vector_path",
+            view_box: source.display.mark_view_box,
+            path: source.display.mark_path,
+          };
+          entry.manifest.display.accent = source.display.accent;
+          entry.manifest.display.name = source.display.name;
+          entry.publisher = entry.manifest.publisher;
+          return entry;
+        }),
+        authentications: [],
+        authentication_executors: [],
       }));
     }
     if (path === "/api/drafts") {

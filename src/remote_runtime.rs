@@ -89,6 +89,9 @@ pub struct Shared {
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
     current_turn_protocol: bool,
     delivery_controls_protocol: bool,
+    /// The Machine starts a `native_fork` launch with `session/fork`; an
+    /// older one would ignore the field and open an empty thread.
+    native_fork_protocol: bool,
     account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
@@ -219,6 +222,8 @@ impl RemoteRuntime {
                     >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
                 delivery_controls_protocol: machine_protocol
                     >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
+                native_fork_protocol: machine_protocol
+                    >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(HashMap::new()),
@@ -273,6 +278,7 @@ impl RemoteRuntime {
                 steering: Mutex::new(HashMap::new()),
                 current_turn_protocol: true,
                 delivery_controls_protocol: true,
+                native_fork_protocol: true,
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 declarations: Mutex::new(declarations),
@@ -856,7 +862,7 @@ impl RemoteRuntime {
         }
         Some(crate::send_delivery::DeliveryTarget {
             worker_epoch: worker.worker_epoch.clone(),
-            turn_id: worker.current_turn_id.clone()?,
+            turn_id: worker.delivery_turn_id()?.to_owned(),
         })
     }
 
@@ -904,8 +910,9 @@ impl RemoteRuntime {
             return Err("next checkpoint is unavailable in this running worker".into());
         }
         let turn_id = worker
-            .current_turn_id
-            .ok_or("session has no current turn")?;
+            .delivery_turn_id()
+            .ok_or("session has no current turn")?
+            .to_owned();
         if target.is_some_and(|expected| {
             expected.worker_epoch != worker.worker_epoch || expected.turn_id != turn_id
         }) {
@@ -948,7 +955,20 @@ impl RemoteRuntime {
         cmid: String,
     ) -> Result<SteeringDelivery, String> {
         let controls = self.delivery_controls(session_id);
-        if controls.version == 0 || self.delivery_target(session_id).as_ref() != Some(target) {
+        // Only a Cowboy turn can be cancelled and replaced; a self-started
+        // cycle is a steering target only.
+        let cowboy_turn = self
+            .shared
+            .workers
+            .lock()
+            .get(session_id)
+            .is_some_and(|worker| {
+                worker.current_turn_id.as_deref() == Some(target.turn_id.as_str())
+            });
+        if controls.version == 0
+            || !cowboy_turn
+            || self.delivery_target(session_id).as_ref() != Some(target)
+        {
             return Err("cancellation target is unavailable".into());
         }
         let key = (session_id.to_owned(), cmid.clone());
@@ -1701,6 +1721,14 @@ fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
 }
 
 fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
+    let forking = match command {
+        CoreCommand::EnsureSession { session } => session.native_fork.is_some(),
+        CoreCommand::RecoverExecutionSession { session, .. } => session.native_fork.is_some(),
+        _ => false,
+    };
+    if forking && !shared.native_fork_protocol {
+        return false;
+    }
     if shared.protocol.load(Ordering::Acquire)
         >= crate::runtime_wire::PROVIDER_ACCOUNT_PROTOCOL_VERSION
     {
@@ -2643,17 +2671,25 @@ fn update_snapshot_from_event(
                 worker.agent_session_id.clone_from(agent_session_id);
             }
         }
-        RuntimeEvent::Status { state, .. } => worker.state = *state,
+        RuntimeEvent::Status { state, .. } => {
+            worker.state = *state;
+            if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+                worker.native_cycle_id = None;
+            }
+        }
         RuntimeEvent::TurnStarted { turn_id, .. } => {
             worker.state = WorkerState::Busy;
             worker.current_turn_id = Some(turn_id.clone());
+            worker.native_cycle_id = None;
         }
         RuntimeEvent::TurnEnded { turn_id, .. } => {
             if worker.current_turn_id.as_deref() == Some(turn_id) {
                 worker.current_turn_id = None;
             }
         }
-        RuntimeEvent::AgentSessionId { agent_session_id } => {
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
             worker.agent_session_id = Some(agent_session_id.clone());
         }
         RuntimeEvent::PermissionRequest { request_id, .. } => {
@@ -2685,6 +2721,11 @@ fn update_snapshot_from_event(
             if crate::runtime_wire::background_tasks_count(update).is_some() =>
         {
             worker.background_tasks = crate::runtime_wire::background_tasks_count(update);
+        }
+        RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::native_cycle(update).is_some() =>
+        {
+            worker.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
         }
         RuntimeEvent::Update { .. }
         | RuntimeEvent::ScheduleWakeup { .. }
@@ -2761,6 +2802,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             {
                 return; // Consumed by the delivery waiter, not conversation content.
             }
+            if crate::runtime_wire::native_cycle(&update).is_some() {
+                return; // Worker metadata for delivery targets, never a transcript row.
+            }
             let compact_failure = remote_compact_failure(hub, session_id, &update);
             hub.push_tagged(session_id, Event::Update { update }, cmid);
             if let Some(message) = compact_failure {
@@ -2829,7 +2873,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             // trailing idle status cannot release the next prompt's guard.
             hub.complete_turn(session_id);
         }
-        RuntimeEvent::AgentSessionId { agent_session_id } => {
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
             hub.set_agent_session_id(session_id, agent_session_id);
         }
         RuntimeEvent::ScheduleWakeup {
@@ -2923,21 +2969,24 @@ fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event
 
 const REMOTE_COMPACT_FAILURE_PREFIX: &str = "Error running remote compact task:";
 
-/// Codex ACP currently reports a failed remote `/compact` as an ordinary
-/// assistant message rather than a runtime error. Promote only the documented
-/// compact sequence; arbitrary assistant text containing "Error" must remain
-/// conversation content and must not create diagnostic incidents.
+/// A failed context compaction is a session error. Agents that received the
+/// `session.compaction` client capability report it as a typed
+/// `compaction_update`. Older Codex ACP releases instead report a failed remote
+/// `/compact` as an ordinary assistant message rather than a runtime error;
+/// promote only that documented compact sequence, so arbitrary assistant text
+/// containing "Error" remains conversation content and creates no incident.
 fn remote_compact_failure(
     hub: &Hub,
     session_id: &str,
     update: &serde_json::Value,
 ) -> Option<String> {
-    if update
+    match update
         .get("sessionUpdate")
         .and_then(serde_json::Value::as_str)
-        != Some("agent_message_chunk")
     {
-        return None;
+        Some("compaction_update") => return typed_compaction_failure(update),
+        Some("agent_message_chunk") => {}
+        _ => return None,
     }
     let message = update
         .pointer("/content/text")
@@ -2972,6 +3021,21 @@ fn remote_compact_failure(
         .unwrap_or(false);
 
     active_compaction.then(|| message.trim_end().to_owned())
+}
+
+fn typed_compaction_failure(update: &serde_json::Value) -> Option<String> {
+    if update.get("status").and_then(serde_json::Value::as_str) != Some("failed") {
+        return None;
+    }
+    let detail = update
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|error| !error.is_empty());
+    Some(detail.map_or_else(
+        || "Context compaction failed".to_owned(),
+        |error| format!("Context compaction failed: {error}"),
+    ))
 }
 
 fn handle_rejected_command(
@@ -3228,6 +3292,95 @@ mod tests {
         );
         assert!(runtime.pending_for_test().is_empty());
         assert!(runtime.shared.steering.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_named_native_cycle_is_steerable_but_never_cancelled_or_stored() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "cycle".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let mut worker = snapshot("cycle");
+        worker.supports_current_turn = true;
+        worker.current_turn_id = None;
+        worker.delivery_controls.version = 1;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![]);
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("cycle".into(), worker.clone());
+        runtime.connect_for_test();
+        assert_eq!(runtime.delivery_target("cycle"), None);
+
+        let named = RuntimeEvent::Update {
+            update: crate::runtime_wire::native_cycle_update(Some("native-a")),
+            cmid: None,
+        };
+        let before = hub.snapshot("cycle").unwrap().0.len();
+        update_snapshot_from_event(&runtime.shared, "cycle", 5, &named);
+        apply_event(&hub, "cycle", named);
+        assert_eq!(
+            hub.snapshot("cycle").unwrap().0.len(),
+            before,
+            "never a transcript row"
+        );
+        let target = runtime.delivery_target("cycle").unwrap();
+        assert_eq!(target.turn_id, "native-a");
+        assert_eq!(target.worker_epoch, worker.worker_epoch);
+        assert!(
+            runtime
+                .start_cancel_turn("cycle", &target, "stop".into())
+                .is_err()
+        );
+        let effect = runtime
+            .start_steer_targeted("cycle", vec![], "join".into(), Some(&target), false)
+            .unwrap();
+        assert!(matches!(
+            runtime.pending_for_test().as_slice(),
+            [CoreCommand::Steer { turn_id, .. }] if turn_id == "native-a"
+        ));
+        drop(effect);
+
+        // A Cowboy turn takes precedence and clears the name.
+        update_snapshot_from_event(
+            &runtime.shared,
+            "cycle",
+            6,
+            &RuntimeEvent::TurnStarted {
+                turn_id: "turn-1".into(),
+                command_id: "command-1".into(),
+            },
+        );
+        assert_eq!(runtime.delivery_target("cycle").unwrap().turn_id, "turn-1");
+        update_snapshot_from_event(
+            &runtime.shared,
+            "cycle",
+            7,
+            &RuntimeEvent::TurnEnded {
+                turn_id: "turn-1".into(),
+                stop_reason: "end_turn".into(),
+                usage: None,
+            },
+        );
+        assert_eq!(runtime.delivery_target("cycle"), None);
+        for cycle in [Some("native-b"), None] {
+            update_snapshot_from_event(
+                &runtime.shared,
+                "cycle",
+                8,
+                &RuntimeEvent::Update {
+                    update: crate::runtime_wire::native_cycle_update(cycle),
+                    cmid: None,
+                },
+            );
+        }
+        assert_eq!(runtime.delivery_target("cycle"), None);
     }
 
     #[tokio::test]
@@ -3632,15 +3785,12 @@ mod tests {
             .machine_grant(&recipient)
             .unwrap();
         let source: cowboy_provider_sdk::StandardProviderSource =
-            serde_json::from_str(include_str!("../plugins/gemini/provider.json")).unwrap();
+            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
         let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
         let bundle = crate::machine_protocol::PortableCredentialBundle {
             portable_schema: package.manifest.authentication.portable_schema.clone(),
-            method_id: "code-assist".into(),
-            values: std::collections::BTreeMap::from([
-                ("settings_json".into(), "e30=".into()),
-                ("oauth_creds_json".into(), "e30=".into()),
-            ]),
+            method_id: "xai-account".into(),
+            values: std::collections::BTreeMap::from([("auth_json".into(), "e30=".into())]),
         };
         for scope in [&auth, &first, &other_machine, &other_account] {
             scope.commit(&package, &bundle, None, Some(0)).unwrap();
@@ -3648,7 +3798,7 @@ mod tests {
         let hub = Hub::new();
         hub.create_session(crate::core::SessionRegistration {
             id: "named".into(),
-            provider: "gemini".into(),
+            provider: "grok".into(),
             provider_version: "fixture".into(),
             provider_generation_digest: "sha256:fixture".into(),
             provider_account_id: id,
@@ -3672,13 +3822,11 @@ mod tests {
             .provider_auth = Some(Arc::clone(&auth));
         let rejected = RuntimeEvent::Status {
             state: WorkerState::Crashed,
-            detail: Some(crate::provider::provider_auth_required_detail(
-                "gemini", true,
-            )),
+            detail: Some(crate::provider::provider_auth_required_detail("grok", true)),
         };
         mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
-            first.status("gemini").unwrap().authentication_state,
+            first.status("grok").unwrap().authentication_state,
             ServiceAuthenticationState::Ready
         );
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
@@ -3686,12 +3834,12 @@ mod tests {
             .auth_recipient_key = Some(recipient);
         mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
-            first.status("gemini").unwrap().authentication_state,
+            first.status("grok").unwrap().authentication_state,
             ServiceAuthenticationState::Expired
         );
         for scope in [&auth, &other_machine, &other_account] {
             assert_eq!(
-                scope.status("gemini").unwrap().authentication_state,
+                scope.status("grok").unwrap().authentication_state,
                 ServiceAuthenticationState::Ready
             );
         }
@@ -3743,6 +3891,38 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn typed_compaction_failure_is_a_session_error() {
+        let hub = Hub::new();
+        let failed = serde_json::json!({
+            "sessionUpdate": "compaction_update",
+            "compactionId": "c-1",
+            "status": "failed",
+            "error": "transport disconnected"
+        });
+        assert_eq!(
+            remote_compact_failure(&hub, "s", &failed).as_deref(),
+            Some("Context compaction failed: transport disconnected")
+        );
+        let without_detail = serde_json::json!({
+            "sessionUpdate": "compaction_update",
+            "compactionId": "c-1",
+            "status": "failed"
+        });
+        assert_eq!(
+            remote_compact_failure(&hub, "s", &without_detail).as_deref(),
+            Some("Context compaction failed")
+        );
+        for status in ["in_progress", "completed", "cancelled"] {
+            let update = serde_json::json!({
+                "sessionUpdate": "compaction_update",
+                "compactionId": "c-1",
+                "status": status
+            });
+            assert_eq!(remote_compact_failure(&hub, "s", &update), None, "{status}");
+        }
     }
 
     #[test]
@@ -3809,6 +3989,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                native_fork: None,
             }),
             state: WorkerState::Busy,
             agent_session_id: Some("agent-1".to_owned()),
@@ -3825,6 +4006,7 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            native_cycle_id: None,
             incarnation: None,
         }
     }

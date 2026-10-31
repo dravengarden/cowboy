@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.15",
+  "sdk_version": "3.1.17",
   "display": {
     "name": "DeepSeek Harness",
     "vendor": "DeepSeek",
@@ -185,9 +185,9 @@
     "dependencies": [
       {
         "id": "deepseek-harness",
-        "version": "0.2.1-rc.2",
-        "source": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.2.tgz",
-        "integrity": "sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==",
+        "version": "0.2.1-rc.5",
+        "source": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.5.tgz",
+        "integrity": "sha512-WkyJZv4zl9sCAxSzRctGm58m0rilGqwR6pniBiLOz5CPDfHfDuAUicg0AAazXI7oj/Cph6/cjNTncA/rpLTXpw==",
         "private": true
       },
       {

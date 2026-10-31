@@ -97,6 +97,42 @@ test("new Plugins require an explicit additive migration without rebinding old r
   assertThrows(() => validateReleaseHistory(releases));
 });
 
+test("retired Plugins require an explicit removal and never return", () => {
+  const releases = history();
+  const next = append(releases);
+  delete next.plugins.zed;
+  delete next.closure!.plugins.zed;
+  assertThrows(() => validateReleaseHistory(releases));
+  next.plugin_removals = ["zed"];
+  validateReleaseHistory(releases);
+  for (const removals of [[], ["zed", "zed"], ["zed", "codex"], ["missing"]]) {
+    const changed = structuredClone(releases);
+    changed.at(-1)!.plugin_removals = removals;
+    assertThrows(() => validateReleaseHistory(changed));
+  }
+  const legacy = structuredClone(releases);
+  legacy[1]!.plugin_removals = ["zed"];
+  assertThrows(() => validateReleaseHistory(legacy));
+
+  // A retired identity cannot be reintroduced by a later addition.
+  const later = structuredClone(next);
+  later.version = "1.3.0";
+  delete later.plugin_removals;
+  later.plugins.zed = "2.0.0";
+  later.closure!.plugins.zed = {
+    component_release: later.version,
+    components: [{ id: "cowboy.zed", version: "1.0.0" }],
+    source_digest: digest("9"),
+  };
+  later.plugin_additions = ["zed"];
+  releases.push(later);
+  assertThrows(
+    () => validateReleaseHistory(releases),
+    Error,
+    "reuses the identity zed",
+  );
+});
+
 test("schema-2 release history is unchanged by the schema-3 migration", async () => {
   const registry = JSON.parse(
     await readFile("components/registry.json", "utf8"),

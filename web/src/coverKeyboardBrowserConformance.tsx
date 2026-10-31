@@ -9,6 +9,7 @@ import { inferKeyboardOpen } from "./keyboardGeometry";
 import { ObsidianSheet } from "./ObsidianSheet";
 import { runLightboxStageBrowserChecks } from "./lightboxStageBrowserChecks";
 import { runUndoHistoryBrowserChecks } from "./undoHistoryBrowserChecks";
+import { runSheetFocusRevealBrowserChecks } from "./sheetFocusRevealBrowserChecks";
 export { renderUndoHistoryPreview } from "./undoHistoryBrowserChecks";
 import { Button, CssBaseline, Stack, TextField, Typography } from "@mui/material";
 
@@ -18,6 +19,7 @@ function check(value: unknown, label: string): asserts value {
 export async function runCoverKeyboardBrowserConformance(keepFixture = false): Promise<string[]> {
   if (!keepFixture) await runLightboxStageBrowserChecks();
   if (!keepFixture) await runUndoHistoryBrowserChecks();
+  if (!keepFixture) await runSheetFocusRevealBrowserChecks();
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);

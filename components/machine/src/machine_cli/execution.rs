@@ -275,9 +275,16 @@ impl Manager {
                 session_id,
                 workspace_id,
                 runtime,
+                base_session_id,
             } => {
                 match self
-                    .prepare(&session_id, &workspace_id, runtime, workspaces)
+                    .prepare(
+                        &session_id,
+                        &workspace_id,
+                        runtime,
+                        base_session_id.as_deref(),
+                        workspaces,
+                    )
                     .await
                 {
                     Ok(binding) => Response::Prepared { binding },
@@ -604,6 +611,7 @@ impl Manager {
         session_id: &str,
         workspace_id: &str,
         runtime: RuntimeLocation,
+        base_session_id: Option<&str>,
         workspaces: &[MachineWorkspace],
     ) -> Result<BindingV1, Refusal> {
         let config = self.configuration.as_ref().ok_or(Refusal::Unavailable)?;
@@ -672,17 +680,32 @@ impl Manager {
         if count >= 512 {
             return Err(Refusal::Capacity);
         }
+        let base_worktree = match base_session_id {
+            Some(base) if keeper::valid_operation_id(base) => Some(
+                self.worktrees
+                    .for_source(base, Path::new(&workspace.canonical_path))
+                    .map_err(|_| Refusal::WorkspaceUnavailable)?
+                    .join(base),
+            ),
+            Some(_) => return Err(Refusal::InvalidRequest),
+            None => None,
+        };
         let prepared = crate::session_workspace::prepare(
             crate::session_workspace::PrepareWorkspaceRequest {
                 root: workspace.canonical_path.clone(),
                 session_id: session_id.to_owned(),
+                base_session_id: base_session_id.map(str::to_owned),
+                base_worktree,
             },
             self.worktrees
                 .for_source(session_id, Path::new(&workspace.canonical_path))
                 .map_err(|_| Refusal::WorkspaceUnavailable)?,
         )
         .await
-        .map_err(|_| Refusal::WorkspaceUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%session_id, error = %format!("{error:#}"), "session workspace preparation failed");
+            Refusal::WorkspaceUnavailable
+        })?;
         let binding = BindingV1 {
             schema: 1,
             id: random_id(),

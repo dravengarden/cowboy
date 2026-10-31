@@ -1,5 +1,6 @@
 import { agentCallsPrompt } from "./agent-calls.mjs";
 import { installSteeringPriority } from "./steering.mjs";
+import { installNativeCycles } from "./native-cycle.mjs";
 import { spawn } from "node:child_process";
 import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -140,6 +141,9 @@ export function nativeRuntimeEnvironment(environment) {
 // Advertise the pinned adapter's explicit no-new-turn contract to Cowboy.
 export function advertiseCurrentTurn(Agent) {
   const prioritySupported = installSteeringPriority(Agent);
+  // Outermost: a steer addressed to a self-started cycle never reaches the
+  // ordinary priority path unless that cycle already has a turn.
+  installNativeCycles(Agent);
   const initialize = Agent.prototype.initialize;
   Agent.prototype.initialize = async function (...args) {
     const result = await initialize.apply(this, args);

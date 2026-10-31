@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 // Markdown renderer used by message bubbles. GitHub-Flavored Markdown
 // (tables, strikethrough, task lists) + syntax-highlighted code fences via
@@ -383,7 +383,7 @@ function CodeBlock({
         },
       }}
     >
-      {copied ? <Check sx={{ fontSize: desktopSize(16) }} /> : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
+      {copied ? <Check sx={{ fontSize: glyphSize(16) }} /> : <ContentCopy sx={{ fontSize: glyphSize(15) }} />}
       {copied && <Box component="span">Copied</Box>}
     </IconButton>
   );

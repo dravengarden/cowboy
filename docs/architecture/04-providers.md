@@ -30,7 +30,6 @@ multi-platform runtime release is externally published and trusted:
 | `claude-deepseek` | the same two pins; Anthropic gateway `0.1.0` | Claude Code over the private DeepSeek Anthropic Messages gateway |
 | `codex` | Codex ACP `1.1.7`; Codex `0.147.0` | adapter over Codex App Server |
 | `codex-deepseek` | the same two pins; Responses gateway `0.2.0` | Codex over the private DeepSeek Responses gateway |
-| `gemini` | Gemini CLI `0.55.1` | Gemini's native ACP mode |
 | `grok` | Grok Build CLI `0.2.117` | Grok Build's native ACP stdio agent |
 
 Each source compiles to canonical `.cowboy-plugin` bytes; a complete
@@ -49,7 +48,7 @@ local/drain path.
 Provider SDK 2.3 moves reasoning-step presentation behind host integration
 schema 2. The Provider selects a closed Cowboy component-library variant and
 bounded tokens; it does not supply React, HTML, CSS, dimensions, or animation
-code. The six first-party packages choose by agent interaction language:
+code. The first-party packages choose by agent interaction language:
 
 | Provider | Variant | Density | Current surface |
 |---|---|---|---|
@@ -57,7 +56,6 @@ code. The six first-party packages choose by agent interaction language:
 | `claude-deepseek` | `timeline` | `compact` | `soft` |
 | `codex` | `workcell` | `comfortable` | `soft` |
 | `codex-deepseek` | `workcell` | `compact` | `soft` |
-| `gemini` | `signal` | `comfortable` | `soft` |
 | `grok` | `terminal` | `compact` | `plain` |
 
 DeepSeek changes the model/runtime lane, not the agent-family visual grammar,
@@ -139,7 +137,11 @@ directories to the worker-only `PATH`. Claude Providers additionally bind
 `component_command` value. Codex ACP finds its packaged Codex CLI through the
 same generation-local path. Neither variant refers to a Nix profile, `/etc`
 catalog, managed Node package, host adapter, or ambient CLI to complete an exact
-package launch.
+package launch. `codex-deepseek` therefore ships DeepSeek's Codex model
+catalog inside its gateway artifact (the `files` of its `git_go_static` recipe,
+taken from the same digest-pinned source) and points `model_catalog_json` at it
+through a `component_file` binding; every Machine and platform reads the same
+catalog bytes.
 
 For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
 forwarded only to the gateway sidecar; it is not added to the ACP adapter's
@@ -234,25 +236,13 @@ are model- and cache-independent. Aggregates carry no time of day, so calls
 before the billing start are valued too. Events from older gateways leave the
 counts empty rather than zero-valued.
 
-Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
-Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
-or Code Assist Standard/Enterprise credentials. The Gemini Provider declares
-those two Service-scoped methods:
+### Retired Providers
 
-- **Gemini API key** is captured by a temporary executor, committed to the
-  Service vault, then projected to the Provider's private Machine home with
-  user-only permissions.
-- **Standard/Enterprise Google Login** is offered only when
-  `GOOGLE_CLOUD_PROJECT` is configured for the executor. The resulting portable
-  bundle follows the same Service generation and replica path.
-
-An old `oauth-personal` credential file without that project is never reported
-as signed in. Cowboy recognizes the upstream retirement response as a terminal
-startup error: selecting the crashed session does not create a restart loop,
-while an explicit Retry remains available after the user changes credentials.
-Personal, Google AI Pro, and AI Ultra accounts belong to Antigravity;
-Antigravity CLI is not a drop-in Cowboy provider until it publishes an ACP
-server mode.
+The Gemini Provider was sunset on 2026-10-20 and retired from the source tree
+in component release 3.72.0. Historical sessions, usage rows and Catalog
+entries that name `gemini` still load: they resolve through the generic,
+package-less portable behavior, and a Service configuration that still lists
+`gemini` in `plugins.disabled` remains valid.
 
 Grok uses the official Grok Build CLI as both private Provider CLI and ACP
 agent; there is no second adapter package. Cowboy starts one isolated process
@@ -323,12 +313,10 @@ and keep the shared domain operation separate from the Desktop and Mobile UI.
 flowchart LR
     CC["claude-code"] --> CFG1["config via<br/>notification"]
     CX["codex"] --> CFG2["config in<br/>session resp"]
-    GM["gemini"] --> MODE["session MODES<br/>→ mode chip"]
     GR["grok"] --> XCFG["x.ai/sessionConfig<br/>→ model + effort chips"]
 
     style CC fill:#eef2ff,stroke:#6366f1
     style CX fill:#dcfce7,stroke:#16a34a
-    style GM fill:#fef9c3,stroke:#ca8a04
     style GR fill:#f3e8ff,stroke:#9333ea
 ```
 
@@ -341,8 +329,8 @@ and older hosts reject it instead of guessing.
 - **claude-code** sends its config options (mode / model) *after* the session is
   created, via a `config_option_update` notification.
 - **codex** returns config options in the session-creation response.
-- **gemini** has no config-option concept for approvals — it uses ACP session
-  **modes**. cowboy synthesizes a `"mode"` config chip so the UI presents one
+- A package selecting `acp_session_mode_yolo_v1` has no config-option concept
+  for approvals — it uses ACP session **modes**. cowboy synthesizes a `"mode"` config chip so the UI presents one
   uniform control, and routes a change to `SetSessionModeRequest` instead of the
   `session/set_config_option` ext method.
 - **grok** exposes model and reasoning selectors in `x.ai/sessionConfig`; both

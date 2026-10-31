@@ -37,6 +37,10 @@ export interface ComponentRelease {
   // reuse, hidden dependencies or relabeling an existing Plugin's closure.
   component_additions?: string[];
   plugin_additions?: string[];
+  // Explicit schema-3 retirement of first-party Plugin identities. A retired
+  // identity leaves future releases for good: it cannot be added back, and
+  // historical releases that recorded it remain immutable.
+  plugin_removals?: string[];
 }
 
 export function assert(condition: unknown, message: string): asserts condition {
@@ -164,6 +168,7 @@ export function validatePluginComponentClosure(
 }
 
 export function validateReleaseHistory(releases: ComponentRelease[]): void {
+  const seenPlugins = new Set<string>();
   for (let index = 0; index < releases.length; index++) {
     const release = releases[index]!;
     assert(
@@ -190,6 +195,34 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
           ),
         "Plugin additions require an explicit nonempty post-baseline migration",
       );
+      for (const id of release.plugin_additions) {
+        assert(
+          !seenPlugins.has(id),
+          `${release.version}: Plugin addition reuses the identity ${id}`,
+        );
+      }
+    }
+    if (release.plugin_removals !== undefined) {
+      assert(
+        previous?.closure && release.closure &&
+          Array.isArray(release.plugin_removals) &&
+          release.plugin_removals.length > 0 &&
+          release.plugin_removals.every((id) =>
+            typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)
+          ),
+        "Plugin removals require an explicit nonempty post-baseline migration",
+      );
+      assert(
+        new Set(release.plugin_removals).size ===
+          release.plugin_removals.length,
+        `${release.version}: duplicate Plugin removal`,
+      );
+      for (const id of release.plugin_removals) {
+        assert(
+          previous.plugins[id] !== undefined,
+          `${release.version}: removed Plugin ${id} is absent from the previous release`,
+        );
+      }
     }
     if (release.component_additions !== undefined) {
       assert(
@@ -208,12 +241,17 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
         compareVersion(release.version, previous.version) > 0,
         `${release.version}: component releases must append in SemVer order`,
       );
+      const removed = new Set(release.plugin_removals ?? []);
       assertSameSet(
         Object.keys(release.plugins),
-        [...Object.keys(previous.plugins), ...(release.plugin_additions ?? [])],
-        `${release.version}: Plugin identities require an exact additive migration; removal is forbidden`,
+        [
+          ...Object.keys(previous.plugins).filter((id) => !removed.has(id)),
+          ...(release.plugin_additions ?? []),
+        ],
+        `${release.version}: Plugin identities require an exact declared addition or removal`,
       );
     }
+    for (const id of Object.keys(release.plugins)) seenPlugins.add(id);
     if (!release.closure) {
       assert(
         !previous?.closure,

@@ -51,7 +51,7 @@ test("MCP identity keeps qualified names and tools with their own server argumen
 });
 
 test("MCP headings describe Cowboy help/actions and Matrix operations across providers", () => {
-  for (const provider of ["codex", "claude-code", "claude-deepseek", "gemini", "grok", "future-provider"]) {
+  for (const provider of ["codex", "claude-code", "claude-deepseek", "grok", "future-provider"]) {
     const base = { provider, toolName: "", kind: "search", title: "" };
     assertEquals(toolHeading({ ...base, rawInput: { server: "cowboy", tool: "cowboy_read", arguments: { help: "calls" } } }), "Cowboy help · calls");
     assertEquals(toolHeading({ ...base, rawInput: { server: "cowboy", tool: "cowboy_execute", arguments: { action: "review.start" } } }), "Cowboy · review.start");

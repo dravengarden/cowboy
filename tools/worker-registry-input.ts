@@ -36,6 +36,7 @@ function workerRecord(release: Release): unknown {
   delete record.version;
   delete record.component_additions;
   delete record.plugin_additions;
+  delete record.plugin_removals;
   record.components = release.components.filter((entry) =>
     entry.id !== "cowboy.app-shell"
   );

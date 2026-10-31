@@ -38,7 +38,7 @@ test("thinking activity has no Provider identity branches", () => {
   assertEquals(transcriptSource.includes("function CodexThinking"), false);
   assertEquals(transcriptSource.includes("function GrokThinking"), false);
   assertEquals(transcriptSource.includes("providerActivityKind"), false);
-  for (const provider of ["claude-code", "codex", "gemini", "grok"]) {
+  for (const provider of ["claude-code", "codex", "grok"]) {
     assertEquals(providerTranscriptSource.includes(`"${provider}"`), false);
   }
 });

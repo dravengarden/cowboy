@@ -171,6 +171,29 @@ export function eventsFrom(
   });
 }
 
+/** Machine history is bounded and may evict a still-live challenge. Keep only
+ * this request's unexpired challenge until a newer one or completion arrives. */
+export function retainAuthenticationChallenge(
+  previous: ProviderLoginEvent[],
+  events: ProviderLoginEvent[],
+  provider: string,
+  request: string,
+  now = Date.now(),
+): ProviderLoginEvent[] {
+  if (
+    events.some((event) => event.event === "login_challenge") ||
+    providerAuthenticationCompleted(events)
+  ) return events;
+  const challenge = previous.findLast((event) =>
+    event.event === "login_challenge"
+  );
+  return challenge?.event === "login_challenge" &&
+      challenge.provider === provider && challenge.request_id === request &&
+      challenge.expires_at_ms > now
+    ? [...events, challenge]
+    : events;
+}
+
 /** Finite, core-owned Service sign-in UI. No credential persistence, automatic
  * mutation retry, remote cancellation on unmount, or Machine login authority.
  * Timers and aborted reads remain owned until they actually settle.
@@ -306,6 +329,12 @@ export function createProviderAuthenticationOwner(
           try {
             events = eventsFrom(
               body,
+              flow.provider.provider_id,
+              flow.requestId!,
+            );
+            events = retainAuthenticationChallenge(
+              lease.value().flow.events,
+              events,
               flow.provider.provider_id,
               flow.requestId!,
             );

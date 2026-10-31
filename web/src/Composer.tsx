@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { prefetchDeliveryOptions } from "./deliveryPolicy";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
@@ -3660,7 +3660,7 @@ function AttachmentPreviews({
               "&:hover": { bgcolor: "rgba(0,0,0,0.72)" },
             }}
           >
-            <Close sx={{ fontSize: desktopSize(13) }} />
+            <Close sx={{ fontSize: glyphSize(13) }} />
           </IconButton>
         </Box>
       ))}
@@ -3733,7 +3733,7 @@ function OptimisticDraftRow({
         <CloudUpload
           aria-hidden
           sx={{
-            fontSize: desktopSize(16),
+            fontSize: glyphSize(16),
             color: "info.main",
             mt: 0.25,
             flexShrink: 0,
@@ -6041,7 +6041,7 @@ function PendingRow({
             data-pending-content-action="schedule"
             size="small"
             clickable
-            icon={<Schedule sx={{ fontSize: desktopSize(15) }} />}
+            icon={<Schedule sx={{ fontSize: glyphSize(15) }} />}
             label={`${fireLabel(message.schedule.fire_at_ms)} · ${
               message.schedule.delivery === "front" ? "队首" : "队尾"
             }`}
@@ -6426,7 +6426,7 @@ export function AutoScrollAndStop({
             ? {
               width: desktopSize(32),
               height: desktopSize(32),
-              "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
+              "& .MuiSvgIcon-root": { fontSize: glyphSize(18) },
             }
             : undefined}
         >
@@ -6450,7 +6450,7 @@ export function AutoScrollAndStop({
               ? {
                 width: desktopSize(32),
                 height: desktopSize(32),
-                "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
+                "& .MuiSvgIcon-root": { fontSize: glyphSize(18) },
               }
               : undefined}
           >
@@ -6798,7 +6798,7 @@ function RecommendedRunConfigPresetButton({
       >
         {progress ? (
           <CircularProgress size={desktopSize(14)} thickness={4.5} color="inherit" />
-        ) : selected ? <Check sx={{ fontSize: desktopSize(18) }} /> : null}
+        ) : selected ? <Check sx={{ fontSize: glyphSize(18) }} /> : null}
       </Box>
     </ButtonBase>
   );

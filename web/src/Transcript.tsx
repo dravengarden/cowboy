@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 import { SessionStartSettings } from "./SessionStartSettings";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
@@ -49,6 +49,7 @@ import {
   ChatBubbleOutline,
   CheckCircleOutline,
   ChevronRight,
+  CallSplitOutlined,
   CleaningServices,
   Close,
   CloudUpload,
@@ -59,6 +60,7 @@ import {
   ExpandMore,
   ExtensionOutlined,
   Folder,
+  InfoOutlined,
   KeyboardArrowDown,
   MyLocation,
   NavigateBefore,
@@ -72,6 +74,10 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
+import { documentNotice } from "./documents/DocumentNotifications";
+import { requestPickSession } from "./sessionPickRequest";
+import { forkAvailability, forkSession } from "./sessionFork";
+import { isManagedChild } from "./managedCalls";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
@@ -108,6 +114,7 @@ import {
   COMPACTING_NOTICE,
   type ContentChunk,
   derive,
+  forkableAnswerKeys,
   isCompactingTail,
   isCompactionCommandText,
   isCompactionCompletionTail,
@@ -791,10 +798,10 @@ function ConversationEmptyState({
           }}
         >
           {kind === "preparing"
-            ? <Terminal sx={{ fontSize: desktopSize(22) }} />
+            ? <Terminal sx={{ fontSize: glyphSize(22) }} />
             : kind === "cleared"
-            ? <CleaningServices sx={{ fontSize: desktopSize(22) }} />
-            : <ChatBubbleOutline sx={{ fontSize: desktopSize(22) }} />}
+            ? <CleaningServices sx={{ fontSize: glyphSize(22) }} />
+            : <ChatBubbleOutline sx={{ fontSize: glyphSize(22) }} />}
         </Box>
         <Typography
           variant="body1"
@@ -887,7 +894,7 @@ function ConversationEmptyState({
             </Typography>
             <Tune
               aria-hidden
-              sx={{ fontSize: desktopSize(16), color: "text.secondary", opacity: 0.78 }}
+              sx={{ fontSize: glyphSize(16), color: "text.secondary", opacity: 0.78 }}
             />
           </Stack>
         </ButtonBase>
@@ -1073,7 +1080,7 @@ function CompactingWidget({
     >
       {active
         ? <CircularProgress size={16} color="inherit" aria-label="Compacting" sx={{ color: accent }} />
-        : <UnfoldLess aria-hidden sx={{ fontSize: desktopSize(16), color: muted }} />}
+        : <UnfoldLess aria-hidden sx={{ fontSize: glyphSize(16), color: muted }} />}
       {active
         ? (
           <Typography
@@ -1331,7 +1338,7 @@ function CollapsibleUserBody({
               py: 0,
               opacity: 0.85,
               "& .MuiButton-endIcon": { ml: 0.25 },
-              "& .MuiButton-endIcon > svg": { fontSize: desktopSize(18) },
+              "& .MuiButton-endIcon > svg": { fontSize: glyphSize(18) },
               "&:hover": { bgcolor: "transparent", opacity: 1 },
             }}
           >
@@ -1450,7 +1457,7 @@ function OptimisticUserBubble({
           alignItems="center"
           sx={{ pr: 0.25 }}
         >
-          <CloudUpload sx={{ fontSize: desktopSize(14), color: "info.main" }} />
+          <CloudUpload sx={{ fontSize: glyphSize(14), color: "info.main" }} />
           <Typography variant="caption" sx={{ color: "info.main" }}>
             {connected ? "Waiting for Cowboy…" : "Waiting for connection…"}
           </Typography>
@@ -1495,6 +1502,49 @@ function OptimisticUserBubble({
         </Stack>
       )}
     </Stack>
+  );
+}
+
+const NO_FORK_ANSWERS: ReadonlyMap<string, string> = new Map();
+
+/** A quiet action under a turn-final answer: fork the conversation through it. */
+function ForkFromHere({
+  sessionId,
+  messageId,
+}: {
+  sessionId: string;
+  messageId: string;
+}): React.JSX.Element {
+  const [pending, setPending] = useState(false);
+  return (
+    <Button
+      data-transcript-fork-from-here
+      size="small"
+      disabled={pending}
+      startIcon={<CallSplitOutlined sx={{ fontSize: glyphSize(14) }} />}
+      onClick={(): void => {
+        setPending(true);
+        void forkSession(sessionId, { messageId })
+          .then((receipt) =>
+            requestPickSession(receipt.session_id, receipt.session ?? undefined)
+          )
+          .catch((error: Error) => documentNotice(error.message))
+          .finally(() => setPending(false));
+      }}
+      sx={{
+        alignSelf: "flex-start",
+        mt: 0.25,
+        minWidth: 0,
+        px: 0.75,
+        py: 0,
+        typography: "caption",
+        color: "text.secondary",
+        opacity: 0.7,
+        "&:hover, &:focus-visible": { opacity: 1 },
+      }}
+    >
+      {pending ? "Forking…" : "Fork from here"}
+    </Button>
   );
 }
 
@@ -3031,6 +3081,7 @@ const ItemView = memo(function ItemView({
   desktop,
   selectedToolKey,
   onOpenTool,
+  forkMessageId,
 }: {
   item: RenderItem;
   sessionId: string;
@@ -3046,10 +3097,12 @@ const ItemView = memo(function ItemView({
   desktop: boolean;
   selectedToolKey: string | null;
   onOpenTool: (key: string) => void;
+  /** Provider message ID when this answer ends a turn a fork can start from. */
+  forkMessageId?: string | undefined;
 }): React.JSX.Element | null {
   switch (item.kind) {
-    case "message":
-      return (
+    case "message": {
+      const bubble = (
         <MessageBubble
           role={item.role}
           chunks={item.chunks}
@@ -3062,6 +3115,14 @@ const ItemView = memo(function ItemView({
           desktop={desktop}
         />
       );
+      if (!forkMessageId) return bubble;
+      return (
+        <>
+          {bubble}
+          <ForkFromHere sessionId={sessionId} messageId={forkMessageId} />
+        </>
+      );
+    }
     case "thought":
       return (
         <Box
@@ -3167,6 +3228,41 @@ const ItemView = memo(function ItemView({
         </Box>
       );
     }
+    case "forked":
+      return (
+        <Box
+          data-transcript-fork-origin
+          role="status"
+          sx={(theme) => ({
+            alignSelf: "center",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.625,
+            my: 0.75,
+            px: 1,
+            py: 0.25,
+            borderRadius: 999,
+            color: "text.secondary",
+            bgcolor: alpha(theme.palette.background.paper, 0.66),
+            border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
+          })}
+        >
+          <CallSplitOutlined
+            sx={{ fontSize: glyphSize(15), color: "primary.main" }}
+          />
+          <Typography variant="caption" sx={{ fontWeight: 650 }}>
+            {item.atMessage ? "Forked from an answer in" : "Forked from"}{" "}
+            {item.sourceTitle || "another session"}
+          </Typography>
+          <Button
+            size="small"
+            onClick={(): void => requestPickSession(item.sourceSessionId)}
+            sx={{ minWidth: 0, px: 0.75, py: 0, typography: "caption" }}
+          >
+            Open
+          </Button>
+        </Box>
+      );
     case "cleared":
       // A compact context boundary, not a full-width divider. The old pair of
       // rules visually split an otherwise empty transcript and competed with
@@ -3206,7 +3302,7 @@ const ItemView = memo(function ItemView({
               bgcolor: alpha(theme.palette.primary.main, 0.09),
             })}
           >
-            <CleaningServices sx={{ fontSize: desktopSize(13) }} />
+            <CleaningServices sx={{ fontSize: glyphSize(13) }} />
           </Box>
           <Typography
             variant="caption"
@@ -3216,6 +3312,79 @@ const ItemView = memo(function ItemView({
           </Typography>
         </Box>
       );
+    case "compaction": {
+      if (item.status === "failed" || item.status === "cancelled") {
+        const failed = item.status === "failed";
+        return (
+          <Box sx={{ ...LIFECYCLE_ROW_SX, color: failed ? "error.main" : "warning.main" }}>
+            {failed
+              ? <ErrorOutline sx={LIFECYCLE_ICON_SX} />
+              : <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />}
+            <Box sx={{ minWidth: 0 }}>
+              <Box component="span">
+                {failed ? "Context compaction failed" : "Context compaction cancelled"}
+              </Box>
+              {item.error && <ErrorDetails detail={item.error} />}
+            </Box>
+          </Box>
+        );
+      }
+      return (
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+          <CompactingWidget
+            active={item.status === "in_progress" && status === "busy"}
+            provider={provider}
+            providerVersion={providerVersion}
+            providerDigest={providerDigest}
+            desktop={desktop}
+          />
+          {item.summary.trim() && (
+            <Box
+              component="details"
+              sx={{ color: "text.secondary", fontSize: "0.75rem", maxWidth: "100%" }}
+            >
+              <Box component="summary" sx={{ cursor: "pointer" }}>Retained summary</Box>
+              <Box
+                component="div"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  mt: 0.5,
+                  maxHeight: "40vh",
+                  overflow: "auto",
+                }}
+              >
+                {item.summary.trim()}
+              </Box>
+            </Box>
+          )}
+        </Box>
+      );
+    }
+    case "notice": {
+      const color = item.severity === "error"
+        ? "error.main"
+        : item.severity === "warning"
+        ? "warning.main"
+        : "text.secondary";
+      return (
+        <Box role="status" sx={{ ...LIFECYCLE_ROW_SX, color }}>
+          {item.severity === "error"
+            ? <ErrorOutline sx={LIFECYCLE_ICON_SX} />
+            : item.severity === "warning"
+            ? <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />
+            : <InfoOutlined sx={LIFECYCLE_ICON_SX} />}
+          <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            <Box component="span" sx={{ fontWeight: 600 }}>{item.title}</Box>
+            {item.description && (
+              <Box sx={{ color: "text.secondary", whiteSpace: "pre-wrap" }}>
+                {item.description}
+              </Box>
+            )}
+          </Box>
+        </Box>
+      );
+    }
   }
 });
 
@@ -3421,6 +3590,12 @@ function itemProgressSignature(
       return `${count}:${item.key}:lifecycle:${item.status}:${item.recovered ?? false}`;
     case "cleared":
       return `${count}:${item.key}:cleared:${item.at}`;
+    case "forked":
+      return `${count}:${item.key}:forked`;
+    case "compaction":
+      return `${count}:${item.key}:compaction:${item.status}:${item.summary.length}`;
+    case "notice":
+      return `${count}:${item.key}:notice:${item.title}`;
   }
 }
 
@@ -3750,6 +3925,16 @@ export function Transcript({
     timeline,
   );
   const streamingRowKey = lastIsStreamingAssistant ? lastItem?.key ?? null : null;
+  const forkOffered = useStoreSelector((state) => {
+    const session = state.sessions.find((entry) => entry.id === sessionId);
+    return !!session && !isManagedChild(session) &&
+      forkAvailability(session, state.machines) !== null;
+  });
+  const turnRunning = status === "busy" || status === "starting";
+  const forkAnswers = useMemo(
+    () => forkOffered ? forkableAnswerKeys(items, turnRunning) : NO_FORK_ANSWERS,
+    [forkOffered, items, turnRunning],
+  );
   const compacting = working && isCompactingTail(timeline);
   const showLiveCompactionRequest = working &&
     isCompactionRequestTail(timeline);
@@ -5763,7 +5948,7 @@ export function Transcript({
                     size="small"
                     variant="contained"
                     color="error"
-                    startIcon={<Stop sx={{ fontSize: desktopSize(16) }} />}
+                    startIcon={<Stop sx={{ fontSize: glyphSize(16) }} />}
                     onClick={(): void => {
                       importantHaptic();
                       cancelTurn(sessionId);
@@ -5903,6 +6088,7 @@ export function Transcript({
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}
                       onOpenTool={openTool}
+                      forkMessageId={forkAnswers.get(item.key)}
                     />
                   </Box>
                 ))}

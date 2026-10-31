@@ -86,7 +86,6 @@ test("website catalog follows every first-party Plugin manifest", async () => {
   const currentFirstParty = [
     "codex",
     "claude-code",
-    "gemini",
     "grok",
     "codex-deepseek",
     "claude-deepseek",
@@ -614,7 +613,6 @@ test("website build produces a complete self-contained Pages artifact", async ()
         (html.match(/machine-chassis-server/gu) ?? []).length === 2 &&
         html.includes('data-agent-provider="codex"') &&
         html.includes('data-agent-provider="claude-code"') &&
-        html.includes('data-agent-provider="gemini"') &&
         html.includes('data-agent-provider="deepseek"') &&
         html.includes('data-agent-provider="grok"') &&
         html.includes('data-agent-provider="custom"'),

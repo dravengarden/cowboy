@@ -70,7 +70,7 @@ export interface MachineSummary {
   // Latest host observation; absent from Machines that do not report one.
   resources?: MachineHostResources;
   // Absent on a daemon that predates negotiated Machine capabilities.
-  capabilities?: { hibernation: boolean };
+  capabilities?: { hibernation: boolean; native_fork?: boolean };
   pending_updates?: readonly { kind: string; slot?: string }[];
   // Why an automatic component has not converged yet. Absent entries are
   // converged; the Controller owns the decision, this is only its report.
@@ -157,6 +157,8 @@ export interface SessionMeta {
   provider_account_id?: string;
   /** The session this one continues as a new agent (title is inherited). */
   continued_from?: string;
+  /** The session this one forks with its native conversation. */
+  forked_from?: string;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
   /** Present unknown/null bindings must stay present and cannot imply local execution. */

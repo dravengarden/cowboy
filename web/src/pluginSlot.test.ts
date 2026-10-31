@@ -195,7 +195,7 @@ test("host kit exposes only closed Cowboy-owned renderers", () => {
   );
 });
 
-for (const id of ["grok", "codex", "claude-code", "gemini"]) {
+for (const id of ["grok", "codex", "claude-code"]) {
   const host = await readFile(
     new URL(`../../plugins/${id}/host.json`, import.meta.url), "utf8",
   );

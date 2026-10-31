@@ -38,13 +38,17 @@ use std::time::{Duration, Instant};
 // version-agnostic schema root and the `Agent`/`Client` traits at the crate root.
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientNotification, ContentBlock, ExtNotification, InitializeRequest,
-    LoadSessionRequest, Meta, NewSessionRequest, PermissionOption, PermissionOptionId,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest,
+    CancelNotification, ClientCapabilities, ClientNotification, ClientSessionCapabilities,
+    CompactionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
+    ElicitationAction, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode,
+    ElicitationScope, ElicitationUrlCapabilities, ExtNotification, ForkSessionRequest,
+    InitializeRequest, LoadSessionRequest, Meta, NewSessionRequest, NoticeCapabilities,
+    PermissionOption, PermissionOptionId, PermissionOptionKind, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
+    SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
@@ -877,6 +881,7 @@ enum StartupPhase {
     Initialize,
     Resume,
     Load,
+    Fork,
     New,
     Configure,
     Ready,
@@ -888,6 +893,7 @@ impl StartupPhase {
             Self::Initialize => "initialize",
             Self::Resume => "session/resume",
             Self::Load => "session/load",
+            Self::Fork => "session/fork",
             Self::New => "session/new",
             Self::Configure => "startup configuration",
             Self::Ready => "ready",
@@ -995,6 +1001,118 @@ fn projected_auth_error(
     .data(diagnostic)
 }
 
+/// The ACP `initialize` request every Cowboy client sends. Cowboy persists and
+/// renders the stable typed session updates for context compaction and
+/// advisory notices, so it advertises both. Without them, adapters fall back to
+/// presentation-specific transcript text or tool calls whose identifying
+/// `_meta` is reserved for other clients, leaving Cowboy unable to tell a
+/// compaction's lifecycle apart from ordinary agent output.
+///
+/// It also answers form and URL elicitations. Without them, Claude disables
+/// `AskUserQuestion` and Codex answers every `request_user_input` with nothing.
+fn initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+        ClientCapabilities::new()
+            .session(
+                ClientSessionCapabilities::new()
+                    .compaction(CompactionCapabilities::new())
+                    .notices(NoticeCapabilities::new()),
+            )
+            .elicitation(
+                ElicitationCapabilities::new()
+                    .form(ElicitationFormCapabilities::new())
+                    .url(ElicitationUrlCapabilities::new()),
+            ),
+    )
+}
+
+/// Answer options of an elicitation presented as a Cowboy permission request.
+/// Clients that recognize the `_cowboy.elicitation` payload render the form and
+/// answer `accept:<content JSON>`; older clients still offer these two choices.
+const ELICITATION_ACCEPT: &str = "accept";
+const ELICITATION_DECLINE: &str = "decline";
+
+/// Present an elicitation through the permission channel every Cowboy surface
+/// already answers: the request appears as a permission request whose
+/// tool call carries the original elicitation under `_cowboy.elicitation`.
+fn elicitation_permission(
+    request_id: &str,
+    request: &CreateElicitationRequest,
+) -> (serde_json::Value, serde_json::Value) {
+    let tool_call_id = match &request.mode {
+        ElicitationMode::Form(form) => elicitation_tool_call_id(&form.scope),
+        ElicitationMode::Url(url) => elicitation_tool_call_id(&url.scope),
+        _ => None,
+    };
+    let url = matches!(request.mode, ElicitationMode::Url(_));
+    let mut tool_call = serde_json::json!({
+        "title": request.message,
+        "_cowboy": {
+            "elicitation": serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+        },
+    });
+    // A permission request names a tool call. A request-scoped elicitation has
+    // none, so it gets one of its own that no update ever settles.
+    tool_call["toolCallId"] = serde_json::Value::String(
+        tool_call_id.unwrap_or_else(|| format!("elicitation:{request_id}")),
+    );
+    let options = serde_json::json!([
+        {
+            "optionId": ELICITATION_ACCEPT,
+            "name": if url { "Done" } else { "Submit" },
+            "kind": "allow_once",
+        },
+        {
+            "optionId": ELICITATION_DECLINE,
+            "name": "Decline",
+            "kind": "reject_once",
+        },
+    ]);
+    (tool_call, options)
+}
+
+fn elicitation_tool_call_id(scope: &ElicitationScope) -> Option<String> {
+    match scope {
+        ElicitationScope::Session(session) => {
+            session.tool_call_id.as_ref().map(|id| id.0.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Translate a Cowboy answer into the elicitation response. An absent answer
+/// (the request was abandoned) and anything unparseable cancel; a form answer
+/// is `accept:` followed by its content object.
+fn elicitation_response(answer: Option<&str>) -> CreateElicitationResponse {
+    let action = match answer {
+        Some(ELICITATION_ACCEPT) => serde_json::json!({ "action": "accept" }),
+        Some(ELICITATION_DECLINE) => serde_json::json!({ "action": "decline" }),
+        Some(answer) => match answer
+            .strip_prefix("accept:")
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        {
+            Some(content @ serde_json::Value::Object(_)) => {
+                serde_json::json!({ "action": "accept", "content": content })
+            }
+            _ => serde_json::json!({ "action": "cancel" }),
+        },
+        None => serde_json::json!({ "action": "cancel" }),
+    };
+    serde_json::from_value(action)
+        .unwrap_or_else(|_| CreateElicitationResponse::new(ElicitationAction::Cancel))
+}
+
+/// The transcript records only the outcome of an elicitation, never its
+/// content: forms may ask for secrets, and the agent reports the answers it
+/// uses through its own tool calls.
+fn elicitation_outcome(answer: Option<&str>) -> Option<String> {
+    match elicitation_response(answer).action {
+        ElicitationAction::Accept(_) => Some(ELICITATION_ACCEPT.to_owned()),
+        ElicitationAction::Decline => Some(ELICITATION_DECLINE.to_owned()),
+        _ => None,
+    }
+}
+
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
     NewSessionRequest::new(cwd).meta(provider_session_meta(provider_id))
 }
@@ -1005,6 +1123,51 @@ fn resume_session_request(
     cwd: PathBuf,
 ) -> ResumeSessionRequest {
     ResumeSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
+}
+
+/// How a worker establishes its native thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeStart {
+    /// `session/new`.
+    New,
+    /// Strict `session/resume` (or `session/load`) of this native thread.
+    Resume(String),
+    /// Strict `session/fork` of another session's native thread.
+    Fork(crate::runtime_wire::NativeFork),
+}
+
+impl From<Option<String>> for NativeStart {
+    fn from(resume: Option<String>) -> Self {
+        resume.map_or(Self::New, Self::Resume)
+    }
+}
+
+impl NativeStart {
+    /// A thread that already holds history: a new one can lose nothing by
+    /// re-authenticating.
+    const fn has_history(&self) -> bool {
+        !matches!(self, Self::New)
+    }
+}
+
+/// `session/fork` with the same Provider metadata as `session/new`. A message
+/// fork adds the `jetbrains.air.fork` point that both pinned adapters read
+/// (Claude: SDK `upToMessageId`; Codex: `thread/fork.lastTurnId`).
+fn fork_session_request(
+    provider_id: &str,
+    fork: &crate::runtime_wire::NativeFork,
+    cwd: PathBuf,
+) -> ForkSessionRequest {
+    let mut meta = provider_session_meta(provider_id);
+    if let Some(message_id) = &fork.message_id {
+        meta.get_or_insert_with(Meta::new).insert(
+            "jetbrains".to_owned(),
+            serde_json::json!({
+                "air": {"fork": {"version": 1, "messageId": message_id}},
+            }),
+        );
+    }
+    ForkSessionRequest::new(SessionId::new(fork.agent_session_id.as_str()), cwd).meta(meta)
 }
 
 fn load_session_request(
@@ -1026,7 +1189,8 @@ mod startup_mode_tests {
         GrokSessionInfoRequest, GrokSessionInfoResponse, ProviderBackoff, ResumeMethod,
         StartupPhase, StartupTimeout, backoff_verdict, codex_full_access_available,
         codex_full_access_selected, current_model_label, deepseek_session_environment,
-        grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
+        elicitation_outcome, elicitation_permission, elicitation_response, grok_cowboy_options,
+        grok_model_request, grok_permission_notification, grok_session_usage, initialize_request,
         is_empty_stream_message_update, is_turn_progress_update, load_session_request,
         new_session_request, note_tool_liveness, parse_provider_backoff,
         permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
@@ -1046,6 +1210,104 @@ mod startup_mode_tests {
     use tokio::sync::{Notify, mpsc};
 
     #[test]
+    fn initialize_advertises_typed_compaction_notices_and_elicitation() {
+        let request = serde_json::to_value(initialize_request()).unwrap();
+        assert_eq!(request["protocolVersion"], 1);
+        assert_eq!(
+            request["clientCapabilities"]["session"],
+            serde_json::json!({ "compaction": {}, "notices": {} })
+        );
+        assert_eq!(
+            request["clientCapabilities"]["elicitation"],
+            serde_json::json!({ "form": {}, "url": {} })
+        );
+    }
+
+    #[test]
+    fn a_form_elicitation_is_presented_and_answered_as_a_permission() {
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "mode": "form",
+                "sessionId": "s",
+                "toolCallId": "call-1",
+                "message": "Codex needs your input to continue.",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "q1": {
+                            "type": "string",
+                            "title": "Which database?",
+                            "oneOf": [
+                                { "const": "Postgres", "title": "Postgres" },
+                                { "const": "SQLite", "title": "SQLite" }
+                            ]
+                        }
+                    },
+                    "required": ["q1"]
+                }
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("1", &request);
+        assert_eq!(tool_call["toolCallId"], "call-1");
+        assert_eq!(tool_call["title"], "Codex needs your input to continue.");
+        assert_eq!(tool_call["_cowboy"]["elicitation"]["mode"], "form");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["required"],
+            serde_json::json!(["q1"])
+        );
+        assert_eq!(options[0]["optionId"], "accept");
+        assert_eq!(options[1]["optionId"], "decline");
+
+        let answer = r#"accept:{"q1":"SQLite"}"#;
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some(answer))).unwrap(),
+            serde_json::json!({ "action": "accept", "content": { "q1": "SQLite" } })
+        );
+        // Only the outcome reaches the transcript.
+        assert_eq!(elicitation_outcome(Some(answer)).as_deref(), Some("accept"));
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("decline"))).unwrap(),
+            serde_json::json!({ "action": "decline" })
+        );
+        assert_eq!(
+            elicitation_outcome(Some("decline")).as_deref(),
+            Some("decline")
+        );
+        for abandoned in [None, Some("accept:[1]"), Some("accept:{"), Some("other")] {
+            assert_eq!(
+                serde_json::to_value(elicitation_response(abandoned)).unwrap(),
+                serde_json::json!({ "action": "cancel" }),
+                "{abandoned:?}"
+            );
+            assert_eq!(elicitation_outcome(abandoned), None);
+        }
+    }
+
+    #[test]
+    fn a_url_elicitation_offers_done_and_accepts_without_content() {
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "mode": "url",
+                "requestId": 7,
+                "elicitationId": "e-1",
+                "url": "https://example.com/oauth",
+                "message": "Sign in to the MCP server",
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("7", &request);
+        assert_eq!(tool_call["toolCallId"], "elicitation:7");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["url"],
+            "https://example.com/oauth"
+        );
+        assert_eq!(options[0]["name"], "Done");
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("accept"))).unwrap(),
+            serde_json::json!({ "action": "accept" })
+        );
+    }
+
+    #[test]
     fn providers_use_their_native_full_access_mode() {
         assert_eq!(
             startup_full_access_mode("claude-code"),
@@ -1055,7 +1317,8 @@ mod startup_mode_tests {
             startup_full_access_mode("claude-deepseek"),
             Some("bypassPermissions")
         );
-        assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
+        // A retired package-less Provider identity resolves to portable behavior.
+        assert_eq!(startup_full_access_mode("gemini"), None);
         assert_eq!(startup_full_access_mode("codex"), None);
     }
 
@@ -2111,6 +2374,9 @@ struct ClientState {
     /// id. The connection's permission handler inserts a sender; the command
     /// loop resolves exactly one (first-response-wins).
     pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
+    /// The subset of `pending` that are elicitations, whose answers carry form
+    /// content and are recorded only as an outcome.
+    elicitations: Mutex<HashSet<String>>,
     /// Serialize `session/prompt` RPCs while leaving the outer command loop
     /// responsive to Cancel, permission answers, and config changes.
     prompt_lock: tokio::sync::Mutex<()>,
@@ -2121,6 +2387,10 @@ struct ClientState {
     active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
     /// Combine the requested prompt lifecycle with native autonomous activity.
     activity: Mutex<SessionActivity>,
+    /// The cycle the adapter reports Claude running on its own (a follow-up
+    /// to a finished background task), named by the adapter's own foreground
+    /// work. Current-turn delivery while no prompt runs targets exactly it.
+    native_cycle: Mutex<Option<String>>,
     /// Every Cancel advances this generation. A prompt captures the current
     /// value when accepted, so Stop also cancels a retry waiting in backoff (or
     /// a prompt queued before Stop but not yet started).
@@ -2229,7 +2499,7 @@ pub fn run_agent_with_sink(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
-    resume: Option<String>,
+    start: NativeStart,
     service_auth_projected: bool,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     sink: &Arc<dyn AgentSink>,
@@ -2262,7 +2532,7 @@ pub fn run_agent_with_sink(
             spec,
             session_id,
             cwd.clone(),
-            resume.clone(),
+            start.clone(),
             service_auth_projected,
             &mut cmd_rx,
             Arc::clone(sink),
@@ -2289,7 +2559,7 @@ pub fn run_agent_with_sink(
                 spec,
                 session_id,
                 cwd,
-                resume,
+                start,
                 service_auth_projected,
                 &mut cmd_rx,
                 Arc::clone(sink),
@@ -2342,7 +2612,7 @@ async fn agent_main(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
-    resume: Option<String>,
+    start: NativeStart,
     service_auth_projected: bool,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     sink: Arc<dyn AgentSink>,
@@ -2453,10 +2723,12 @@ async fn agent_main(
         provider_id: spec.id.clone(),
         service_auth_projected,
         pending: Mutex::new(HashMap::new()),
+        elicitations: Mutex::new(HashSet::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         steering_gate: tokio::sync::Mutex::new(()),
         activity: Mutex::new(SessionActivity::default()),
+        native_cycle: Mutex::new(None),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
@@ -2472,6 +2744,7 @@ async fn agent_main(
     let notif_state = state.clone();
     let activity_state = state.clone();
     let perm_state = state.clone();
+    let elicit_state = state.clone();
     let main_state = state.clone();
 
     // `run_session` advances this marker before every startup request. The
@@ -2607,11 +2880,68 @@ async fn agent_main(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |req: CreateElicitationRequest,
+                        responder,
+                        cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                // Nobody answers a system or managed session, and a managed
+                // call must not wait on a person.
+                if elicit_state.sink.session_is_system(&elicit_state.session_id)
+                    || elicit_state
+                        .sink
+                        .session_is_managed_read_only(&elicit_state.session_id)
+                {
+                    return responder.respond(elicitation_response(None));
+                }
+                if let Some(prompt) = elicit_state.current_prompt() {
+                    prompt.visible_update.store(true, Ordering::SeqCst);
+                }
+                let request_id = serde_json::to_string(responder.id())
+                    .unwrap_or_else(|_| responder.id().to_string());
+                let (tool_call, options) = elicitation_permission(&request_id, &req);
+                let (tx, rx) = oneshot::channel::<Option<String>>();
+                elicit_state.pending.lock().insert(request_id.clone(), tx);
+                elicit_state.elicitations.lock().insert(request_id.clone());
+                elicit_state.sink.push(
+                    &elicit_state.session_id,
+                    Event::PermissionRequest {
+                        request_id: request_id.clone(),
+                        tool_call,
+                        options,
+                    },
+                );
+                let cancellation = responder.cancellation();
+                let cancelled_state = Arc::clone(&elicit_state);
+                cx.spawn(async move {
+                    let answer = tokio::select! {
+                        answer = rx => answer.unwrap_or(None),
+                        () = cancellation.cancelled() => {
+                            cancelled_state.pending.lock().remove(&request_id);
+                            cancelled_state.elicitations.lock().remove(&request_id);
+                            cancelled_state.sink.push(
+                                &cancelled_state.session_id,
+                                Event::PermissionResolved {
+                                    request_id,
+                                    option_id: None,
+                                },
+                            );
+                            responder.respond_with_error(Error::request_cancelled())?;
+                            return Ok(());
+                        }
+                    };
+                    responder.respond(elicitation_response(answer.as_deref()))?;
+                    Ok(())
+                })?;
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
             run_session(
                 &main_state,
                 cx,
-                resume,
+                start,
                 cwd,
                 cmd_rx,
                 &spec.id,
@@ -2962,6 +3292,7 @@ fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotificat
     match notif.message["subtype"].as_str() {
         Some("session_state_changed") => handle_native_state(state, notif),
         Some("background_tasks_changed") => handle_native_background_tasks(state, notif),
+        Some(NATIVE_CYCLE_SUBTYPE) => handle_native_cycle(state, notif),
         Some("api_error") => handle_native_api_error(state, notif),
         _ => {}
     }
@@ -2997,6 +3328,26 @@ fn handle_native_state(state: &ClientState, notif: &ClaudeSdkMessageNotification
     if status != previous {
         state.sink.set_status(&state.session_id, status, None);
     }
+}
+
+/// The Claude plugin's adapter names each cycle Claude runs on its own (see
+/// `plugins/claude-code/runtime/native-cycle.mjs`). An older adapter never
+/// sends it, so such cycles stay unsteerable rather than guessed.
+const NATIVE_CYCLE_SUBTYPE: &str = "cowboy_native_cycle";
+
+fn handle_native_cycle(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
+    let cycle = notif.message["cycle_id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 128)
+        .map(str::to_owned);
+    let mut current = state.native_cycle.lock();
+    if *current == cycle {
+        return;
+    }
+    current.clone_from(&cycle);
+    state
+        .sink
+        .set_native_cycle(&state.session_id, cycle.as_deref());
 }
 
 /// The SDK replaces its whole live background-task set on every membership
@@ -3183,7 +3534,7 @@ fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
 async fn run_session(
     state: &Arc<ClientState>,
     cx: ConnectionTo<Agent>,
-    resume: Option<String>,
+    start: NativeStart,
     cwd: PathBuf,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     provider_id: &str,
@@ -3193,11 +3544,16 @@ async fn run_session(
     let service_auth_projected = state.service_auth_projected;
 
     let init = cx
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(initialize_request())
         .block_task()
         .await
         .map_err(|error| {
-            projected_auth_error(provider_id, service_auth_projected, resume.is_none(), error)
+            projected_auth_error(
+                provider_id,
+                service_auth_projected,
+                !start.has_history(),
+                error,
+            )
         })?;
     let initialize_meta = init.meta.clone();
     let supports_current_turn = initialize_meta
@@ -3232,6 +3588,12 @@ async fn run_session(
         .resume
         .is_some();
     let resume_method = select_resume_method(agent_can_resume, agent_can_load);
+    let agent_can_fork = init.agent_capabilities.session_capabilities.fork.is_some();
+    let (resume, fork) = match start {
+        NativeStart::New => (None, None),
+        NativeStart::Resume(id) => (Some(id), None),
+        NativeStart::Fork(fork) => (None, Some(fork)),
+    };
 
     // Establish the agent session. Prefer `session/resume`: unlike
     // `session/load`, ACP defines it to restore native state without replaying
@@ -3246,6 +3608,14 @@ async fn run_session(
     // `config_option_update` notification (claude does that). We capture + surface
     // both, so codex's Model / approval chips render like claude's.
     let mut config_options = None;
+    if fork.is_some() && !agent_can_fork {
+        // A fork is strict too: `session/new` would present an empty thread
+        // as a copy of the source conversation.
+        return Err(anyhow::anyhow!(
+            "agent does not support session/fork; refusing to start the fork as an empty session"
+        )
+        .into());
+    }
     if resume.is_some() && resume_method.is_none() {
         return Err(anyhow::anyhow!(
             "agent supports neither session/resume nor session/load; refusing to replace the existing native thread"
@@ -3308,6 +3678,32 @@ async fn run_session(
                 }
             }
         }
+    }
+    if let Some(fork) = fork {
+        startup_phase.send_replace(StartupPhase::Fork);
+        let forked = cx
+            .send_request(fork_session_request(provider_id, &fork, cwd.clone()))
+            .block_task()
+            .await
+            .map_err(|error| {
+                projected_auth_error(provider_id, service_auth_projected, false, error)
+            })?;
+        // The fork holds the copied history already: persist it as a
+        // resumable thread before any prompt.
+        state
+            .sink
+            .set_forked_agent_session_id(&session_id, forked.session_id.0.to_string());
+        tracing::info!(
+            session = %session_id,
+            source_acp_id = %fork.agent_session_id,
+            acp_id = %forked.session_id.0,
+            at_message = fork.message_id.is_some(),
+            "session forked via session/fork"
+        );
+        acp_id = Some(forked.session_id);
+        modes = forked.modes;
+        config_options = forked.config_options;
+        session_meta = forked.meta;
     }
     let acp_id = if let Some(id) = acp_id {
         id
@@ -3374,7 +3770,8 @@ async fn run_session(
 
     // Open every provider at its own full-access session mode when advertised.
     // Codex exposes this as the config option handled above; Claude calls it
-    // `bypassPermissions`, while Gemini calls the equivalent mode `yolo`.
+    // `bypassPermissions`; a package selecting `acp_session_mode_yolo_v1` names
+    // the equivalent mode `yolo`.
     if !state.sink.session_is_managed_read_only(&session_id)
         && let (Some(modes), Some(want)) = (modes.as_ref(), startup_full_access_mode(provider_id))
     {
@@ -3406,16 +3803,17 @@ async fn run_session(
         }
     }
 
-    // Gemini (unlike codex) exposes its APPROVAL options as session MODES
-    // (`availableModes` + `session/set_mode`), NOT config_options — so the codex
-    // push above renders nothing for it. Translate those modes into a synthetic
-    // "mode" select chip (matching Zed, which surfaces `session_modes` as its own
-    // selector) so gemini gets an Approval dropdown like the others. Gated to
-    // gemini: claude ALSO ships session modes, but advertises its mode as a real
+    // A Provider selecting the `acp_session_mode_yolo_v1` permission contract
+    // exposes its APPROVAL options as session MODES (`availableModes` +
+    // `session/set_mode`), NOT config_options — so the codex push above renders
+    // nothing for it. Translate those modes into a synthetic "mode" select chip
+    // (matching Zed, which surfaces `session_modes` as its own selector) so it
+    // gets an Approval dropdown like the others. Gated to that contract: claude
+    // ALSO ships session modes, but advertises its mode as a real
     // `config_option` (via a later notification) that this must not shadow. The
-    // chip's SET is routed to `session/set_mode` in the command loop below —
-    // gemini implements no `session/set_config_option`. `Some` here also marks the
-    // session as mode-via-session-modes for that routing.
+    // chip's SET is routed to `session/set_mode` in the command loop below — such
+    // a Provider implements no `session/set_config_option`. `Some` here also
+    // marks the session as mode-via-session-modes for that routing.
     // Grok also has ordinary ACP session modes, but its model + reasoning
     // choices arrive in `x.ai/sessionConfig`; use a distinct id so both menus
     // remain independently selectable.
@@ -3477,7 +3875,7 @@ async fn run_session(
         ));
     }
     // Surface every startup option in one authoritative array. This includes
-    // standard config options (Codex), synthesized ACP modes (Gemini/Grok), and
+    // standard config options (Codex), synthesized ACP modes (session-mode Providers and Grok), and
     // Grok's pre-standard model/effort metadata.
     // An empty list is authoritative too: a replacement may remove all the
     // old release's options. Publish this before Running so the Controller can
@@ -3591,6 +3989,17 @@ async fn run_session(
                 target,
             } => {
                 let expected_prompt = state.current_prompt();
+                // A self-started cycle has no prompt. It is addressed only by
+                // its exact name, which the adapter checks again atomically.
+                let expected_cycle = expected_prompt
+                    .is_none()
+                    .then(|| state.native_cycle.lock().clone())
+                    .flatten()
+                    .filter(|cycle| {
+                        target
+                            .as_ref()
+                            .is_some_and(|target| &target.turn_id == cycle)
+                    });
                 let connection = cx.clone();
                 let state = Arc::clone(state);
                 let acp_id = acp_id.clone();
@@ -3599,16 +4008,23 @@ async fn run_session(
                     let _gate = state.steering_gate.lock().await;
                     let same_prompt = expected_prompt.as_ref().zip(state.current_prompt().as_ref())
                         .is_some_and(|(expected, active)| Arc::ptr_eq(expected, active));
+                    let same_cycle = expected_cycle.is_some()
+                        && state.current_prompt().is_none()
+                        && *state.native_cycle.lock() == expected_cycle;
                     let outcome = if !supports_current_turn || (next_checkpoint && !supports_next_checkpoint) || state.sink.session_is_managed_read_only(&session_id) {
                         "unsupported"
-                    } else if !same_prompt || target.as_ref().is_some_and(|target| !state.sink.delivery_target_is_current(&session_id, target)) {
+                    } else if !(same_prompt || same_cycle) || target.as_ref().is_some_and(|target| !state.sink.delivery_target_is_current(&session_id, target)) {
                         "not_delivered"
                     } else {
                         state.last_echoed_user_contents.lock().extend(blocks.iter().map(|block| serde_json::to_value(block).unwrap_or_default()));
+                        let mut steering = serde_json::json!({"idleBehavior":"promptRequired", "priority":if next_checkpoint { "next" } else { "now" }});
+                        if same_cycle {
+                            steering["nativeCycle"] = serde_json::json!(expected_cycle);
+                        }
                         match tokio::time::timeout(Duration::from_secs(25), connection.send_request(SteeringRequest {
                             session_id: acp_id,
                             prompt: blocks.clone(),
-                            meta: serde_json::json!({"steering":{"idleBehavior":"promptRequired", "priority":if next_checkpoint { "next" } else { "now" }}}),
+                            meta: serde_json::json!({"steering":steering}),
                         }).block_task()).await {
                             Ok(Ok(response)) if response.outcome == "injected" => "injected",
                             Ok(Ok(response)) if response.outcome == "promptRequired" => "not_delivered",
@@ -4034,6 +4450,11 @@ async fn run_session(
                 if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
+                let option_id = if state.elicitations.lock().remove(&request_id) {
+                    elicitation_outcome(option_id.as_deref())
+                } else {
+                    option_id
+                };
                 state.sink.push(
                     &session_id,
                     Event::PermissionResolved {
@@ -4045,9 +4466,10 @@ async fn run_session(
             AgentCommand::SetConfigOption { config_id, value }
                 if mode_config_id == Some(config_id.as_str()) && mode_select.is_some() =>
             {
-                // gemini's synthesized "mode" chip maps to ACP `session/set_mode` —
-                // it implements no `session/set_config_option` (it never advertised
-                // config options; cowboy built this chip from its session modes).
+                // A synthesized "mode" chip maps to ACP `session/set_mode` — the
+                // Provider implements no `session/set_config_option` (it never
+                // advertised config options; cowboy built this chip from its
+                // session modes).
                 let Some(mode_id) = value.as_str().map(str::to_owned) else {
                     tracing::warn!(?value, "set mode: non-string value");
                     continue;
@@ -4074,8 +4496,8 @@ async fn run_session(
                         Ok(_) => {
                             *current_session_mode.lock() = Some(mode_id.clone());
                             // Re-push the chip with the new current so the dropdown
-                            // sticks (gemini emits no current_mode_update for an
-                            // explicit set).
+                            // sticks (a session-mode Provider may emit no
+                            // current_mode_update for an explicit set).
                             let config = grok_config.lock().clone();
                             let published = if is_grok {
                                 grok_cowboy_options(
@@ -4292,9 +4714,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
+            cx.send_request(initialize_request()).block_task().await?;
 
             let session = cx
                 .send_request(new_session_request(provider_id, cwd.clone()))

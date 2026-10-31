@@ -1430,6 +1430,13 @@ fn config_assignments(
     for argument in arguments {
         if expect_assignment {
             expect_assignment = false;
+            // Package-less launches have no signed artifact to hold component
+            // data; their host-side equivalents (e.g. `loopback_catalog` for
+            // `model_catalog_json`) are written by the legacy config itself.
+            if argument.get("source").and_then(serde_json::Value::as_str) == Some("component_file")
+            {
+                continue;
+            }
             assignments.push(assignment_from_runtime_value(
                 plugin_id,
                 argument,
@@ -1551,8 +1558,7 @@ mod tests {
         assert!(cli_arguments("codex").windows(2).any(|pair| {
             pair == ["-c", "approval_policy=never"] || pair == ["-c", "approval_policy=\"never\""]
         }));
-        assert_eq!(cli_arguments("gemini"), ["--acp"]);
-        assert_eq!(join_env(cli_arguments("gemini")), "--acp");
+        assert!(cli_arguments("gemini").is_empty());
         assert!(cli_arguments("grok").contains(&"--no-auto-update"));
         assert!(cli_arguments("grok").contains(&"--experimental-memory"));
         assert!(cli_arguments("grok").contains(&"agent"));
@@ -1612,10 +1618,6 @@ mod tests {
             Some("@agentclientprotocol/claude-agent-acp")
         );
         assert_eq!(
-            npm_package_for_component("provider_cli", "gemini"),
-            Some("@google/gemini-cli")
-        );
-        assert_eq!(
             npm_package_for_component("provider_cli", "grok"),
             Some("@xai-official/grok")
         );
@@ -1640,7 +1642,6 @@ mod tests {
             npx_package_for_plugin("codex-deepseek"),
             "@agentclientprotocol/codex-acp"
         );
-        assert_eq!(npx_package_for_plugin("gemini"), "@google/gemini-cli");
         assert_eq!(npx_package_for_plugin("grok"), "@xai-official/grok");
         assert_eq!(npx_prefix("grok"), ["-y", "@xai-official/grok"]);
         assert!(
@@ -1650,16 +1651,13 @@ mod tests {
         );
         let detect = path_detect();
         let grok_args = join_env(cli_arguments("grok"));
-        let gemini_args = join_env(cli_arguments("gemini"));
         assert!(detect.iter().any(|row| row.plugin_id == "codex"
             && row.command == "codex-acp"
             && row.args.is_none()));
         assert!(detect.iter().any(|row| row.plugin_id == "grok"
             && row.command == "grok"
             && row.args.as_deref() == Some(grok_args.as_str())));
-        assert!(detect.iter().any(|row| row.plugin_id == "gemini"
-            && row.command == "gemini"
-            && row.args.as_deref() == Some(gemini_args.as_str())));
+        assert!(!detect.iter().any(|row| row.plugin_id == "gemini"));
         assert!(detect.iter().any(|row| row.plugin_id == "claude-code"
             && row.command == "claude-agent-acp"
             && row.args.is_none()));
@@ -1667,7 +1665,7 @@ mod tests {
         assert!(!detect.iter().any(|row| row.plugin_id == "codex-deepseek"));
         assert_eq!(
             occupancy_slots(),
-            ["claude", "codex", "deepseek-harness", "gemini", "grok"]
+            ["claude", "codex", "deepseek-harness", "grok"]
         );
         assert_eq!(cli_command_for_slot("claude"), Some("claude"));
         assert_eq!(cli_command_for_slot("codex"), Some("codex"));
@@ -1678,15 +1676,6 @@ mod tests {
         assert_eq!(
             cli_auth_for_slot("claude").map(|auth| (auth.kind.as_str(), auth.argv.as_slice())),
             Some(("exit", ["auth", "status", "--json"].as_slice()))
-        );
-        assert_eq!(
-            cli_auth_for_slot("gemini").map(|auth| auth.kind.as_str()),
-            Some("rules-v1")
-        );
-        assert!(
-            cli_auth_for_slot("gemini")
-                .and_then(|auth| auth.rules.as_ref())
-                .is_some()
         );
         assert_eq!(
             cli_auth_for_slot("grok").map(|auth| auth.kind.as_str()),
@@ -1700,7 +1689,7 @@ mod tests {
         assert_eq!(adapter_entrypoint("codex"), Some("codex-acp"));
         assert_eq!(adapter_entrypoint("claude"), Some("claude-agent-acp"));
         assert_eq!(adapter_entrypoint("claude-code"), Some("claude-agent-acp"));
-        assert_eq!(adapter_entrypoint("gemini"), Some("gemini"));
+        assert_eq!(adapter_entrypoint("gemini"), None);
         assert_eq!(adapter_entrypoint("grok"), Some("grok"));
         assert_eq!(adapter_entrypoint("future"), None);
         assert_eq!(
@@ -1725,10 +1714,7 @@ mod tests {
             ["codex", "claude", "deepseek-harness"]
         );
         assert_eq!(usage_activity_agent_ids("openai"), &[] as &[&str]);
-        assert_eq!(
-            usage_accounts(),
-            ["anthropic", "openai", "xai", "deepseek", "gemini"]
-        );
+        assert_eq!(usage_accounts(), ["anthropic", "openai", "xai", "deepseek"]);
         assert_eq!(
             provider_info_urls_env("deepseek"),
             "COWBOY_PROVIDER_INFO_DEEPSEEK_URLS"
@@ -1860,6 +1846,7 @@ mod tests {
             normalize_disabled_provider_slot("claude-deepseek"),
             "claude-deepseek"
         );
+        // A retired Provider identity stays a valid exact pass-through.
         assert_eq!(normalize_disabled_provider_slot("gemini"), "gemini");
         assert!(adapter_runtime_enabled("claude", &["claude".to_owned()]));
         assert!(adapter_runtime_enabled(

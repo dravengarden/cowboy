@@ -357,7 +357,11 @@ export function MobileProductShell({
       const touch = event.touches[0];
       if (!gesture || !touch) return;
       if (expandedSelection(globalThis.getSelection?.() ?? null)) {
+        // An iOS long-press selection takes the stream. The finger-down store
+        // hold must not outlive it, or the workspace stops presenting updates
+        // for as long as the selection stays visible.
         if (gesture.locked) settle(gesture.product, 0, gesture.width);
+        else disarmPagerPresentation();
         gesture = null;
         return;
       }

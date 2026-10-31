@@ -153,7 +153,6 @@
     "plugins/codex/runtime/README.md",
     "tools/remote_impact.py",
     "tools/remote_check_map.json",
-    "components/provider-runtime/packages/gemini/",
     "components/provider-runtime/packages/deepseek-harness/",
     "components/provider-runtime/check.ts",
     "plugins/codex/runtime/resume_conformance.py"
@@ -249,6 +248,7 @@
       "paths": [
         "plugins/claude-code/runtime/launch.mjs",
         "plugins/claude-code/runtime/steering.mjs",
+        "plugins/claude-code/runtime/native-cycle.mjs",
         "plugins/claude-code/runtime/context-mod.js",
         "plugins/claude-code/runtime/tools.mjs",
         "plugins/claude-code/runtime/connection.mjs",

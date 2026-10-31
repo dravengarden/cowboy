@@ -1,4 +1,4 @@
-import { desktopSize } from "./surface/desktopSize";
+import { glyphSize } from "./surface/desktopSize";
 import type { ReactNode } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import AccountTree from "@mui/icons-material/AccountTree";
@@ -239,7 +239,7 @@ export function CallApprovalOverlay({
           >
             <AccountTree
               sx={{
-                fontSize: desktopSize(18),
+                fontSize: glyphSize(18),
                 color: "primary.main",
                 flexShrink: 0,
               }}

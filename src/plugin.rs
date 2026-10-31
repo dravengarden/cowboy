@@ -39,6 +39,10 @@ struct ComponentRelease {
     component_additions: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_component_additions")]
     plugin_additions: Option<Vec<String>>,
+    /// Explicit retirement of first-party Plugin identities. A retired identity
+    /// never returns, and earlier releases that recorded it stay immutable.
+    #[serde(default, deserialize_with = "deserialize_component_additions")]
+    plugin_removals: Option<Vec<String>>,
 }
 
 fn deserialize_component_additions<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -269,31 +273,44 @@ fn validate_dependency_graph(release: &ComponentRelease, graph: &ComponentClosur
 /// Build metadata only. The additive migration does not grant Plugin/runtime
 /// authority, rewrite old component identities or bypass exact closure checks.
 fn validate_component_identity_history(registry: &ComponentRegistry) -> Result<()> {
+    let mut seen_plugins: BTreeSet<&str> = BTreeSet::new();
     for (index, release) in registry.releases.iter().enumerate() {
         let previous = index.checked_sub(1).map(|index| &registry.releases[index]);
-        if let Some(additions) = &release.plugin_additions {
-            ensure!(
-                registry.schema_version == 3
-                    && release.closure.is_some()
-                    && previous.is_some_and(|old| old.closure.is_some())
-                    && !additions.is_empty(),
-                "Plugin additions require a nonempty post-baseline migration"
-            );
+        for (migration, label) in [
+            (&release.plugin_additions, "Plugin additions"),
+            (&release.plugin_removals, "Plugin removals"),
+        ] {
+            if let Some(ids) = migration {
+                ensure!(
+                    registry.schema_version == 3
+                        && release.closure.is_some()
+                        && previous.is_some_and(|old| old.closure.is_some())
+                        && !ids.is_empty(),
+                    "{label} require a nonempty post-baseline migration"
+                );
+            }
         }
         if let Some(previous) = previous {
             let mut expected: BTreeSet<&str> =
                 previous.plugins.keys().map(String::as_str).collect();
+            for id in release.plugin_removals.as_deref().unwrap_or_default() {
+                ensure!(
+                    expected.remove(id.as_str()),
+                    "Plugin removal duplicates or names an absent identity"
+                );
+            }
             for id in release.plugin_additions.as_deref().unwrap_or_default() {
                 ensure!(
-                    expected.insert(id),
+                    !seen_plugins.contains(id.as_str()) && expected.insert(id),
                     "Plugin addition duplicates or reuses an identity"
                 );
             }
             ensure!(
                 expected == release.plugins.keys().map(String::as_str).collect(),
-                "Plugin identity change needs exact additive migration; removal is forbidden"
+                "Plugin identity change needs an exact declared addition or removal"
             );
         }
+        seen_plugins.extend(release.plugins.keys().map(String::as_str));
         if let Some(additions) = &release.component_additions {
             ensure!(
                 registry.schema_version == 3
@@ -415,6 +432,22 @@ mod tests {
         registry
     }
 
+    /// Migration snapshots keep every historical identity; a retired Plugin
+    /// has no current source manifest to rebind, so it is skipped explicitly.
+    fn historical_plugin_ids(release: &ComponentRelease) -> Vec<&String> {
+        let retired: BTreeSet<&str> = component_registry()
+            .releases
+            .iter()
+            .flat_map(|release| release.plugin_removals.iter().flatten())
+            .map(String::as_str)
+            .collect();
+        release
+            .plugins
+            .keys()
+            .filter(|id| !retired.contains(id.as_str()))
+            .collect()
+    }
+
     fn migration_manifest(id: &str) -> PluginManifest {
         let registry = migration_registry();
         let active = registry.releases.last().unwrap();
@@ -458,7 +491,7 @@ mod tests {
     fn web_component_release_preserves_historical_plugin_bindings() {
         let registry = migration_registry();
         assert_eq!(registry.schema_version, 3);
-        for id in registry.releases.last().unwrap().plugins.keys() {
+        for id in historical_plugin_ids(registry.releases.last().unwrap()) {
             let manifest = migration_manifest(id);
             assert_ne!(manifest.component_release, registry.active_release);
             validate_against_registry(&manifest, &registry).unwrap();
@@ -473,7 +506,7 @@ mod tests {
             .retain(|release| release.closure.is_none());
         registry.active_release = registry.releases.last().unwrap().version.clone();
         registry.schema_version = 2;
-        for id in registry.releases.last().unwrap().plugins.keys() {
+        for id in historical_plugin_ids(registry.releases.last().unwrap()) {
             validate_against_registry(&migration_manifest(id), &registry).unwrap();
         }
     }
@@ -543,6 +576,73 @@ mod tests {
                 validate_against_registry(&first_party_plugins()[0], &registry).is_err(),
                 "{case}"
             );
+        }
+    }
+
+    #[test]
+    fn retirement_registry_reader_requires_an_exact_removal_that_never_returns() {
+        let retired = |registry: &mut ComponentRegistry| -> usize {
+            registry
+                .releases
+                .iter()
+                .position(|release| release.plugin_removals.is_some())
+                .unwrap()
+        };
+        let mut registry = component_registry().clone();
+        let index = retired(&mut registry);
+        assert_eq!(
+            registry.releases[index].plugin_removals.as_deref(),
+            Some(["gemini".to_owned()].as_slice())
+        );
+        assert!(registry.releases[index - 1].plugins.contains_key("gemini"));
+        assert!(!registry.releases[index].plugins.contains_key("gemini"));
+        validate_against_registry(&first_party_plugins()[0], &registry).unwrap();
+        for case in [
+            "undeclared",
+            "empty",
+            "absent",
+            "duplicate",
+            "kept",
+            "reintroduced",
+        ] {
+            let mut registry = component_registry().clone();
+            let index = retired(&mut registry);
+            match case {
+                "undeclared" => registry.releases[index].plugin_removals = None,
+                "empty" => registry.releases[index].plugin_removals = Some(vec![]),
+                "absent" => registry.releases[index]
+                    .plugin_removals
+                    .as_mut()
+                    .unwrap()
+                    .push("missing".to_owned()),
+                "duplicate" => registry.releases[index]
+                    .plugin_removals
+                    .as_mut()
+                    .unwrap()
+                    .push("gemini".to_owned()),
+                "kept" => {
+                    registry.releases[index]
+                        .plugins
+                        .insert("gemini".to_owned(), "3.1.46".to_owned());
+                }
+                _ => {
+                    let mut later = registry.releases.last().unwrap().clone();
+                    later.version = "99.0.0".to_owned();
+                    later.plugin_removals = None;
+                    later
+                        .plugins
+                        .insert("gemini".to_owned(), "99.0.0".to_owned());
+                    later.plugin_additions = Some(vec!["gemini".to_owned()]);
+                    registry.releases.push(later);
+                    registry.active_release = "99.0.0".to_owned();
+                }
+            }
+            let error = validate_against_registry(&first_party_plugins()[0], &registry)
+                .expect_err(case)
+                .to_string();
+            if case == "reintroduced" {
+                assert!(error.contains("reuses an identity"), "{error}");
+            }
         }
     }
 

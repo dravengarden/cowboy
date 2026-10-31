@@ -24,7 +24,7 @@ machine-host = ["cowboy/machine-host"]
 cowboy = { version = "0.1.0", path = "../.." }
 cardea-authorization = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
 cardea-core = { git = "ssh://git@github.com/dravengarden/cardea.git", rev = "71f12d90bd1b3212f11530cbd0c20086317a5976", version = "=0.1.0" }
-agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
@@ -74,8 +74,8 @@ semver = "1"
 mime_guess = "2"
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 rand = "0.8"
-cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
-cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
+cowboy-provider-sdk = { version = "=3.1.17", path = "../provider-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.4", path = "../plugin-sdk" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"
 fs2 = "0.4"

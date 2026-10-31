@@ -2541,10 +2541,6 @@ mod tests {
             Some("claude-agent-acp")
         );
         assert_eq!(
-            component_command(&component(ComponentKind::ProviderAdapter, "gemini")).as_deref(),
-            Some("gemini")
-        );
-        assert_eq!(
             component_command(&component(ComponentKind::ProviderAdapter, "grok")).as_deref(),
             Some("grok")
         );

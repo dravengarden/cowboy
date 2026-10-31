@@ -130,7 +130,7 @@ details collapsed inside the account's card.
 
 ## Retiring a Provider
 
-`plugins.disabled = ["gemini"]` in the Service configuration excludes those exact
+`plugins.disabled = ["<plugin-id>"]` in the Service configuration excludes those exact
 Plugin IDs from Catalog and Provider discovery, login/session admission and
 host activation, including bootstrap fallback. Validate through `cowboy config
 check`; this setting takes effect on Controller restart. Configuration schema

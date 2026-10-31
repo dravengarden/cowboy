@@ -75,6 +75,8 @@ interface GitGoRecipe {
   subdir: string;
   source_archive_sha256: string;
   binary: string;
+  /** Regular files from the source subdir shipped beside the binary. */
+  files?: string[];
   probe: string[];
 }
 
@@ -356,7 +358,14 @@ async function buildComponent(
       if (!goOperatingSystem) {
         throw new Error(`${dependency.id} has no ${target} build contract`);
       }
-      const output = `${await realpath(destination)}/${command}`;
+      const files = recipe.files ?? [];
+      const stage2 = files.length > 0
+        ? await mkdtemp(join(temporary, `${command}-files-`))
+        : undefined;
+      if (stage2) await mkdir(`${stage2}/bin`, { recursive: true });
+      const output = stage2
+        ? `${stage2}/bin/${command}`
+        : `${await realpath(destination)}/${command}`;
       await run("nix", [
         "develop",
         `path:${sourceRoot}`,
@@ -375,7 +384,24 @@ async function buildComponent(
         `./cmd/${recipe.binary}`,
       ], { cwd: sourceRoot });
       await chmod(output, 0o755);
-      return { path: output, format: "raw" };
+      if (!stage2) return { path: output, format: "raw" };
+      // Data the component reads at run time (e.g. a model catalog) ships
+      // beside its command from the same digest-verified source tree.
+      for (const file of files) {
+        if (!/^[a-z0-9][a-z0-9._-]*$/.test(file) || file === command) {
+          throw new Error(`unsafe component file ${file}`);
+        }
+        const source = join(sourceRoot, file);
+        if (!(await lstat(source)).isFile()) {
+          throw new Error(`component file ${file} is not a regular source file`);
+        }
+        await copyFile(source, `${stage2}/bin/${file}`);
+        await chmod(`${stage2}/bin/${file}`, 0o444);
+      }
+      await rejectLinks(stage2);
+      const archive = `${destination}/${command}.tar.gz`;
+      await deterministicTarGz(stage2, archive);
+      return { path: archive, format: "tar_gz", entrypoint: `bin/${command}` };
     }
   }
 }

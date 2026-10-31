@@ -33,7 +33,7 @@ required-features = ["machine-host"]
 
 [dependencies]
 cowboy = { version = "0.1.0", path = "../..", default-features = false }
-agent-client-protocol = { version = "2", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "3.6", features = ["unstable_end_turn_token_usage"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
@@ -68,9 +68,9 @@ semver = "1"
 shell-words = "1"
 notify = "8"
 rand = "0.8"
-cowboy-provider-sdk = { version = "=3.1.15", path = "../provider-sdk" }
+cowboy-provider-sdk = { version = "=3.1.17", path = "../provider-sdk" }
 tempfile = { version = "3" }
-cowboy-plugin-sdk = { version = "=1.12.2", path = "../plugin-sdk" }
+cowboy-plugin-sdk = { version = "=1.12.4", path = "../plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fs2 = "0.4"

@@ -13,6 +13,7 @@ import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
+import { useSheetFocusReveal } from "./sheetFocusReveal";
 import { installHaptics } from "@cowboy/app-shell";
 import {
   installObservability,
@@ -81,6 +82,8 @@ function Root(): React.JSX.Element {
   // Publish the keyboard overlap as `--kb-inset` so the composer lifts clear of
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
+  // Keep a focused sheet field above the keyboard and the sheet footer.
+  useSheetFocusReveal();
   const surface = useSurfaceProfile();
   // The static boot shell cannot run this rule, so it reuses the answer
   // (docs/offline-first-sync.md §Boot presentation).

@@ -3662,11 +3662,18 @@ async fn run_adapter_request(
             return durable_state_reply(&payload, &durable_state);
         }
         if adapter == "workspace" {
-            let request: crate::session_workspace::PrepareWorkspaceRequest =
+            let mut request: crate::session_workspace::PrepareWorkspaceRequest =
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
             let root = worktree_roots.for_source(&request.session_id, Path::new(&request.root))?.to_path_buf();
+            if let Some(base) = &request.base_session_id {
+                request.base_worktree = Some(
+                    worktree_roots
+                        .for_source(base, Path::new(&request.root))?
+                        .join(base),
+                );
+            }
             return serde_json::to_value(
                 crate::session_workspace::prepare(request, &root).await?,
             )
@@ -5151,6 +5158,8 @@ mod tests {
 
     #[test]
     fn disabled_provider_aliases_are_normalized() {
+        // A retired Provider identity (Gemini) remains an exact pass-through, so
+        // an older configuration that still disables it stays valid.
         assert_eq!(
             disabled_provider_slots_from("claude-code, claude-deepseek, gemini, codex-deepseek"),
             ["claude", "claude-deepseek", "gemini", "codex-deepseek"]
@@ -5168,17 +5177,16 @@ mod tests {
             environment["COWBOY_ACP_GROK_ARGS"],
             detected_cli_args("grok")
         );
+
+        // Disabling another Provider leaves Grok's pinned arguments in place.
+        pin_cli_runtime_args(&mut environment, &["codex".to_owned()]);
         assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
+            environment["COWBOY_ACP_GROK_ARGS"],
+            detected_cli_args("grok")
         );
 
         pin_cli_runtime_args(&mut environment, &["grok".to_owned()]);
         assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
-        assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
-        );
     }
 
     #[test]
@@ -5389,10 +5397,6 @@ mod tests {
                 component(ComponentKind::ProviderCli, "claude"),
             ),
             (
-                "provider_cli-gemini",
-                component(ComponentKind::ProviderCli, "gemini"),
-            ),
-            (
                 "provider_cli-grok",
                 component(ComponentKind::ProviderCli, "grok"),
             ),
@@ -5423,11 +5427,6 @@ mod tests {
                 .and_then(std::ffi::OsStr::to_str),
             Some("bash" | "zsh")
         ));
-        assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
-        assert_eq!(
-            environment["COWBOY_ACP_GEMINI_ARGS"],
-            detected_cli_args("gemini")
-        );
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
@@ -5471,6 +5470,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    native_fork: None,
                 },
             },
         };
