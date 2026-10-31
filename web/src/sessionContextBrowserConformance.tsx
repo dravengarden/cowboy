@@ -334,6 +334,7 @@ export async function runSessionContextBrowserConformance(
               }}
             >
               <Box sx={{ py: 2 }}>
+                <Box sx={{ height: 1600 }} />
                 <SessionContextSettings session={sessions[0]!} />
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="overline">Session</Typography>
@@ -791,6 +792,15 @@ export async function runSessionContextBrowserConformance(
         Boolean(container.querySelector("[data-new-session-editor]")),
         `${mode}: the session menu opens the new session form`,
       );
+      if (!desktop) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const landed = container.querySelector("[data-session-new-from-section]")!
+          .getBoundingClientRect();
+        check(
+          landed.top >= 0 && landed.top < window.innerHeight / 2,
+          "mobile: the session menu lands on that form",
+        );
+      }
       continueRun().click();
       await until(() => surfaceEvents.includes(COMPOSER_FOCUS_EVENT));
       check(

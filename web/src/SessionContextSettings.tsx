@@ -64,20 +64,36 @@ export function SessionContextSettings(
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null);
-  const section = useRef<HTMLDivElement>(null);
+  const [reveal, setReveal] = useState(false);
+  const actions = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const handedOff = useContinuation(session.id) !== undefined;
   useEffect(() => {
     const take = () => {
-      if (takeNewFromRequest(session.id)) setOpen(true);
+      if (!takeNewFromRequest(session.id)) return;
+      setOpen(true);
+      setReveal(true);
     };
     take();
     document.addEventListener(SESSION_NEW_FROM_EVENT, take);
     return () => document.removeEventListener(SESSION_NEW_FROM_EVENT, take);
   }, [session.id]);
+  // Requested from the session menu: land on the form, once it exists. The
+  // settings surface and the form's pickers settle after the first frame.
+  const ready = open && Boolean(data);
   useEffect(() => {
-    if (open) section.current?.scrollIntoView({ block: "nearest" });
-  }, [open]);
+    if (!reveal || !ready) return undefined;
+    const show = () => actions.current?.scrollIntoView({ block: "start" });
+    const frame = requestAnimationFrame(show);
+    const settled = setTimeout(() => {
+      show();
+      setReveal(false);
+    }, 400);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
+    };
+  }, [reveal, ready]);
   const onSaved = () => {
     void reload();
     setOpen(false);
@@ -86,7 +102,6 @@ export function SessionContextSettings(
     data?.revision !== data?.applied_revision;
   return (
     <Box
-      ref={section}
       data-session-context
       sx={{ minWidth: 0, pb: open ? 2 : 0 }}
     >
@@ -118,7 +133,7 @@ export function SessionContextSettings(
               />
             </>
           )}
-          <Box>
+          <Box ref={actions} data-session-new-from-section>
             <Button
               startIcon={<ForkRightOutlined />}
               endIcon={
