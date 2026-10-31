@@ -769,10 +769,12 @@ for the remaining acceptance boundaries.
 The private Codex adapter archive supplies a bounded configuration launcher:
 the package's `-c` arguments are passed to its exact Codex CLI, since upstream
 `codex-acp` does not consume or forward those arguments. No Cowboy Controller
-Provider-ID branch or ambient executable is involved. The normal Codex package
-also declares the adapter's API-key initialization request, which uses only its
-already projected replica environment and is unnecessary for an existing
-native account. This is not a Service login/refresh action.
+Provider-ID branch or ambient executable is involved. The normal Codex launcher
+declares the adapter's API-key initialization request only when the projected
+replica environment holds an API key, so a ChatGPT login that expired reaches
+ACP `authRequired` (Cowboy's reconnect state) instead of a failed API-key
+login. This is not a Service login/refresh action; see the
+[Codex runtime notes](../plugins/codex/runtime/README.md#authentication-default).
 
 ### Controller host activation
 

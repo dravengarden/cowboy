@@ -8,6 +8,9 @@ import {
   agentApiConfiguration,
   agentCallsConfiguration,
   agentCallsPrompt,
+  API_KEY_AUTH_REQUEST,
+  applyDefaultAuthRequest,
+  defaultAuthRequest,
   managedMcpOverrides,
   managedRuleViolations,
   splitConfigurationArguments,
@@ -179,4 +182,50 @@ test("the Review Plugin renders Codex's guidance with Claude as its peer", () =>
     JSON.parse(added[1].slice("developer_instructions=".length)),
     prompt,
   );
+});
+
+test("only a projected API key selects the adapter's API-key login", () => {
+  // A ChatGPT account, valid or expired, must reach ACP authRequired.
+  assert.equal(defaultAuthRequest({}), undefined);
+  assert.equal(defaultAuthRequest({ OPENAI_API_KEY: "  " }), undefined);
+  assert.equal(
+    defaultAuthRequest({ DEFAULT_AUTH_REQUEST: API_KEY_AUTH_REQUEST }),
+    undefined,
+  );
+  for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY"]) {
+    assert.equal(
+      defaultAuthRequest({ [name]: "sk-fixture" }),
+      API_KEY_AUTH_REQUEST,
+    );
+  }
+  assert.deepEqual(JSON.parse(API_KEY_AUTH_REQUEST), { methodId: "api-key" });
+  // A request carrying its own key, or another method, is kept as declared.
+  const inline = JSON.stringify({
+    methodId: "api-key",
+    _meta: { "api-key": { apiKey: "sk-inline" } },
+  });
+  assert.equal(defaultAuthRequest({ DEFAULT_AUTH_REQUEST: inline }), inline);
+  const chatgpt = JSON.stringify({ methodId: "chat-gpt" });
+  assert.equal(defaultAuthRequest({ DEFAULT_AUTH_REQUEST: chatgpt }), chatgpt);
+  assert.throws(
+    () => defaultAuthRequest({ DEFAULT_AUTH_REQUEST: "{" }),
+    /Invalid default Codex authentication request/,
+  );
+
+  const chatgptAccount = { DEFAULT_AUTH_REQUEST: API_KEY_AUTH_REQUEST };
+  applyDefaultAuthRequest(chatgptAccount);
+  assert.equal("DEFAULT_AUTH_REQUEST" in chatgptAccount, false);
+  const keyAccount = { OPENAI_API_KEY: "sk-fixture" };
+  applyDefaultAuthRequest(keyAccount);
+  assert.equal(keyAccount.DEFAULT_AUTH_REQUEST, API_KEY_AUTH_REQUEST);
+});
+
+test("the package no longer declares an unconditional API-key login", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../provider.json", import.meta.url), "utf8"),
+  );
+  assert.equal("DEFAULT_AUTH_REQUEST" in manifest.runtime.environment, false);
+  assert.deepEqual(manifest.authentication.environment_projection, {
+    OPENAI_API_KEY: "api_key",
+  });
 });

@@ -219,7 +219,7 @@ async fn run_peer(
     mut observed_rx: watch::Receiver<usize>,
     command_tx: mpsc::UnboundedSender<AgentCommand>,
     capabilities: Value,
-    reject: bool,
+    rejection: Option<Value>,
 ) -> Vec<Value> {
     let (peer_read, mut peer_write) = tokio::io::split(peer_io);
     let mut requests = Vec::new();
@@ -265,12 +265,10 @@ async fn run_peer(
         } else {
             0
         };
-        if reject {
+        if let Some(error) = &rejection {
             send_json(
                 &mut peer_write,
-                json!({"jsonrpc": "2.0", "id": id, "error": {
-                    "code": -32603, "message": "fixture native history is unavailable"
-                }}),
+                json!({"jsonrpc": "2.0", "id": id, "error": error}),
             )
             .await;
             continue;
@@ -320,7 +318,19 @@ async fn exercise(resume: bool, capabilities: Value, reject: bool) -> Observatio
     .await
 }
 
+fn native_history_unavailable() -> Value {
+    json!({"code": -32603, "message": "fixture native history is unavailable"})
+}
+
 async fn exercise_start(start: NativeStart, capabilities: Value, reject: bool) -> Observation {
+    exercise_rejected(start, capabilities, reject.then(native_history_unavailable)).await
+}
+
+async fn exercise_rejected(
+    start: NativeStart,
+    capabilities: Value,
+    rejection: Option<Value>,
+) -> Observation {
     let (state, sink) = fixture_state(matches!(start, NativeStart::Resume(_)));
     let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
@@ -363,7 +373,7 @@ async fn exercise_start(start: NativeStart, capabilities: Value, reject: bool) -
         observed_rx,
         command_tx,
         capabilities,
-        reject,
+        rejection,
     );
     let (result, requests) =
         tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
@@ -836,6 +846,53 @@ async fn rejected_resume_never_tries_load_or_creates_a_blank_session() {
     observed.assert_retained_identity();
     assert_eq!(observed.texts(), ["saved user", "saved answer"]);
     assert_ne!(observed.sink.hub.status(SESSION), Some(Status::Running));
+}
+
+/// codex-acp answers ACP authRequired when the app-server needs a login and
+/// no default auth request applies (an expired `ChatGPT` login). The
+/// resume keeps the native thread and reports Cowboy's typed "reconnect the
+/// same account" state, which the Controller marks as expired authorization
+/// and the Machine refuses to retry on an older worker generation.
+#[tokio::test]
+async fn auth_required_resume_reports_reconnect_and_keeps_the_native_thread() {
+    let observed = exercise_rejected(
+        NativeStart::Resume(NATIVE.to_owned()),
+        resume_and_load(),
+        Some(json!({"code": -32000, "message": "Authentication required"})),
+    )
+    .await;
+    let detail = observed.result.as_ref().unwrap_err();
+    assert!(
+        crate::provider_behavior::is_provider_auth_required_error(detail),
+        "{detail}"
+    );
+    assert!(detail.contains("Reconnect the same"), "{detail}");
+    assert_eq!(observed.methods(), ["initialize", "session/resume"]);
+    observed.assert_retained_identity();
+    assert_eq!(observed.texts(), ["saved user", "saved answer"]);
+    assert_ne!(observed.sink.hub.status(SESSION), Some(Status::Running));
+}
+
+/// The pre-fix failure: an unconditional API-key default turned the same
+/// expired login into an internal error, which is not an authorization state.
+#[tokio::test]
+async fn internal_api_key_error_at_resume_is_not_an_auth_state() {
+    let observed = exercise_rejected(
+        NativeStart::Resume(NATIVE.to_owned()),
+        resume_and_load(),
+        Some(json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": "CODEX_API_KEY or OPENAI_API_KEY is not set"
+        })),
+    )
+    .await;
+    let detail = observed.result.as_ref().unwrap_err();
+    assert!(
+        !crate::provider_behavior::is_provider_auth_required_error(detail),
+        "{detail}"
+    );
+    observed.assert_retained_identity();
 }
 
 #[tokio::test]
