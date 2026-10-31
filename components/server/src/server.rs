@@ -5802,11 +5802,11 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path.starts_with("/api/machine/") {
         return RouteAuth::Public;
     }
-    // Deployment health checks use refresh to ask a connected Machine to
-    // republish its read-only inventory after a declarative workspace update.
-    // It does not install, revoke, reconcile, or otherwise mutate the Machine.
-    if method == Method::POST && path.starts_with("/api/machines/") && path.ends_with("/refresh") {
-        return RouteAuth::Public;
+    // Refreshing republishes a Machine's read-only inventory. The Web and
+    // Operators reach it signed in; host deployment checks reach it through
+    // `internal_machine_refresh` before any principal is resolved.
+    if method == Method::POST && machine_refresh_path(path) {
+        return RouteAuth::ProductOrAdminOperator;
     }
     // Release transactions need a narrow, credential-free liveness signal on
     // both the Controller host and remote Machines. Keep the full inventory
@@ -5919,8 +5919,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::ProductOrAdminOperator;
     }
     if path.starts_with("/api/machines/")
-        && (path.ends_with("/refresh")
-            || path.ends_with("/components/reconcile")
+        && (path.ends_with("/components/reconcile")
             || path.ends_with("/components/reconcile-one")
             || path.ends_with("/components/update-npm"))
     {
@@ -5999,6 +5998,25 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::AdminOperator;
     }
     RouteAuth::Public
+}
+
+fn machine_refresh_path(path: &str) -> bool {
+    path.strip_prefix("/api/machines/")
+        .and_then(|rest| rest.strip_suffix("/refresh"))
+        .is_some_and(|machine| !machine.is_empty() && !machine.contains('/'))
+}
+
+/// Same rule as the metrics scrape: a direct same-host caller, never a request
+/// that crossed the public reverse proxy.
+fn internal_machine_refresh(
+    method: &Method,
+    path: &str,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> bool {
+    method == Method::POST
+        && machine_refresh_path(path)
+        && crate::product_auth::metrics_scrape_allowed(peer, headers)
 }
 
 fn plugin_call_path(path: &str) -> bool {
@@ -6419,6 +6437,9 @@ async fn enforce_product_api(
 ) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    if internal_machine_refresh(&method, &path, peer, request.headers()) {
+        return next.run(request).await;
+    }
     match classify_route(&method, &path) {
         RouteAuth::Public | RouteAuth::MetricsScrape => return next.run(request).await,
         RouteAuth::AdminViewer => {
@@ -21017,6 +21038,58 @@ mod refresh_identity_evidence_tests {
 }
 
 #[cfg(test)]
+mod machine_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_needs_an_operator_or_a_direct_same_host_caller() {
+        let path = "/api/machines/hawk/refresh";
+        assert_eq!(
+            classify_route(&Method::POST, path),
+            RouteAuth::ProductOrAdminOperator
+        );
+        let local: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let remote: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let direct = HeaderMap::new();
+        assert!(internal_machine_refresh(
+            &Method::POST,
+            path,
+            local,
+            &direct
+        ));
+        assert!(!internal_machine_refresh(
+            &Method::POST,
+            path,
+            remote,
+            &direct
+        ));
+        assert!(!internal_machine_refresh(
+            &Method::GET,
+            path,
+            local,
+            &direct
+        ));
+        let mut proxied = HeaderMap::new();
+        proxied.insert("x-forwarded-for", "192.0.2.1".parse().unwrap());
+        assert!(!internal_machine_refresh(
+            &Method::POST,
+            path,
+            local,
+            &proxied
+        ));
+    }
+
+    #[test]
+    fn a_plugin_named_refresh_is_not_a_machine_refresh() {
+        assert!(!machine_refresh_path("/api/machines/hawk/plugins/refresh"));
+        assert_eq!(
+            classify_route(&Method::POST, "/api/machines/hawk/plugins/refresh"),
+            RouteAuth::ProductOrAdminOperator
+        );
+    }
+}
+
+#[cfg(test)]
 mod session_route_authorization_tests {
     use super::*;
     use crate::product_auth::ProductPrincipal;
@@ -25797,7 +25870,7 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/machines/m-123/refresh"),
-            RouteAuth::Public
+            RouteAuth::ProductOrAdminOperator
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),

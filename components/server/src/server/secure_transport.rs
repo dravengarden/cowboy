@@ -166,6 +166,7 @@ pub(super) async fn enforce(
                     || (path.starts_with("/api/machines/")
                         && path.ends_with("/deployment-health"))))
             || path.starts_with("/api/machine/")
+            || (request.method() == Method::POST && machine_refresh_path(&path))
             || device_bearer
             || path == "/api/auth/status"
             || path.starts_with("/api/auth/device/"));
