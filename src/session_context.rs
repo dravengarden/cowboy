@@ -214,6 +214,14 @@ impl Context {
     }
 }
 
+/// The session whose worktree state this new session starts from: a fork's
+/// source or a continuation's.
+pub fn workspace_base(hub: &crate::core::Hub, id: &str) -> Option<String> {
+    hub.session_fork(id)
+        .map(|record| record.source_session_id)
+        .or_else(|| read(hub, id).ok()?.workspace_base)
+}
+
 /// Sessions the next prompt will read.
 pub fn pending_links(context: &Context) -> Vec<String> {
     if context.revision != context.applied_revision {

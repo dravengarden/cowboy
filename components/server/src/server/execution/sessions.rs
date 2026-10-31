@@ -509,6 +509,20 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
     if !durable {
         return Err("Execution preparation has not reached durable storage".into());
     }
+    // A fork or continuation starts from its source's worktree state.
+    let base_session_id = crate::session_context::workspace_base(&state.hub, session_id);
+    // An older Machine would start from the default branch.
+    if base_session_id.is_some()
+        && !state.machine_control.machine_supports(
+            &intent.machine_id,
+            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+        )
+    {
+        return Err(format!(
+            "Machine {} must be updated before it can prepare this workspace",
+            intent.machine_id
+        ));
+    }
     let response = call(
         state,
         &intent.machine_id,
@@ -516,16 +530,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
             session_id: session_id.into(),
             workspace_id: intent.workspace_id.clone(),
             runtime: intent.runtime.clone(),
-            // A fork or continuation starts from its source's worktree state.
-            base_session_id: state
-                .hub
-                .session_fork(session_id)
-                .map(|record| record.source_session_id)
-                .or_else(|| {
-                    crate::session_context::read(&state.hub, session_id)
-                        .ok()?
-                        .workspace_base
-                }),
+            base_session_id,
         },
     )
     .await?;

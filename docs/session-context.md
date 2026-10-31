@@ -67,7 +67,8 @@ controls.
 A continuation and a fork differ in shape. Continuing moves the work to a new
 agent, so there is one line and the original leaves. Forking copies a
 conversation, so there are two live lines. An accepted handoff moves the
-original to Trash, with Undo on the device that sent it. In Trash it stays
+original to Trash, with Undo on the device that sent it, also when that device
+recovers a lost reply. In Trash it stays
 readable, by the continuation through Cowboy MCP as well, until retention ends;
 its worktree is intact for **Restore** until then. If Trash refuses, the
 original stays as read-only history: the session list marks it **History** and
@@ -153,8 +154,8 @@ created, then checked again against its actual admitted generation. A concurrent
 change can still fail after creation; the failed receipt explicitly identifies
 the unsent destination for inspection or deletion, and never retries the message.
 
-A continuation in the source's project on its execution Machine picks up the
-work where it stands: its new worktree starts from the source's `HEAD` with the
+A continuation in the source's project on its execution Machine (protocol 39 or
+later), from a source that has run, picks up the work where it stands: its new worktree starts from the source's `HEAD` with the
 source's uncommitted changes, through the same copy as a
 [fork](session-fork.md), including its limits and the 512 MiB refusal. The source
 worktree is never written, so Undo and Restore return it unchanged. Another

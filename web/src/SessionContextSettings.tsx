@@ -292,10 +292,13 @@ function NewSessionForm(
   const sameAccount = provider === session.provider &&
     subscription.value === sourceAccount;
   // Worktrees live on the execution Machine, per project.
-  const sameWorktree = nextAgent.cwd === (session.workspace_id || "") &&
+  const sameHome = nextAgent.cwd === (session.workspace_id || "") &&
     nextAgent.machine_id === (execution.machineId || null);
+  const copiesWorktree = sameHome && machines.some((machine) =>
+    machine.id === nextAgent.machine_id && machine.capabilities?.native_fork
+  );
   // A fork stays in this session's project and Machines.
-  const samePlacement = sameWorktree &&
+  const samePlacement = sameHome &&
     (nextAgent.runtime_machine_id || session.machine_id) === session.machine_id;
   const fork = forkAvailability(session, machines);
   // A native fork takes the conversation as it is, so a chosen preset or
@@ -384,8 +387,10 @@ function NewSessionForm(
       <Stack spacing={0.5} data-new-session-outcome>
         <Typography variant="caption" color="text.secondary" data-new-session-continue>
           {sameAccount && samePlacement
-            ? "Continue starts a fresh conversation with this agent on your next message, with uncommitted changes. This session moves to Trash."
-            : sameWorktree
+            ? `Continue starts a fresh conversation with this agent on your next message${
+              copiesWorktree ? ", with uncommitted changes" : ""
+            }. This session moves to Trash.`
+            : copiesWorktree
             ? "Continue moves the work to this agent on your next message, with uncommitted changes. This session moves to Trash."
             : "Continue moves the work to this agent on your next message. This session moves to Trash and keeps uncommitted changes."}
         </Typography>

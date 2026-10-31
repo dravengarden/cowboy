@@ -507,15 +507,22 @@ async fn creation_error(response: Response) -> String {
 
 /// A continuation in the source's project on its Machine picks up the work
 /// where it stands: a new worktree holding the source's commits and uncommitted
-/// changes. The source's own worktree stays intact for Undo and Restore.
+/// changes. The source's own worktree stays intact for Undo and Restore. A
+/// session that never ran has no worktree, and an older Machine cannot copy.
 fn workspace_base(
+    state: &AppState,
     source: &crate::core::SessionMeta,
-    id: &str,
     target: &NextAgent,
 ) -> Option<String> {
-    source.execution_binding.as_ref()?;
     let (machine_id, _, project) = fork::placement(source).ok()?;
-    (machine_id == target.machine_id && project == target.cwd).then(|| id.to_owned())
+    (machine_id == target.machine_id
+        && project == target.cwd
+        && state.hub.agent_session_id_for_resume(&source.id).is_some()
+        && state.machine_control.machine_supports(
+            &machine_id,
+            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+        ))
+    .then(|| source.id.clone())
 }
 
 async fn prepare_target(
@@ -539,7 +546,7 @@ async fn prepare_target(
                 revision: 1,
                 sources: context.sources.clone(),
                 delivery: Some(delivery.clone()),
-                workspace_base: workspace_base(&source, id, target),
+                workspace_base: workspace_base(state, &source, target),
                 ..Context::default()
             },
         )
@@ -707,7 +714,7 @@ async fn deliver(
             workspace_base: context
                 .next_agent
                 .as_ref()
-                .and_then(|target| workspace_base(&info.meta, &id, target)),
+                .and_then(|target| workspace_base(&state, &info.meta, target)),
             ..Context::default()
         }
     };
@@ -752,7 +759,15 @@ async fn deliver(
     // a refusal only leaves it as read-only history beside the continuation.
     if target_id != id {
         match super::session_trash::trash(&state, &auth.principal, &[], std::slice::from_ref(&id)) {
-            Ok(()) => delivery.source_trashed = true,
+            Ok(()) => {
+                delivery.source_trashed = true;
+                // A replayed receipt still offers Undo. Trash itself succeeded,
+                // so a failed write only loses that offer; Restore remains.
+                context.delivery = Some(delivery.clone());
+                if let Err(reason) = save(&state, &id, &context).await {
+                    tracing::info!(session = %id, %reason, "handoff Trash outcome not recorded");
+                }
+            }
             Err(reason) => {
                 tracing::info!(session = %id, %reason, "handed-off session stayed out of Trash");
                 if state.supervisor.has_live_worker(&id)
