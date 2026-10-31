@@ -17337,6 +17337,9 @@ struct NewSessionRequest {
     /// Only the durable context transition may reserve a creation identity.
     #[serde(skip)]
     reserved_id: Option<String>,
+    /// Only a native fork may keep its source's older auth generation.
+    #[serde(skip)]
+    retained_auth_generation: Option<u64>,
     #[serde(default)]
     provider: String,
     #[serde(default)]
@@ -17778,6 +17781,7 @@ async fn api_new_session(
             "context_sources": req.context_sources,
         })).expect("typed creation request");
         request.reserved_id = req.reserved_id;
+        request.retained_auth_generation = req.retained_auth_generation;
         return execution::sessions::create(State(state), Extension(authenticated), Json(request))
             .await;
     }
@@ -17881,7 +17885,7 @@ async fn api_new_session(
                 serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(value).ok()
             })
             .unwrap_or_default();
-        let provider_generation = match provider_accounts::registration::generation(
+        let mut provider_generation = match provider_accounts::registration::generation(
             &state,
             &providers,
             &req.provider,
@@ -17894,6 +17898,16 @@ async fn api_new_session(
             Ok(generation) => generation,
             Err(error) => return (StatusCode::CONFLICT, error).into_response(),
         };
+        let scheduling_generation = provider_generation.auth_generation;
+        if let Some(retained) = req.retained_auth_generation
+            && let Err(error) = provider_accounts::registration::retain_auth_generation(
+                &mut provider_generation,
+                &provider_account_id,
+                retained,
+            )
+        {
+            return (StatusCode::CONFLICT, error).into_response();
+        }
 
         let Some(source_path) = cwd.as_deref() else {
             return (
@@ -17949,7 +17963,10 @@ async fn api_new_session(
         {
             return (StatusCode::CONFLICT, error).into_response();
         }
-        if let Err(error) = provider_accounts::registration::register(&state, registration).await {
+        if let Err(error) =
+            provider_accounts::registration::register(&state, registration, scheduling_generation)
+                .await
+        {
             return (StatusCode::CONFLICT, error).into_response();
         }
 

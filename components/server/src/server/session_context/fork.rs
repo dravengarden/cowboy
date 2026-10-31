@@ -127,12 +127,19 @@ async fn fork_session(
         inherit_settings: true,
     };
     // The adapter reads the source thread from the login's native home on
-    // this Machine. A newer login generation has another home.
-    let generation = inheritance::target_generation(&state, &auth, &selection).await?;
-    if generation.auth_generation != source.provider_auth_generation {
-        return Err(
-            "This subscription was signed in again since the session started; use Continue in new agent".into(),
-        );
+    // this Machine, and each auth generation has its own home. A Service
+    // token refresh advances the generation about every eight hours without
+    // a new sign-in, so the fork keeps the source's generation; only a named
+    // subscription that really signed in again is refused.
+    let mut generation = inheritance::target_generation(&state, &auth, &selection).await?;
+    if let Some(retained) = source.provider_auth_generation {
+        provider_accounts::registration::retain_auth_generation(
+            &mut generation,
+            &source.provider_account_id,
+            retained,
+        )?;
+    } else if generation.auth_generation.is_some() {
+        return Err(provider_accounts::registration::SIGNED_IN_AGAIN.into());
     }
     inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
@@ -182,6 +189,7 @@ async fn fork_session(
         initial_prompt: None,
         context_sources: vec![],
         reserved_id: Some(destination.clone()),
+        retained_auth_generation: source.provider_auth_generation,
     };
     let response =
         api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;

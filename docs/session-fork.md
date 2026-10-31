@@ -76,7 +76,15 @@ The destination is created through ordinary session admission with the
 source's account, Provider, Machines and project, and then checked again: the
 admitted account, login generation and runtime Machine must equal the
 source's, because the adapter reads the source thread from that account's
-native home on that Machine. The fork uses that login's currently admitted
+native home on that Machine. Each auth generation has its own runtime home,
+and a Service-managed (default) account advances its generation on every
+token refresh (about every eight hours) without a new sign-in. Admission
+therefore keeps the source's older generation for a fork: the Service
+readiness check still holds the current generation, and every retained home
+is re-projected with the newest credentials, exactly as when the source
+resumes. A named subscription's generation advances only on a real sign-in,
+so a fork across one is refused with "use Continue in new agent". The fork
+uses that login's currently admitted
 release of the same Provider; inheritance keeps only settings that release
 declares. If the admitted session no longer matches, it is kept but marked so
 that it never forks, and the request reports it for deletion.

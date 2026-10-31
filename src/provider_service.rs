@@ -575,6 +575,27 @@ impl ProviderAuthService {
         Ok(operation())
     }
 
+    /// Like [`Self::with_scheduling_generation`], but the registered session
+    /// keeps an older `retained` generation: a native fork must run in its
+    /// source's generation home, where the source thread lives. Service token
+    /// refreshes advance the generation without a new sign-in, and every
+    /// retained runtime home is re-projected with the newest credentials, so
+    /// this is as current as resuming the source itself. The readiness check
+    /// still holds the exact `current` generation while registering.
+    pub fn with_retained_scheduling_generation<T>(
+        &self,
+        provider_id: &str,
+        current: u64,
+        retained: u64,
+        operation: impl FnOnce() -> T,
+    ) -> Result<T> {
+        ensure!(
+            retained <= current,
+            "retained Provider authentication generation is ahead of the Service"
+        );
+        self.with_scheduling_generation(provider_id, true, Some(current), operation)
+    }
+
     /// Commit a successfully authenticated portable bundle as the next Service
     /// generation. A stale executor cannot overwrite a newer generation when
     /// `expected_generation` is supplied.
@@ -2096,6 +2117,35 @@ mod tests {
         assert_eq!(
             service.active_authentication_request("grok").as_deref(),
             Some("next-login")
+        );
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_scheduling_generation_holds_the_current_one() {
+        let (root, service) = service();
+        let package = package("grok");
+        let bundle = bundle(&package);
+        service.commit(&package, &bundle, None, None).unwrap();
+        let refreshed = service.commit(&package, &bundle, None, Some(1)).unwrap();
+        assert_eq!(refreshed.auth_generation, 2);
+        assert_eq!(
+            service
+                .with_retained_scheduling_generation("grok", 2, 1, || 5)
+                .unwrap(),
+            5
+        );
+        // Never ahead of the Service, and the current generation is exact.
+        assert!(
+            service
+                .with_retained_scheduling_generation("grok", 2, 3, || ())
+                .is_err()
+        );
+        assert!(
+            service
+                .with_retained_scheduling_generation("grok", 3, 1, || ())
+                .is_err()
         );
         drop(service);
         fs::remove_dir_all(root).unwrap();

@@ -134,6 +134,9 @@ pub(in crate::server) struct CreateRequest {
     context_sources: Vec<String>,
     #[serde(skip)]
     pub(in crate::server) reserved_id: Option<String>,
+    /// Only a native fork may keep its source's older auth generation.
+    #[serde(skip)]
+    pub(in crate::server) retained_auth_generation: Option<u64>,
     #[serde(default)]
     provider: String,
     #[serde(default)]
@@ -299,7 +302,7 @@ async fn create_checked(
     } else {
         resolve_machine_workspace(&workspaces, Some(&request.cwd))?
     };
-    let generation = provider_accounts::registration::generation(
+    let mut generation = provider_accounts::registration::generation(
         state,
         &providers(runtime),
         &request.provider,
@@ -308,6 +311,14 @@ async fn create_checked(
         &runtime.id,
     )
     .await?;
+    let scheduling_generation = generation.auth_generation;
+    if let Some(retained) = request.retained_auth_generation {
+        provider_accounts::registration::retain_auth_generation(
+            &mut generation,
+            &provider_account_id,
+            retained,
+        )?;
+    }
     let configuration = folder_defaults::preset_values(
         state,
         &request.provider,
@@ -380,7 +391,7 @@ async fn create_checked(
             .map(|_| format!("execution-initial:{session_id}")),
     )
     .await?;
-    provider_accounts::registration::register(state, registration).await?;
+    provider_accounts::registration::register(state, registration, scheduling_generation).await?;
     folder_defaults::apply_created(
         state,
         &authenticated.principal,

@@ -476,6 +476,7 @@ async fn prepare_target(
             initial_prompt: None,
             context_sources: vec![],
             reserved_id: Some(target_id.clone()),
+            retained_auth_generation: None,
         };
         let response =
             api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;

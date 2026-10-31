@@ -65,9 +65,39 @@ fn login_message(code: &str) -> String {
     }
 }
 
+/// Shown when a fork cannot reuse its source's login: a named subscription's
+/// generation advances only on a real sign-in, whose old tokens may be gone.
+pub(in crate::server) const SIGNED_IN_AGAIN: &str =
+    "This subscription was signed in again since the session started; use Continue in new agent";
+
+/// Keep a creation on an older `retained` auth generation (a native fork runs
+/// in its source's generation home). A Service-managed (default) account
+/// advances its generation on every token refresh, and each retained home is
+/// re-projected with the newest credentials, so the older generation is as
+/// current as resuming the source. Named subscriptions advance only on a new
+/// sign-in and are refused.
+pub(in crate::server) fn retain_auth_generation(
+    generation: &mut ResolvedProviderGeneration,
+    account: &crate::provider_account::ProviderAccountId,
+    retained: u64,
+) -> Result<(), String> {
+    if !retainable(generation.auth_generation, account.is_default(), retained) {
+        return Err(SIGNED_IN_AGAIN.into());
+    }
+    generation.auth_generation = Some(retained);
+    Ok(())
+}
+
+fn retainable(current: Option<u64>, service_account: bool, retained: u64) -> bool {
+    current.is_some_and(|current| current == retained || (service_account && retained < current))
+}
+
+/// Register while `scheduling` — the Service generation creation resolved —
+/// stays immutable; the session may record an older retained generation.
 pub(in crate::server) async fn register(
     state: &AppState,
     registration: crate::core::SessionRegistration,
+    scheduling: Option<u64>,
 ) -> Result<(), String> {
     let key = (
         registration.machine_id.clone(),
@@ -79,6 +109,16 @@ pub(in crate::server) async fn register(
             return Err("Provider is changing on the selected Machine".into());
         }
         let provider = registration.provider.clone();
+        if let (Some(current), Some(retained)) = (scheduling, registration.provider_auth_generation)
+            && current != retained
+        {
+            return state
+                .provider_auth
+                .with_retained_scheduling_generation(&provider, current, retained, || {
+                    state.hub.create_session(registration)
+                })
+                .map_err(|error| error.to_string());
+        }
         return state
             .provider_auth
             .with_scheduling_generation(
@@ -145,6 +185,19 @@ pub(in crate::server) async fn register(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_fork_keeps_only_a_service_refresh_generation() {
+        // Service (default) account: a token refresh advanced 76 -> 180.
+        assert!(super::retainable(Some(180), true, 76));
+        assert!(super::retainable(Some(76), true, 76));
+        // Never ahead of the current generation, never without one.
+        assert!(!super::retainable(Some(76), true, 180));
+        assert!(!super::retainable(None, true, 76));
+        // A named subscription moves only on a real sign-in.
+        assert!(super::retainable(Some(6), false, 6));
+        assert!(!super::retainable(Some(7), false, 6));
+    }
+
     #[test]
     fn login_refusals_tell_people_how_to_recover() {
         for code in [
