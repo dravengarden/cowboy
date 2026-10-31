@@ -91,7 +91,9 @@ Claude · Mink", or how many sessions it links) with **Cancel**, and the input
 placeholder reads "Message the new agent…" so the cue survives the mobile
 keyboard hiding auxiliary rows. After a handoff the link is history, not a
 next-send choice, so it leaves the Composer. The switch itself stays in Session
-Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
+Settings. While a continuation prepares, or any session with its first message queued,
+its page shows only the progress: the setup form is for a session nothing has
+been sent to yet, and Session Settings stays available. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
 its empty and preparing state), with `+N` for its other links.
 
 The links list in Session Settings starts folded under "N links" and has one row per link: "Forked from",
