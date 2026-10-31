@@ -10,6 +10,9 @@ export interface ElicitationChoice {
   value: string;
   title: string;
   description: string | null;
+  /** Plain-text preview of the option (a mockup, a code snippet), shown on
+   *  request. Never markup. */
+  preview: string | null;
 }
 
 export type ElicitationFieldKind =
@@ -37,12 +40,24 @@ export interface ElicitationField {
 export type ElicitationValue = string | boolean | string[];
 
 export type Elicitation =
-  | { mode: "form"; message: string; fields: ElicitationField[] }
+  | {
+    mode: "form";
+    message: string;
+    fields: ElicitationField[];
+    /** The agent answers on its own after this long without input (Codex
+     *  `request_user_input`); null when it waits for the user. */
+    autoResolutionMs: number | null;
+  }
   | { mode: "url"; message: string; url: string };
 
 export type ElicitationValues = Record<string, ElicitationValue>;
 
 export const ELICITATION_ACCEPT = "accept";
+/** claude-agent-acp's `_meta` key for an AskUserQuestion option's extras
+ *  (dist/elicitation.js `OPTION_META_KEY`). */
+export const CLAUDE_OPTION_META_KEY = "_claude/askUserQuestionOption";
+/** A preview is plain text for a bounded box; keep a runaway one bounded too. */
+const PREVIEW_MAX_CHARS = 20_000;
 export const ELICITATION_DECLINE = "decline";
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -55,6 +70,14 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function previewOf(option: Record<string, unknown> | null): string | null {
+  const preview = record(record(option?.["_meta"])?.[CLAUDE_OPTION_META_KEY])?.["preview"];
+  if (typeof preview !== "string" || !preview.trim()) return null;
+  return preview.length > PREVIEW_MAX_CHARS
+    ? `${preview.slice(0, PREVIEW_MAX_CHARS)}\n…`
+    : preview;
+}
+
 function choicesOf(source: unknown, values: unknown): ElicitationChoice[] {
   if (Array.isArray(source)) {
     return source.flatMap((option) => {
@@ -65,13 +88,21 @@ function choicesOf(source: unknown, values: unknown): ElicitationChoice[] {
         value,
         title: text(entry?.["title"]) ?? value,
         description: text(entry?.["description"]),
+        preview: previewOf(entry),
       }];
     });
   }
   return Array.isArray(values)
     ? values.filter((value): value is string => typeof value === "string")
-      .map((value) => ({ value, title: value, description: null }))
+      .map((value) => ({ value, title: value, description: null, preview: null }))
     : [];
+}
+
+/** Codex `request_user_input`: `_meta.codex.autoResolutionMs`, a number of
+ *  milliseconds or null. */
+function autoResolutionOf(request: Record<string, unknown>): number | null {
+  const value = record(record(request["_meta"])?.["codex"])?.["autoResolutionMs"];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function fieldOf(
@@ -162,7 +193,24 @@ export function elicitationOf(toolCall: unknown): Elicitation | null {
     }
     fields.push(parsed);
   }
-  return { mode: "form", message, fields };
+  return { mode: "form", message, fields, autoResolutionMs: autoResolutionOf(request) };
+}
+
+/** Remaining whole seconds before an auto-resolving request answers itself,
+ *  given when this client first saw it; 0 once due. */
+export function autoResolutionSecondsLeft(
+  autoResolutionMs: number,
+  firstSeenAtMs: number,
+  nowMs: number,
+): number {
+  return Math.max(0, Math.ceil((firstSeenAtMs + autoResolutionMs - nowMs) / 1000));
+}
+
+/** "42s" / "1:05" for the countdown. */
+export function formatCountdown(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 export function initialElicitationValues(

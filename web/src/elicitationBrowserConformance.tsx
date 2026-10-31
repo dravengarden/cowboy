@@ -169,6 +169,69 @@ export async function runElicitationBrowserConformance(): Promise<string[]> {
   check(container.querySelector('[data-elicitation="form"]'), "Mobile overlay draws the form");
   passed.push("approval surfaces draw the form");
 
+  // 5. An option preview is collapsed, opens as bounded plain text, and
+  //    opening it never picks the option.
+  const previewed = parsed({
+    mode: "form",
+    sessionId: "s",
+    message: "Which layout?",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        question_0: {
+          type: "string",
+          oneOf: [
+            {
+              const: "Grid",
+              title: "Grid",
+              _meta: {
+                "_claude/askUserQuestionOption": {
+                  preview: `<b>grid</b>\n${"| cell ".repeat(40)}\n${"row\n".repeat(60)}`,
+                },
+              },
+            },
+            { const: "List", title: "List" },
+          ],
+        },
+      },
+    },
+  });
+  render(<Harness elicitation={previewed} answers={answers} />);
+  const previews = container.querySelectorAll<HTMLElement>("[data-elicitation-preview]");
+  check(previews.length === 1, "only the option with a preview offers one");
+  check(previews[0]?.dataset["elicitationPreview"] === "closed", "a preview starts collapsed");
+  const toggle = previews[0]?.querySelector<HTMLButtonElement>("button");
+  check(toggle?.getAttribute("aria-expanded") === "false", "the toggle reports collapsed");
+  toggle.click();
+  await settle();
+  const pre = container.querySelector<HTMLElement>('[data-elicitation-preview="open"] pre');
+  check(pre, "the preview opens");
+  check(toggle.getAttribute("aria-expanded") === "true", "the toggle reports expanded");
+  check(!pre.querySelector("b") && pre.textContent?.startsWith("<b>grid</b>"), "a preview is plain text");
+  const style = getComputedStyle(pre);
+  check(style.fontFamily.includes("monospace") && style.whiteSpace === "pre", "a preview is monospace and unwrapped");
+  check(pre.clientHeight <= 240 && pre.scrollHeight > pre.clientHeight, "a long preview scrolls inside a bounded box");
+  const picked = container.querySelectorAll<HTMLInputElement>('[role="radiogroup"] input[type="radio"]');
+  check(picked.length === 2 && !picked[0]?.checked && !picked[1]?.checked, "opening a preview picks nothing");
+  passed.push("option preview is collapsed plain text that picks nothing");
+
+  // 6. A Codex request that resolves itself shows its countdown on both surfaces.
+  const timed: PendingPermission = {
+    ...item,
+    seq: 2,
+    requestId: "r-3",
+    elicitation: parsed({ ...FORM, _meta: { codex: { autoResolutionMs: 75_000 } } }),
+  };
+  render(<DesktopPermissionDock item={timed} waiting={1} sessionId="s" />);
+  const desktopTimer = container.querySelector<HTMLElement>('[role="timer"]');
+  check(desktopTimer?.textContent?.includes("1:15") || desktopTimer?.textContent?.includes("1:14"), `Desktop countdown: ${String(desktopTimer?.textContent)}`);
+  render(<PermissionOverlay item={timed} sessionId="s" />);
+  const mobileTimer = container.querySelector<HTMLElement>('[role="timer"]');
+  check(mobileTimer?.textContent?.includes("Continues without your answer"), "Mobile overlay shows the countdown");
+  render(<PermissionOverlay item={item} sessionId="s" />);
+  check(!container.querySelector('[role="timer"]'), "a request that waits for the user has no countdown");
+  passed.push("auto-resolving request shows its countdown");
+
   root.unmount();
   container.remove();
   return passed;
@@ -184,7 +247,32 @@ export function renderElicitationPreview(): void {
     requestKind: "question",
     title: "Codex needs your input to continue.",
     options: [],
-    elicitation: parsed(FORM),
+    elicitation: parsed({
+      ...FORM,
+      _meta: { codex: { autoResolutionMs: 75_000 } },
+      requestedSchema: {
+        ...FORM.requestedSchema,
+        properties: {
+          ...FORM.requestedSchema.properties,
+          database: {
+            ...FORM.requestedSchema.properties.database,
+            oneOf: [
+              {
+                const: "Postgres",
+                title: "Postgres",
+                description: "Recommended",
+                _meta: {
+                  "_claude/askUserQuestionOption": {
+                    preview: "services:\n  db:\n    image: postgres:17\n    volumes: [pg:/var/lib/postgresql]",
+                  },
+                },
+              },
+              { const: "SQLite", title: "SQLite" },
+            ],
+          },
+        },
+      },
+    }),
   };
   const tool: PendingPermission = {
     seq: 2,

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import {
   alpha,
   Box,
@@ -13,12 +13,15 @@ import {
 import OpenInNew from "@mui/icons-material/OpenInNew";
 import { approvalProseSx } from "./approvalCardStyle";
 import {
+  autoResolutionSecondsLeft,
   type Elicitation,
   ELICITATION_ACCEPT,
   ELICITATION_DECLINE,
   elicitationAnswer,
+  type ElicitationChoice,
   elicitationComplete,
   type ElicitationField,
+  formatCountdown,
   type ElicitationValue,
   type ElicitationValues,
   initialElicitationValues,
@@ -116,6 +119,93 @@ function FieldHeading({ field }: { field: ElicitationField }): React.JSX.Element
   );
 }
 
+/** When this client first saw each auto-resolving request. The worker sends
+ *  no timestamp, so a reload restarts the count from the reload; the agent's
+ *  own timer is authoritative and its resolution removes the form. */
+const firstSeenAt = new Map<string, number>();
+const FIRST_SEEN_LIMIT = 256;
+
+function firstSeen(key: string, now: number): number {
+  const known = firstSeenAt.get(key);
+  if (known !== undefined) return known;
+  if (firstSeenAt.size >= FIRST_SEEN_LIMIT) {
+    const oldest = firstSeenAt.keys().next().value;
+    if (oldest !== undefined) firstSeenAt.delete(oldest);
+  }
+  firstSeenAt.set(key, now);
+  return now;
+}
+
+/** "Continues without your answer in 42s": the agent answers on its own. */
+function AutoResolutionCountdown(
+  { seenKey, autoResolutionMs }: { seenKey: string; autoResolutionMs: number },
+): React.JSX.Element {
+  const [now, setNow] = useState(() => Date.now());
+  const since = firstSeen(seenKey, now);
+  const left = autoResolutionSecondsLeft(autoResolutionMs, since, now);
+  const due = left === 0;
+  useEffect(() => {
+    if (due) return undefined;
+    const timer = globalThis.setInterval(() => setNow(Date.now()), 1000);
+    return (): void => globalThis.clearInterval(timer);
+  }, [due]);
+  return (
+    <Typography
+      variant="caption"
+      role="timer"
+      data-elicitation-countdown={left}
+      sx={{ color: left <= 10 ? "warning.main" : "text.secondary", display: "block" }}
+    >
+      {due
+        ? "Continuing without your answer…"
+        : `Continues without your answer in ${formatCountdown(left)}`}
+    </Typography>
+  );
+}
+
+/** An option's plain-text preview, collapsed until asked for. */
+function ChoicePreview({ preview }: { preview: string }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <Box sx={{ pl: 4, pb: 0.5 }} data-elicitation-preview={open ? "open" : "closed"}>
+      <Button
+        size="small"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={(): void => setOpen((value) => !value)}
+        sx={{ textTransform: "none", minWidth: 0, px: 0.5, py: 0, fontSize: "0.75rem" }}
+      >
+        {open ? "Hide preview" : "Show preview"}
+      </Button>
+      {open && (
+        <Box
+          id={id}
+          component="pre"
+          sx={{
+            m: 0,
+            mt: 0.25,
+            px: 1,
+            py: 0.75,
+            maxHeight: 220,
+            overflow: "auto",
+            borderRadius: 1,
+            border: 1,
+            borderColor: "divider",
+            bgcolor: "action.hover",
+            fontFamily: "monospace",
+            fontSize: "0.75rem",
+            lineHeight: 1.45,
+            whiteSpace: "pre",
+          }}
+        >
+          {preview}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 // One line of choice title; the control box shares it so they align exactly.
 const CHOICE_LINE = "1.375rem";
 
@@ -182,6 +272,20 @@ function ChoiceTile(
   );
 }
 
+/** One option, and its preview outside the label so opening the preview
+ *  never picks the option. */
+function ChoiceRow(
+  { choice, children }: { choice: ElicitationChoice; children: React.ReactNode },
+): React.JSX.Element {
+  if (!choice.preview) return <>{children}</>;
+  return (
+    <Box>
+      {children}
+      <ChoicePreview preview={choice.preview} />
+    </Box>
+  );
+}
+
 function FieldInput({
   field,
   value,
@@ -198,19 +302,20 @@ function FieldInput({
       return (
         <Stack role="radiogroup" aria-label={field.title} spacing={0.75}>
           {field.choices.map((choice) => (
-            <ChoiceTile
-              key={choice.value}
-              title={choice.title}
-              description={choice.description}
-              selected={value === choice.value}
-              disabled={disabled}
-              control={
-                <Radio
-                  checked={value === choice.value}
-                  onChange={() => onChange(choice.value)}
-                />
-              }
-            />
+            <ChoiceRow key={choice.value} choice={choice}>
+              <ChoiceTile
+                title={choice.title}
+                description={choice.description}
+                selected={value === choice.value}
+                disabled={disabled}
+                control={
+                  <Radio
+                    checked={value === choice.value}
+                    onChange={() => onChange(choice.value)}
+                  />
+                }
+              />
+            </ChoiceRow>
           ))}
         </Stack>
       );
@@ -219,24 +324,25 @@ function FieldInput({
       return (
         <Stack role="group" aria-label={field.title} spacing={0.75}>
           {field.choices.map((choice) => (
-            <ChoiceTile
-              key={choice.value}
-              title={choice.title}
-              description={choice.description}
-              selected={picked.includes(choice.value)}
-              disabled={disabled}
-              control={
-                <Checkbox
-                  checked={picked.includes(choice.value)}
-                  onChange={(event) =>
-                    onChange(
-                      event.target.checked
-                        ? [...picked, choice.value]
-                        : picked.filter((item) => item !== choice.value),
-                    )}
-                />
-              }
-            />
+            <ChoiceRow key={choice.value} choice={choice}>
+              <ChoiceTile
+                title={choice.title}
+                description={choice.description}
+                selected={picked.includes(choice.value)}
+                disabled={disabled}
+                control={
+                  <Checkbox
+                    checked={picked.includes(choice.value)}
+                    onChange={(event) =>
+                      onChange(
+                        event.target.checked
+                          ? [...picked, choice.value]
+                          : picked.filter((item) => item !== choice.value),
+                      )}
+                  />
+                }
+              />
+            </ChoiceRow>
           ))}
         </Stack>
       );
@@ -284,11 +390,15 @@ export function ElicitationFields({
   values,
   setValue,
   disabled,
+  seenKey,
 }: {
   elicitation: Elicitation;
   values: ElicitationValues;
   setValue: (id: string, value: ElicitationValue) => void;
   disabled: boolean;
+  /** Identifies this request across remounts (session, seq and request id);
+   *  the auto-resolution countdown starts when a key is first drawn. */
+  seenKey?: string;
 }): React.JSX.Element {
   return (
     <Stack
@@ -302,6 +412,13 @@ export function ElicitationFields({
       >
         {elicitation.message}
       </Typography>
+      {elicitation.mode === "form" && elicitation.autoResolutionMs !== null &&
+        seenKey !== undefined && (
+        <AutoResolutionCountdown
+          seenKey={seenKey}
+          autoResolutionMs={elicitation.autoResolutionMs}
+        />
+      )}
       {elicitation.mode === "url"
         ? (
           <Box>

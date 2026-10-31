@@ -145,6 +145,7 @@ export function DesktopPermissionDock({
             values={form.values}
             setValue={form.setValue}
             disabled={response.busy}
+            seenKey={`${sessionId}:${item.seq}:${item.requestId}`}
           />
         )
         : (

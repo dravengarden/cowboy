@@ -1,9 +1,11 @@
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
+  autoResolutionSecondsLeft,
   elicitationAnswer,
   elicitationComplete,
   elicitationOf,
+  formatCountdown,
   initialElicitationValues,
 } from "./elicitation";
 import { derive, pendingPermissions } from "./derive";
@@ -65,8 +67,10 @@ test("a Codex user-input form becomes typed fields", () => {
     value: "Postgres",
     title: "Postgres",
     description: "Recommended",
+    preview: null,
   });
   assertEquals(elicitation.fields[1]?.noteFor, "database");
+  assertEquals(elicitation.autoResolutionMs, null);
 
   const values = initialElicitationValues(elicitation.fields);
   if (elicitationComplete(elicitation.fields, values)) {
@@ -173,4 +177,62 @@ test("an elicitation permission request is a question that carries its form", ()
   const marker = derive(timeline)[0];
   if (marker?.kind !== "permission") throw new Error("expected a permission marker");
   assertEquals(marker.requestKind, "question");
+});
+
+test("AskUserQuestion option previews parse as plain text for single and multi choices", () => {
+  const meta = (preview: unknown) => ({ _meta: { "_claude/askUserQuestionOption": { preview } } });
+  const elicitation = elicitationOf(carrying({
+    mode: "form",
+    sessionId: "s",
+    message: "Which layout?",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        question_0: {
+          type: "string",
+          oneOf: [
+            { const: "Grid", title: "Grid", ...meta("<div>grid</div>\n  cells") },
+            { const: "List", title: "List", ...meta("  ") },
+            { const: "Rows", title: "Rows", ...meta(7) },
+          ],
+        },
+        question_1: {
+          type: "array",
+          items: { anyOf: [{ const: "Dark", title: "Dark", ...meta("bg: #000") }] },
+        },
+      },
+    },
+  }));
+  if (elicitation?.mode !== "form") throw new Error("expected a form");
+  assertEquals(
+    elicitation.fields[0]?.choices.map((choice) => choice.preview),
+    ["<div>grid</div>\n  cells", null, null],
+  );
+  assertEquals(elicitation.fields[1]?.choices[0]?.preview, "bg: #000");
+  const huge = elicitationOf(carrying({
+    mode: "form",
+    message: "x",
+    requestedSchema: { type: "object", properties: {
+      q: { type: "string", oneOf: [{ const: "A", ...meta("a".repeat(30_000)) }] },
+    } },
+  }));
+  if (huge?.mode !== "form") throw new Error("expected a form");
+  const preview = huge.fields[0]?.choices[0]?.preview ?? "";
+  if (preview.length > 20_010 || !preview.endsWith("…")) throw new Error("preview must stay bounded");
+});
+
+test("Codex auto-resolution parses and counts down from first sight", () => {
+  const timed = elicitationOf(carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: 90_000 } } }));
+  if (timed?.mode !== "form") throw new Error("expected a form");
+  assertEquals(timed.autoResolutionMs, 90_000);
+  for (const value of [null, "60000", -1, Number.NaN]) {
+    const untimed = elicitationOf(carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: value } } }));
+    if (untimed?.mode !== "form") throw new Error("expected a form");
+    assertEquals(untimed.autoResolutionMs, null);
+  }
+  assertEquals(autoResolutionSecondsLeft(90_000, 1_000, 1_000), 90);
+  assertEquals(autoResolutionSecondsLeft(90_000, 1_000, 30_500), 61);
+  assertEquals(autoResolutionSecondsLeft(90_000, 1_000, 200_000), 0);
+  assertEquals(formatCountdown(42), "42s");
+  assertEquals(formatCountdown(65), "1:05");
 });
