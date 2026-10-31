@@ -246,7 +246,15 @@ pub(super) async fn enforce(
         }
     }
     if let Some(proof) = proof.as_ref()
-        && state.devices.consume(proof, registered, now).is_err()
+        && state
+            .devices
+            .consume(
+                proof,
+                registered,
+                now,
+                crate::product_auth::client_ip(request.headers(), peer),
+            )
+            .is_err()
     {
         return reject_proof();
     }

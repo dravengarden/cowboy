@@ -3,6 +3,7 @@
 //! HttpOnly session remains necessary and is durably bound to the proven key.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 use anyhow::{Context as _, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -14,7 +15,14 @@ pub const HEADER: &str = "x-cowboy-browser-proof";
 pub const WS_PREFIX: &str = "cowboy-device.";
 pub const CHALLENGE_PATH: &str = "/api/auth/browser/challenge";
 const MAX_SKEW_MS: i64 = 90_000;
+/// Browsers stamp `Date.now()` plus the offset from their challenge, so a proof
+/// is ahead only by local clock movement since then, and a rejected one
+/// refreshes the challenge and retries. A future stamp also extends how long
+/// its nonce stays in the replay budget.
+const MAX_FUTURE_SKEW_MS: i64 = 30_000;
 const MAX_NONCES: usize = 65_536;
+/// One network's unregistered proofs must not spend another's sign-in budget.
+const MAX_ENROLLMENT_NONCES_PER_CLIENT: usize = 512;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +52,23 @@ pub struct BrowserDevices {
 #[derive(Default)]
 struct ReplayNonces {
     registered: HashMap<String, i64>,
-    enrollment: HashMap<String, i64>,
+    enrollment: HashMap<String, Enrollment>,
+    enrollment_per_client: HashMap<IpAddr, usize>,
+}
+
+struct Enrollment {
+    expires: i64,
+    client: IpAddr,
+}
+
+/// An IPv6 client controls its whole /64, so one address is not one client.
+fn client_bucket(client: IpAddr) -> IpAddr {
+    match client.to_canonical() {
+        IpAddr::V6(address) => {
+            IpAddr::V6((u128::from(address) & !u128::from(u64::MAX)).into())
+        }
+        address @ IpAddr::V4(_) => address,
+    }
 }
 
 impl BrowserDevices {
@@ -73,7 +97,8 @@ impl BrowserDevices {
             "device proof origin mismatch"
         );
         ensure!(
-            proof.time.abs_diff(now) <= MAX_SKEW_MS as u64,
+            proof.time >= now.saturating_sub(MAX_SKEW_MS)
+                && proof.time <= now.saturating_add(MAX_FUTURE_SKEW_MS),
             "expired device proof"
         );
         ensure!(
@@ -89,24 +114,52 @@ impl BrowserDevices {
         Ok(proof)
     }
 
-    pub fn consume(&self, proof: &Proof, registered: bool, now: i64) -> Result<()> {
+    pub fn consume(
+        &self,
+        proof: &Proof,
+        registered: bool,
+        now: i64,
+        client: IpAddr,
+    ) -> Result<()> {
         let replay = format!("{}:{}", proof.key, proof.nonce);
-        let mut nonces = self.nonces.lock();
+        let mut guard = self.nonces.lock();
+        let nonces = &mut *guard;
         nonces.registered.retain(|_, expires| *expires >= now);
-        nonces.enrollment.retain(|_, expires| *expires >= now);
+        let counts = &mut nonces.enrollment_per_client;
+        nonces.enrollment.retain(|_, entry| {
+            let live = entry.expires >= now;
+            if !live && let Some(count) = counts.get_mut(&entry.client) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    counts.remove(&entry.client);
+                }
+            }
+            live
+        });
         ensure!(
             !nonces.registered.contains_key(&replay) && !nonces.enrollment.contains_key(&replay),
             "replayed device proof"
         );
-        // Unregistered callers must not fill the active devices' replay budget.
-        let (entries, limit) = if registered {
-            (&mut nonces.registered, MAX_NONCES)
-        } else {
-            (&mut nonces.enrollment, 1024)
-        };
+        let expires = proof.time.saturating_add(MAX_SKEW_MS);
         // Never evict live entries: that would make a captured proof reusable.
-        ensure!(entries.len() < limit, "device proof capacity exhausted");
-        entries.insert(replay, proof.time.saturating_add(MAX_SKEW_MS));
+        if registered {
+            // Unregistered callers cannot fill the active devices' budget.
+            ensure!(
+                nonces.registered.len() < MAX_NONCES,
+                "device proof capacity exhausted"
+            );
+            nonces.registered.insert(replay, expires);
+            return Ok(());
+        }
+        let client = client_bucket(client);
+        ensure!(
+            nonces.enrollment.len() < MAX_NONCES
+                && nonces.enrollment_per_client.get(&client).copied().unwrap_or(0)
+                    < MAX_ENROLLMENT_NONCES_PER_CLIENT,
+            "device proof capacity exhausted"
+        );
+        nonces.enrollment.insert(replay, Enrollment { expires, client });
+        *nonces.enrollment_per_client.entry(client).or_insert(0) += 1;
         Ok(())
     }
 }
@@ -168,25 +221,76 @@ pub mod tests {
         let verified = devices
             .verify(&proof, "POST", "/api/sessions?a=1", &origins, now)
             .unwrap();
-        assert!(devices.consume(&verified, false, now).is_ok());
-        assert!(devices.consume(&verified, true, now).is_err());
-        for i in 0..1024 {
-            devices
-                .nonces
-                .lock()
-                .enrollment
-                .insert(format!("unknown:{i}"), now + MAX_SKEW_MS);
-        }
-        let second = devices
+        let client: IpAddr = "192.0.2.1".parse().unwrap();
+        assert!(devices.consume(&verified, false, now, client).is_ok());
+        assert!(devices.consume(&verified, true, now, client).is_err());
+    }
+
+    fn proof_at(devices: &BrowserDevices, key: &SigningKey, now: i64) -> Proof {
+        devices
             .verify(
-                &sign(&key, &devices.epoch, "GET", "/api/private", now),
+                &sign(key, &devices.epoch, "GET", "/api/private", now),
                 "GET",
                 "/api/private",
+                &["https://cowboy.example".to_owned()],
+                now,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn one_clients_unregistered_proofs_cannot_lock_out_other_sign_ins() {
+        let devices = BrowserDevices::new();
+        let key = SigningKey::random(&mut rand::rngs::OsRng);
+        let now = 1_000_000;
+        let attacker: IpAddr = "192.0.2.1".parse().unwrap();
+        for _ in 0..MAX_ENROLLMENT_NONCES_PER_CLIENT {
+            let proof = proof_at(&devices, &key, now);
+            devices.consume(&proof, false, now, attacker).unwrap();
+        }
+        let proof = proof_at(&devices, &key, now);
+        assert!(devices.consume(&proof, false, now, attacker).is_err());
+        // A registered device and every other client keep their budgets.
+        assert!(devices.consume(&proof, true, now, attacker).is_ok());
+        let proof = proof_at(&devices, &key, now);
+        let owner: IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(devices.consume(&proof, false, now, owner).is_ok());
+        // The budget returns when the proofs expire, including its counter.
+        let later = now + MAX_SKEW_MS + 1;
+        let proof = proof_at(&devices, &key, later);
+        assert!(devices.consume(&proof, false, later, attacker).is_ok());
+        assert_eq!(devices.nonces.lock().enrollment_per_client.len(), 1);
+    }
+
+    #[test]
+    fn an_ipv6_client_shares_one_budget_across_its_prefix() {
+        let first: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let second: IpAddr = "2001:db8:1:2:bbbb::2".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(client_bucket(first), client_bucket(second));
+        assert_ne!(client_bucket(first), client_bucket(other));
+        let mapped: IpAddr = "::ffff:192.0.2.1".parse().unwrap();
+        assert_eq!(client_bucket(mapped), "192.0.2.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn a_proof_stamped_far_ahead_is_refused_but_ordinary_skew_is_not() {
+        let devices = BrowserDevices::new();
+        let key = SigningKey::random(&mut rand::rngs::OsRng);
+        let origins = vec!["https://cowboy.example".to_owned()];
+        let now = 1_000_000;
+        let verify = |time| {
+            devices.verify(
+                &sign(&key, &devices.epoch, "GET", "/x", time),
+                "GET",
+                "/x",
                 &origins,
                 now,
             )
-            .unwrap();
-        assert!(devices.consume(&second, false, now).is_err());
-        assert!(devices.consume(&second, true, now).is_ok());
+        };
+        assert!(verify(now + MAX_FUTURE_SKEW_MS).is_ok());
+        assert!(verify(now + MAX_FUTURE_SKEW_MS + 1).is_err());
+        assert!(verify(now - MAX_SKEW_MS).is_ok());
+        assert!(verify(now - MAX_SKEW_MS - 1).is_err());
     }
 }
