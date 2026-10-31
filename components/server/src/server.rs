@@ -5762,6 +5762,16 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     {
         return RouteAuth::Product;
     }
+    // Per-agent Tools defaults are a product Settings page. The API fallback
+    // demanded an admin cookie, so every product user got 401. Saving a default
+    // still requires the Owner role inside the handler.
+    if path == "/api/agent-tools" || path.starts_with("/api/agent-tools/") {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::Product
+        } else {
+            RouteAuth::ProductOperator
+        };
+    }
     if matches!(
         path,
         "/api/usage"
@@ -25305,6 +25315,14 @@ mod product_auth_api_tests {
 
     #[test]
     fn classify_route_table_matches_capability_matrix() {
+        assert_eq!(
+            classify_route(&Method::GET, "/api/agent-tools"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::PUT, "/api/agent-tools/codex"),
+            RouteAuth::ProductOperator
+        );
         for path in [
             "/api/project-policies",
             "/api/project-placements",
