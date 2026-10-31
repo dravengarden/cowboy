@@ -119,16 +119,16 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       const circumference = 2 * Math.PI * arc.r.baseVal.value;
       motion.pause();
       try {
-        return getComputedStyle(svg).overflow === "visible" && [0, 100, 200, 400, 600, 799].every((time) => {
+        return getComputedStyle(svg).overflow === "visible" && [0, 100, 200, 300, 450, 599].every((time) => {
           motion.currentTime = time;
           const style = getComputedStyle(arc);
           const fixed = track.getBoundingClientRect();
           const moving = arc.getBoundingClientRect();
           const pattern = style.strokeDasharray.split(/[, ]+/).map(Number.parseFloat);
           return style.transform === "none" &&
-            Math.abs(pattern[0]! - circumference / 4) < 0.01 &&
+            Math.abs(pattern[0]! - circumference / 3) < 0.01 &&
             Math.abs(pattern.reduce((sum, length) => sum + length, 0) - circumference) < 0.01 &&
-            Math.abs(Number.parseFloat(style.strokeDashoffset) + time / 800 * circumference) < 0.01 &&
+            Math.abs(Number.parseFloat(style.strokeDashoffset) + time / 600 * circumference) < 0.01 &&
             Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
             Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
             Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
@@ -143,7 +143,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     document.body.append(shell);
     try {
       const mark = shell.querySelector(".app-splash-spinner")!;
-      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor !== "rgba(0, 0, 0, 0)" && getComputedStyle(mark).borderRightColor !== getComputedStyle(mark).borderTopColor, "Pre-mount splash uses a quarter arc over a faint full track");
+      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).animationDuration === "0.6s" && /conic-gradient\(.* 120deg,/.test(getComputedStyle(mark).backgroundImage) && getComputedStyle(mark).maskImage.includes("radial-gradient"), "Pre-mount splash uses a one-third arc over a faint full track");
     } finally {
       shell.remove();
     }
