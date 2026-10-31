@@ -27,7 +27,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -59,6 +59,26 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       provider: "codex",
       status: "exited",
     },
+    ...(linked
+      ? [{
+        id: "copy",
+        cwd: "/runtime/copy",
+        workspace_id: "cowboy",
+        workspace_name: "Cowboy",
+        workspace_source_path: "/projects/cowboy",
+        machine_id: "ovh",
+        execution_binding: {
+          schema: 1,
+          runtime: { machine_id: "ovh", cwd: "/runtime/copy" },
+          environment: { machine_id: "hawk", protocol: 1 },
+          workspace: { cwd: "/tasks/cowboy/copy" },
+        },
+        title: "Improve review (copy)",
+        provider: "codex",
+        status: "exited",
+        continued_from: "worktree",
+      } as SessionMeta]
+      : []),
     {
       id: "fallback",
       cwd: "",
@@ -180,7 +200,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     if (url.pathname.endsWith("/bootstrap")) return json({ messages: [] });
     if (url.pathname.startsWith("/api/code/sessions/")) {
       const context = decodeURIComponent(url.pathname.split("/")[4]!);
-      const clean = context === "project";
+      const clean = context === "project" || context === "copy";
       const branch = context === "worktree" ? "feature/review" : "main";
       const path = url.searchParams.get("path") ?? "";
       if (url.pathname.endsWith("/manifest")) {
@@ -395,8 +415,26 @@ async function checkReviewLoading(): Promise<string> {
   }
 }
 
-async function checkReviewCompareAndSelection(): Promise<string> {
-  const fixture = renderReviewContextPreview(false, false, true);
+async function checkLinkedSessionReview(
+  fixture: ReturnType<typeof renderReviewContextPreview>,
+): Promise<string> {
+  fixture.select("copy");
+  const open = () => fixture.container.querySelector<HTMLElement>("[data-review-linked-session]");
+  await until(() => !!open(), "A clean linked session should offer its source");
+  check(fixture.container.textContent?.includes("Improve review"), "The linked session is not named");
+  const before = fixture.requests.length;
+  flushSync(() => open()!.click());
+  await until(
+    () => fixture.requests.slice(before).some((request) => request.includes("/api/code/sessions/worktree/changes")),
+    "Reviewing the linked session should read its worktree",
+  );
+  check(getActiveSessionId() === "copy", "Reviewing a linked session moved the Agent");
+  return "a clean session reviews its linked session's worktree without moving the Agent";
+}
+
+async function checkReviewCompareAndSelection(
+  fixture: ReturnType<typeof renderReviewContextPreview>,
+): Promise<string> {
   const body = document.body;
   const opened: unknown[] = [];
   const onOpen = (event: Event): void => {
@@ -431,8 +469,8 @@ async function checkReviewCompareAndSelection(): Promise<string> {
       () => compare()?.textContent?.includes("Branch · origin/topic") === true,
       "A chosen branch should become the comparison",
     );
-    check(
-      fixture.mutations.some((mutation) => mutation.includes("setComparison")),
+    await until(
+      () => fixture.mutations.some((mutation) => mutation.includes("setComparison")),
       "The chosen comparison was not saved to the session",
     );
 
@@ -441,10 +479,12 @@ async function checkReviewCompareAndSelection(): Promise<string> {
     const lines = () => [
       ...body.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement"),
     ].filter((element) => element.textContent?.trim());
-    await until(() => lines().length >= 6, "Diff should render line numbers");
-    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5");
-    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6");
     const bar = () => body.querySelector("[data-review-selection-bar]");
+    await until(() => lines().length >= 6, "Diff should render line numbers");
+    await wait(300);
+    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5");
+    await until(() => bar()?.textContent?.includes("1 line") === true, "A tap should select its line");
+    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Two taps should select a range");
     check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
 
@@ -460,7 +500,6 @@ async function checkReviewCompareAndSelection(): Promise<string> {
   } finally {
     window.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpen);
     setDraft("worktree", { text: "", attachments: [] });
-    fixture.cleanup();
   }
 }
 
@@ -881,5 +920,13 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
 }
 
 export async function runReviewCompareBrowserConformance(): Promise<string[]> {
-  return [await checkReviewCompareAndSelection()];
+  const fixture = renderReviewContextPreview(false, false, true, true);
+  try {
+    return [
+      await checkReviewCompareAndSelection(fixture),
+      await checkLinkedSessionReview(fixture),
+    ];
+  } finally {
+    fixture.cleanup();
+  }
 }

@@ -1,3 +1,4 @@
+import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { desktopSize } from "../../surface/desktopSize";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -450,14 +451,24 @@ export function DesktopCommandHost({
     },
     {
       id: "prompt.focusCalls",
-      title: "Open or Close Calls",
-      description: "Open the newest running call from collapsed Calls, otherwise open and focus the Agents this session called; close them when Calls already owns focus",
+      title: "Open Background Tasks",
+      description: "Open the background-tasks inspector: the subagents and calls this session started, grouped Needs you, Active and Ended. With the previous Calls panel restored, open or close Calls instead",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
       when: () => document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null,
-      disabledReason: "This session has not called another Agent",
+      disabledReason: "This session has no background tasks",
       consumeWhenDisabled: true,
       run: () => {
+        const tasks = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']",
+        );
+        if (tasks) {
+          // Return focus to the composer on close, as from the bar.
+          globalThis.dispatchEvent(new CustomEvent(OPEN_BACKGROUND_TASKS_EVENT, {
+            detail: { sessionId: tasks.dataset["backgroundTasksSession"] },
+          }));
+          return;
+        }
         const toggle = document.querySelector<HTMLElement>(
           "[data-desktop-region='prompt.calls'] button[aria-label='Expand calls'], [data-desktop-region='prompt.calls'] button[aria-label='Collapse calls']",
         );

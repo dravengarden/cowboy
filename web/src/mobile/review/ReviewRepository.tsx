@@ -366,6 +366,7 @@ export function ReviewRepository({
   embedded = false,
   actionsContainer,
   onBrowseFiles,
+  linkedSession,
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
@@ -391,6 +392,7 @@ export function ReviewRepository({
   embedded?: boolean;
   actionsContainer?: HTMLElement | null;
   onBrowseFiles?: () => void;
+  linkedSession?: { title: string; onOpen: () => void } | undefined;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
   const [changesRefresh, setChangesRefresh] = useState(0);
@@ -790,6 +792,7 @@ export function ReviewRepository({
               onChanges={onChanges}
               compact={embedded}
               {...(onBrowseFiles ? { onBrowseFiles } : {})}
+              linkedSession={linkedSession}
               refreshToken={(refreshToken ?? 0) + changesRefresh}
             />
           )

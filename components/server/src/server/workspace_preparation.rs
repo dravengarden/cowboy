@@ -163,10 +163,7 @@ async fn prepare(
     source_path: &str,
     eager: bool,
 ) -> Result<(), String> {
-    let base_session_id = state
-        .hub
-        .session_fork(session_id)
-        .map(|record| record.source_session_id);
+    let base_session_id = crate::session_context::workspace_base(&state.hub, session_id);
     // An older Machine ignores the base and would start from the default branch.
     if base_session_id.is_some()
         && !state.machine_control.machine_supports(

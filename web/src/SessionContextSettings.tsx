@@ -64,20 +64,36 @@ export function SessionContextSettings(
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null);
-  const section = useRef<HTMLDivElement>(null);
+  const [reveal, setReveal] = useState(false);
+  const actions = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const handedOff = useContinuation(session.id) !== undefined;
   useEffect(() => {
     const take = () => {
-      if (takeNewFromRequest(session.id)) setOpen(true);
+      if (!takeNewFromRequest(session.id)) return;
+      setOpen(true);
+      setReveal(true);
     };
     take();
     document.addEventListener(SESSION_NEW_FROM_EVENT, take);
     return () => document.removeEventListener(SESSION_NEW_FROM_EVENT, take);
   }, [session.id]);
+  // Requested from the session menu: land on the form, once it exists. The
+  // settings surface and the form's pickers settle after the first frame.
+  const ready = open && Boolean(data);
   useEffect(() => {
-    if (open) section.current?.scrollIntoView({ block: "nearest" });
-  }, [open]);
+    if (!reveal || !ready) return undefined;
+    const show = () => actions.current?.scrollIntoView({ block: "start" });
+    const frame = requestAnimationFrame(show);
+    const settled = setTimeout(() => {
+      show();
+      setReveal(false);
+    }, 400);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
+    };
+  }, [reveal, ready]);
   const onSaved = () => {
     void reload();
     setOpen(false);
@@ -86,7 +102,6 @@ export function SessionContextSettings(
     data?.revision !== data?.applied_revision;
   return (
     <Box
-      ref={section}
       data-session-context
       sx={{ minWidth: 0, pb: open ? 2 : 0 }}
     >
@@ -118,7 +133,7 @@ export function SessionContextSettings(
               />
             </>
           )}
-          <Box>
+          <Box ref={actions} data-session-new-from-section>
             <Button
               startIcon={<ForkRightOutlined />}
               endIcon={
@@ -291,9 +306,14 @@ function NewSessionForm(
   };
   const sameAccount = provider === session.provider &&
     subscription.value === sourceAccount;
+  // Worktrees live on the execution Machine, per project.
+  const sameHome = nextAgent.cwd === (session.workspace_id || "") &&
+    nextAgent.machine_id === (execution.machineId || null);
+  const copiesWorktree = sameHome && machines.some((machine) =>
+    machine.id === nextAgent.machine_id && machine.capabilities?.native_fork
+  );
   // A fork stays in this session's project and Machines.
-  const samePlacement = nextAgent.cwd === (session.workspace_id || "") &&
-    nextAgent.machine_id === (execution.machineId || null) &&
+  const samePlacement = sameHome &&
     (nextAgent.runtime_machine_id || session.machine_id) === session.machine_id;
   const fork = forkAvailability(session, machines);
   // A native fork takes the conversation as it is, so a chosen preset or
@@ -382,8 +402,12 @@ function NewSessionForm(
       <Stack spacing={0.5} data-new-session-outcome>
         <Typography variant="caption" color="text.secondary" data-new-session-continue>
           {sameAccount && samePlacement
-            ? "Continue starts a fresh conversation with this agent on your next message. This session becomes history."
-            : "Continue moves the work to this agent on your next message. This session becomes history and keeps uncommitted changes."}
+            ? `Continue starts a fresh conversation with this agent on your next message${
+              copiesWorktree ? ", with uncommitted changes" : ""
+            }. This session moves to Trash.`
+            : copiesWorktree
+            ? "Continue moves the work to this agent on your next message, with uncommitted changes. This session moves to Trash."
+            : "Continue moves the work to this agent on your next message. This session moves to Trash and keeps uncommitted changes."}
         </Typography>
         {allowFork && (
           <Typography

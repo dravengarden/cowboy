@@ -1,3 +1,5 @@
+import type { SessionContext } from "../../sessionContext.ts";
+import { reviewLinkedSessions } from "./reviewContextModel.ts";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "../../protocol";
@@ -262,4 +264,32 @@ test("remote review uses the files Machine and worktree, never the Agent runtime
       [],
     );
   }
+});
+
+test("linked sessions offer only other live worktrees", () => {
+  const session = (id: string, cwd: string, extra = {}) =>
+    ({ id, cwd, title: id, provider: "codex", status: "exited", ...extra }) as SessionMeta;
+  const copy = session("copy", "/tasks/copy");
+  const source = session("source", "/tasks/source");
+  const shared = session("shared", "/tasks/copy");
+  const context = {
+    links: [
+      { id: "source", available: true },
+      { id: "shared", available: true },
+      { id: "gone", available: false },
+    ],
+    source_sessions: [],
+  } as unknown as SessionContext;
+  assertEquals(
+    reviewLinkedSessions(copy, context, [copy, source, shared]).map((item) => item.id),
+    ["source"],
+  );
+  assertEquals(
+    reviewLinkedSessions(
+      session("fork", "/tasks/fork", { forked_from: "source" }),
+      undefined,
+      [source],
+    ).map((item) => item.id),
+    ["source"],
+  );
 });

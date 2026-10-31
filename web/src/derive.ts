@@ -15,6 +15,7 @@ import {
   newerSubagent,
   orphanedSubagent,
   requestingSubagent,
+  requestingSubagentId,
   type Subagent,
   subagentOf,
 } from "./subagents";
@@ -91,6 +92,16 @@ export type RenderItem = { key: string } & (
     }
   // One ACP subagent (a child session): its latest snapshot, updated in place.
   | { kind: "subagent"; subagent: Subagent }
+  // One accepted Call's idempotent transcript anchor (docs/background-tasks.md
+  // I8). Its state comes from the polled Call ledger, never from this row.
+  | {
+      kind: "call";
+      callId: string;
+      requestId: string;
+      /** The structured origin: an MCP `calls.start` names its operation. */
+      origin: CallAnchorOrigin;
+      approvalRequestId: string | null;
+    }
   | { kind: "lifecycle"; status: Status; detail: string | null; turnFailure?: boolean; recovered?: boolean }
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
@@ -182,8 +193,14 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
     case "subagent":
       return b.kind === "subagent" && a.subagent.id === b.subagent.id &&
         a.subagent.revision === b.subagent.revision &&
+        a.subagent.observedSeq === b.subagent.observedSeq &&
         a.subagent.state === b.subagent.state &&
+        a.subagent.reporting === b.subagent.reporting &&
         a.subagent.cancellable === b.subagent.cancellable;
+    case "call":
+      return b.kind === "call" && a.callId === b.callId && a.requestId === b.requestId &&
+        a.origin.kind === b.origin.kind && a.origin.operation === b.origin.operation &&
+        a.approvalRequestId === b.approvalRequestId;
     case "lifecycle":
       return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail &&
         a.turnFailure === b.turnFailure && a.recovered === b.recovered;
@@ -412,15 +429,31 @@ function envelopeEndsMessage(env: Envelope): boolean {
   }
 }
 
-/** The row a streamed chunk may extend. A subagent row is out of band: one
- *  that appeared mid-message stays after it, as in the durable transcript,
- *  where the Controller coalesces the message around it. */
+/** The row a streamed chunk may extend. A subagent row or Call anchor is out
+ *  of band: one that appeared mid-message stays after it, as in the durable
+ *  transcript, where the Controller coalesces the message around it. */
 function lastStreamTarget(items: RenderItem[]): RenderItem | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.kind !== "subagent") return item;
+    if (item?.kind !== "subagent" && item?.kind !== "call") return item;
   }
   return undefined;
+}
+
+export interface CallAnchorOrigin {
+  kind: "mcp" | "gateway" | "repaired" | "unknown";
+  action: string | null;
+  operation: string | null;
+}
+
+function callAnchorOrigin(value: unknown): CallAnchorOrigin {
+  const origin = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const kind = origin["kind"];
+  return {
+    kind: kind === "mcp" || kind === "gateway" || kind === "repaired" ? kind : "unknown",
+    action: typeof origin["action"] === "string" ? origin["action"] : null,
+    operation: typeof origin["operation"] === "string" ? origin["operation"] : null,
+  };
 }
 
 export function derive(timeline: Envelope[]): RenderItem[] {
@@ -433,6 +466,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const permByTool = new Map<string, number>();
   const compactionIndex = new Map<string, number>();
   const subagentIndex = new Map<string, number>();
+  // The seq that last informed each subagent row: the Controller's receipt seq
+  // when stamped, else the envelope's own (legacy) position (I2/I3).
+  const subagentSeen = new Map<string, number>();
+  let workerBoundarySeq = -1;
+  const callIndex = new Map<string, number>();
   const runtimeFailures = new Set<Extract<RenderItem, { kind: "lifecycle" }>>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
@@ -622,14 +660,32 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (!subagent) break;
             const idx = subagentIndex.get(subagent.id);
             const existing = idx === undefined ? undefined : items[idx];
+            const seen = subagent.observedSeq ?? env.seq;
             if (existing?.kind === "subagent") {
               if (newerSubagent(existing.subagent, subagent)) {
                 existing.subagent = mergeSubagent(existing.subagent, subagent);
+                subagentSeen.set(subagent.id, seen);
               }
             } else {
               items.push({ kind: "subagent", key: String(env.seq), subagent });
               subagentIndex.set(subagent.id, items.length - 1);
+              subagentSeen.set(subagent.id, seen);
             }
+            break;
+          }
+          case "cowboy_call_anchor": {
+            // Out of band, like a subagent row: one row per accepted Call.
+            const callId = u["callId"];
+            if (typeof callId !== "string" || !callId || callIndex.has(callId)) break;
+            items.push({
+              kind: "call",
+              key: String(env.seq),
+              callId,
+              requestId: typeof u["requestId"] === "string" ? u["requestId"] : "",
+              origin: callAnchorOrigin(u["origin"]),
+              approvalRequestId: typeof u["approvalRequestId"] === "string" ? u["approvalRequestId"] : null,
+            });
+            callIndex.set(callId, items.length - 1);
             break;
           }
           case "cowboy_fork_origin": {
@@ -711,10 +767,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         }
         if (permissionWaiterGone(env.status) || env.status === "starting") {
           // Subagents live in their worker's ACP connection. A new worker
-          // reports only the subagents it announces again.
-          for (const item of items) {
-            if (item.kind === "subagent") item.subagent = orphanedSubagent(item.subagent);
-          }
+          // reports only the subagents it announces again: a snapshot seen
+          // before this boundary is fenced below (load/resume fencing, I3).
+          workerBoundarySeq = env.seq;
         }
         // Crashes (and interrupted turns) explain a broken turn in the log.
         // A clean worker exit is session chrome — dormant in the status bar —
@@ -789,6 +844,12 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   );
   for (const item of filtered) {
     if (item.kind === "tool") item.status = resultStatus(item.status, item.content);
+    if (
+      item.kind === "subagent" &&
+      (subagentSeen.get(item.subagent.id) ?? Number.POSITIVE_INFINITY) < workerBoundarySeq
+    ) {
+      item.subagent = orphanedSubagent(item.subagent);
+    }
   }
   const result = shareUnchangedRows(timeline, filtered);
   DERIVE_CACHE.set(timeline, result);
@@ -867,6 +928,8 @@ export interface PendingPermission {
   elicitation: Elicitation | null;
   /** Title of the subagent that asked, when a child session asked. */
   subagent?: string | undefined;
+  /** Child session id of the subagent that asked, when one did. */
+  subagentId?: string | undefined;
 }
 /// Every request still waiting for an answer, oldest first: parallel tool
 /// calls each block on their own answer, so the surface answers them in
@@ -894,6 +957,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
       // Re-inserting moves a reused id to its real place in arrival order.
       drop(env.request_id);
       const subagent = requestingSubagent(env.tool_call);
+      const subagentId = requestingSubagentId(env.tool_call);
       pending.set(env.request_id, {
         seq: env.seq,
         requestId: env.request_id,
@@ -902,6 +966,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         options: env.options,
         elicitation: elicitationOf(env.tool_call),
         ...(subagent ? { subagent } : {}),
+        ...(subagentId ? { subagentId } : {}),
       });
       const tool = toolCallIdOf(env.tool_call);
       if (tool !== null) byTool.set(tool, env.request_id);

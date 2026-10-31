@@ -3,10 +3,16 @@
 //! An agent whose call is refused because calls are off (or its target is not
 //! allowed) keeps resubmitting the same request while it waits. Each refusal
 //! refreshes one prompt per parent session that aggregates every waiting
-//! request; a decision applies to the requests waiting at that moment. A
-//! request nobody resubmits drops out after `WAITING_TTL`, so the prompt
-//! disappears when the agent stops waiting. Nothing here is durable: a
-//! Controller restart forgets pending prompts and the agents ask again.
+//! request. Every waiting request has a stable `approval_request_id`, and the
+//! prompt carries the `request_ids` it presents and a `prompt_revision` that
+//! advances whenever that set changes. A decision applies only to the
+//! presented requests still waiting: one that arrived after the person saw
+//! the prompt never inherits an earlier "once" and gets a refreshed prompt
+//! instead (docs/background-tasks.md §5). A request nobody resubmits drops out
+//! after `WAITING_TTL`, so the prompt disappears when the agent stops waiting,
+//! and a recorded decision older than `DECIDED_TTL` is not applied. Nothing
+//! here is durable: a Controller restart forgets pending prompts and the
+//! agents ask again.
 
 use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
@@ -41,6 +47,7 @@ pub(super) enum Gate {
 }
 
 struct Waiting {
+    approval_id: String,
     agent: String,
     purpose: Value,
     summary: String,
@@ -52,16 +59,23 @@ struct Waiting {
 struct Parent {
     waiting: HashMap<String, Waiting>,
     order: Vec<String>,
-    decided: HashMap<String, (Decision, Instant)>,
+    /// Decided request id -> (decision, when, its approval request id).
+    decided: HashMap<String, (Decision, Instant, String)>,
+    /// Advances whenever the waiting set changes.
+    revision: u64,
 }
 
 impl Parent {
     fn prune(&mut self, now: Instant) {
+        let before = self.waiting.len();
         self.waiting
             .retain(|_, waiting| now.duration_since(waiting.seen) < WAITING_TTL);
+        if self.waiting.len() != before {
+            self.revision += 1;
+        }
         self.order.retain(|id| self.waiting.contains_key(id));
         self.decided
-            .retain(|_, (_, at)| now.duration_since(*at) < DECIDED_TTL);
+            .retain(|_, (_, at, _)| now.duration_since(*at) < DECIDED_TTL);
     }
 
     fn is_empty(&self) -> bool {
@@ -72,6 +86,15 @@ impl Parent {
 #[derive(Default)]
 pub(in crate::server) struct Approvals {
     parents: Mutex<HashMap<String, Parent>>,
+}
+
+fn approval_id() -> String {
+    let mut bytes = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+    format!(
+        "apr-{}",
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    )
 }
 
 /// A short, human label: the request's labels when it has any, else the
@@ -114,7 +137,7 @@ impl Approvals {
         let entry = parents.entry(parent.to_owned()).or_default();
         entry.prune(now);
         match entry.decided.get(&request.request_id) {
-            Some((Decision::Decline, _)) => return Gate::Declined,
+            Some((Decision::Decline, _, _)) => return Gate::Declined,
             Some(_) => return Gate::Approved,
             None => {}
         }
@@ -128,9 +151,11 @@ impl Approvals {
             return Gate::Pending;
         }
         entry.order.push(request.request_id.clone());
+        entry.revision += 1;
         entry.waiting.insert(
             request.request_id.clone(),
             Waiting {
+                approval_id: approval_id(),
                 agent: agent.to_owned(),
                 purpose: serde_json::to_value(request.purpose).unwrap_or(Value::Null),
                 summary: summary(request),
@@ -141,42 +166,59 @@ impl Approvals {
         Gate::Pending
     }
 
-    /// An admitted request no longer needs its decision.
-    pub(super) fn admitted(&self, parent: &str, request_id: &str) {
+    /// An admitted request no longer needs its decision. Returns the approval
+    /// request id a person decided for it, if one did.
+    pub(super) fn admitted(&self, parent: &str, request_id: &str) -> Option<String> {
         let mut parents = self.parents.lock();
-        if let Some(entry) = parents.get_mut(parent) {
-            entry.decided.remove(request_id);
-            entry.waiting.remove(request_id);
-            entry.order.retain(|id| id != request_id);
-            if entry.is_empty() {
-                parents.remove(parent);
-            }
+        let entry = parents.get_mut(parent)?;
+        let approval = entry.decided.remove(request_id).map(|(_, _, id)| id);
+        if entry.waiting.remove(request_id).is_some() {
+            entry.revision += 1;
         }
+        entry.order.retain(|id| id != request_id);
+        if entry.is_empty() {
+            parents.remove(parent);
+        }
+        approval
     }
 
-    /// Apply a decision to every request waiting now; returns their agents,
-    /// or `None` when nothing was waiting.
+    /// Apply a decision. With `presented`, only the presented requests that
+    /// are still waiting are decided; later arrivals stay pending. Without it
+    /// (a Web client older than the binding) every waiting request is decided,
+    /// as before. Returns the decided requests' agents, or `None` when none of
+    /// the targeted requests is waiting any more.
     pub(in crate::server) fn decide(
         &self,
         parent: &str,
         decision: Decision,
+        presented: Option<&[String]>,
     ) -> Option<Vec<String>> {
         let now = Instant::now();
         let mut parents = self.parents.lock();
         let entry = parents.get_mut(parent)?;
         entry.prune(now);
-        if entry.waiting.is_empty() {
+        let targeted: Vec<String> = entry
+            .waiting
+            .iter()
+            .filter(|(_, waiting)| {
+                presented.is_none_or(|presented| presented.contains(&waiting.approval_id))
+            })
+            .map(|(request_id, _)| request_id.clone())
+            .collect();
+        if targeted.is_empty() {
             return None;
         }
-        let agents: BTreeSet<String> = entry
-            .waiting
-            .values()
-            .map(|waiting| waiting.agent.clone())
-            .collect();
-        for (request_id, _) in entry.waiting.drain() {
-            entry.decided.insert(request_id, (decision, now));
+        let mut agents = BTreeSet::new();
+        for request_id in targeted {
+            if let Some(waiting) = entry.waiting.remove(&request_id) {
+                agents.insert(waiting.agent);
+                entry
+                    .decided
+                    .insert(request_id, (decision, now, waiting.approval_id));
+            }
         }
-        entry.order.clear();
+        entry.order.retain(|id| entry.waiting.contains_key(id));
+        entry.revision += 1;
         Some(agents.into_iter().collect())
     }
 
@@ -211,10 +253,15 @@ impl Approvals {
             "requests": waiting.len(),
             "agents": agents,
             "items": waiting.iter().take(MAX_SHOWN).map(|item| json!({
+                "approval_request_id": item.approval_id,
                 "agent": item.agent,
                 "purpose": item.purpose,
                 "summary": item.summary,
             })).collect::<Vec<_>>(),
+            // Every request this prompt presents, including those beyond the
+            // shown items: a decision binds to exactly this set.
+            "request_ids": waiting.iter().map(|item| item.approval_id.as_str()).collect::<Vec<_>>(),
+            "prompt_revision": entry.revision,
             "ttl_ms": WAITING_TTL.as_millis() as u64,
         }))
     }
@@ -257,7 +304,7 @@ mod tests {
         assert_eq!(view["reason"], "calls_disabled");
         assert_eq!(view["items"][0]["summary"], "Review the change");
         assert_eq!(
-            approvals.decide("p", Decision::Once),
+            approvals.decide("p", Decision::Once, None),
             Some(vec!["claude-code".to_owned(), "codex".to_owned()])
         );
         assert!(approvals.view("p", "claude-code").is_none());
@@ -265,17 +312,118 @@ mod tests {
             approvals.refused("p", &request("r1"), "codex", "calls_disabled"),
             Gate::Approved
         );
-        approvals.admitted("p", "r1");
+        assert!(
+            approvals
+                .admitted("p", "r1")
+                .is_some_and(|id| id.starts_with("apr-"))
+        );
         // Admission consumes a once-approval.
         assert_eq!(
             approvals.refused("p", &request("r1"), "codex", "calls_disabled"),
             Gate::Pending
         );
-        assert_eq!(approvals.decide("p", Decision::Decline).unwrap().len(), 1);
+        assert_eq!(
+            approvals
+                .decide("p", Decision::Decline, None)
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(
             approvals.refused("p", &request("r1"), "codex", "calls_disabled"),
             Gate::Declined
         );
-        assert!(approvals.decide("other", Decision::Once).is_none());
+        assert!(approvals.decide("other", Decision::Once, None).is_none());
+    }
+
+    // T10: a request that arrives after the prompt was presented is not
+    // admitted by the earlier "once"; it gets a refreshed prompt.
+    #[test]
+    fn t10_a_decision_binds_to_the_presented_requests_only() {
+        let approvals = Approvals::default();
+        approvals.refused("p", &request("r1"), "codex", "calls_disabled");
+        let shown = approvals.view("p", "claude-code").unwrap();
+        let presented: Vec<String> = shown["request_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(presented.len(), 1);
+        assert_eq!(
+            shown["items"][0]["approval_request_id"],
+            presented[0].as_str()
+        );
+        let revision = shown["prompt_revision"].as_u64().unwrap();
+        // r2 arrives after the person saw the prompt.
+        approvals.refused("p", &request("r2"), "claude-code", "calls_disabled");
+        let refreshed = approvals.view("p", "claude-code").unwrap();
+        assert!(refreshed["prompt_revision"].as_u64().unwrap() > revision);
+        assert_eq!(
+            approvals.decide("p", Decision::Once, Some(&presented)),
+            Some(vec!["codex".to_owned()])
+        );
+        assert_eq!(
+            approvals.refused("p", &request("r1"), "codex", "calls_disabled"),
+            Gate::Approved
+        );
+        assert_eq!(
+            approvals.refused("p", &request("r2"), "claude-code", "calls_disabled"),
+            Gate::Pending,
+            "the late request did not inherit the once"
+        );
+        let after = approvals.view("p", "claude-code").unwrap();
+        assert_eq!(after["requests"], 1);
+        assert_eq!(after["items"][0]["agent"], "claude-code");
+        // A stale presented set (nothing it names still waits) decides nothing.
+        assert_eq!(
+            approvals.decide("p", Decision::Once, Some(&presented)),
+            None
+        );
+        assert_eq!(
+            approvals.refused("p", &request("r2"), "claude-code", "calls_disabled"),
+            Gate::Pending
+        );
+    }
+
+    #[test]
+    fn t10_expired_prompts_and_decisions_are_not_actionable() {
+        let approvals = Approvals::default();
+        approvals.refused("p", &request("r1"), "codex", "calls_disabled");
+        let presented: Vec<String> = approvals.view("p", "codex").unwrap()["request_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        {
+            let mut parents = approvals.parents.lock();
+            let entry = parents.get_mut("p").unwrap();
+            for waiting in entry.waiting.values_mut() {
+                waiting.seen = Instant::now().checked_sub(WAITING_TTL).unwrap();
+            }
+        }
+        assert!(
+            approvals.view("p", "codex").is_none(),
+            "an expired prompt disappears"
+        );
+        assert_eq!(
+            approvals.decide("p", Decision::Once, Some(&presented)),
+            None
+        );
+        approvals.refused("p", &request("r3"), "codex", "calls_disabled");
+        approvals.decide("p", Decision::Once, None).unwrap();
+        {
+            let mut parents = approvals.parents.lock();
+            let entry = parents.get_mut("p").unwrap();
+            for decided in entry.decided.values_mut() {
+                decided.1 = Instant::now().checked_sub(DECIDED_TTL).unwrap();
+            }
+        }
+        assert_eq!(
+            approvals.refused("p", &request("r3"), "codex", "calls_disabled"),
+            Gate::Pending,
+            "a decision older than 30 minutes is not applied"
+        );
     }
 }

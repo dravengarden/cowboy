@@ -25,24 +25,33 @@ done
 export PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null
 
 # Compile once, before starting the server. Use Cargo's artifact path instead of
-# assuming a target directory or choosing a stale executable from a glob.
-fixture_binary="$(
-  cargo test -p cowboy --lib --all-features --locked --no-run \
+# assuming a target directory or choosing a stale executable from a glob. The
+# Cowboy library owns most storage contracts; the Controller crate owns the
+# store writer, whose transcript-anchor contract also runs on both databases.
+fixture_binary_for() {
+  local package="$1" target="$2"
+  cargo test -p "$package" --lib --all-features --locked --no-run \
     --message-format=json-render-diagnostics |
-    jq -r 'select(.reason == "compiler-artifact" and .target.name == "cowboy"
+    jq -r --arg target "$target" 'select(.reason == "compiler-artifact" and .target.name == $target
       and .profile.test and (.target.kind | index("lib"))) | .executable // empty'
-)"
-if [[ ! -f "$fixture_binary" || ! -x "$fixture_binary" ]]; then
-  echo "Cargo did not produce exactly one Cowboy library test executable" >&2
-  exit 1
-fi
-fixture_listing="$("$fixture_binary" --ignored --list)"
+}
+fixture_binaries=()
 fixture_tests=()
-while IFS= read -r fixture_test; do
-  case "$fixture_test" in
-    *::postgres_*": test") fixture_tests+=("${fixture_test%: test}");;
-  esac
-done <<< "$fixture_listing"
+for fixture_crate in cowboy:cowboy cowboy-server:cowboy_server; do
+  fixture_binary="$(fixture_binary_for "${fixture_crate%%:*}" "${fixture_crate#*:}")"
+  if [[ ! -f "$fixture_binary" || ! -x "$fixture_binary" ]]; then
+    echo "Cargo did not produce exactly one ${fixture_crate%%:*} library test executable" >&2
+    exit 1
+  fi
+  fixture_listing="$("$fixture_binary" --ignored --list)"
+  while IFS= read -r fixture_test; do
+    case "$fixture_test" in
+      *::postgres_*": test")
+        fixture_binaries+=("$fixture_binary")
+        fixture_tests+=("${fixture_test%: test}");;
+    esac
+  done <<< "$fixture_listing"
+done
 if ((${#fixture_tests[@]} == 0)); then
   echo "no ignored postgres_ tests found; refusing an empty database gate" >&2
   exit 1
@@ -97,7 +106,9 @@ pg_ctl -D "$fixture_root/data" -l "$fixture_root/postgres.log" \
 
 echo "Running ${#fixture_tests[@]} PostgreSQL tests, each in an isolated empty database"
 fixture_index=0
-for fixture_test in "${fixture_tests[@]}"; do
+for fixture_position in "${!fixture_tests[@]}"; do
+  fixture_test="${fixture_tests[$fixture_position]}"
+  fixture_binary="${fixture_binaries[$fixture_position]}"
   fixture_index=$((fixture_index + 1))
   fixture_database="cowboy_test_$fixture_index"
   createdb --host="$fixture_root/socket" --port=5432 --username=cowboy_test \

@@ -56,7 +56,7 @@ fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Resul
 }
 
 /// Execution Machine, runtime Machine and project of an admitted session.
-fn placement(meta: &SessionMeta) -> Result<(String, Option<String>, String), String> {
+pub(super) fn placement(meta: &SessionMeta) -> Result<(String, Option<String>, String), String> {
     let project = meta
         .workspace_id
         .clone()

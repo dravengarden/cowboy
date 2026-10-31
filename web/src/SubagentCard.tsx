@@ -1,39 +1,24 @@
-// One ACP subagent in the parent transcript: a single live row (title, state,
-// a one-line preview and counts) whose own messages and tool calls stay in a
-// collapsed, bounded activity list. Shared by Desktop and Mobile.
+// One ACP subagent's details: what it was asked, its bounded activity and its
+// result. The transcript shows one compact row per subagent (TaskRow); these
+// details open in the background-tasks inspector. Shared by Desktop and Mobile.
 
-import { useEffect, useState } from "react";
 import {
   Box,
   Button,
-  Chip,
-  Collapse,
   DialogContentText,
-  IconButton,
-  Paper,
   Stack,
   Typography,
 } from "@mui/material";
-import { alpha, type Theme } from "@mui/material/styles";
-import {
-  AccountTreeOutlined,
-  ChatBubbleOutline,
-  ExpandMore,
-  StopCircleOutlined,
-  Terminal,
-} from "@mui/icons-material";
-import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
+import type { Theme } from "@mui/material/styles";
+import { ChatBubbleOutline, Terminal } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ConfirmSheet } from "./Sheet";
 import { glyphSize } from "./surface/desktopSize";
-import { cancelSubagent } from "./store";
 import {
   type Subagent,
-  SUBAGENT_STOP_KEY,
   type SubagentTone,
   subagentCounts,
-  subagentPreview,
   subagentStatus,
 } from "./subagents";
 
@@ -99,11 +84,14 @@ function Section({ label, children }: { label: string; children: string }): Reac
 function SubagentStopConfirm({
   open,
   title,
+  noun = "subagent",
   onClose,
   onConfirm,
 }: {
   open: boolean;
   title: string;
+  /** "subagent" or "call". */
+  noun?: string;
   onClose: () => void;
   onConfirm: () => void;
 }): React.JSX.Element {
@@ -112,7 +100,7 @@ function SubagentStopConfirm({
     <ConfirmSheet
       open={open}
       onClose={onClose}
-      title={`Stop subagent ${title}?`}
+      title={`Stop ${noun} ${title}?`}
       actions={
         <>
           <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
@@ -133,190 +121,100 @@ function SubagentStopConfirm({
       }
     >
       <DialogContentText>
-        Only this subagent stops; the session and its other subagents keep
-        working. What it did so far stays in its activity.
+        {noun === "subagent"
+          ? "Only this subagent stops; the session and its other subagents keep working. What it did so far stays in its activity."
+          : "Only this call stops; the session keeps working. Its conversation so far stays available."}
       </DialogContentText>
     </ConfirmSheet>
   );
 }
 
-export function SubagentCard({
+/** A task's chip color, by its display tone. */
+export function taskChipColor(tone: SubagentTone): "info" | "warning" | "success" | "error" | "default" {
+  return chipColor(tone);
+}
+
+export function taskToneColor(tone: SubagentTone, theme: Theme): string {
+  return toneColor(tone, theme);
+}
+
+/** Today's subagent card body — what it was asked, its bounded activity, its
+ *  result or error — now shown in the background-tasks inspector instead of
+ *  an inline expansion (docs/background-tasks.md §6.1). */
+export function SubagentDetail({
   subagent,
-  sessionId,
-  desktop,
-  stop = cancelSubagent,
+  resumed = false,
 }: {
   subagent: Subagent;
-  sessionId: string;
-  desktop: boolean;
-  /** Sends the stop; returns whether it was sent. Fixtures capture it. */
-  stop?: (sessionId: string, subagentSessionId: string) => boolean;
+  /** A run after an earlier one was observed: snapshots keep the latest only. */
+  resumed?: boolean;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  // A stop is a request: the subagent reports `idle` once it actually stopped.
-  const [stopping, setStopping] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  // Desktop draws the Stop key only on the focused row (item-scoped hints).
-  const [focused, setFocused] = useState(false);
-  useEffect(() => {
-    if (!subagent.cancellable) {
-      setStopping(false);
-      setConfirming(false);
-    }
-  }, [subagent.cancellable]);
-  const confirmStop = (): void => {
-    setConfirming(false);
-    if (stop(sessionId, subagent.id)) setStopping(true);
-  };
   const status = subagentStatus(subagent);
-  const counts = subagentCounts(subagent);
-  const preview = subagentPreview(subagent);
   const working = status.tone === "working" || status.tone === "waiting";
-  const details = [subagent.description, counts].filter(Boolean).join(" · ");
-  const activityId = `subagent-activity-${subagent.id}`;
+  const counts = subagentCounts(subagent);
   return (
-    <Paper
-      elevation={0}
-      data-subagent-row={subagent.id}
-      data-subagent-state={subagent.state}
-      data-subagent-reporting={subagent.reporting ? undefined : "false"}
-      onFocus={(): void => setFocused(true)}
-      onBlur={(event: React.FocusEvent<HTMLElement>): void => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
-      }}
-      sx={(theme) => ({
-        alignSelf: "stretch",
-        overflow: "hidden",
-        bgcolor: "background.paper",
-        backgroundImage: `linear-gradient(105deg, ${alpha(
-          toneColor(status.tone, theme),
-          theme.palette.mode === "dark" ? 0.12 : 0.06,
-        )}, transparent 52%)`,
-        boxShadow: `0 1px 3px ${alpha(
-          theme.palette.common.black,
-          theme.palette.mode === "dark" ? 0.16 : 0.06,
-        )}`,
-        borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-      })}
-    >
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1 }}>
-        <AccountTreeOutlined
-          sx={(theme) => ({ fontSize: glyphSize(18), color: toneColor(status.tone, theme) })}
-        />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            variant="body2"
-            noWrap
-            sx={{ fontSize: "inherit", fontWeight: 650, fontFamily: "var(--cowboy-reading-font, inherit)" }}
-          >
-            {subagent.parentId ? "↳ " : ""}
-            {subagent.title}
-          </Typography>
-          {details && (
-            <Typography variant="caption" noWrap sx={{ display: "block", color: "text.secondary" }}>
-              {details}
-            </Typography>
-          )}
-          {preview && (
-            <Typography
-              variant="caption"
-              noWrap
-              data-subagent-preview
-              sx={{ display: "block", color: working ? "text.primary" : "text.secondary" }}
+    <Box data-subagent-activity sx={{ color: "text.primary" }}>
+      {(subagent.description || counts) && (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          {[subagent.description, counts].filter(Boolean).join(" · ")}
+        </Typography>
+      )}
+      {resumed && (
+        <Typography variant="caption" data-subagent-latest-run sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
+          Showing the latest run only; earlier runs are not retained.
+        </Typography>
+      )}
+      {subagent.prompt && <Section label="Asked">{subagent.prompt}</Section>}
+      {subagent.omittedActivity > 0 && (
+        <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
+          {subagent.omittedActivity === 1
+            ? "1 earlier step not shown"
+            : `${String(subagent.omittedActivity)} earlier steps not shown`}
+        </Typography>
+      )}
+      {subagent.activity.length > 0 && (
+        <Stack component="ol" spacing={0.5} sx={{ listStyle: "none", m: 0, mt: 0.75, p: 0 }}>
+          {subagent.activity.map((entry, index) => (
+            <Stack
+              component="li"
+              key={entry.id ?? `message-${String(index)}`}
+              direction="row"
+              spacing={0.75}
+              alignItems="flex-start"
+              data-subagent-activity-entry={entry.kind}
+              sx={{ fontSize: "0.8125rem", minWidth: 0 }}
             >
-              {preview}
-            </Typography>
-          )}
-        </Box>
-        <Chip size="small" variant="outlined" color={chipColor(status.tone)} label={status.label} />
-        {subagent.cancellable && (
-          <Button
-            size="small"
-            color="error"
-            data-subagent-stop
-            disabled={stopping}
-            startIcon={<StopCircleOutlined />}
-            aria-label={`Stop subagent ${subagent.title}`}
-            onClick={(): void => setConfirming(true)}
-            sx={{ minWidth: 0, minHeight: { xs: 40, sm: 30 }, textTransform: "none" }}
-          >
-            {stopping ? "Stopping…" : "Stop"}
-            {desktop && focused && !stopping && <Kbd keys={SUBAGENT_STOP_KEY} variant="context" />}
-          </Button>
-        )}
-        <IconButton
-          size={desktop ? "small" : "medium"}
-          data-desktop-item-action="default"
-          {...(desktop ? { "data-desktop-widget-toggle": "subagent" } : {})}
-          aria-expanded={open}
-          aria-controls={activityId}
-          aria-label={open ? "Hide subagent activity" : "Show subagent activity"}
-          onClick={(): void => setOpen((value) => !value)}
-        >
-          <ExpandMore
-            sx={{ transition: "transform 120ms ease", transform: open ? "rotate(180deg)" : "none" }}
-          />
-        </IconButton>
-      </Stack>
-      <Collapse in={open} unmountOnExit>
-        <Box id={activityId} data-subagent-activity sx={{ px: 1.5, pb: 1.25 }}>
-          {subagent.prompt && <Section label="Asked">{subagent.prompt}</Section>}
-          {subagent.omittedActivity > 0 && (
-            <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
-              {subagent.omittedActivity === 1
-                ? "1 earlier step not shown"
-                : `${String(subagent.omittedActivity)} earlier steps not shown`}
-            </Typography>
-          )}
-          {subagent.activity.length > 0 && (
-            <Stack component="ol" spacing={0.5} sx={{ listStyle: "none", m: 0, mt: 0.75, p: 0 }}>
-              {subagent.activity.map((entry, index) => (
-                <Stack
-                  component="li"
-                  key={entry.id ?? `message-${String(index)}`}
-                  direction="row"
-                  spacing={0.75}
-                  alignItems="flex-start"
-                  data-subagent-activity-entry={entry.kind}
-                  sx={{ fontSize: "0.8125rem", minWidth: 0 }}
-                >
-                  {entry.kind === "tool"
-                    ? <Terminal sx={{ fontSize: glyphSize(15), mt: "2px", color: "text.secondary" }} />
-                    : <ChatBubbleOutline sx={{ fontSize: glyphSize(15), mt: "2px", color: "text.secondary" }} />}
-                  <Box
-                    sx={{
-                      flex: 1,
-                      minWidth: 0,
-                      overflowWrap: "anywhere",
-                      whiteSpace: entry.kind === "message" ? "pre-wrap" : "normal",
-                    }}
-                  >
-                    {entry.text}
-                  </Box>
-                  {entry.kind === "tool" && (
-                    <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
-                      {toolStatusLabel(entry.status, working)}
-                    </Typography>
-                  )}
-                </Stack>
-              ))}
+              {entry.kind === "tool"
+                ? <Terminal sx={{ fontSize: glyphSize(15), mt: "2px", color: "text.secondary" }} />
+                : <ChatBubbleOutline sx={{ fontSize: glyphSize(15), mt: "2px", color: "text.secondary" }} />}
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflowWrap: "anywhere",
+                  whiteSpace: entry.kind === "message" ? "pre-wrap" : "normal",
+                }}
+              >
+                {entry.text}
+              </Box>
+              {entry.kind === "tool" && (
+                <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
+                  {toolStatusLabel(entry.status, working)}
+                </Typography>
+              )}
             </Stack>
-          )}
-          {subagent.result && !working && <Section label="Result">{subagent.result}</Section>}
-          {subagent.error && <Section label="Error">{subagent.error}</Section>}
-          {!subagent.prompt && subagent.activity.length === 0 && !subagent.result && (
-            <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
-              No activity yet.
-            </Typography>
-          )}
-        </Box>
-      </Collapse>
-      <SubagentStopConfirm
-        open={confirming && subagent.cancellable}
-        title={subagent.title}
-        onClose={(): void => setConfirming(false)}
-        onConfirm={confirmStop}
-      />
-    </Paper>
+          ))}
+        </Stack>
+      )}
+      {subagent.result && !working && <Section label="Result">{subagent.result}</Section>}
+      {subagent.error && <Section label="Error">{subagent.error}</Section>}
+      {!subagent.prompt && subagent.activity.length === 0 && !subagent.result && (
+        <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
+          No activity yet.
+        </Typography>
+      )}
+    </Box>
   );
 }
+
+export { SubagentStopConfirm };

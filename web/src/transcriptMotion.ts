@@ -8,6 +8,10 @@ export type TranscriptRowContainment = "layout paint" | "layout" | "none";
  * height one frame after scroll anchoring has positioned it, which looks like
  * the message itself is shaking even while its layout box stays still.
  *
+ * A running tool card belongs here too. It is a new row whose pulse makes it a
+ * compositor layer, and iOS WebKit can leave that layer unpainted inside a
+ * fresh paint boundary: the row keeps its height and the card is missing.
+ *
  * A settled row with lazy media cannot own a paint boundary either. iOS
  * WebKit may rasterize that row while the image is still off-screen, then keep
  * the empty layer after decode when a column-reverse scroller reveals it. Keep

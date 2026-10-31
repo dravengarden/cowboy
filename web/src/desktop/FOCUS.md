@@ -108,7 +108,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
 | `␣T` + `R/U/A/N/L/C/X/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
-| `␣G` | Open or close Calls (Agents this session called) |
+| `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣X` | Extensions: the installed Plugins' resources for the open session (VS Code's Ctrl+Shift+X) |
@@ -654,10 +654,17 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;
-- `x` on a selected subagent row that can be stopped opens that row's Stop
-  confirmation (`Mod+Enter` stops it, `Esc` keeps it running). The row draws
-  the key on its Stop button only while it holds focus; with no subagent row
-  selected the key does nothing.
+- `x` on a selected background-task row (a subagent or Call) that can be
+  stopped opens that row's Stop confirmation (`Mod+Enter` stops it, `Esc`
+  keeps it running). The row draws the key on its Stop button only while it
+  holds focus; with no task row selected the key does nothing.
+- A background-task row never expands in place: `Enter`/`l` opens the
+  Background tasks inspector at that task (docs/background-tasks.md). Inside
+  it `j/k` and `[`/`]` move the selection (stable by task while groups
+  reorder), `o` opens a Call's conversation, `Shift+L` locates the row, `x`
+  opens Stop, `Esc`/`h` close it and return focus to the originating row (or
+  to the Prompt when it was opened from the bar or `␣G`). Its single keys are
+  ignored during IME composition and inside text fields.
 
 Any navigation away from the latest output pauses following. `G`, or enabling
 Following again, returns to the latest output. The status line exposes this

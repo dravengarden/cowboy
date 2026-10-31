@@ -65,15 +65,18 @@ Session Settings; the Transcript carries no fork, branch or continuation
 controls.
 
 A continuation and a fork differ in shape. Continuing moves the work to a new
-agent, so there is one line and the original becomes history. Forking copies a
-conversation, so there are two live lines. An accepted handoff hibernates the
-original's idle agent (best effort; Session Settings still offers **Hibernate**
-if the worker stayed), and the session list marks the original **History**.
-Its Composer gives way to a dock: **Open** goes to the continuation, **Fork**
+agent, so there is one line and the original leaves. Forking copies a
+conversation, so there are two live lines. An accepted handoff moves the
+original to Trash, with Undo on the device that sent it, also when that device
+recovers a lost reply. In Trash it stays
+readable, by the continuation through Cowboy MCP as well, until retention ends;
+its worktree is intact for **Restore** until then. If Trash refuses, the
+original stays as read-only history: the session list marks it **History** and
+its Composer gives way to a dock. **Open** goes to the continuation, **Fork**
 starts a separate session from this agent's conversation (natively where the
 Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
-original away and opens the continuation. The continuation can read that
-history until Trash retention ends. Writing in the original would silently
+original away and opens the continuation. Restoring leads to the same state.
+Writing in the original would silently
 split one piece of work in two, so the web offers no way to do it;
 Select sessions, **Continue or fork** and the session menu item are
 hidden for the same reason. While its agent is still busy the
@@ -91,7 +94,7 @@ next-send choice, so it leaves the Composer. The switch itself stays in Session
 Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
 its empty and preparing state), with `+N` for its other links.
 
-The links list in Session Settings has one row per link: "Forked from",
+The links list in Session Settings starts folded under "N links" and has one row per link: "Forked from",
 "Continued from" or "Linked", with the title and subscription. A link is
 recorded when its send is accepted (`links` in the context) and survives later
 edits, with the history boundary and title captured then. Following a row opens
@@ -151,11 +154,14 @@ created, then checked again against its actual admitted generation. A concurrent
 change can still fail after creation; the failed receipt explicitly identifies
 the unsent destination for inspection or deletion, and never retries the message.
 
-Git projects follow normal isolated-worktree creation. Other registered
-directories retain their existing sharing rules. This feature does not copy or
-move uncommitted work. The bootstrap tells the destination to inspect original
-worktree state and reconcile relevant changes explicitly. Selected source
-sessions are not stopped, modified or granted new access by a link.
+A continuation in the source's project on its execution Machine (protocol 39 or
+later), from a source that has run, picks up the work where it stands: its new worktree starts from the source's `HEAD` with the
+source's uncommitted changes, through the same copy as a
+[fork](session-fork.md), including its limits and the 512 MiB refusal. The source
+worktree is never written, so Undo and Restore return it unchanged. Another
+project or Machine follows normal isolated-worktree creation and the changes
+stay with the source. Other registered directories retain their existing sharing
+rules. Selected source sessions are not stopped, modified or granted new access by a link.
 
 ## Back for in-place changes
 
@@ -247,6 +253,10 @@ first attempted resend observes that receipt and opens the destination once,
 with an explanatory notice, instead of duplicating the message. Returning to the
 original session then permits a deliberate new message there.
 
+A slash command cannot start a new agent: it needs a conversation, and the
+source would go to Trash for nothing. The send is refused with the staged choice
+intact, so the user writes the first message or goes Back.
+
 A send reserves its operation and destination before creation. A duplicate with
 the same operation and payload observes that receipt; another payload cannot
 reuse the operation. Source and destination mutation locks protect first-send
@@ -303,7 +313,8 @@ the carrier receives the preamble, including on retries of the same prompt. If
 the bootstrap row leaves the queue undispatched (removed, cleared by an edit) or
 a front insert overtakes it, the next dispatched prompt becomes the carrier and
 the overtaken row is later sent as an ordinary message. Scheduled wakeups,
-retries and managed-call prompts never carry or consume the links; current-turn
+retries, managed-call prompts and slash commands such as `/compact` never carry
+or consume the links; current-turn
 steering bypasses dispatch and leaves them for the next queued prompt. If the
 record cannot be written, the prompt stays queued instead of being sent without
 durable evidence, so a Controller restart cannot apply the links twice. A prompt

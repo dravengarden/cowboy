@@ -1,4 +1,5 @@
 /** Actual Calls dock and child notice, synthetic HTTP in an isolated browser. */
+import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CssBaseline } from "@mui/material";
@@ -268,7 +269,9 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const provider = managementEntryFixture("codex");
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    // A focused bootstrap names the client's cached high-water seq
+    // (`?since_seq=`, docs/background-tasks.md); route it by its path.
+    const url = String(input).replace(/(\/bootstrap)\?since_seq=\d+$/, "$1");
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
@@ -408,11 +411,15 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   container.style.width = "560px";
   document.body.append(container);
   let root: Root = createRoot(container);
+  // The product's notice host: Calls cleanup offers its Undo there.
   const render = (node: React.ReactNode) =>
     flushSync(() =>
       root.render(
         <BrowserProductTheme>
-          <SurfaceProvider>{node}</SurfaceProvider>
+          <SurfaceProvider>
+            {node}
+            <DocumentNotifications />
+          </SurfaceProvider>
         </BrowserProductTheme>,
       )
     );
@@ -1398,7 +1405,9 @@ export async function renderManagedCallsPreview(
   const provider = managementEntryFixture("codex");
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL) => {
-    const url = String(input);
+    // A focused bootstrap names the client's cached high-water seq
+    // (`?since_seq=`, docs/background-tasks.md); route it by its path.
+    const url = String(input).replace(/(\/bootstrap)\?since_seq=\d+$/, "$1");
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",

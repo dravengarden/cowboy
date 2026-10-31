@@ -6,10 +6,21 @@ import { agentLabel } from "./agentTools";
 // on every resubmission (every few seconds while the agent waits), so a
 // reconnecting client recovers the prompt without a read. A prompt that is not
 // refreshed within its `ttl_ms` has been abandoned by the agent and hides.
+//
+// A decision binds to the requests the person was shown (docs/background-
+// tasks.md §5): the prompt names them in `request_ids` with a
+// `prompt_revision`, and the answer sends exactly that set as `presented`. A
+// request that arrives later never inherits an earlier "once"; the Controller
+// pushes a refreshed prompt for it instead. Only a prompt on screen can be
+// answered: an answer never reads the latest prompt when clicked. A Controller
+// older than the binding sends no `request_ids`, and the answer keeps its old
+// shape for such a displayed prompt.
 
 export type CallApprovalDecision = "once" | "session" | "decline";
 
 export interface CallApprovalItem {
+  /** Stable identity of this waiting request (Controllers with binding). */
+  approval_request_id?: string;
   agent: string;
   purpose: string;
   summary: string;
@@ -22,7 +33,28 @@ export interface CallApproval {
   requests: number;
   agents: string[];
   items: CallApprovalItem[];
+  /** Every request this prompt presents (Controllers with binding). */
+  request_ids?: string[];
+  /** Advances whenever the waiting set changes. */
+  prompt_revision?: number;
   ttl_ms: number;
+}
+
+/** The body of an answer to `approval`: bound to its presented requests when
+ * the Controller supports binding, else the legacy aggregate decision. */
+export function callApprovalDecisionBody(
+  decision: CallApprovalDecision,
+  approval: CallApproval,
+): Record<string, unknown> {
+  const presented = approval.request_ids;
+  if (!Array.isArray(presented) || presented.length === 0) return { decision };
+  return {
+    decision,
+    presented,
+    ...(typeof approval.prompt_revision === "number"
+      ? { prompt_revision: approval.prompt_revision }
+      : {}),
+  };
 }
 
 interface Entry {
@@ -109,23 +141,38 @@ export function callApprovalReason(approval: CallApproval): string {
 export async function decideCallApproval(
   sessionId: string,
   decision: CallApprovalDecision,
+  presented: CallApproval,
 ): Promise<void> {
   const response = await fetch(
     `/api/sessions/${encodeURIComponent(sessionId)}/calls/approval`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify(callApprovalDecisionBody(decision, presented)),
     },
   );
-  // 409: the agent stopped waiting before the answer arrived.
+  // 409: nothing the person saw still waits (the agent stopped asking or the
+  // prompt expired). The Controller pushes the current prompt, if any.
   if (response.status === 409) {
-    receiveCallApproval(sessionId, null);
+    retireAnswered(sessionId, presented);
     return;
   }
   if (!response.ok) {
     throw new Error(`Could not answer the call request (${response.status})`);
   }
+  retireAnswered(sessionId, presented);
+}
+
+/** Hide the answered prompt unless a refreshed one (a request that arrived
+ * after it was shown) already replaced it. */
+function retireAnswered(sessionId: string, answered: CallApproval): void {
+  const current = entries.get(sessionId)?.approval;
+  if (current === undefined) return;
+  if (
+    current !== answered &&
+    typeof current.prompt_revision === "number" &&
+    current.prompt_revision !== answered.prompt_revision
+  ) return;
   receiveCallApproval(sessionId, null);
 }
 
@@ -136,18 +183,21 @@ export interface CallApprovalAnswer {
 }
 
 /** One answer at a time, with the refusal kept for the surface to show. */
-export function useCallApprovalAnswer(sessionId: string): CallApprovalAnswer {
+export function useCallApprovalAnswer(
+  sessionId: string,
+  approval: CallApproval,
+): CallApprovalAnswer {
   const [busy, setBusy] = useState<CallApprovalDecision | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const answer = useCallback((decision: CallApprovalDecision): void => {
     if (busy) return;
     setBusy(decision);
     setFailure(null);
-    decideCallApproval(sessionId, decision).catch((reason: unknown) => {
+    decideCallApproval(sessionId, decision, approval).catch((reason: unknown) => {
       setFailure(
         reason instanceof Error ? reason.message : "Could not answer",
       );
     }).finally(() => setBusy(null));
-  }, [busy, sessionId]);
+  }, [approval, busy, sessionId]);
   return { busy, failure, answer };
 }

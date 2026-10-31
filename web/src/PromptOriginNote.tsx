@@ -57,7 +57,8 @@ function CowboyOriginNote({
           borderColor: "divider",
           bgcolor: "action.hover",
           color: "text.secondary",
-          fontSize: desktopSize(13),
+          // Message text: rem follows the global font size on every surface.
+          fontSize: "0.8125rem",
         }}
       >
         <Markdown text={text} />

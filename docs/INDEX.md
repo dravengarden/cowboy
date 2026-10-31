@@ -27,6 +27,7 @@ primary phone/desktop product path.
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
 - [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
+- [`background-tasks.md`](background-tasks.md) — Background tasks: one compact row, inspector and bar for subagents and Calls; durable transcript anchors, terminal-state reconciliation, approval binding, diagnostics (Phase 1 implemented) and the later notification/native-work/capability phases
 - [`subagents.md`](subagents.md) — ACP subagents: child-session routing, one bounded live row per subagent, attributed permission requests, stopping one subagent (Machine protocol 40), not-reporting rows, per-model usage, ACP bridge forwarding and adapter behavior
 - [`tool-results.md`](tool-results.md) — Provider-independent MCP result retention, Cowboy/Matrix tool presentation and Desktop/Mobile inspection
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions

@@ -113,7 +113,9 @@ export async function runSessionContextBrowserConformance(
   globalThis.WebSocket = Socket as unknown as typeof WebSocket;
   bindProductSyncPrincipal("context-fixture");
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    // A focused bootstrap names the client's cached high-water seq
+    // (`?since_seq=`, docs/background-tasks.md); route it by its path.
+    const url = String(input).replace(/(\/bootstrap)\?since_seq=\d+$/, "$1");
     if (!url.startsWith("/api/")) return realFetch(input, init);
     if (url === "/api/sync/dataset") {
       return Response.json({
@@ -332,6 +334,7 @@ export async function runSessionContextBrowserConformance(
               }}
             >
               <Box sx={{ py: 2 }}>
+                <Box sx={{ height: 1600 }} />
                 <SessionContextSettings session={sessions[0]!} />
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="overline">Session</Typography>
@@ -374,6 +377,12 @@ export async function runSessionContextBrowserConformance(
       await until(() =>
         contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
       );
+      await until(() => Boolean(container.querySelector("[data-session-links-toggle]")));
+      check(
+        !container.querySelector("[data-session-link]"),
+        `${mode}: links start folded`,
+      );
+      container.querySelector<HTMLElement>("[data-session-links-toggle]")!.click();
       await until(() => Boolean(container.querySelector('[data-session-link="deleted"]')));
       check(
         container.querySelector('[data-session-link="deleted"]')?.textContent
@@ -789,6 +798,15 @@ export async function runSessionContextBrowserConformance(
         Boolean(container.querySelector("[data-new-session-editor]")),
         `${mode}: the session menu opens the new session form`,
       );
+      if (!desktop) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const landed = container.querySelector("[data-session-new-from-section]")!
+          .getBoundingClientRect();
+        check(
+          landed.top >= 0 && landed.top < window.innerHeight / 2,
+          "mobile: the session menu lands on that form",
+        );
+      }
       continueRun().click();
       await until(() => surfaceEvents.includes(COMPOSER_FOCUS_EVENT));
       check(

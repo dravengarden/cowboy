@@ -2046,6 +2046,13 @@ struct HubInner {
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
     history_reducer: Mutex<EventReducer>,
+    /// Latest subagent observations per session (docs/background-tasks.md):
+    /// the bootstrap `subagent_state` and lookups read it beside the store.
+    /// Never held with `sessions`.
+    background: Mutex<HashMap<String, BackgroundLedger>>,
+    /// Identifies this Controller process to clients. A new epoch tells a
+    /// client to replace, never merge, its cached subagent ordering.
+    boot_epoch: String,
     /// Optional content-addressed image store. When present, inline ACP images
     /// are replaced with `/api/artifacts/…` URLs before the Hub clones the
     /// envelope into history, the persistence queue, and live fan-out.
@@ -2216,6 +2223,33 @@ fn reconcile_config_preferences(
     changed
 }
 
+/// Children of one session whose latest observation the Hub keeps for the
+/// bootstrap watermark. Older terminal children fall back to the store.
+const BACKGROUND_LATEST_PER_SESSION: usize = 512;
+
+/// Per-session subagent observation state (docs/background-tasks.md I2–I5).
+#[derive(Default)]
+struct BackgroundLedger {
+    /// Last accepted snapshot identity per child, for duplicate/stale fencing.
+    marks: HashMap<String, crate::transcript_anchors::SnapshotMark>,
+    /// Latest accepted snapshot per child with the Hub's anchor seq.
+    latest: HashMap<String, (u64, serde_json::Value)>,
+    /// The worker incarnation (Machine worker epoch) last seen for the session.
+    incarnation: Option<String>,
+}
+
+/// The Hub's half of a `subagent_state` bootstrap.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentObservations {
+    /// `(anchor seq, latest update)` per child observed by this process.
+    pub items: Vec<(u64, serde_json::Value)>,
+    /// Highest seq allocated for the session when read.
+    pub watermark_seq: u64,
+    pub incarnation: Option<String>,
+    /// The Hub holds the whole transcript (no store): its view is complete.
+    pub memory_only: bool,
+}
+
 impl Hub {
     #[must_use]
     pub fn new() -> Self {
@@ -2250,6 +2284,12 @@ impl Hub {
                 automatic_update_failures: Mutex::new(HashMap::new()),
                 automatic_update_failed_sessions: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
+                background: Mutex::new(HashMap::new()),
+                boot_epoch: {
+                    let mut bytes = [0u8; 8];
+                    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+                    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+                },
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
@@ -3684,6 +3724,9 @@ impl Hub {
             }
             removed
         };
+        if removed {
+            self.inner.background.lock().remove(session_id);
+        }
         if removed {
             // The per-session sync states die with the session. Their dedupe
             // sets must not keep growing for ids no client can replay any more.
@@ -5406,6 +5449,10 @@ impl Hub {
             session.reached_start = true;
             self.inner.history_reducer.lock().clear_session(session_id);
         }
+        if let Some(ledger) = self.inner.background.lock().get_mut(session_id) {
+            ledger.marks.clear();
+            ledger.latest.clear();
+        }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearEvents {
                 session_id: session_id.to_owned(),
@@ -5577,6 +5624,30 @@ impl Hub {
         {
             tracing::warn!(%error, session_id, "live image externalize failed");
         }
+        // A subagent snapshot is fenced by its producer identity (I4) before
+        // it receives a seq: an exact duplicate or an older revision of the
+        // same worker incarnation never becomes a newer observation.
+        let subagent_child = match &event {
+            Event::Update { update }
+                if update
+                    .get("sessionUpdate")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(crate::transcript_anchors::SUBAGENT_UPDATE) =>
+            {
+                update
+                    .get("sessionId")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|child| crate::transcript_anchors::valid_id(child))
+                    .map(str::to_owned)
+            }
+            _ => None,
+        };
+        if let (Some(child), Event::Update { update }) = (&subagent_child, &event)
+            && !self.accept_subagent_snapshot(session_id, child, update)
+        {
+            return;
+        }
+        let mut subagent_anchor = None;
         let (envelope, durable_agent_session_id) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5602,6 +5673,14 @@ impl Hub {
             if counts_as_activity(&event) {
                 s.last_activity = std::time::Instant::now();
             }
+            // I2: clients order subagent snapshots by the Controller's receipt
+            // seq, never by the producer's wall-clock revision alone.
+            if subagent_child.is_some()
+                && let Event::Update { update } = &mut event
+                && let Some(object) = update.as_object_mut()
+            {
+                object.insert("observedSeq".to_owned(), serde_json::Value::from(seq));
+            }
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
                 seq,
@@ -5619,6 +5698,9 @@ impl Hub {
                 dispatched.echoed = true;
             }
             if let Some(canonical) = self.inner.history_reducer.lock().reduce(envelope.clone()) {
+                if subagent_child.is_some() {
+                    subagent_anchor = Some(canonical.seq);
+                }
                 match s
                     .log
                     .binary_search_by_key(&canonical.seq, |entry| entry.seq)
@@ -5658,6 +5740,11 @@ impl Hub {
                 .flatten();
             (envelope, durable_agent_session_id)
         };
+        if let (Some(child), Some(anchor), Event::Update { update }) =
+            (subagent_child, subagent_anchor, &envelope.event)
+        {
+            self.record_subagent_observation(session_id, child, anchor, update.clone());
+        }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
             if let Some(agent_session_id) = durable_agent_session_id {
@@ -5668,6 +5755,144 @@ impl Hub {
             }
         }
         self.fanout(Outbound::Event { envelope });
+    }
+
+    /// I4: decide whether a subagent snapshot is a new observation.
+    fn accept_subagent_snapshot(
+        &self,
+        session_id: &str,
+        child: &str,
+        update: &serde_json::Value,
+    ) -> bool {
+        use crate::transcript_anchors::{METRICS, SnapshotVerdict, judge_snapshot, mark_of};
+        let mark = mark_of(update);
+        let mut background = self.inner.background.lock();
+        let ledger = background.entry(session_id.to_owned()).or_default();
+        match judge_snapshot(ledger.marks.get(child), &mark) {
+            SnapshotVerdict::Duplicate => {
+                METRICS.duplicates.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
+            SnapshotVerdict::Stale => {
+                METRICS.revision_stale.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(session = %session_id, child, "dropping an older subagent revision");
+                return false;
+            }
+            SnapshotVerdict::Conflict => {
+                METRICS.revision_conflicts.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(session = %session_id, child, revision = mark.revision,
+                    "subagent revision conflict: equal revision, different payload");
+            }
+            SnapshotVerdict::Accept => {}
+        }
+        ledger.marks.insert(child.to_owned(), mark);
+        true
+    }
+
+    fn record_subagent_observation(
+        &self,
+        session_id: &str,
+        child: String,
+        anchor_seq: u64,
+        update: serde_json::Value,
+    ) {
+        let mut background = self.inner.background.lock();
+        let ledger = background.entry(session_id.to_owned()).or_default();
+        ledger.latest.insert(child, (anchor_seq, update));
+        if ledger.latest.len() > BACKGROUND_LATEST_PER_SESSION {
+            // Forget the oldest terminal observation first: the store keeps it.
+            let victim = ledger
+                .latest
+                .iter()
+                .min_by_key(|(_, (_, update))| {
+                    (
+                        !crate::transcript_anchors::subagent_terminal(update),
+                        crate::transcript_anchors::snapshot_order(update),
+                    )
+                })
+                .map(|(child, _)| child.clone());
+            if let Some(victim) = victim {
+                ledger.latest.remove(&victim);
+            }
+        }
+    }
+
+    /// The Machine worker epoch that produced a session's latest events. A
+    /// change is a load boundary: cached child state and grants are invalid
+    /// until the new worker reports again (docs/background-tasks.md I3).
+    pub fn note_worker_incarnation(&self, session_id: &str, incarnation: &str) {
+        let mut background = self.inner.background.lock();
+        let ledger = background.entry(session_id.to_owned()).or_default();
+        if ledger.incarnation.as_deref() == Some(incarnation) {
+            return;
+        }
+        if ledger.incarnation.is_some() {
+            crate::transcript_anchors::METRICS
+                .epoch_changes
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        ledger.incarnation = Some(incarnation.to_owned());
+    }
+
+    /// This Controller process's bootstrap epoch.
+    #[must_use]
+    pub fn boot_epoch(&self) -> &str {
+        &self.inner.boot_epoch
+    }
+
+    /// Adopt durable transcript anchors before any new event is reduced, so a
+    /// restarted Hub replaces the original subagent or Call row.
+    pub fn warm_transcript_anchors(&self, anchors: Vec<crate::transcript_anchors::AnchorWrite>) {
+        let mut reducer = self.inner.history_reducer.lock();
+        // Newest first from the store: adopt oldest first so the newest stay
+        // most recently used in the bounded index.
+        for anchor in anchors.into_iter().rev() {
+            reducer.adopt_anchor(&anchor.session_id, &anchor.key, anchor.seq);
+        }
+    }
+
+    /// Restore the identity of each child's durable snapshot, so a replay after
+    /// a restart is fenced like one in the same process (I4). The process's own
+    /// marks always win.
+    pub fn warm_subagent_marks(
+        &self,
+        snapshots: Vec<(String, crate::store::transcript_anchors::AnchoredRow)>,
+    ) {
+        let mut background = self.inner.background.lock();
+        for (session_id, row) in snapshots {
+            let Some(child) = row
+                .key
+                .strip_prefix(crate::transcript_anchors::SUBAGENT_PREFIX)
+            else {
+                continue;
+            };
+            background
+                .entry(session_id)
+                .or_default()
+                .marks
+                .entry(child.to_owned())
+                .or_insert_with(|| crate::transcript_anchors::mark_of(&row.update));
+        }
+    }
+
+    /// The Hub's subagent observations for a session's bootstrap, or `None`
+    /// for an unknown session.
+    #[must_use]
+    pub fn subagent_observations(&self, session_id: &str) -> Option<SubagentObservations> {
+        let watermark_seq = {
+            let sessions = self.inner.sessions.lock();
+            sessions.get(session_id)?.next_seq.saturating_sub(1)
+        };
+        let background = self.inner.background.lock();
+        let ledger = background.get(session_id);
+        Some(SubagentObservations {
+            items: ledger
+                .map(|ledger| ledger.latest.values().cloned().collect())
+                .unwrap_or_default(),
+            watermark_seq,
+            incarnation: ledger.and_then(|ledger| ledger.incarnation.clone()),
+            memory_only: self.inner.store_tx.is_none(),
+        })
     }
 
     fn broadcast_sessions(&self) {

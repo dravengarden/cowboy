@@ -441,6 +441,9 @@ export type Outbound =
  * uses the normal Outbound reducer so HTTP and live WebSocket overlap dedupes. */
 export interface SessionBootstrapResponse {
   messages: Outbound[];
+  /** Authoritative subagent observations (docs/background-tasks.md I5);
+   *  absent from Controllers older than the contract. */
+  subagent_state?: import("./backgroundTasks").SubagentStateWire;
 }
 
 export type Inbound =
