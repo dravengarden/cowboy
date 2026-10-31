@@ -7,7 +7,7 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { SessionDuplicateSettings } from "./SessionDuplicateSettings";
-import { SessionContextCue } from "./SessionContextCue";
+import { SessionContextCue, SessionHandoffSeam } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
@@ -83,6 +83,7 @@ export async function runSessionContextBrowserConformance(
   let sendFailure: number | null = null;
   let parentDismissals = 0;
   const writes: { url: string; body: Record<string, unknown> }[] = [];
+  const contextReads: string[] = [];
   class Socket {
     static active: Socket[] = [];
     static OPEN = 1;
@@ -156,6 +157,7 @@ export async function runSessionContextBrowserConformance(
       return Response.json(context.delivery);
     }
     if (url.endsWith("/context")) {
+      contextReads.push(url);
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         writes.push({ url, body });
@@ -309,7 +311,11 @@ export async function runSessionContextBrowserConformance(
           >
             {state.lastError?.message}
           </output>
+          <SessionHandoffSeam sessionId={sessions[0]!.id} desktop={desktop} position="start" />
+          <SessionHandoffSeam sessionId={sessions[1]!.id} desktop={desktop} position="end" />
+          <SessionHandoffSeam sessionId={sessions[2]!.id} desktop={desktop} position="end" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
+          <SessionHandoffSeam sessionId={sessions[0]!.id} desktop={desktop} position="end" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
@@ -346,6 +352,8 @@ export async function runSessionContextBrowserConformance(
       sessions.forEach((session, index) => {
         session.id = `context-fixture-${mode}-${index}`;
       });
+      // Another tab's handoff: only the synced mark links sessions[1] here.
+      sessions[3]!.continued_from = sessions[1]!.id;
       context = {
         revision: 0,
         applied_revision: 0,
@@ -365,6 +373,13 @@ export async function runSessionContextBrowserConformance(
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
       await until(() => Boolean(button("Switch agent or link context")));
+      await until(() =>
+        contextReads.some((url) => url.includes(`/${sessions[1]!.id}/context`))
+      );
+      check(
+        !contextReads.some((url) => url.includes(`/${sessions[2]!.id}/context`)),
+        `${mode}: a reloaded handoff is read from its synced mark, an ordinary session is not`,
+      );
       button("Switch agent or link context").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
@@ -683,6 +698,12 @@ export async function runSessionContextBrowserConformance(
           document.querySelector('[data-session-context-cue="continued_in"]'),
         )
       );
+      check(
+        document.querySelector('[data-session-handoff="end"]')?.textContent
+          ?.includes("Continued in") === true,
+        `${mode}: the original's Transcript records where the work went`,
+      );
+      await observe?.(`${mode}-handoff`);
       check(
         Boolean(
           document.querySelector(

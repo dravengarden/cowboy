@@ -40,7 +40,7 @@ import {
 } from "./sessionSettingsOpen";
 
 export function SessionContextSettings(
-  { session }: { session: SessionMeta },
+  { session, provenance = true }: { session: SessionMeta; provenance?: boolean },
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [startNewAgent, setStartNewAgent] = useState(false);
@@ -68,7 +68,7 @@ export function SessionContextSettings(
       data-session-context
       sx={{ minWidth: 0, pb: open ? 2 : 0 }}
     >
-      <SessionProvenance sessionId={session.id} />
+      {provenance && <SessionProvenance sessionId={session.id} />}
       <Button
         startIcon={<LinkOutlined />}
         endIcon={

@@ -1,10 +1,17 @@
 import type { SessionContext } from "./sessionContext";
 
 export type ContextCue =
-  | { kind: "pending_agent"; label: string }
+  | { kind: "pending_agent"; provider: string; label: string }
   | { kind: "pending_links"; count: number }
   | { kind: "continued_in"; context: SessionContext }
-  | { kind: "continued_from"; id: string; title: string; more: number };
+  | {
+    kind: "continued_from";
+    id: string;
+    title: string;
+    more: number;
+    provider?: string;
+    label?: string;
+  };
 
 export function contextCue(
   sessionId: string,
@@ -20,6 +27,7 @@ export function contextCue(
     if (context.next_agent) {
       return {
         kind: "pending_agent",
+        provider: context.next_agent.provider,
         label: label(
           context.next_agent.provider,
           context.next_agent.provider_account_id,
@@ -44,6 +52,10 @@ export function contextCue(
       id: source.id,
       title: source.title || "a linked session",
       more: sources.length - 1,
+      ...(source.provider && {
+        provider: source.provider,
+        label: label(source.provider, source.provider_account_id ?? "default"),
+      }),
     }
     : null;
 }

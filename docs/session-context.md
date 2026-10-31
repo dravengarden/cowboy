@@ -46,16 +46,21 @@ When the original agent is idle on a Machine that supports hibernation, its
 "continued in a new agent" cue also offers **Hibernate** to free the worker; it
 resumes on the next message there. Nothing is hibernated automatically.
 
-While choices are pending, a one-line cue above the Composer says what the
-next message does ("starts a new agent · Claude · Mink", or how many sessions
-it links) with **Cancel**, and the input placeholder reads "Message the new
-agent…" so the cue survives the mobile keyboard hiding auxiliary rows. After a
-handoff the link is history, not a next-send choice, so it leaves the Composer
-and lives in Session Settings above **Switch agent or link context**: the
-destination shows "Continued from SOURCE · Open", the original "Continued in a
-new agent · Open" (with **Hibernate** when available), and a fork "Forked from
-SOURCE · Open". Both directions stay one tap without any Transcript marker.
-Sessions without announced context render and fetch nothing for this cue.
+While choices are pending, a row directly above the Composer, in the same frame
+as the Plan panel, says what the next message does ("Next message · Starts
+Claude · Mink", or how many sessions it links) with **Cancel**, and the input
+placeholder reads "Message the new agent…" so the cue survives the mobile
+keyboard hiding auxiliary rows. After a handoff the link is history, not a
+next-send choice, so it leaves the Composer. The switch itself stays in Session
+Settings; the Transcript only records it, so the two sessions read as one piece
+of work. The destination's first row (and its empty or preparing state) is a
+read-only card "Continued from SOURCE", the original's last row "Continued in
+DESTINATION"; each shows both Provider marks, "OLD → NEW" subscription and
+**Open**, joined to the conversation by a short rail. Session Settings repeats
+these above **Switch agent or link context** with **Hibernate** on the original
+when available, and shows "Forked from SOURCE · Open" for a fork.
+Sessions without announced context or a continuation mark render and fetch
+nothing for this cue.
 
 On mobile, **Context from sessions** opens a separate sheet above Settings or
 New Session. It opens without focusing an input; search raises the keyboard

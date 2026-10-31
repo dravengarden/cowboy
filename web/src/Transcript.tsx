@@ -74,6 +74,7 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
+import { SessionHandoffSeam } from "./SessionContextCue";
 import { SubagentCard } from "./SubagentCard";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
@@ -734,7 +735,7 @@ function ConversationEmptyState({
   });
   const writeFromEmpty = (event: { target: EventTarget | null }): boolean => {
     if (!(event.target instanceof Element)) return true;
-    return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings]") ===
+    return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings], [data-session-handoff]") ===
       null;
   };
   return (
@@ -783,6 +784,7 @@ function ConversationEmptyState({
         },
       }}
     >
+      <SessionHandoffSeam sessionId={sessionId} position="start" desktop={desktop} />
       <Stack direction="row" alignItems="center" justifyContent="center" spacing={1} sx={{ width: "100%", maxWidth: 360 }}>
         <Box
           sx={{
@@ -5845,6 +5847,12 @@ export function Transcript({
                 />
               )}
 
+              {/* Directly below the newest turn: where this conversation went. */}
+              <SessionHandoffSeam
+                sessionId={sessionId}
+                position="end"
+                desktop={desktopNavigation}
+              />
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
                 (timeline growth or live terminal output) on a working turn,
@@ -6024,6 +6032,14 @@ export function Transcript({
                     flex: `0 0 ${recycledHeight}px`,
                     pointerEvents: "none",
                   }}
+                />
+              )}
+              {/* The conversation's true first row: where it came from. */}
+              {recycledHeight === 0 && (paging?.reachedStart ?? true) && (
+                <SessionHandoffSeam
+                  sessionId={sessionId}
+                  position="start"
+                  desktop={desktopNavigation}
                 />
               )}
               {paging != null && shouldShowScrollbackLoadingSkeleton({

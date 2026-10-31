@@ -2068,7 +2068,6 @@ export function ComposerWorkspace({
           a prompt open while its native retry loop waits for a reset, so surface
           the known exhausted window even though no transcript error exists. */
       }
-      <SessionContextCue sessionId={sessionId} desktop={desktop} />
       <ProviderQuotaStatus
         sessionId={sessionId}
         provider={provider}
@@ -2334,6 +2333,7 @@ export function ComposerWorkspace({
           retains its own input card and keyboard material. Both keep this same
           editor owner mounted through width, state and focus changes. */
       }
+      <SessionContextCue sessionId={sessionId} desktop={desktop} />
       <Paper
         data-composer-stack-slot="primary"
         {...(surface === "desktop"

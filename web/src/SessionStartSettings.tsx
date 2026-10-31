@@ -342,7 +342,10 @@ export function SessionStartSettings(
           <SessionToolsSection sessionId={sessionId} disabled={!connected} />
         )}
       </Box>
-      {session && <SessionContextSettings session={session} />}
+      {
+        /* The empty conversation above already shows the handoff. */
+      }
+      {session && <SessionContextSettings session={session} provenance={false} />}
     </Box>
   );
 }
