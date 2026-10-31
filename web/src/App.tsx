@@ -14,7 +14,6 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { recordUndo } from "./undoActions";
 import { UNDO_NOTICE_MS } from "./undoHistory";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
-import { forkAvailability, forkSession } from "./sessionFork";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
 import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
@@ -98,7 +97,6 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ForkRightOutlined,
-    CallSplitOutlined,
     ExpandMore,
     FolderOpenOutlined,
     FolderOutlined,
@@ -147,7 +145,8 @@ import { AccountBadge } from "./AccountBadge";
 import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
-import { openSessionSettings, requestComposerFocus, requestNewAgent } from "./sessionSettingsOpen";
+import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
+import { useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -859,6 +858,13 @@ function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
+    // Sources of a continuation, as a stable value so a `sessions` frame for
+    // another reason re-renders no row.
+    const handedOffIds = useStoreSelector((snapshot) =>
+        snapshot.sessions.flatMap((entry) => entry.continued_from ? [entry.continued_from] : []).sort().join("\n"));
+    const handedOff = useMemo(() => new Set(handedOffIds.split("\n")), [handedOffIds]);
+    // A handed-off session is history; continuing it again would split the work.
+    const menuHandedOff = useContinuation(menuAnchor?.row.id ?? "") !== undefined;
     useSystemNotificationPreferences();
     const menuSessionMuted = menuAnchor
         ? sessionNotificationsMuted(menuAnchor.row.id)
@@ -878,29 +884,6 @@ function SessionList({
         setMenuAnchor(null);
         void hibernateSession(session.id)
             .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
-            .catch((error: Error) => documentNotice(error.message));
-    };
-    // The anchor keeps the row captured when the menu opened; a turn can end
-    // while it stays open, so read the live session.
-    const menuLiveSession = useStoreSelector((snapshot) =>
-        menuAnchor ? snapshot.sessions.find((session) => session.id === menuAnchor.row.id) : undefined
-    );
-    const menuFork = menuLiveSession && !isManagedChild(menuLiveSession)
-        ? forkAvailability(menuLiveSession, sessionMachines)
-        : null;
-    const forkMenuSession = (): void => {
-        if (!menuAnchor || menuFork !== "ready") return;
-        const session = menuAnchor.row;
-        setMenuAnchor(null);
-        void forkSession(session.id)
-            .then((receipt) => {
-                requestPickSession(receipt.session_id, receipt.session ?? undefined);
-                // Mobile keeps the keyboard down: a focus outside the tap's own
-                // gesture would show a caret without raising the keyboard.
-                if (desktop) {
-                    setTimeout(() => requestComposerFocus(receipt.session_id), 150);
-                }
-            })
             .catch((error: Error) => documentNotice(error.message));
     };
     const menuProjection = useExploreSessionState(
@@ -2351,7 +2334,7 @@ function SessionList({
                     <SessionRowMemo
                         key={s.id}
                         deps={[
-                            s, s.id === activeId, deleting, jumpLabel, desktop, pinned, copyTargeted,
+                            s, s.id === activeId, handedOff.has(s.id), deleting, jumpLabel, desktop, pinned, copyTargeted,
                             row.depth, sortable.drag, dropFolderName, dropHighlight(row, s.id),
                             pulse === undefined ? null : (pulse as { animation?: string }).animation,
                             accounts, mobileDrawer,
@@ -2559,16 +2542,19 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
-                                    {s.continued_from && (
-                                        // A continuation keeps its source's title; this tells the
-                                        // adjacent pair apart without renaming either session.
+                                    {handedOff.has(s.id) && (
+                                        // The pair shares a title; this marks the one the work left.
                                         <Chip
-                                            data-session-continued
+                                            data-session-history
                                             size="small"
-                                            variant="outlined"
-                                            label="Continued"
-                                            title="Continues an earlier session with a new agent"
-                                            sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
+                                            label="History"
+                                            title="Continued in a new agent; this session is read-only"
+                                            sx={{
+                                                height: "1.25rem", flexShrink: 0, fontSize: "0.6875rem",
+                                                border: "1px solid transparent", boxShadow: "none", color: "text.secondary",
+                                                bgcolor: (theme) => alpha(theme.palette.text.secondary, theme.palette.mode === "dark" ? 0.22 : 0.14),
+                                                "& .MuiChip-label": { px: "0.5rem" },
+                                            }}
                                         />
                                     )}
                                     {s.forked_from && (
@@ -2863,31 +2849,20 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
-                {menuFork && (
-                    <MenuItem data-session-fork disabled={menuFork === "busy"} onClick={forkMenuSession}>
-                        <ListItemIcon>
-                            <CallSplitOutlined fontSize="medium" />
-                        </ListItemIcon>
-                        <ListItemText
-                            primary="Fork"
-                            secondary={menuFork === "busy" ? "Available after the current turn" : "Same agent and conversation, new branch"}
-                        />
-                    </MenuItem>
-                )}
-                {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                     <MenuItem
-                        data-session-continue-new-agent
+                        data-session-new-from
                         onClick={(): void => {
                             const row = menuAnchor.row;
                             setMenuAnchor(null);
                             requestPickSession(row.id, row);
-                            requestNewAgent(row.id);
+                            requestNewFrom(row.id);
                         }}
                     >
                         <ListItemIcon>
                             <ForkRightOutlined fontSize="medium" />
                         </ListItemIcon>
-                        <ListItemText primary="Continue in new agent…" secondary="Another subscription or Provider" />
+                        <ListItemText primary="Continue or fork" />
                     </MenuItem>
                 )}
                 {menuAnchor && tree.folderOf.get(menuAnchor.row.id) && (
@@ -3024,16 +2999,10 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
                                 <Kbd keys="M" />
                             </Button>
-                            {menuFork && (
-                                <Button data-session-shortcut="f" data-session-fork fullWidth disabled={menuFork === "busy"} startIcon={<CallSplitOutlined />} onClick={forkMenuSession} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuFork === "busy" ? "Fork after this turn" : "Fork"}</Box>
+                            {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                                <Button data-session-shortcut="f" data-session-new-from fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewFrom(row.id); }} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue or fork</Box>
                                     <Kbd keys="F" />
-                                </Button>
-                            )}
-                            {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
-                                <Button data-session-shortcut="a" data-session-continue-new-agent fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewAgent(row.id); }} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue in new agent…</Box>
-                                    <Kbd keys="A" />
                                 </Button>
                             )}
                             <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>

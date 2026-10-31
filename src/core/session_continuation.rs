@@ -54,6 +54,25 @@ impl Hub {
         Ok(())
     }
 
+    /// Place an admitted copy (a new agent that reads its source as linked
+    /// context) beside its source, under the source title marked as a copy.
+    /// Unlike a continuation the source stays the active conversation.
+    pub fn place_copy(
+        &self,
+        source: &str,
+        destination: &str,
+        actor: &FolderActor,
+    ) -> Result<(), String> {
+        let title = self.place_beside(source, destination, true, actor)?;
+        let title = if title.ends_with(" (copy)") {
+            title
+        } else {
+            format!("{title} (copy)")
+        };
+        self.rename_session(destination, title);
+        Ok(())
+    }
+
     /// Folder, both sidebar orders and the review directory; returns the
     /// source title.
     fn place_beside(

@@ -2,11 +2,11 @@
 //! effects; only an explicit, revision-fenced send can consume them.
 use super::*;
 use crate::core::SessionInfo;
-use crate::session_context::{Context, Delivery, Injection, NextAgent, Source};
+use crate::session_context::{Context, Delivery, Injection, Link, NextAgent, Source};
 
 mod fork;
 mod inheritance;
-pub(super) use fork::fork;
+pub(super) use fork::{duplicate, fork};
 
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.
@@ -83,6 +83,21 @@ fn capture(
         .collect()
 }
 
+fn delivered_links(state: &AppState, sources: &[Source]) -> Vec<Link> {
+    sources
+        .iter()
+        .map(|source| Link {
+            session_id: source.session_id.clone(),
+            before: source.before,
+            title: state
+                .hub
+                .session_info(&source.session_id)
+                .map(|info| info.meta.title)
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
 async fn save(state: &AppState, id: &str, context: &Context) -> Result<(), String> {
     let store = state.store.as_ref().ok_or("Context storage unavailable")?;
     let key = crate::session_context::key(id);
@@ -112,6 +127,11 @@ pub(super) async fn initialize(
         return Ok(());
     }
     let snapshots = capture(state, principal, &sources)?;
+    let links = if initial_cmid.is_some() {
+        delivered_links(state, &snapshots)
+    } else {
+        Vec::new()
+    };
     let context = Context {
         revision: 1,
         applied_revision: u64::from(initial_cmid.is_some()),
@@ -128,6 +148,7 @@ pub(super) async fn initialize(
             sources: snapshots,
             follows_first_prompt: true,
         }),
+        links,
         ..Context::default()
     };
     save(state, id, &context).await
@@ -205,6 +226,12 @@ fn view(
 ) -> Result<serde_json::Value, String> {
     owned(state, principal, id)?;
     let context = crate::session_context::read(&state.hub, id)?;
+    let links: Vec<_> = context.known_links().iter().map(|link| {
+        match owned(state, principal, &link.session_id) {
+            Ok(info) => serde_json::json!({"id":link.session_id,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"before":link.before}),
+            Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title}),
+        }
+    }).collect();
     let sources: Vec<_> = context.sources.iter().map(|source| {
         match owned(state, principal, source) {
             Ok(info) => serde_json::json!({"id":source,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"workspace":info.meta.workspace_name}),
@@ -218,7 +245,7 @@ fn view(
     }
     Ok(serde_json::json!({
         "revision":context.revision,"applied_revision":context.applied_revision,
-        "sources":context.sources,"source_sessions":sources,"next_agent":context.next_agent,
+        "sources":context.sources,"source_sessions":sources,"links":links,"next_agent":context.next_agent,
         "delivery":delivery,"max_sources":crate::session_context::MAX_SOURCES,
     }))
 }
@@ -349,6 +376,7 @@ pub(super) async fn set(
             .revision
             .checked_add(1)
             .ok_or("Context revision exhausted")?;
+        let links = current.known_links();
         let saved = Context {
             revision,
             // Removing every link with no replacement needs no bootstrap.
@@ -362,6 +390,7 @@ pub(super) async fn set(
             delivery: current
                 .delivery
                 .filter(|delivery| matches!(delivery.state.as_str(), "accepted" | "failed")),
+            links,
             ..Context::default()
         };
         current_authority(&state, &auth)?;
@@ -619,6 +648,7 @@ async fn deliver(
     };
     advance_applied(&mut target_context)?;
     target_context.next_agent = None;
+    let links = delivered_links(&state, &sources);
     target_context.injection = Some(Injection {
         cmid: cmid.clone(),
         sources,
@@ -634,6 +664,7 @@ async fn deliver(
         .hub
         .submit_context(&target_id, request.text, request.content, cmid);
     delivery.state = "accepted".into();
+    target_context.remember_links(links);
     if target_id != id {
         target_context.delivery = Some(delivery.clone());
         save(&state, &target_id, &target_context).await?;
@@ -650,6 +681,14 @@ async fn deliver(
     }
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
+    // The work moved on, so the original agent stops holding a Machine slot.
+    // Best effort: a refusal only leaves it idle, as before this handoff.
+    if target_id != id
+        && state.supervisor.has_live_worker(&id)
+        && let Err(reason) = state.supervisor.hibernate_session(&id)
+    {
+        tracing::info!(session = %id, %reason, "handed-off session kept its idle worker");
+    }
     Ok(delivery)
 }
 

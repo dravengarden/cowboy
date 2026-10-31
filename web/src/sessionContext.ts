@@ -33,8 +33,22 @@ export interface SessionContext {
     provider?: string;
     provider_account_id?: string;
   }[];
+  /** Every session this conversation has read, surviving later edits. */
+  links?: {
+    id: string;
+    available: boolean;
+    title?: string;
+    provider?: string;
+    provider_account_id?: string;
+    before?: number | null;
+  }[];
   delivery: ContextDelivery | null;
   max_sources: number;
+}
+
+/** Sources the next message will read. Once sent they are links instead. */
+export function pendingSources(context: SessionContext): string[] {
+  return context.revision === context.applied_revision ? [] : context.sources;
 }
 
 const reads = new Map<string, Promise<SessionContext>>();
@@ -124,6 +138,17 @@ export function contextConfigured(id: string): boolean {
 export function announceContext(id: string): void {
   invalidateRead(id);
   globalThis.dispatchEvent?.(new CustomEvent(CONTEXT_CHANGED, { detail: id }));
+}
+
+/** Back from a staged new agent: other selected sources stay linked. */
+export function withoutAgentSwitch(
+  context: Pick<SessionContext, "sources">,
+  sessionId: string,
+): Pick<SessionContext, "sources" | "next_agent"> {
+  return {
+    sources: context.sources.filter((id) => id !== sessionId),
+    next_agent: null,
+  };
 }
 
 export async function saveSessionContext(

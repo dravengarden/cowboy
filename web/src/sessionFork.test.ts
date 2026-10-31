@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { forkAvailability, forkSession } from "./sessionFork";
+import {
+  duplicateMode,
+  duplicateSession,
+  forkAvailability,
+  forkSession,
+} from "./sessionFork";
 
 const machines = [
   { id: "ovh", capabilities: { hibernation: true, native_fork: true } },
@@ -63,4 +68,46 @@ test("forkSession surfaces the server's refusal", async () => {
       ),
   );
   expect(refused).rejects.toThrow("Wait for this agent");
+});
+
+test("Duplicate forks natively only on the same Provider and subscription", () => {
+  const base = {
+    sourceProvider: "claude-code",
+    sourceAccount: "default",
+    provider: "claude-code",
+    account: "default",
+    forkAvailable: true,
+  };
+  expect(duplicateMode(base)).toBe("fork");
+  expect(duplicateMode({ ...base, account: "mink" })).toBe("linked");
+  expect(duplicateMode({ ...base, provider: "codex" })).toBe("linked");
+  expect(duplicateMode({ ...base, forkAvailable: false })).toBe("linked");
+});
+
+test("Duplicate requests carry config overrides and an idempotency key", async () => {
+  const seen: { url: string; init: RequestInit }[] = [];
+  const fetcher = ((url: string, init: RequestInit) => {
+    seen.push({ url, init });
+    return Promise.resolve(Response.json({ session_id: "copy", session: null }, { status: 201 }));
+  }) as unknown as typeof fetch;
+  await forkSession("s", { operation: "op", config: { model: "opus" } }, fetcher);
+  expect(JSON.parse(String(seen[0]!.init.body))).toEqual({
+    operation: "op",
+    config: { model: "opus" },
+  });
+  const receipt = await duplicateSession(
+    "s",
+    { provider: "codex", provider_account_id: "pika", preset: "codex/max" },
+    "key-1",
+    fetcher,
+  );
+  expect(receipt.session_id).toBe("copy");
+  expect(seen[1]!.url).toBe("/api/sessions/s/duplicate");
+  expect((seen[1]!.init.headers as Record<string, string>)["idempotency-key"]).toBe("key-1");
+  expect(JSON.parse(String(seen[1]!.init.body))).toEqual({
+    operation: "key-1",
+    provider: "codex",
+    provider_account_id: "pika",
+    preset: "codex/max",
+  });
 });

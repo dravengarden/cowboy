@@ -55,7 +55,7 @@ test("a pending new agent names its subscription", () => {
         preset: null,
       },
     }, label),
-    { kind: "pending_agent", label: "claude-code:mink" },
+    { kind: "pending_agent", provider: "claude-code", label: "claude-code:mink" },
   );
   assertEquals(
     contextCue("s", { ...base, revision: 2, sources: ["a", "b"] }, label),
@@ -63,22 +63,13 @@ test("a pending new agent names its subscription", () => {
   );
 });
 
-test("source and destination link to each other after a handoff", () => {
+test("only the source shows a cue after a handoff", () => {
   assertEquals(
     contextCue("s", { ...base, delivery: accepted("t") }, label)?.kind,
     "continued_in",
   );
   assertEquals(
-    contextCue("t", {
-      ...base,
-      sources: ["s", "x", "gone"],
-      delivery: accepted("t"),
-      source_sessions: [
-        { id: "s", available: true, title: "Fix PR" },
-        { id: "x", available: true },
-        { id: "gone", available: false },
-      ],
-    }, label),
-    { kind: "continued_from", id: "s", title: "Fix PR", more: 1 },
+    contextCue("t", { ...base, sources: ["s"], delivery: accepted("t") }, label),
+    null,
   );
 });

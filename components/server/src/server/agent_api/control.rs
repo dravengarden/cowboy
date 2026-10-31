@@ -283,6 +283,11 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/config-revert/restore",
             post(web::config_revert::restore),
         ),
+        "sessions.duplicate" => (
+            "POST",
+            "/api/sessions/{session_id}/duplicate",
+            post(web::session_context::duplicate),
+        ),
         "sessions.context" => (
             "GET",
             "/api/sessions/{session_id}/context",

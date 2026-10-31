@@ -78,6 +78,8 @@ import { PendingCallRow, TaskRow } from "./TaskRow";
 import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
 import { applySubagentAuthority, callKey, subagentKey, useSessionAuthority } from "./backgroundTasks";
 import { type BackgroundTasks, useBackgroundTasks, useStopStates } from "./useBackgroundTasks";
+import { SessionContinuedFrom } from "./SessionContextCue";
+import { lastRowBefore, SESSION_REVEAL_EVENT, takeSessionReveal } from "./sessionReveal";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
@@ -737,7 +739,7 @@ function ConversationEmptyState({
   });
   const writeFromEmpty = (event: { target: EventTarget | null }): boolean => {
     if (!(event.target instanceof Element)) return true;
-    return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings]") ===
+    return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings], [data-session-handoff]") ===
       null;
   };
   return (
@@ -786,6 +788,7 @@ function ConversationEmptyState({
         },
       }}
     >
+      <SessionContinuedFrom sessionId={sessionId} />
       <Stack direction="row" alignItems="center" justifyContent="center" spacing={1} sx={{ width: "100%", maxWidth: 360 }}>
         <Box
           sx={{
@@ -4712,6 +4715,42 @@ export function Transcript({
       }, 1400);
     }, 40);
   }, []);
+  // A followed link lands on the moment it was made, paging history back in
+  // until that row exists. Gives up quietly: the session is open either way.
+  const revealKeysRef = useRef<string[]>([]);
+  revealKeysRef.current = items.map((item) => item.key);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const seek = (before: number): void => {
+      const key = lastRowBefore(revealKeysRef.current, before);
+      const mounted = key !== undefined && parentRef.current?.querySelector(
+        `[data-key="${CSS.escape(key)}"]`,
+      );
+      if (key !== undefined && mounted) {
+        locateTool(key);
+        return;
+      }
+      if (attempts++ >= 80) return;
+      if (key === undefined && !pagingRef.current?.reachedStart) {
+        void loadOlder(sessionId);
+      }
+      timer = setTimeout(() => seek(before), 100);
+    };
+    const reveal = (): void => {
+      const before = takeSessionReveal(sessionId);
+      if (before === undefined) return;
+      attempts = 0;
+      globalThis.clearTimeout(timer);
+      seek(before);
+    };
+    reveal();
+    globalThis.addEventListener(SESSION_REVEAL_EVENT, reveal);
+    return () => {
+      globalThis.removeEventListener(SESSION_REVEAL_EVENT, reveal);
+      globalThis.clearTimeout(timer);
+    };
+  }, [locateTool, sessionId]);
   // Bumped by the composer toggle (requestStickToBottom) to ask us to scroll to
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
@@ -6060,6 +6099,10 @@ export function Transcript({
                     pointerEvents: "none",
                   }}
                 />
+              )}
+              {/* The conversation's true first row: where it came from. */}
+              {recycledHeight === 0 && (paging?.reachedStart ?? true) && (
+                <SessionContinuedFrom sessionId={sessionId} />
               )}
               {paging != null && shouldShowScrollbackLoadingSkeleton({
                 managed: managesScrollHistory,

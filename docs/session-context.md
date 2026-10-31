@@ -5,59 +5,106 @@ or a new session. Provider and subscription changes create a new native agent.
 Reasoning, permissions and other supported live settings keep their existing
 configuration path.
 
-To branch the same agent with its complete native conversation instead, use
-**Fork** ([session fork](session-fork.md)). A fork stays on the source's
+To keep this session live and branch from it, use **Fork**
+([session fork](session-fork.md)). A native fork stays on the source's
 subscription and runtime Machine; links never copy native transcripts across
 accounts.
 
 ## User flow
 
-New Session has an optional **Context from sessions** multiselect. Existing
-sessions expose **Switch agent or link context** directly under the Agent
-block in mobile settings and desktop Run Configuration, and in the
-empty-session configuration workspace. Every switch is a click in Session
-Settings; the Transcript carries no fork, branch or continuation controls.
+New Session has an optional **Select sessions** multiselect.
 
-Selecting **Continue with a new agent** initially includes the current session as a
-source. Users may select other sessions or remove every source. The current
-project, execution Machine, runtime Machine and subscription are preselected.
-Only installation and subscription are shown initially; **More options** exposes
-project, the optional preset and **Inherit compatible settings** (on by default).
-For the same Provider, an empty preset means inherit current model and reasoning.
-The commit button
-appears only after an edit: **Switch** when the new agent's Provider or
-subscription differs, otherwise **Save changes** (links only, or a same-agent
-fresh conversation). It saves these choices without creating, stopping or
-starting a worker. **Discard** leaves stored choices unchanged. The current
-agent and its identity remain intact. A saved switch shows "Switching to
-SUBSCRIPTION on your next message · **Back**" while the section is collapsed;
-**Back to current agent** (or **Cancel linked context** for links only)
-removes the pending configuration until the next message is sent.
+Session Settings answers independent questions, each in one place:
 
-The session menu (mobile long press, Desktop session actions with `A`) offers
-**Continue in new agent…**: it opens that session's settings with the new agent
-selected and the session linked. Saving a staged choice closes settings and
-focuses the Composer, so the next step is writing the message. A continuation
-keeps its source's title and shows a **Continued** badge in the session list;
-the mark is the persisted `session_continued_from:<id>` setting projected as
-`continued_from` on the session. Continuations created before that mark are
-recorded once at Controller startup from their source's accepted send receipt.
-When the original agent is idle on a Machine that supports hibernation, its
-"continued in a new agent" cue also offers **Hibernate** to free the worker; it
-resumes on the next message there. Nothing is hibernated automatically.
+- **How this agent runs**: the Agent block (model, reasoning, permissions)
+  changes in place. Nothing below repeats it.
+- **What this session has read**: the links list names every session this
+  conversation came from or read (below).
+- **What the next message will read**: **Select sessions** is always visible
+  under the Agent block in mobile settings, desktop Run Configuration and the
+  empty-session configuration workspace. **Save changes** stages the selection
+  for this session's next message, including a staged continuation;
+  **Discard** drops the edit and **Cancel linked context** removes a saved one.
+  Once sent, a selection joins the links.
+- **Where the work goes**: **Continue or fork** opens one form with the
+  target agent and two actions. **Continue on next message** moves the work;
+  **Fork now** keeps both live.
 
-While choices are pending, a one-line cue above the Composer says what the
-next message does ("starts a new agent · Claude · Mink", or how many sessions
-it links) with **Cancel**, and the input placeholder reads "Message the new
-agent…" so the cue survives the mobile keyboard hiding auxiliary rows. After a
-handoff the link is history, not a next-send choice, so it leaves the Composer
-and lives in Session Settings above **Switch agent or link context**: the
-destination shows "Continued from SOURCE · Open", the original "Continued in a
-new agent · Open" (with **Hibernate** when available), and a fork "Forked from
-SOURCE · Open". Both directions stay one tap without any Transcript marker.
-Sessions without announced context render and fetch nothing for this cue.
+The form preselects the current installation and subscription, or the staged
+target. How history travels follows from the target and is stated under the
+pickers, not chosen. **More options** holds what the destination needs before
+its first turn: project, the optional preset of the target agent (for the same
+Provider an empty preset inherits current model and reasoning) and **Inherit
+compatible settings** (on by default). Clearing inheritance is the way past a
+target that refuses the source's restrictive permissions; nothing retries
+without it automatically.
 
-On mobile, **Context from sessions** opens a separate sheet above Settings or
+**Continue on next message** saves the target and links the current session
+ahead of the selected ones, without creating, stopping or starting a worker,
+then closes settings and focuses the Composer. The current session stays a
+removable source in the selection, and the action stays available for an
+identical target, which starts a fresh conversation in place of the accumulated
+one. The current agent and its identity remain intact until the send. A saved
+switch shows "Switching to SUBSCRIPTION on your next message · **Back**". Back
+(and **Cancel** in the Composer cue) removes the new agent and the current
+session's link and keeps other selected sources.
+
+**Fork now** ([session fork](session-fork.md)) acts immediately and opens the
+new session, where its settings and links are configured. It stays on this
+session's project and Machines, so it is disabled for a changed placement, and
+it leaves this session's pending links and staged continuation untouched. An
+empty session offers only Continue.
+
+The session menu (mobile long press, Desktop session actions with `F`) offers
+**Continue or fork**, which opens that form. A continuation keeps its
+source's title and links back to it; the mark is the persisted
+`session_continued_from:<id>` setting projected as `continued_from` on the
+session. Continuations created before that mark are recorded once at Controller
+startup from their source's accepted send receipt. Every switch is made in
+Session Settings; the Transcript carries no fork, branch or continuation
+controls.
+
+A continuation and a fork differ in shape. Continuing moves the work to a new
+agent, so there is one line and the original becomes history. Forking copies a
+conversation, so there are two live lines. An accepted handoff hibernates the
+original's idle agent (best effort; Session Settings still offers **Hibernate**
+if the worker stayed), and the session list marks the original **History**.
+Its Composer gives way to a dock: **Open** goes to the continuation, **Fork**
+starts a separate session from this agent's conversation (natively where the
+Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
+original away and opens the continuation. The continuation can read that
+history until Trash retention ends. Writing in the original would silently
+split one piece of work in two, so the web offers no way to do it;
+Select sessions, **Continue or fork** and the session menu item are
+hidden for the same reason. While its agent is still busy the
+Composer stays, so the turn can be observed and stopped. Deleting or trashing
+the continuation returns the original to an ordinary session. The state is
+derived from the synced `continued_from` mark; the session API still accepts
+messages from agents and scripts.
+
+While choices are pending, a row directly above the Composer, in the same frame
+as the Plan panel, says what the next message does ("Next message · Starts
+Claude · Mink", or how many sessions it links) with **Cancel**, and the input
+placeholder reads "Message the new agent…" so the cue survives the mobile
+keyboard hiding auxiliary rows. After a handoff the link is history, not a
+next-send choice, so it leaves the Composer. The switch itself stays in Session
+Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
+its empty and preparing state), with `+N` for its other links.
+
+The links list in Session Settings has one row per link: "Forked from",
+"Continued from" or "Linked", with the title and subscription. A link is
+recorded when its send is accepted (`links` in the context) and survives later
+edits, with the history boundary and title captured then. Following a row opens
+the source at that row, paging history back in and highlighting it. A source can
+go away at any time, so the row follows the live session lists: in Trash it
+stays named with **Restore**, and deleted it stays named from the stored title,
+marked Deleted, with nothing to open. The record of what this conversation read
+cannot be removed. Where the work continued keeps its own row, "Continued in a
+new agent · Open" (with **Hibernate** when available).
+Sessions without announced context or a continuation mark render and fetch
+nothing for this cue.
+
+On mobile, **Select sessions** opens a separate sheet above Settings or
 New Session. It opens without focusing an input; search raises the keyboard
 only when chosen. Search stays above the scrolling results and **Done** stays
 above the keyboard. Selection, including **Clear**, edits only the owning form;

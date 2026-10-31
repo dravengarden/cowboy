@@ -208,6 +208,8 @@ import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
 import {
   SessionContextCue,
+  SessionHandedOffDock,
+  useHandedOff,
   useAnnouncedSessionContext,
 } from "./SessionContextCue";
 import { PermissionOverlay } from "./PermissionOverlay";
@@ -1398,6 +1400,7 @@ export function ComposerWorkspace({
   const [mobileQueuedEditing, setMobileQueuedEditing] = useState(false);
   const [mobileDraftEditing, setMobileDraftEditing] = useState(false);
   const mobilePendingEditing = mobileQueuedEditing || mobileDraftEditing;
+  const handedOff = useHandedOff(sessionId);
   const onMobileQueuedEditingChange = useCallback((editing: boolean): void => {
     setMobileQueuedEditing(editing);
   }, []);
@@ -2071,7 +2074,6 @@ export function ComposerWorkspace({
           a prompt open while its native retry loop waits for a reset, so surface
           the known exhausted window even though no transcript error exists. */
       }
-      <SessionContextCue sessionId={sessionId} desktop={desktop} />
       <ProviderQuotaStatus
         sessionId={sessionId}
         provider={provider}
@@ -2357,6 +2359,8 @@ export function ComposerWorkspace({
           retains its own input card and keyboard material. Both keep this same
           editor owner mounted through width, state and focus changes. */
       }
+      <SessionContextCue sessionId={sessionId} desktop={desktop} />
+      {handedOff && <SessionHandedOffDock sessionId={sessionId} desktop={desktop} />}
       <Paper
         data-composer-stack-slot="primary"
         {...(surface === "desktop"
@@ -2378,6 +2382,7 @@ export function ComposerWorkspace({
           position: "relative",
           display: !desktop && mobilePendingEditing ? "none" : "flex",
           flexDirection: "column",
+          ...(handedOff && { display: "none" }),
           ...(desktop && {
             border: 0,
             borderRadius: 0,

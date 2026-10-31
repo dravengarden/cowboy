@@ -81,6 +81,7 @@ test("DeepSeek pricing adds per-request Search and Fetch to every cost view", ()
         fetchRequests: 1,
       },
       "future-model": { requests: 1, searchRequests: 1 },
+      "deepseek-fetch": { requests: 1, fetchRequests: 1 },
     },
   });
   const pro = activity.cost.byBillingModel["deepseek-v4-pro"];
@@ -93,7 +94,12 @@ test("DeepSeek pricing adds per-request Search and Fetch to every cost view", ()
   close(unknown.estimatedCost, 0.005, "unknown model still values its search");
   const summary = activity.cost.summary;
   equal(summary.searchRequests, 4, "summary searches");
-  close(summary.serverToolCost, 0.025, "summary server tool cost");
+  close(summary.serverToolCost, 0.03, "summary server tool cost");
+  equal(
+    summary.unknownModelRequests,
+    1,
+    "the Fetch API is not an unknown model",
+  );
   equal(activity.pricing.serverTools.searchCnyPerThousand, 5, "search price");
   equal(
     activity.cost.cacheProtection.summary.serverToolCost,
