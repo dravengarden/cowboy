@@ -62,6 +62,7 @@ primary phone/desktop product path.
 - [`releases/agent-runtimes-2026-10-30.md`](releases/agent-runtimes-2026-10-30.md) — Claude Code 2.1.314 with ACP 0.99.1, Codex 0.165.0 with ACP 2.5.0 and dsh rc.5; component release 3.71.0
 - [`releases/credential-probe-backoff-2026-10-31.md`](releases/credential-probe-backoff-2026-10-31.md) — failed credential probe backoff, usage after re-login, Ultra badge; Claude Code 3.20.22 and component release 3.73.0
 - [`releases/gemini-retirement-2026-10-30.md`](releases/gemini-retirement-2026-10-30.md) — Gemini retired from source, component release 3.72.0 and its fleet rollout
+- [`releases/acp-subagents-2026-10-31.md`](releases/acp-subagents-2026-10-31.md) — ACP subagents, form previews and countdowns, URL elicitation completion; fleet rollout
 - [`releases/steer-native-cycle-2026-10-29.md`](releases/steer-native-cycle-2026-10-29.md) — Steer joins a cycle Claude starts on its own after a background task
 - [`releases/acp-typed-updates-elicitation-2026-10-29.md`](releases/acp-typed-updates-elicitation-2026-10-29.md) — typed compaction, notices and elicitation; ACP SDK 3.6
 - [`releases/agent-runtimes-send-2026-10-18.md`](releases/agent-runtimes-send-2026-10-18.md) — runtime upgrade candidates, compatibility constraints and explicit send delivery design
