@@ -822,6 +822,9 @@ Letters resolve from physical codes; a text field inside a popup owns its keys.
 A keyboard-first picker (the delivery picker) always paints its cursor row and
 names its keys in a quiet hint line, without a divider. In the Composer,
 `Ctrl-n`/`Ctrl-p` walk a visible completion list, as in Vim Insert mode.
+`Tab` accepts a visible completion; with none, in an empty Composer it takes
+the agent's predicted prompt drawn as ghost text (filling, never sending), and
+otherwise keeps its editing meaning. It is the editor's key, not a command.
 
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the

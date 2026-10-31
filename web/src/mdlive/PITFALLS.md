@@ -3328,3 +3328,26 @@ Insert completion. Without a visible list the chord falls through to the
 editor (macOS next/previous line). This is a keymap entry above
 `completionKeymap` only: no extension, IME, caret, selection or paste behaviour
 changes, and it does not touch physical iPhone issue #69.
+
+### 2026-10-31 Predicted next prompt (ghost text and chip)
+
+Agents may publish a predicted next prompt
+(`session_info_update._meta.promptSuggestions`; `promptSuggestions.ts`).
+Desktop draws it as CM6 ghost text in an empty document
+(`composer/promptSuggestionExtension.ts`): one `StateField`, a widget
+decoration at offset 0 and a class that hides `.cm-placeholder` while the ghost
+shows. The suggestion reaches the editor as a `StateEffect`, never as a new
+`placeholder` prop, because a placeholder change rebuilds the extension memo
+and reconfigures CM6 (Vim and IME must never span a reconfigure). The effect
+is skipped while `view.composing`; a composing document is not empty anyway.
+`Tab` takes it only after a visible completion declined the key and only in an
+empty document; any other edit ends it. Nothing sends.
+
+Mobile does not touch either editor: the compact native textarea keeps its
+placeholder, and a small chip above it (shown only while the composer is empty
+and idle) inserts the text through the handle's `insertText`, which commits any
+marked text first. The chip's mouse-down default is prevented so a focused
+textarea stays the first responder. No extension, caret, selection, paste or
+IME behaviour changes, and it does not touch physical iPhone issue #69. Like
+any composer-adjacent change, physical iOS acceptance of the chip is still
+outstanding until checked on a device.

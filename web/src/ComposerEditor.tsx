@@ -83,6 +83,11 @@ import { hasNativeClipboardBridge } from "./composer/clipboardPort";
 import { isAppleTouchDevice } from "./keyboardGeometry";
 import { withoutNativeComposition } from "./composer/nativeComposition";
 import {
+  acceptPromptSuggestion,
+  promptSuggestionExtension,
+  setPromptSuggestion,
+} from "./composer/promptSuggestionExtension";
+import {
   cycleHeading,
   indentLines,
   insertCodeBlock,
@@ -351,6 +356,11 @@ export const ComposerEditor = forwardRef<
     /// the card edge while reserving the overlaid action gutter on content only.
     /// Touch surfaces deliberately retain their established inset scroller.
     flushRightScrollbar?: boolean;
+    /// The agent's predicted next prompt, drawn as ghost text while the
+    /// document is empty; Tab copies it in without sending. Null hides it.
+    promptSuggestion?: string | null;
+    /// The editor moved past the suggestion (typed or accepted it).
+    onPromptSuggestionDismiss?: () => void;
   }
 >(function ComposerEditor(
   {
@@ -378,6 +388,8 @@ export const ComposerEditor = forwardRef<
     heightPx = 0,
     fill = false,
     flushRightScrollbar = false,
+    promptSuggestion = null,
+    onPromptSuggestionDismiss,
   },
   ref,
 ): React.JSX.Element {
@@ -424,6 +436,8 @@ export const ComposerEditor = forwardRef<
   onEscapeRef.current = onEscape;
   const onPasteFilesRef = useRef(onPasteFiles);
   onPasteFilesRef.current = onPasteFiles;
+  const onPromptSuggestionDismissRef = useRef(onPromptSuggestionDismiss);
+  onPromptSuggestionDismissRef.current = onPromptSuggestionDismiss;
   // Set synchronously by useVimExtension on the first interactive Desktop
   // mount; read by the Escape keymap to tell insert from normal/visual mode.
   const vimApiRef = useRef<VimApi | null>(null);
@@ -456,6 +470,15 @@ export const ComposerEditor = forwardRef<
     onVimModeRef.current?.(cm.state?.vim?.insertMode ? "insert" : "normal");
     return (): void => cm.off?.("vim-mode-change", handler);
   }, [vim, vimExt]);
+
+  // Hand the predicted prompt to the editor as a state effect: unlike a
+  // placeholder change it never reconfigures CM6. An IME composition already
+  // owns a non-empty document, where the ghost would not show anyway.
+  useEffect(() => {
+    const view = cmRef.current?.view;
+    if (!view || view.composing) return;
+    view.dispatch({ effects: setPromptSuggestion.of(promptSuggestion) });
+  }, [promptSuggestion]);
 
   // A held send-chord that unmounts mid-press must not leave its timer running.
   useEffect(() => (): void => {
@@ -911,6 +934,7 @@ export const ComposerEditor = forwardRef<
       }),
       history(),
       placeholderExt(placeholder ?? ""),
+      promptSuggestionExtension(() => onPromptSuggestionDismissRef.current?.()),
       // Monospace + the Zed block-cursor styling only when vim is active (the
       // "code editor" mode); normal chat keeps the prose font. vimExt is already
       // a dep of this memo, so toggling vim rebuilds the theme.
@@ -982,11 +1006,14 @@ export const ComposerEditor = forwardRef<
               completionStatus(view.state) === "pending"),
         })),
         {
+          // An open suggest list owns Tab; otherwise Tab takes the agent's
+          // predicted prompt in an empty editor (never sends it).
           key: "Tab",
           run: (view: EditorView): boolean =>
             acceptCompletion(view) ||
             (completionStatus(view.state) === "pending" &&
-              completionListVisible(view)),
+              completionListVisible(view)) ||
+            acceptPromptSuggestion(view),
         },
         {
           // Escape closes a visible list only. A pending or fully filtered

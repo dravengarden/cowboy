@@ -153,6 +153,7 @@ import {
   type SessionMeta,
   type WireQueued,
 } from "./protocol";
+import { observePromptSuggestion } from "./promptSuggestions";
 import {
   dropEventsBefore,
   lastContextClearSeq,
@@ -1829,7 +1830,10 @@ function handle(msg: Outbound): void {
     }
     case "event": {
       const env = msg.envelope;
-      if (!containsSeq(state.timelines.get(env.session_id) ?? [], env.seq)) observeRecoveredSend(env);
+      if (!containsSeq(state.timelines.get(env.session_id) ?? [], env.seq)) {
+        observeRecoveredSend(env);
+        observePromptSuggestion(env);
+      }
       if (env.kind === "update") {
         if (env.update.sessionUpdate === "user_message_chunk") telemetryOperations.userEcho(env.session_id, env.cmid);
         if (env.update.sessionUpdate === "agent_message_chunk") telemetryOperations.firstOutput(env.session_id);

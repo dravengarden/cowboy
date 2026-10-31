@@ -4,6 +4,7 @@ import { checkNativeMarkdownLinks } from "./nativeMarkdownLinksBrowserConformanc
 import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
 import { checkDraftKeyboard } from "./desktop/draftKeyboardBrowserConformance";
 import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
+import { checkPromptSuggestion } from "./composer/promptSuggestionBrowserConformance";
 import {
   checkPendingPanelLayout,
   checkPendingPreviewTouchDisclosure,
@@ -623,6 +624,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkDeliveryPicker());
     results.push(await checkDraftKeyboard());
     results.push(await checkInputVim());
+    results.push(await checkPromptSuggestion());
     return results;
   } finally {
     clearImeStatus();

@@ -161,6 +161,7 @@ import {
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
+import { dismissPromptSuggestion, usePromptSuggestion } from "./promptSuggestions";
 import { useTouchComposer } from "./ComposerTextarea";
 import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
 import {
@@ -1524,6 +1525,16 @@ export function ComposerWorkspace({
   const { padding } = useReadingSettings();
 
   const busy = status === "busy";
+  // The agent's predicted next prompt. Offered only while nothing runs and the
+  // composer is empty; taking it fills the composer and never sends.
+  const predictedPrompt = usePromptSuggestion(sessionId);
+  const offeredPrompt = predictedPrompt !== null && !busy && !preparing &&
+      attachments.length === 0
+    ? predictedPrompt
+    : null;
+  const mobilePromptSuggestion = !desktop && !composeFs && text === ""
+    ? offeredPrompt
+    : null;
   function requestDelivery(onSucceeded?: () => void): void {
     if (status === "busy" || queue.length > 0) openDeliveryPicker();
     else submitWithFeedback(onSucceeded);
@@ -2568,6 +2579,25 @@ export function ComposerWorkspace({
             }}
           />
         )}
+        {mobilePromptSuggestion !== null && (
+          <Box sx={{ px: 1, pt: 0.75, minWidth: 0 }}>
+            <Chip
+              size="small"
+              variant="outlined"
+              data-prompt-suggestion="chip"
+              aria-label={`Use suggested prompt: ${mobilePromptSuggestion}`}
+              label={mobilePromptSuggestion}
+              // Keep a focused textarea the first responder (no keyboard
+              // bounce); the tap itself focuses an unfocused one.
+              onMouseDown={(event): void => event.preventDefault()}
+              onClick={(): void => {
+                editorRef.current?.insertText(mobilePromptSuggestion);
+                dismissPromptSuggestion(sessionId);
+              }}
+              sx={{ maxWidth: "100%", color: "text.secondary" }}
+            />
+          </Box>
+        )}
         {!composeFs && (
           // PlatformComposerEditor owns the compact-touch hybrid: native textarea
           // for UIKit long-press editing while there is no inline image token,
@@ -2648,6 +2678,9 @@ export function ComposerWorkspace({
               onVimMode={setVimMode}
               onPasteFiles={(files): void =>
                 addFiles(files, { preserveFocus: true })}
+              promptSuggestion={desktop ? offeredPrompt : null}
+              onPromptSuggestionDismiss={(): void =>
+                dismissPromptSuggestion(sessionId)}
             />
           </Box>
         )}
