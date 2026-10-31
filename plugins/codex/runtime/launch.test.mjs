@@ -9,12 +9,15 @@ import {
   agentCallsConfiguration,
   agentCallsPrompt,
   API_KEY_AUTH_REQUEST,
+  applyAwaitedMcpServers,
   applyDefaultAuthRequest,
+  AWAIT_MCP_SERVERS_ENV,
   defaultAuthRequest,
   managedMcpOverrides,
   managedRuleViolations,
   splitConfigurationArguments,
 } from "./launch.mjs";
+import { agentApiServerName, injectedMcpServerNames } from "./memory.mjs";
 
 test("Cowboy MCP follows native execution placement without copying credentials", () => {
   assert.deepEqual(agentApiConfiguration(), []);
@@ -228,4 +231,71 @@ test("the package no longer declares an unconditional API-key login", () => {
   assert.deepEqual(manifest.authentication.environment_projection, {
     OPENAI_API_KEY: "api_key",
   });
+});
+
+test("the adapter awaits exactly the MCP servers the bridge injects", () => {
+  assert.equal(agentApiServerName([]), "cowboy");
+  assert.equal(agentApiServerName(["cowboy"]), "cowboy_session");
+  assert.equal(
+    agentApiServerName(["cowboy", "cowboy_session", "cowboy_session_2"]),
+    "cowboy_session_3",
+  );
+  const matrix = {
+    server: "matrix",
+    tools: ["memory_search"],
+    enableTools: true,
+  };
+  const listed = [];
+  const listServers = () => {
+    listed.push(true);
+    return ["cowboy", "chrome-devtools"];
+  };
+  assert.deepEqual(
+    injectedMcpServerNames({ cowboy: true, memory: matrix, listServers }),
+    ["cowboy_session", "matrix"],
+  );
+  // The injected Cowboy name avoids the Matrix name exactly as the bridge does.
+  assert.deepEqual(
+    injectedMcpServerNames({
+      cowboy: true,
+      memory: { ...matrix, server: "cowboy_session" },
+      listServers,
+    }),
+    ["cowboy_session_2", "cowboy_session"],
+  );
+  // Matrix without enabled tools injects no MCP server; recall still works.
+  assert.deepEqual(
+    injectedMcpServerNames({
+      cowboy: true,
+      memory: { ...matrix, enableTools: false },
+      listServers: () => [],
+    }),
+    ["cowboy"],
+  );
+  listed.length = 0;
+  assert.deepEqual(
+    injectedMcpServerNames({ cowboy: false, memory: matrix, listServers }),
+    ["matrix"],
+  );
+  assert.deepEqual(
+    injectedMcpServerNames({ cowboy: false, memory: null, listServers }),
+    [],
+  );
+  assert.equal(listed.length, 0, "only Cowboy MCP naming lists native servers");
+  // The listed user servers are never awaited.
+  assert.doesNotMatch(
+    JSON.stringify(
+      injectedMcpServerNames({ cowboy: true, memory: null, listServers }),
+    ),
+    /chrome-devtools/,
+  );
+
+  const environment = { [AWAIT_MCP_SERVERS_ENV]: '["stale"]' };
+  applyAwaitedMcpServers([], environment);
+  assert.equal(AWAIT_MCP_SERVERS_ENV in environment, false);
+  applyAwaitedMcpServers(["cowboy", "matrix"], environment);
+  assert.deepEqual(JSON.parse(environment[AWAIT_MCP_SERVERS_ENV]), [
+    "cowboy",
+    "matrix",
+  ]);
 });

@@ -1184,10 +1184,11 @@ const _: () = assert!(
 
 /// Session metadata for a request that opens a thread: the Provider's own
 /// keys plus, for the Codex ACP behavior family, the bounded MCP startup wait.
-/// Only codex-acp reads the key, and it covers only servers declared in the
-/// request's `mcpServers`; servers configured through Codex's own config start
-/// as before. `session/load` is not given the key because codex-acp ignores it
-/// there.
+/// Only codex-acp reads the key. Upstream it covers servers declared in the
+/// request's `mcpServers`; the Codex package's patch also awaits the servers its
+/// launcher injects through native configuration (see
+/// `plugins/codex/runtime/README.md`). `session/load` is not given the key
+/// because codex-acp ignores it there.
 fn opening_session_meta(provider_id: &str) -> Option<Meta> {
     let mut meta = provider_session_meta(provider_id);
     if crate::provider::uses_config_full_access(provider_id) {

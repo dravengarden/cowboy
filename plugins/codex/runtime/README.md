@@ -57,14 +57,38 @@ launcher; it never declared this default and is unchanged.
 
 ## MCP startup wait
 
-The worker sends `_meta.mcpStartupAwaitTimeoutMs` on `session/new`,
-`session/resume` and `session/fork` for the Codex family. codex-acp honors it
-only for servers in the request's `mcpServers`: it converts them into the
-thread's `mcp_servers` configuration and awaits exactly those names. Every
-server a Cowboy Codex session uses comes from native configuration instead
-(user/project `config.toml`, or the launcher's `-c mcp_servers.*` options), so
-the wait has no effect today. Moving them into ACP `mcpServers` is not
-semantics-preserving, so they stay native configuration:
+The worker sends `_meta.mcpStartupAwaitTimeoutMs` (15 s) on `session/new`,
+`session/resume` and `session/fork` for the Codex family. Upstream codex-acp
+honors it only for servers in the request's `mcpServers`. Every server a Cowboy
+Codex session uses comes from native configuration instead: user/project
+`config.toml`, or the launcher's `-c mcp_servers.*` options.
+
+The owned patch extends the wait to the servers the Provider's native bridge
+injects. The launcher computes their exact names with the bridge's own naming
+rules (`injectedMcpServerNames` in `memory.mjs`): the session Cowboy MCP
+(`cowboy`, or a fresh `cowboy_session*` name when native configuration already
+defines `cowboy`) for executor or call-context sessions, and Matrix when its
+backend tools are enabled. It passes them as a JSON array in
+`COWBOY_CODEX_AWAIT_MCP_SERVERS`. Inherited values are removed and only an
+ordinary launch with the bridge declares any; managed profiles never do, and
+the adapter also ignores the list under a managed profile.
+
+When the metadata asks for a positive wait, `tryCreateSession` adds those names
+to the servers `McpSessionStartup` awaits, with the upstream tracker semantics:
+events for the thread or global events, after the version read before the
+native request, bounded by the requested timeout. Each failed or cancelled
+server is reported as an `mcp__<server>__startup` tool call; a fork waits but
+publishes nothing. Without the metadata, without names, and for `session/load`
+nothing changes. User-configured servers are not awaited.
+
+Native Codex `0.165.0` reports natively configured servers on the thread. An
+offline probe of the packaged CLI with two `-c mcp_servers.*` servers (one
+valid, one missing executable) received `mcpServer/startupStatus/updated` with
+the thread ID for both servers, `starting` then `ready` or `failed`, on
+`thread/start` and on `thread/resume`, before the resume response.
+
+The servers stay native configuration rather than ACP `mcpServers`, because
+ACP cannot express them without changing their meaning:
 
 - ACP stdio maps only to `{command, args, env}` and ACP HTTP only to
   `{url, http_headers}`, with literal values. Session Cowboy MCP depends on
@@ -73,25 +97,16 @@ semantics-preserving, so they stay native configuration:
   `env_vars=["COWBOY_CALL_CONTEXT"]` locally, and on `tool_timeout_sec=75`.
   Matrix memory depends on `env_http_headers`, which keeps its bearer token in
   the process environment rather than in configuration, and on
-  `enabled_tools`, which exposes only the tools the backend declares. None of
-  these can be expressed, and the token would become a literal thread
-  configuration value.
-- These servers are assembled inside the Provider's native bridge
-  (`memory.mjs`), after the native server list is read and the Matrix client is
-  opened for the execution target. The Rust worker that sends the ACP request
-  knows none of them, and the bridge sits on the native app-server stream, not
-  on ACP.
+  `enabled_tools`, which exposes only the tools the backend declares.
+- These servers are assembled inside the native bridge (`memory.mjs`), on the
+  native app-server stream. The Rust worker that sends the ACP request knows
+  none of them.
 - codex-acp skips, and does not await, a requested server whose name any
-  native configuration layer already defines. User-configured servers stay
-  owned by the user's Codex configuration; Cowboy does not read or rewrite it
-  to re-declare them.
-- Managed read-only and image profiles disable every configured server, and
-  codex-acp ignores request `mcpServers` under a managed profile anyway.
+  native configuration layer already defines.
 
-The metadata stays in place so that a server supplied through ACP in the future
-is awaited without another worker change. Making the first turn wait for
-native-configured servers would need an adapter patch that awaits the
-configured names, not a change of transport.
+The launcher and the bridge each list the native servers once, from the same
+arguments; a configuration change between those two reads can only make the
+wait miss a server or end at its timeout.
 
 ## Dependency audit (2026-10-11)
 
