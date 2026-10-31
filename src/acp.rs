@@ -4578,6 +4578,14 @@ async fn run_session(
                     .prompt_cancellation
                     .send_modify(|generation| *generation = generation.wrapping_add(1));
                 let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+                // Stop means the whole session. With the subagents capability,
+                // claude-agent-acp keeps background subagents running after a
+                // parent cancel (Codex cascades on its own), so stop every
+                // child that may be stopped as well.
+                for child in state.subagents.lock().cancellable() {
+                    let _ = cx
+                        .send_notification(CancelNotification::new(SessionId::new(child.as_str())));
+                }
             }
             AgentCommand::CancelSubagent {
                 subagent_session_id,

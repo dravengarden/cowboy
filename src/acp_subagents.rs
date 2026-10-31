@@ -244,6 +244,19 @@ impl Subagents {
             .is_some_and(|child| child.cancel && child.working())
     }
 
+    /// Every child that may be stopped alone right now.
+    #[must_use]
+    pub fn cancellable(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .children
+            .iter()
+            .filter(|(_, child)| child.cancel && child.working())
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
     /// The identity a permission or elicitation request raised by a child
     /// carries, so the person answering knows which subagent asks.
     #[must_use]
@@ -806,6 +819,7 @@ mod tests {
             2,
         );
         assert!(subagents.can_cancel("child"));
+        assert_eq!(subagents.cancellable(), ["child"]);
         subagents.route(
             ROOT,
             &announce("child", &json!({ "capabilities": { "cancel": null } })),
@@ -813,6 +827,7 @@ mod tests {
             3,
         );
         assert!(!subagents.can_cancel("child"));
+        assert!(subagents.cancellable().is_empty());
         let nested = subagents.route(
             "child",
             &announce(

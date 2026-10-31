@@ -74,6 +74,14 @@ subagent. A subagent's request stays pending across the parent's turn end.
 System, Full Access and managed read-only sessions answer child requests
 exactly like their own, so a managed child never waits on a person.
 
+## Stopping the whole session
+
+A parent Stop still stops everything. After cancelling the parent, the worker
+also sends `session/cancel` to every child that is working and currently
+cancellable, because claude-agent-acp spares background children on a parent
+cancel in the subagents form. Codex cascades on its own; the extra cancel is
+harmless there.
+
 ## Stopping one subagent
 
 Web sends `cancel_subagent { session_id, subagent_session_id }`; Cowboy MCP
