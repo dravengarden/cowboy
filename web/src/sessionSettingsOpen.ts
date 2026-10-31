@@ -1,7 +1,6 @@
 export const OPEN_SESSION_SETTINGS_EVENT = "cowboy:open-session-settings";
 export const CLOSE_SESSION_SETTINGS_EVENT = "cowboy:close-session-settings";
-export const SESSION_NEW_AGENT_EVENT = "cowboy:session-new-agent";
-export const SESSION_DUPLICATE_EVENT = "cowboy:session-duplicate";
+export const SESSION_NEW_FROM_EVENT = "cowboy:session-new-from";
 export const COMPOSER_FOCUS_EVENT = "cowboy:composer-focus";
 
 export type SessionSettingsFocus = "session" | "agent";
@@ -12,8 +11,7 @@ const PENDING_MS = 3_000;
 let pendingOpen:
   | { sessionId: string; focus: SessionSettingsFocus; at: number }
   | undefined;
-const newAgentRequests = new Map<string, number>();
-const duplicateRequests = new Map<string, number>();
+const newFromRequests = new Map<string, number>();
 
 export function openSessionSettings(
   focus: SessionSettingsFocus = "agent",
@@ -41,33 +39,18 @@ export function closeSessionSettings(sessionId: string): void {
   );
 }
 
-/** Open this session's settings with "Continue with a new agent" selected. */
-export function requestNewAgent(sessionId: string): void {
-  newAgentRequests.set(sessionId, Date.now());
+/** Open this session's settings at New session from this. */
+export function requestNewFrom(sessionId: string): void {
+  newFromRequests.set(sessionId, Date.now());
   document.dispatchEvent(
-    new CustomEvent(SESSION_NEW_AGENT_EVENT, { detail: { sessionId } }),
+    new CustomEvent(SESSION_NEW_FROM_EVENT, { detail: { sessionId } }),
   );
   openSessionSettings("agent", sessionId);
 }
 
-export function takeNewAgentRequest(sessionId: string): boolean {
-  const at = newAgentRequests.get(sessionId);
-  newAgentRequests.delete(sessionId);
-  return at !== undefined && Date.now() - at < PENDING_MS;
-}
-
-/** Open this session's settings at Duplicate. */
-export function requestDuplicate(sessionId: string): void {
-  duplicateRequests.set(sessionId, Date.now());
-  document.dispatchEvent(
-    new CustomEvent(SESSION_DUPLICATE_EVENT, { detail: { sessionId } }),
-  );
-  openSessionSettings("agent", sessionId);
-}
-
-export function takeDuplicateRequest(sessionId: string): boolean {
-  const at = duplicateRequests.get(sessionId);
-  duplicateRequests.delete(sessionId);
+export function takeNewFromRequest(sessionId: string): boolean {
+  const at = newFromRequests.get(sessionId);
+  newFromRequests.delete(sessionId);
   return at !== undefined && Date.now() - at < PENDING_MS;
 }
 

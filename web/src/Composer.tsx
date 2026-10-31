@@ -376,7 +376,6 @@ import {
   toggleComposerStackPanel,
 } from "./composerStackAccordion";
 import { ConfigRevertBack } from "./ConfigRevertBack";
-import { SessionDuplicateSettings } from "./SessionDuplicateSettings";
 import {
   COMPOSER_STACK_DISCLOSURE_TIMEOUT,
   composerStackDisclosureSx,
@@ -7253,7 +7252,6 @@ function ComposerSheet({
           {/* Right under the Agent block: model and reasoning apply in place;
               another subscription or Provider is a Switch with Back. */}
           <SessionContextSettings session={session} />
-          <SessionDuplicateSettings session={session} />
           <Divider />
           <SessionToolsSection sessionId={session.id} />
         </>

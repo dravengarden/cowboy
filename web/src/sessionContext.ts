@@ -128,6 +128,17 @@ export function announceContext(id: string): void {
   globalThis.dispatchEvent?.(new CustomEvent(CONTEXT_CHANGED, { detail: id }));
 }
 
+/** Back from a staged new agent: other selected sources stay linked. */
+export function withoutAgentSwitch(
+  context: Pick<SessionContext, "sources">,
+  sessionId: string,
+): Pick<SessionContext, "sources" | "next_agent"> {
+  return {
+    sources: context.sources.filter((id) => id !== sessionId),
+    next_agent: null,
+  };
+}
+
 export async function saveSessionContext(
   id: string,
   edit: Pick<SessionContext, "revision" | "sources" | "next_agent"> & {
