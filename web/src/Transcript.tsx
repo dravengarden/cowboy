@@ -256,6 +256,7 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { isImeKeyEvent } from "./imeKey";
+import { SessionContextCue } from "./SessionContextCue";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -5924,6 +5925,12 @@ export function Transcript({
                 />
               )}
 
+              {/* Directly below the newest turn: where this conversation went. */}
+              <SessionContextCue
+                sessionId={sessionId}
+                desktop={desktopNavigation}
+                placement="end"
+              />
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
                 (timeline growth or live terminal output) on a working turn,
@@ -6101,6 +6108,14 @@ export function Transcript({
                     flex: `0 0 ${recycledHeight}px`,
                     pointerEvents: "none",
                   }}
+                />
+              )}
+              {/* The conversation's true first row: where it came from. */}
+              {recycledHeight === 0 && (paging?.reachedStart ?? true) && (
+                <SessionContextCue
+                  sessionId={sessionId}
+                  desktop={desktopNavigation}
+                  placement="start"
                 />
               )}
               {paging != null && shouldShowScrollbackLoadingSkeleton({

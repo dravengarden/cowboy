@@ -36,10 +36,29 @@ export function useAnnouncedSessionContext(
   return useSessionContext(sessionId, known).data;
 }
 
-/** One line above the Composer: what the next message does, or where this
- *  conversation continued. Ordinary sessions render nothing and fetch nothing. */
+/** Where a context cue renders. A pending choice changes the next send, so
+ *  it stays on the Composer. Provenance is history: "Context from" opens the
+ *  Transcript and "continued in" closes it, instead of a permanent card
+ *  between the reply and the input. */
+export type SessionContextCuePlacement = "composer" | "start" | "end";
+
+function cuePlacement(kind: string): SessionContextCuePlacement {
+  return kind === "continued_from"
+    ? "start"
+    : kind === "continued_in"
+    ? "end"
+    : "composer";
+}
+
+/** What the next message does (above the Composer), or where this
+ *  conversation came from / continued (Transcript start / end). Ordinary
+ *  sessions render nothing and fetch nothing. */
 export function SessionContextCue(
-  { sessionId, desktop = false }: { sessionId: string; desktop?: boolean },
+  { sessionId, desktop = false, placement = "composer" }: {
+    sessionId: string;
+    desktop?: boolean;
+    placement?: SessionContextCuePlacement;
+  },
 ): React.JSX.Element | null {
   const context = useAnnouncedSessionContext(sessionId);
   const { data: accounts } = useSubscriptionAccounts();
@@ -54,7 +73,7 @@ export function SessionContextCue(
     context,
     (provider, account) => accountIdentity(accounts, provider, account).label,
   );
-  if (!cue || !context) return null;
+  if (!cue || !context || cuePlacement(cue.kind) !== placement) return null;
   // The original agent usually goes idle after a handoff; offer to free its
   // worker without stopping anything automatically.
   const canHibernate = cue.kind === "continued_in" && session !== undefined &&
@@ -67,8 +86,8 @@ export function SessionContextCue(
       cue.count === 1 ? "" : "s"
     } as context`
     : cue.kind === "continued_in"
-    ? "This conversation continued in a new agent"
-    : `Context from ${cue.title}${cue.more > 0 ? ` +${cue.more}` : ""}`;
+    ? "Continued in a new agent"
+    : `Continued from ${cue.title}${cue.more > 0 ? ` +${cue.more}` : ""}`;
   const action = pending
     ? {
       label: busy ? "Cancelling…" : "Cancel",
@@ -94,6 +113,81 @@ export function SessionContextCue(
         if (cue.kind === "continued_from") requestPickSession(cue.id);
       },
     };
+  const hibernate = (): void => {
+    setBusy(true);
+    setHibernateError("");
+    void hibernateSession(sessionId)
+      .catch((error: unknown) =>
+        setHibernateError(
+          error instanceof Error ? error.message : "Could not hibernate",
+        )
+      )
+      .finally(() => setBusy(false));
+  };
+  if (placement !== "composer") {
+    // A quiet divider in the conversation's own flow, like a date separator.
+    return (
+      <Box
+        role="status"
+        data-session-context-cue={cue.kind}
+        data-transcript-context-marker={placement}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          px: desktop ? 2 : 1.5,
+          py: placement === "start" ? 1.5 : 1,
+          color: "text.secondary",
+          "&::before, &::after": {
+            content: '""',
+            flex: "1 1 1.5rem",
+            minWidth: "1.5rem",
+            borderTop: 1,
+            borderColor: "divider",
+          },
+        }}
+      >
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.5}
+          sx={{ minWidth: 0, maxWidth: "min(100%, 34rem)" }}
+        >
+          <LinkOutlined
+            sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "primary.main" }}
+          />
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{ minWidth: 0 }}
+            title={hibernateError || text}
+          >
+            {hibernateError || text}
+          </Typography>
+          <Button
+            size="small"
+            disabled={busy}
+            onClick={action.run}
+            sx={{ flexShrink: 0, minWidth: 0, px: 0.75, textTransform: "none" }}
+          >
+            {action.label}
+          </Button>
+          {canHibernate && (
+            <Button
+              size="small"
+              disabled={busy}
+              data-context-cue-hibernate
+              title="Free this agent's memory; it resumes when you send here again"
+              onClick={hibernate}
+              sx={{ flexShrink: 0, minWidth: 0, px: 0.75, textTransform: "none" }}
+            >
+              Hibernate
+            </Button>
+          )}
+        </Stack>
+      </Box>
+    );
+  }
   return (
     <Box
       data-session-context-cue={cue.kind}
@@ -147,34 +241,10 @@ export function SessionContextCue(
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={hibernateError || text}
+          title={text}
         >
-          {hibernateError || text}
+          {text}
         </Typography>
-        {canHibernate && (
-          <Button
-            size="small"
-            disabled={busy}
-            data-context-cue-hibernate
-            title="Free this agent's memory; it resumes when you send here again"
-            onClick={() => {
-              setBusy(true);
-              setHibernateError("");
-              void hibernateSession(sessionId)
-                .catch((error: unknown) =>
-                  setHibernateError(
-                    error instanceof Error
-                      ? error.message
-                      : "Could not hibernate",
-                  )
-                )
-                .finally(() => setBusy(false));
-            }}
-            sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
-          >
-            Hibernate
-          </Button>
-        )}
         <Button
           size="small"
           disabled={busy}

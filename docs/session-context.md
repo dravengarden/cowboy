@@ -44,8 +44,11 @@ While choices are pending, a one-line cue above the Composer says what the
 next message does ("starts a new agent · Claude · Mink", or how many sessions
 it links) with **Cancel**, and the input placeholder reads "Message the new
 agent…" so the cue survives the mobile keyboard hiding auxiliary rows. After a
-handoff the original session shows "continued in a new agent · Open" and the
-destination shows "Context from SOURCE · Open", so both directions are one tap.
+handoff the link is history, not a next-send choice, so it leaves the Composer:
+the destination's Transcript opens with a "Continued from SOURCE · Open"
+divider (shown once its first page is loaded), and the original's Transcript
+ends with "Continued in a new agent · Open" below the newest turn. Both
+directions stay one tap without a permanent card between reply and input.
 Sessions without announced context render and fetch nothing for this cue.
 
 On mobile, **Context from sessions** opens a separate sheet above Settings or

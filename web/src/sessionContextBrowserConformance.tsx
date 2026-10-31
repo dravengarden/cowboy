@@ -294,6 +294,8 @@ export async function runSessionContextBrowserConformance(
             {state.lastError?.message}
           </output>
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
+          <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
+          <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? <SessionContextSettings session={sessions[0]!} /> : (
             <Sheet
               open
@@ -657,9 +659,14 @@ export async function runSessionContextBrowserConformance(
       );
       check(
         Boolean(
-          document.querySelector('[data-session-context-cue="continued_in"]'),
-        ),
-        `${mode}: the original session links to where it continued`,
+          document.querySelector(
+            '[data-session-context-cue="continued_in"][data-transcript-context-marker="end"]',
+          ),
+        ) &&
+          !document.querySelector(
+            '[data-composer-stack-slot="context"][data-session-context-cue^="continued"]',
+          ),
+        `${mode}: the original session links to where it continued from the Transcript end, not the Composer`,
       );
       // An idle original agent can be hibernated straight from the cue.
       const idle = { ...sessions[0]!, status: "running" as const };
