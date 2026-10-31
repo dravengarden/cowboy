@@ -6,8 +6,10 @@ import { isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   callGuidance,
+  injectedMcpServerNames,
   memoryConfiguration,
   memoryNative,
+  nativeMcpServerNames,
   sessionExtensions,
 } from "./memory.mjs";
 
@@ -112,6 +114,16 @@ export function applyDefaultAuthRequest(environment = process.env) {
   else environment.DEFAULT_AUTH_REQUEST = request;
 }
 
+// The patched adapter also awaits these natively configured servers when a
+// session open asks for its bounded MCP startup wait. Only ordinary launches
+// whose bridge injects Cowboy MCP or Matrix declare any.
+export const AWAIT_MCP_SERVERS_ENV = "COWBOY_CODEX_AWAIT_MCP_SERVERS";
+
+export function applyAwaitedMcpServers(names, environment = process.env) {
+  if (names.length === 0) delete environment[AWAIT_MCP_SERVERS_ENV];
+  else environment[AWAIT_MCP_SERVERS_ENV] = JSON.stringify(names);
+}
+
 // A signed managed launch profile selects this mode explicitly. It never
 // inherits ordinary full-access arguments and never starts Matrix memory.
 export const MANAGED_PROFILE_FLAG = "--cowboy-managed-profile=read-only-v1";
@@ -188,6 +200,7 @@ async function managedMain(args, profile) {
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   process.env.COWBOY_PRIVATE_MANAGED_PROFILE = profile;
   applyDefaultAuthRequest();
+  applyAwaitedMcpServers([]);
   if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
     // Use the same native execution binding, without the ordinary session's
     // memory / Cowboy MCP enrollment. The keeper still enforces read-only.
@@ -244,20 +257,29 @@ export async function main(args) {
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   applyDefaultAuthRequest();
-  if (
-    !inspection &&
-    (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-      process.env.COWBOY_CALL_CONTEXT ||
-      await memoryConfiguration("codex", { extensions }))
-  ) {
+  const cowboyMcp = Boolean(
+    process.env.COWBOY_EXECUTION_DESCRIPTOR || process.env.COWBOY_CALL_CONTEXT,
+  );
+  // The bridge reads the same configuration again when it starts native.
+  const memory = inspection
+    ? null
+    : await memoryConfiguration("codex", { extensions });
+  if (!inspection && (cowboyMcp || memory)) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");
     }
     process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE = process.env.CODEX_PATH;
     process.env.COWBOY_PRIVATE_CODEX_BRIDGE = fileURLToPath(import.meta.url);
+    applyAwaitedMcpServers(injectedMcpServerNames({
+      cowboy: cowboyMcp,
+      memory,
+      listServers: () =>
+        nativeMcpServerNames(process.env.CODEX_PATH, configuration),
+    }));
   } else {
     delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
     delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
+    applyAwaitedMcpServers([]);
   }
   const upstream = fileURLToPath(
     new URL(

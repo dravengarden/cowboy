@@ -25,18 +25,10 @@ export function agentApiConfiguration(
   if (environmentId && (typeof cwd !== "string" || !cwd.startsWith("/"))) {
     throw new Error("Remote Cowboy MCP requires its target working directory");
   }
-  // Native config layers merge tables, including obsolete URL/env fields.
-  // Use a fresh name instead of mixing transports or inheriting stale wiring.
-  const names = new Set(servers);
-  let name = "cowboy";
-  const configuration = [];
-  if (names.has(name)) {
-    configuration.push("-c", "mcp_servers.cowboy.enabled=false");
-    name = "cowboy_session";
-    for (let suffix = 2; names.has(name); suffix++) {
-      name = `cowboy_session_${suffix}`;
-    }
-  }
+  const name = agentApiServerName(servers);
+  const configuration = name === "cowboy"
+    ? []
+    : ["-c", "mcp_servers.cowboy.enabled=false"];
   // An executor MCP needs an explicit target cwd. The empty context slot makes
   // native send an env object; the keeper replaces it with its own wiring.
   const placement = environmentId
@@ -49,6 +41,57 @@ export function agentApiConfiguration(
     "-c",
     `mcp_servers.${name}={command="cowboy",args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
   ];
+}
+
+// Native config layers merge tables, including obsolete URL/env fields.
+// Use a fresh name instead of mixing transports or inheriting stale wiring.
+export function agentApiServerName(servers = []) {
+  const names = new Set(servers);
+  if (!names.has("cowboy")) return "cowboy";
+  let name = "cowboy_session";
+  for (let suffix = 2; names.has(name); suffix++) {
+    name = `cowboy_session_${suffix}`;
+  }
+  return name;
+}
+
+/** The names of the servers natively configured for this launch, by asking
+ * native itself; credentials and config files stay where they belong. */
+export function nativeMcpServerNames(executable, configuration) {
+  const listing = spawnSync(
+    executable,
+    [...configuration, "mcp", "list", "--json"],
+    { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
+  );
+  if (listing.status !== 0) {
+    throw new Error("Cowboy MCP could not enumerate native server names");
+  }
+  const entries = JSON.parse(listing.stdout);
+  if (
+    !Array.isArray(entries) ||
+    entries.some((entry) => typeof entry?.name !== "string")
+  ) {
+    throw new Error("Cowboy MCP received an invalid native server list");
+  }
+  return entries.map((entry) => entry.name);
+}
+
+/**
+ * The exact native names of the MCP servers the bridge injects for a launch:
+ * Cowboy MCP for executor or call-context sessions, and Matrix when its
+ * backend tools are enabled. `listServers` returns the natively configured
+ * names and runs only when Cowboy MCP needs a collision-free name.
+ * Mirrors `runNative`, which assembles these servers.
+ */
+export function injectedMcpServerNames({ cowboy, memory, listServers }) {
+  const names = [];
+  if (cowboy) {
+    const servers = listServers();
+    if (memory?.tools) servers.push(memory.server);
+    names.push(agentApiServerName(servers));
+  }
+  if (memory?.enableTools === true) names.push(memory.server);
+  return names;
 }
 
 export function codexObservation(message) {
@@ -128,24 +171,11 @@ async function runNative(args, execution, descriptor) {
   );
   let servers = [];
   if (descriptor || process.env.COWBOY_CALL_CONTEXT) {
-    // Ask native to resolve its configuration; keep credentials/config files
-    // where they belong and retain only server names from the bounded reply.
-    const listing = spawnSync(
+    // Retain only server names from native's bounded reply.
+    servers = nativeMcpServerNames(
       process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE,
-      [...configuration, "mcp", "list", "--json"],
-      { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
+      configuration,
     );
-    if (listing.status !== 0) {
-      throw new Error("Cowboy MCP could not enumerate native server names");
-    }
-    const entries = JSON.parse(listing.stdout);
-    if (
-      !Array.isArray(entries) ||
-      entries.some((entry) => typeof entry?.name !== "string")
-    ) {
-      throw new Error("Cowboy MCP received an invalid native server list");
-    }
-    servers = entries.map((entry) => entry.name);
     if (config?.tools) servers.push(config.server);
   }
   configuration.push(...agentApiConfiguration({
