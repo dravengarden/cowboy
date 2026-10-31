@@ -44,16 +44,18 @@ test("mobile new session uses labeled Cancel and Create actions", () => {
   assertEquals(dialog.includes("0 -8px 18px"), false);
   assertEquals(
     mobileProductShellSource.includes(
-      "[data-detent-sheet='true'][aria-label='Create']) [data-mobile-overflow-layer='true']",
+      "[data-detent-sheet='true'][aria-label='Create']:not([data-detent-moving])) [data-mobile-overflow-layer='true']",
     ),
     true,
   );
   assertEquals(
     mobileProductShellSource.includes(
-      "[data-detent-sheet='true'][aria-label='Create']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']",
+      "[data-detent-sheet='true'][aria-label='Create']:not([data-detent-moving])) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']",
     ),
     true,
   );
+  // Toggling a scroller's overflow leaves iOS WebKit unable to scroll it.
+  assertEquals(mobileProductShellSource.includes('overflowY: "hidden !important"'), false);
 });
 
 test("session title editing uses labeled Cancel and Save actions", async () => {
