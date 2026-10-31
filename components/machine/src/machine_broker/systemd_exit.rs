@@ -263,6 +263,31 @@ pub(super) async fn confirm_recycled(
     collected(&show(unit).await?, unit)
 }
 
+/// Prove the previous named launch's tree exit before a replacement launch
+/// (generation cutover, its fallback, or a reload) on the same stable unit.
+/// Its launching broker's reaper normally records this, but a Machine host
+/// restart loses that reaper and an in-process replacement can win the race
+/// with it, after which the journal refuses every relaunch and the session is
+/// left without a worker. The caller has observed the stable unit collected;
+/// this rechecks the exact recorded incarnation and its empty cgroup, so a live
+/// or unobserved previous worker still refuses the launch (one owner).
+pub(super) async fn confirm_replaced(store: &MachinePluginStore, session: &str) -> Result<()> {
+    const ATTEMPTS: u32 = 20;
+    for attempt in 1..=ATTEMPTS {
+        store.reconcile_account_worker_boot(session)?;
+        match store.account_worker_exit(session)? {
+            Some(receipt) if !receipt.tree_exited => {}
+            _ => return Ok(()),
+        }
+        match confirm(store, session).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == ATTEMPTS => return Err(error),
+            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        }
+    }
+    unreachable!("the final attempt returns")
+}
+
 pub(super) async fn confirm(store: &MachinePluginStore, session: &str) -> Result<()> {
     store.reconcile_account_worker_boot(session)?;
     let receipt = store
@@ -467,6 +492,81 @@ mod tests {
         assert!(store.account_worker_exit("s").unwrap().unwrap().tree_exited);
         confirm(&store, "s").await.unwrap();
         assert!(!stop_allowed(&store, "s", &unit).await.unwrap());
+    }
+
+    /// 2026-10-31 OVH `--workers` rollout: a named worker launched by the
+    /// previous Machine host was stopped by the cutover, but only that host's
+    /// lost reaper would have recorded its tree exit, so the replacement and
+    /// its fallback were both refused and the session was left without one.
+    #[tokio::test]
+    #[ignore = "requires user systemd and cgroup v2"]
+    async fn replacement_proves_a_collected_named_unit_whose_reaper_was_lost() {
+        let temp = tempfile::tempdir().unwrap();
+        let open = || {
+            MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap()
+        };
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let unit = format!("cowboy-handoff-test-{}.service", uuid::Uuid::new_v4());
+        let store = open();
+        let mut command = Command::new("systemd-run");
+        command.args([
+            "--user",
+            "--quiet",
+            "--collect",
+            "--service-type=exec",
+            "--property=KillMode=control-group",
+            "--property=TimeoutStopSec=1s",
+            "--property=RuntimeMaxSec=30s",
+            &format!("--unit={unit}"),
+            &format!("--setenv={LAUNCH_ENV}"),
+            "sleep",
+            "60",
+        ]);
+        let (mut child, _) =
+            super::super::account_worker::spawn(&mut command, &store, "s", &account).unwrap();
+        assert!(child.wait().await.unwrap().success());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while capture(&store, "s", &unit).await.is_err() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // The launching host (and its reaper) is gone; a new one owns the store.
+        drop(store);
+        let store = open();
+        // A live previous incarnation is never proven exited: one owner.
+        assert!(confirm_replaced(&store, "s").await.is_err());
+        assert!(store.begin_account_worker("s", &account).is_err());
+        let status = Command::new("systemctl")
+            .args(["--user", "stop", &unit])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while collected(&show(&unit).await.unwrap(), &unit).is_err() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            store
+                .begin_account_worker("s", &account)
+                .unwrap_err()
+                .to_string()
+                .contains("previous worker tree exit unconfirmed")
+        );
+        confirm_replaced(&store, "s").await.unwrap();
+        assert!(store.account_worker_exit("s").unwrap().unwrap().tree_exited);
+        store.begin_account_worker("s", &account).unwrap();
     }
 
     fn fixture() -> (SystemdWorker, String, uuid::Uuid) {
