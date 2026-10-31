@@ -9,8 +9,8 @@ export type ContextCue =
     id: string;
     title: string;
     more: number;
-    provider?: string;
     label?: string;
+    before?: number;
   };
 
 export function contextCue(
@@ -53,9 +53,9 @@ export function contextCue(
       title: source.title || "a linked session",
       more: sources.length - 1,
       ...(source.provider && {
-        provider: source.provider,
         label: label(source.provider, source.provider_account_id ?? "default"),
       }),
+      ...(typeof source.before === "number" && { before: source.before }),
     }
     : null;
 }

@@ -57,7 +57,10 @@ export function SessionContextPicker(
     !session.system && !session.closing && !isManagedChild(session) &&
     session.id !== exclude
   );
-  const byId = new Map(choices.map((session) => [session.id, session]));
+  // A selected session stays named even when it can no longer be chosen,
+  // such as an original already moved to Trash.
+  const trashed = useStoreSelector((state) => state.trashedSessions);
+  const byId = new Map([...trashed, ...sessions].map((session) => [session.id, session]));
   // Keep rows stationary as the user selects them; only missing selections
   // need extra rows. Selection order remains in value, not the browsing list.
   const ids = [...new Set([...choices.map((session) => session.id), ...value])];
@@ -123,7 +126,7 @@ export function SessionContextPicker(
             },
           }}
         >
-          Context from sessions{value.length ? ` · ${value.length}` : ""}
+          <SelectLabel count={value.length} />
         </Button>
         {value.length > 0 && (
           <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
@@ -146,7 +149,7 @@ export function SessionContextPicker(
             forceSheet
             portal
             fill
-            title="Context from sessions"
+            title="Select sessions"
             onClose={close}
             actions={
               <Button fullWidth variant="contained" onClick={close}>
@@ -177,6 +180,19 @@ export function SessionContextPicker(
       choices={choices}
       identityLabel={identityLabel}
     />
+  );
+}
+
+function SelectLabel({ count }: { count: number }): React.JSX.Element {
+  return (
+    <>
+      Select sessions
+      {count > 0 && (
+        <Box component="span" sx={{ ml: "auto", pr: 0.5, color: "text.secondary" }}>
+          {count} selected
+        </Box>
+      )}
+    </>
   );
 }
 
@@ -233,7 +249,7 @@ function DesktopContextPicker(
           borderColor: "divider",
         }}
       >
-        Context from sessions{value.length ? ` · ${value.length}` : " · optional"}
+        <SelectLabel count={value.length} />
       </Button>
       {value.length > 0 && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
@@ -253,7 +269,7 @@ function DesktopContextPicker(
         <DesktopModal
           open
           onClose={() => setOpen(false)}
-          title="Context from sessions"
+          title="Select sessions"
           description="The agent reads these sessions when it needs them."
           icon={<AccountTreeOutlined color="primary" />}
           width={720}

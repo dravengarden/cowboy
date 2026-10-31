@@ -12,7 +12,7 @@ accounts.
 
 ## User flow
 
-New Session has an optional **Context from sessions** multiselect. Existing
+New Session has an optional **Select sessions** multiselect. Existing
 sessions expose **Switch agent or link context** directly under the Agent
 block in mobile settings and desktop Run Configuration, and in the
 empty-session configuration workspace. Every switch is a click in Session
@@ -42,9 +42,24 @@ keeps its source's title and shows a **Continued** badge in the session list;
 the mark is the persisted `session_continued_from:<id>` setting projected as
 `continued_from` on the session. Continuations created before that mark are
 recorded once at Controller startup from their source's accepted send receipt.
-When the original agent is idle on a Machine that supports hibernation, its
-"continued in a new agent" cue also offers **Hibernate** to free the worker; it
-resumes on the next message there. Nothing is hibernated automatically.
+
+A continuation and a fork differ in shape. Continuing moves the work to a new
+agent, so there is one line and the original becomes history. Forking copies a
+conversation, so there are two live lines. An accepted handoff hibernates the
+original's idle agent (best effort; Session Settings still offers **Hibernate**
+if the worker stayed), and the session list marks the original **History**.
+Its Composer gives way to a dock: **Open** goes to the continuation, **Fork**
+starts a separate session from this agent's conversation (natively where the
+Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
+original away and opens the continuation. The continuation can read that
+history until Trash retention ends. Writing in the original would silently
+split one piece of work in two, so the web offers no way to do it;
+**Switch agent or link context** and the session menu's **Continue in new
+agent…** are hidden for the same reason. While its agent is still busy the
+Composer stays, so the turn can be observed and stopped. Deleting or trashing
+the continuation returns the original to an ordinary session. The state is
+derived from the synced `continued_from` mark; the session API still accepts
+messages from agents and scripts.
 
 While choices are pending, a row directly above the Composer, in the same frame
 as the Plan panel, says what the next message does ("Next message · Starts
@@ -52,17 +67,17 @@ Claude · Mink", or how many sessions it links) with **Cancel**, and the input
 placeholder reads "Message the new agent…" so the cue survives the mobile
 keyboard hiding auxiliary rows. After a handoff the link is history, not a
 next-send choice, so it leaves the Composer. The switch itself stays in Session
-Settings; the Transcript only records it, so the two sessions read as one piece
-of work. The destination's first row (and its empty or preparing state) is a
-read-only card "Continued from SOURCE", the original's last row "Continued in
-DESTINATION"; each shows both Provider marks, "OLD → NEW" subscription and
-**Open**, joined to the conversation by a short rail. Session Settings repeats
-these above **Switch agent or link context** with **Hibernate** on the original
-when available, and shows "Forked from SOURCE · Open" for a fork.
+Settings. A continuation opens with one link, "Continued from SOURCE · OLD →
+NEW" (also in its empty and preparing state). Following it opens the original at
+the row where the link was captured, paging history back in and highlighting
+it. A source in Trash stays named but cannot be opened. Session Settings repeats
+the link above **Switch agent or link context**, "Continued in a new agent ·
+Open" on the original (with **Hibernate** when available), and "Forked from
+SOURCE · Open" for a fork.
 Sessions without announced context or a continuation mark render and fetch
 nothing for this cue.
 
-On mobile, **Context from sessions** opens a separate sheet above Settings or
+On mobile, **Select sessions** opens a separate sheet above Settings or
 New Session. It opens without focusing an input; search raises the keyboard
 only when chosen. Search stays above the scrolling results and **Done** stays
 above the keyboard. Selection, including **Clear**, edits only the owning form;
