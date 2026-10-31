@@ -40,9 +40,13 @@ export function useCompactionContext({
   size: number;
   refreshing: boolean;
   beginRefresh: () => void;
+  /** A refused command never starts, so nothing would end the refresh. */
+  cancelRefresh: () => void;
 } {
   const [request, setRequest] = useState<CompactRequest | null>(null);
   const [override, setOverride] = useState<ContextOverride | null>(null);
+
+  const cancelRefresh = useCallback((): void => setRequest(null), []);
 
   const beginRefresh = useCallback((): void => {
     setOverride(null);
@@ -155,5 +159,6 @@ export function useCompactionContext({
     // until a subsequent model turn supplies canonical token usage.
     refreshing: request !== null || (override !== null && override.size === 0),
     beginRefresh,
+    cancelRefresh,
   };
 }

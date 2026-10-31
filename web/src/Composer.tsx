@@ -1674,7 +1674,10 @@ export function ComposerWorkspace({
     } else if (a.command !== undefined) {
       // Compact: send the agent's slash-command down the normal prompt path.
       compactContext.beginRefresh();
-      return submitPrompt(sessionId, a.command, []);
+      return submitPrompt(sessionId, a.command, []).catch((error: unknown) => {
+        compactContext.cancelRefresh();
+        throw error;
+      });
     }
     return Promise.resolve();
   }
