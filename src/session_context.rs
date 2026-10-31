@@ -145,6 +145,9 @@ pub struct Delivery {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The handoff moved its source to Trash, reported once to undo it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_trashed: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -166,6 +169,9 @@ pub struct Context {
     /// dispatch turns them into a new [`Injection`] and records them as links.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting: Vec<Link>,
+    /// The session whose worktree state this continuation starts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_base: Option<String>,
 }
 
 impl Context {
@@ -206,6 +212,14 @@ impl Context {
         known.remember_links(carried);
         known.links
     }
+}
+
+/// The session whose worktree state this new session starts from: a fork's
+/// source or a continuation's.
+pub fn workspace_base(hub: &crate::core::Hub, id: &str) -> Option<String> {
+    hub.session_fork(id)
+        .map(|record| record.source_session_id)
+        .or_else(|| read(hub, id).ok()?.workspace_base)
 }
 
 /// Sessions the next prompt will read.
@@ -649,6 +663,7 @@ mod tests {
                 session_id: "destination".into(),
                 state: "preparing".into(),
                 error: None,
+                source_trashed: false,
             }),
             injection: Some(Injection {
                 cmid: "admitted".into(),
@@ -679,6 +694,7 @@ mod tests {
                     session_id: "destination".into(),
                     state: "accepted".into(),
                     error: None,
+                    source_trashed: false,
                 }),
                 injection: Some(Injection {
                     cmid: cmid.into(),

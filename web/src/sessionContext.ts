@@ -20,6 +20,7 @@ export interface ContextDelivery {
   state: "preparing" | "accepted" | "failed" | "unknown";
   error?: string | null;
   session?: SessionMeta;
+  source_trashed?: boolean;
 }
 export interface SessionContext {
   revision: number;
@@ -281,6 +282,17 @@ export async function requireCurrentAgentContext(id: string): Promise<void> {
   }
 }
 
+const offeredUndo = new Set<string>();
+
+function offerHandoffUndo(id: string, receipt: ContextDelivery): void {
+  if (!receipt.source_trashed || offeredUndo.has(receipt.operation)) return;
+  offeredUndo.add(receipt.operation);
+  // Lazily: Undo reaches back into the store that imports this module.
+  void import("./undoActions").then(({ recordUndo }) =>
+    recordUndo("Original moved to Trash", [{ kind: "restore_trash", sessions: [id] }])
+  );
+}
+
 export async function sendWithContext(
   id: string,
   text: string,
@@ -300,6 +312,7 @@ export async function sendWithContext(
     !observedHandoffs.has(context.delivery.operation)
   ) {
     openContextDestination(context.delivery);
+    offerHandoffUndo(id, context.delivery);
     throw new ContextNavigationNotice(context.delivery.session_id);
   }
   if (!request && context.revision === context.applied_revision) return false;
@@ -353,6 +366,7 @@ export async function sendWithContext(
   sends.delete(id);
   if (receipt.session_id !== id) {
     openContextDestination(receipt);
+    offerHandoffUndo(id, receipt);
   }
   return true;
 }
