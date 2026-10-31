@@ -83,6 +83,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.75.0 records provider-runtime 1.1.27 for
+claude-deepseek-gateway 0.1.5. The 0.1.4 gateway reported fetches under an
+operation the Controller's usage table refuses, which stalled that producer's
+usage queue; 0.1.5 uses the admitted dimensions. Every Plugin that pins
+provider-runtime advances one patch version. Native pins are unchanged.
+
 Component release 3.74.0 records provider-runtime 1.1.26. DeepSeek Harness now
 selects DeepSeek's Fetch API for `web_fetch`, because dsh's local backend refuses
 fake-IP DNS answers, and reaches it through claude-deepseek-gateway 0.1.4, which
