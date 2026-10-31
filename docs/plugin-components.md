@@ -83,6 +83,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.73.0 records app-shell 1.1.34 for the already-committed
+loading-spinner changes `b2053d73` and `f7bd4bbd`; no Plugin depends on that
+component. It also records Claude Code 3.20.22, whose usage collector badges
+the former Max 20x plan as Ultra from the credential's rate-limit tier. Native
+pins and its component release 3.72.0 are unchanged.
+
 Component release 3.72.0 retires the Gemini Agent Provider, sunset on
 2026-10-20. Its explicit `plugin_removals: ["gemini"]` migration drops
 `gemini` from the active Plugin set and closure; every earlier release that
