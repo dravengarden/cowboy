@@ -373,6 +373,32 @@ export function dshHome(env = process.env, home = homedir()) {
   return home && isAbsolute(home) ? join(home, ".dsh") : undefined;
 }
 
+/**
+ * dsh cannot send Cowboy's session header, so its gateway URLs carry the
+ * identity instead; the gateway removes it and never forwards it upstream.
+ */
+export function sessionRoutedEnvironment(env = process.env) {
+  const session = /^X-Cowboy-Session-Id: ([0-9a-f]{64})$/mu.exec(
+    env.ANTHROPIC_CUSTOM_HEADERS ?? "",
+  )?.[1];
+  if (!session) return env;
+  const routed = { ...env };
+  for (
+    const name of [
+      "DEEPSEEK_BASE_URL",
+      "DEEPSEEK_SEARCH_BASE_URL",
+      "DEEPSEEK_WEB_BASE_URL",
+    ]
+  ) {
+    if (!env[name]) continue;
+    const url = new URL(env[name]);
+    url.pathname = `/cowboy-session/${session}${url.pathname}`
+      .replace(/\/+$/u, "");
+    routed[name] = url.href;
+  }
+  return routed;
+}
+
 async function writePatch(home) {
   const directory = join(home, "cowboy");
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -413,6 +439,7 @@ async function main(argv) {
   const home = dshHome();
   if (acp && home) args.push("--patch", await writePatch(home));
   const child = spawn(process.execPath, [dsh, ...args], {
+    env: acp ? sessionRoutedEnvironment() : process.env,
     stdio: [acp ? "pipe" : "inherit", acp ? "pipe" : "inherit", "inherit"],
   });
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {

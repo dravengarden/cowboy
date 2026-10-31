@@ -7,6 +7,7 @@ import {
   planOf,
   presentMessage,
   requestCwd,
+  sessionRoutedEnvironment,
 } from "./launch.mjs";
 
 const cwd = "/work/session";
@@ -295,6 +296,23 @@ test("fileText leaves unframed or unnumbered text alone", () => {
     ),
     "no numbers",
   );
+});
+
+test("gateway URLs carry the session identity dsh cannot send", () => {
+  const session = "ab".repeat(32);
+  const env = {
+    ANTHROPIC_CUSTOM_HEADERS: `X-Cowboy-Session-Id: ${session}`,
+    DEEPSEEK_BASE_URL: "http://127.0.0.1:9",
+    DEEPSEEK_SEARCH_BASE_URL: "http://127.0.0.1:9/v1",
+    DEEPSEEK_WEB_BASE_URL: "http://127.0.0.1:9/v1/tools",
+  };
+  const prefix = `http://127.0.0.1:9/cowboy-session/${session}`;
+  const routed = sessionRoutedEnvironment(env);
+  assert.equal(routed.DEEPSEEK_BASE_URL, prefix);
+  assert.equal(routed.DEEPSEEK_SEARCH_BASE_URL, `${prefix}/v1`);
+  assert.equal(routed.DEEPSEEK_WEB_BASE_URL, `${prefix}/v1/tools`);
+  const plain = { DEEPSEEK_BASE_URL: "http://127.0.0.1:9" };
+  assert.equal(sessionRoutedEnvironment(plain), plain);
 });
 
 test("the profile patch routes web_fetch through the gateway", () => {
