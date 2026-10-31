@@ -171,10 +171,24 @@ async fn claim_carrier_in(
     id: &str,
     cmid: Option<&str>,
 ) -> Result<(), String> {
+    let unavailable = "Linked context could not be recorded; the message stays queued";
+    if let Some(promoted) = crate::session_context::promotion(hub, id, cmid) {
+        let store = store.ok_or(unavailable)?;
+        let key = crate::session_context::key(id);
+        let value = serde_json::to_value(&promoted).expect("context serializes");
+        if !store
+            .compare_and_put_setting(&key, hub.setting(&key).as_ref(), &value)
+            .await
+            .unwrap_or(false)
+        {
+            return Err(unavailable.into());
+        }
+        hub.load_settings(vec![(key, value)]);
+        crate::session_context::announce(hub, id, &promoted);
+    }
     let Some((key, expected, value)) = crate::session_context::carrier_claim(hub, id, cmid) else {
         return Ok(());
     };
-    let unavailable = "Linked context could not be recorded; the message stays queued";
     let store = store.ok_or(unavailable)?;
     let committed = match store
         .compare_and_put_setting(&key, expected.as_ref(), &value)
@@ -245,7 +259,7 @@ fn view(
     }
     Ok(serde_json::json!({
         "revision":context.revision,"applied_revision":context.applied_revision,
-        "sources":context.sources,"source_sessions":sources,"links":links,"next_agent":context.next_agent,
+        "sources":context.sources,"source_sessions":sources,"links":links,"pending_links":crate::session_context::pending_links(&context),"next_agent":context.next_agent,
         "delivery":delivery,"max_sources":crate::session_context::MAX_SOURCES,
     }))
 }
@@ -282,7 +296,9 @@ pub(super) struct Edit {
     resolve_operation: Option<String>,
 }
 
-fn editable(info: &SessionInfo, context: &Context, clearing: bool) -> Result<(), String> {
+/// Links wait for the next prompt without holding anything. Only a new agent
+/// needs this session settled first.
+fn editable(info: &SessionInfo, context: &Context, new_agent: bool) -> Result<(), String> {
     if context
         .delivery
         .as_ref()
@@ -290,8 +306,8 @@ fn editable(info: &SessionInfo, context: &Context, clearing: bool) -> Result<(),
     {
         return Err("A send is unresolved. Check its destination before changing context; do not send it again.".into());
     }
-    if (!clearing && info.queue_count > 0)
-        || context.injection.is_some() && info.meta.status == Status::Busy
+    if new_agent
+        && (info.queue_count > 0 || context.injection.is_some() && info.meta.status == Status::Busy)
     {
         return Err(
             "Wait for the submitted message or resolve the queue before changing context".into(),
@@ -353,11 +369,11 @@ pub(super) async fn set(
             }
             check.delivery = None;
         }
-        let clearing = edit.sources.is_empty() && edit.next_agent.is_none();
+        let links_only = edit.next_agent.is_none();
         if edit.revision != current.revision {
             return Err("Context changed on another device; refresh before saving".into());
         }
-        editable(&info, &check, clearing)?;
+        editable(&info, &check, !links_only)?;
         validate_sources(&state, &auth.principal, &edit.sources)?;
         if let Some(target) = &edit.next_agent {
             validate_target(target)?;
@@ -377,25 +393,45 @@ pub(super) async fn set(
             .checked_add(1)
             .ok_or("Context revision exhausted")?;
         let links = current.known_links();
+        // Staging a new agent leaves the waiting links in place: going back
+        // must not move their point.
+        let waiting = if links_only {
+            let links = delivered_links(&state, &capture(&state, &auth.principal, &edit.sources)?);
+            links
+                .into_iter()
+                .map(|link| {
+                    current
+                        .waiting
+                        .iter()
+                        .find(|known| known.session_id == link.session_id)
+                        .cloned()
+                        .unwrap_or(link)
+                })
+                .collect()
+        } else {
+            current.waiting.clone()
+        };
+        let delivery = current
+            .delivery
+            .filter(|delivery| matches!(delivery.state.as_str(), "accepted" | "failed"));
         let saved = Context {
             revision,
-            // Removing every link with no replacement needs no bootstrap.
-            applied_revision: if edit.sources.is_empty() && edit.next_agent.is_none() {
+            applied_revision: if links_only {
                 revision
             } else {
                 current.applied_revision
             },
-            sources: edit.sources,
+            sources: if links_only { Vec::new() } else { edit.sources },
             next_agent: edit.next_agent,
-            delivery: current
-                .delivery
-                .filter(|delivery| matches!(delivery.state.as_str(), "accepted" | "failed")),
+            delivery,
+            // A claimed injection may still be retried by its prompt.
+            injection: current.injection,
             links,
-            ..Context::default()
+            waiting,
         };
         current_authority(&state, &auth)?;
         owned(&state, &auth.principal, &id)?;
-        let _queue_guard = state.hub.begin_context_edit(&id, clearing)?;
+        let _queue_guard = state.hub.begin_context_edit(&id, links_only)?;
         save(&state, &id, &saved).await?;
         view(&state, &auth.principal, &id)
     })
@@ -599,8 +635,16 @@ async fn deliver(
     {
         return Err("A nonempty message and a stable operation id are required".into());
     }
-    if request.revision != context.revision || context.applied_revision == context.revision {
+    // Sending names its own carrier, for callers that want a receipt.
+    let links_waiting = context.next_agent.is_none() && !context.waiting.is_empty();
+    if request.revision != context.revision
+        || (context.applied_revision == context.revision && !links_waiting)
+    {
         return Err("Context changed or was already applied; refresh before sending".into());
+    }
+    if links_waiting {
+        context.sources = crate::session_context::pending_links(&context);
+        context.waiting.clear();
     }
     if info.queue_count > 0
         || (context.next_agent.is_some()
@@ -678,6 +722,7 @@ async fn deliver(
     context.next_agent = None;
     if target_id != id {
         context.sources.clear();
+        context.waiting.clear();
     }
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;

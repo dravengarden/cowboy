@@ -3888,6 +3888,15 @@ impl Hub {
             && crate::session_context::allows_dispatch(self, id, cmid)
     }
 
+    pub fn has_queued_cmid(&self, id: &str, cmid: &str) -> bool {
+        self.inner.sessions.lock().get(id).is_some_and(|session| {
+            session
+                .queue
+                .iter()
+                .any(|entry| entry.cmid.as_deref() == Some(cmid))
+        })
+    }
+
     pub fn context_state_changed(&self, id: &str) {
         self.try_drain(id);
     }

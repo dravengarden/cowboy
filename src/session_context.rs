@@ -162,6 +162,10 @@ pub struct Context {
     pub injection: Option<Injection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// Sessions the next authored prompt will read. They hold nothing: a
+    /// dispatch turns them into a new [`Injection`] and records them as links.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting: Vec<Link>,
 }
 
 impl Context {
@@ -202,6 +206,66 @@ impl Context {
         known.remember_links(carried);
         known.links
     }
+}
+
+/// Sessions the next prompt will read.
+pub fn pending_links(context: &Context) -> Vec<String> {
+    if context.revision != context.applied_revision {
+        return context.sources.clone();
+    }
+    context
+        .waiting
+        .iter()
+        .map(|link| link.session_id.clone())
+        .collect()
+}
+
+/// Turn waiting links into the injection this prompt will carry, or `None`
+/// when there is nothing to do. A claimed injection stays while its prompt is
+/// queued for retry, and that prompt is not a new one to carry links.
+pub fn promotion(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> Option<Context> {
+    let cmid = cmid.filter(|cmid| crate::core::Hub::is_authored_cmid(cmid))?;
+    let mut context = read(hub, id).ok()?;
+    if context.waiting.is_empty() || context.revision != context.applied_revision {
+        return None;
+    }
+    if let Some(claimed) = context
+        .injection
+        .as_ref()
+        .and_then(|injection| carrier(hub, id, injection))
+        && (claimed.cmid == cmid || hub.has_queued_cmid(id, &claimed.cmid))
+    {
+        return None;
+    }
+    let owner = hub.session_info(id)?.meta.owner_user_id;
+    let waiting = std::mem::take(&mut context.waiting);
+    // A session deleted while waiting must not refuse the prompt.
+    let links: Vec<_> = waiting
+        .into_iter()
+        .filter(|link| {
+            hub.session_info(&link.session_id).is_some_and(|info| {
+                !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
+            })
+        })
+        .collect();
+    context.links = context.known_links();
+    context.revision = context.revision.checked_add(1)?;
+    context.applied_revision = context.revision;
+    if !links.is_empty() {
+        context.injection = Some(Injection {
+            cmid: format!("context-links-{id}-{}", context.revision),
+            sources: links
+                .iter()
+                .map(|link| Source {
+                    session_id: link.session_id.clone(),
+                    before: link.before,
+                })
+                .collect(),
+            follows_first_prompt: true,
+        });
+        context.remember_links(links);
+    }
+    Some(context)
 }
 
 pub fn key(id: &str) -> String {
@@ -383,6 +447,65 @@ pub fn preamble(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prompt_turns_waiting_links_into_its_injection_once() {
+        let (hub, mut rx) = starting_destination();
+        accepted(&hub, "first", true);
+        let waiting = Link {
+            session_id: "source".into(),
+            before: 7,
+            title: "Source".into(),
+        };
+        let mut context = read(&hub, "destination").unwrap();
+        context.waiting = vec![waiting.clone()];
+        put(&hub, &context);
+        assert_eq!(pending_links(&context), ["source"]);
+        assert!(!pending(&hub, "destination"));
+
+        // The claimed injection's own prompt, or a queued retry of it, keeps it.
+        hub.load_settings(vec![(
+            carrier_key("destination"),
+            serde_json::to_value(Carrier {
+                injection: "first".into(),
+                cmid: "c-old".into(),
+            })
+            .unwrap(),
+        )]);
+        assert!(promotion(&hub, "destination", Some("c-old")).is_none());
+        hub.submit("destination", "retry".into(), vec![], Some("c-old".into()));
+        assert!(promotion(&hub, "destination", Some("c-next")).is_none());
+        drop(rx.try_recv());
+        let row = hub.queue_and_drafts("destination", |_| true).unwrap().0[0]
+            .id
+            .clone();
+        assert!(hub.remove_queued("destination", &row));
+
+        let promoted = promotion(&hub, "destination", Some("c-next")).unwrap();
+        put(&hub, &promoted);
+        assert!(promoted.waiting.is_empty());
+        assert_eq!(promoted.revision, promoted.applied_revision);
+        assert_eq!(promoted.revision, context.revision + 1);
+        assert_eq!(promoted.links[0].title, "Source");
+        assert_eq!(promoted.injection.unwrap().sources[0].before, 7);
+        assert!(promotion(&hub, "destination", Some("c-later")).is_none());
+    }
+
+    #[test]
+    fn a_session_deleted_while_waiting_does_not_refuse_the_prompt() {
+        let (hub, _rx) = starting_destination();
+        accepted(&hub, "first", true);
+        let mut context = read(&hub, "destination").unwrap();
+        context.injection = None;
+        context.waiting = vec![Link {
+            session_id: "gone".into(),
+            before: 1,
+            title: String::new(),
+        }];
+        put(&hub, &context);
+        let promoted = promotion(&hub, "destination", Some("c-next")).unwrap();
+        assert!(promoted.waiting.is_empty() && promoted.injection.is_none());
+    }
 
     #[test]
     fn links_survive_and_a_relinked_session_moves_to_its_new_point() {
