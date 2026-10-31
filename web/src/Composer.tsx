@@ -4303,9 +4303,12 @@ export function PendingPanel({
             ...(desktop && { "&:focus-visible": { bgcolor: "action.hover" } }),
           }}
         >
+          {/* Desktop: the Calls/Plan chevron column (22 + 0.375rem gap), so
+              all three chevrons share a centre, not only the labels. */}
           <Box
             sx={{
-              width: desktop ? desktopSize(28) : 40,
+              width: desktop ? desktopSize(22) : 40,
+              mr: desktop ? "0.375rem" : 0,
               display: "inline-flex",
               justifyContent: "center",
               flexShrink: 0,
