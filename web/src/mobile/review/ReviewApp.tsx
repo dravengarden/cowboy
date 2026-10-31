@@ -60,6 +60,7 @@ import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsB
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
+import { useAnnouncedSessionContext } from "../../SessionContextCue";
 import { inheritedReviewDirectory, resolveReviewDirectory, reviewStateKey } from "../../reviewDirectoryDefault";
 import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
@@ -155,6 +156,7 @@ import type { GitReviewEntry } from "./gitReviewModel";
 import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
+  reviewLinkedSessions,
   buildReviewContextProjects,
   orderReviewContextProjects,
   popReviewSessionHistory,
@@ -3106,6 +3108,11 @@ export function ReviewApp({
   const previousSession = previousSessionId
     ? sessionById.get(previousSessionId)
     : undefined;
+  const linkedContext = useAnnouncedSessionContext(currentSession?.id ?? "", !!(currentSession?.continued_from || currentSession?.forked_from));
+  const linkedSessions = useMemo(
+    () => reviewLinkedSessions(currentSession, linkedContext, sessions),
+    [currentSession, linkedContext, sessions],
+  );
   const contextReturnSession = explicitProjectContext
     ? currentSession
     : previousSession;
@@ -3215,6 +3222,18 @@ export function ReviewApp({
     setSourceTarget(undefined);
     setSessionSwitcherOpen(false);
   };
+  /** Read a linked session's worktree; the Agent stays on this session. */
+  const openLinkedSession = (session: SessionMeta): void => {
+    if (!currentSession) return;
+    navigationHaptic();
+    const resolved = resolveReviewDirectory(`session::${session.id}`, currentSession, sessions, machineInventories);
+    if (!resolved.context) { setContextError(resolved.error); return; }
+    setContextError(undefined);
+    setProjectCodeContext({ ...resolved.context, ownerSessionId: boundWorkspace?.sessionId ?? null });
+    setMode("git");
+    setSourceTarget(undefined);
+    setSessionSwitcherOpen(false);
+  };
   const openRepositoryPull = (choice: Choice, pull: PullSummary): void => {
     const sessionId = workspace?.sessionId;
     if (!sessionId) return;
@@ -3321,6 +3340,9 @@ export function ReviewApp({
             embedded={navigationInline}
             actionsContainer={inlineActionsContainer}
             onBrowseFiles={() => activateReviewMode("files")}
+            linkedSession={!projectCodeContext && linkedSessions[0]
+              ? { title: linkedSessions[0].title, onOpen: () => openLinkedSession(linkedSessions[0]!) }
+              : undefined}
             {...(workspace?.sessionId && !projectCodeContext &&
                 typeof syncedReview.remote_selected === "boolean"
               ? { onOpenPull: openRepositoryPull }
@@ -3976,6 +3998,31 @@ export function ReviewApp({
                       selected
                       onPick={() => switchSession(currentSession)}
                     />
+                  </Stack>
+                )}
+                {linkedSessions.length > 0 && (
+                  <Stack spacing={0.5}>
+                    <Typography
+                      variant="overline"
+                      color="text.secondary"
+                      sx={{
+                        px: 1.25,
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                      }}
+                    >
+                      Linked sessions
+                    </Typography>
+                    <Stack divider={<Divider flexItem />}>
+                      {linkedSessions.map((session) => (
+                        <ContextSessionRow
+                          key={session.id}
+                          session={session}
+                          selected={projectCodeContext?.sessionId === session.id}
+                          onPick={() => openLinkedSession(session)}
+                        />
+                      ))}
+                    </Stack>
                   </Stack>
                 )}
                 {sessions.some((session) =>

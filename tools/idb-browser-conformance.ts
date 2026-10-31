@@ -328,7 +328,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "review-context"
         ? 8
         : suite === "review-compare"
-        ? 1
+        ? 2
         : suite === "review-recovery"
         ? 17
         : 6) ||

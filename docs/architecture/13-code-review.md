@@ -165,6 +165,12 @@ reach through the same sync operation. A stored branch that no longer exists
 falls back to the default and is not overwritten. The unread chip filters the
 list without changing next/previous navigation.
 
+A fresh copy has a clean worktree of its own, so its work is usually in the
+session it links. Sessions this one forked from, continued or has read appear
+as **Linked sessions** in the context control, and a session with no changes
+offers **Review linked session** in place of the empty list. Either reads that
+worktree without moving the Agent.
+
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists
 open pull requests that are not checked out. See

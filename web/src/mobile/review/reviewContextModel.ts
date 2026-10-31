@@ -1,3 +1,5 @@
+import type { SessionContext } from "../../sessionContext";
+import { sessionLinks } from "../../sessionLinks";
 import type { SessionMeta } from "../../protocol";
 import { sessionProjectLabel } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
@@ -244,4 +246,30 @@ export function popReviewSessionHistory(
 ): readonly string[] {
   const index = history.lastIndexOf(targetId);
   return index < 0 ? history : history.slice(0, index);
+}
+
+/**
+ * Sessions this one came from or has read, whose worktrees hold other work.
+ * A copy starts from a clean checkout, so this is where its changes usually are.
+ */
+export function reviewLinkedSessions(
+  session: SessionMeta | undefined,
+  context: SessionContext | undefined,
+  sessions: readonly SessionMeta[],
+): SessionMeta[] {
+  if (!session) return [];
+  const links = [
+    ...(context?.links ?? []),
+    ...(context?.source_sessions ?? []).filter((source) =>
+      !context?.links?.some((link) => link.id === source.id)
+    ),
+  ];
+  const cwd = sessionExecution(session).cwd;
+  return sessionLinks(session, links, sessions, [])
+    .filter((link) => link.state === "open" && link.id !== session.id)
+    .flatMap((link) => {
+      const linked = sessions.find((entry) => entry.id === link.id);
+      const worktree = linked && sessionExecution(linked).cwd;
+      return linked && worktree && worktree !== cwd ? [linked] : [];
+    });
 }

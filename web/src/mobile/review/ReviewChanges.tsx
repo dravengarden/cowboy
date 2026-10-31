@@ -212,6 +212,7 @@ export function ReviewChanges({
   onClose,
   refreshToken = 0,
   onBrowseFiles,
+  linkedSession,
   compact = false,
 }: {
   sessionId: string | undefined;
@@ -231,6 +232,8 @@ export function ReviewChanges({
   onClose?: () => void;
   refreshToken?: number;
   onBrowseFiles?: () => void;
+  /** A linked session's worktree, for a session with nothing of its own. */
+  linkedSession?: { title: string; onOpen: () => void } | undefined;
   compact?: boolean;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
@@ -567,6 +570,25 @@ export function ReviewChanges({
                   ? "No changes from this branch"
                   : "Working tree is clean"}
               </Typography>
+              {linkedSession && (
+                <>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    align="center"
+                    sx={{ px: 3 }}
+                  >
+                    {`This session's worktree doesn't include the changes in ${linkedSession.title}.`}
+                  </Typography>
+                  <Button
+                    data-review-linked-session
+                    variant="outlined"
+                    onClick={linkedSession.onOpen}
+                  >
+                    Review linked session
+                  </Button>
+                </>
+              )}
               {onBrowseFiles && (
                 <Button startIcon={<FolderOutlined />} onClick={onBrowseFiles}>
                   Browse files
