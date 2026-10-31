@@ -142,6 +142,7 @@ pub(super) async fn initialize(
             session_id: id.to_owned(),
             state: "preparing".into(),
             error: None,
+            source_trashed: false,
         }),
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
@@ -428,6 +429,7 @@ pub(super) async fn set(
             injection: current.injection,
             links,
             waiting,
+            workspace_base: current.workspace_base,
         };
         current_authority(&state, &auth)?;
         owned(&state, &auth.principal, &id)?;
@@ -503,6 +505,19 @@ async fn creation_error(response: Response) -> String {
         .unwrap_or(fallback)
 }
 
+/// A continuation in the source's project on its Machine picks up the work
+/// where it stands: a new worktree holding the source's commits and uncommitted
+/// changes. The source's own worktree stays intact for Undo and Restore.
+fn workspace_base(
+    source: &crate::core::SessionMeta,
+    id: &str,
+    target: &NextAgent,
+) -> Option<String> {
+    source.execution_binding.as_ref()?;
+    let (machine_id, _, project) = fork::placement(source).ok()?;
+    (machine_id == target.machine_id && project == target.cwd).then(|| id.to_owned())
+}
+
 async fn prepare_target(
     state: &Arc<AppState>,
     auth: &AuthenticatedProductRequest,
@@ -524,6 +539,7 @@ async fn prepare_target(
                 revision: 1,
                 sources: context.sources.clone(),
                 delivery: Some(delivery.clone()),
+                workspace_base: workspace_base(&source, id, target),
                 ..Context::default()
             },
         )
@@ -671,6 +687,7 @@ async fn deliver(
         session_id: target_id.clone(),
         state: "preparing".into(),
         error: None,
+        source_trashed: false,
     };
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
@@ -687,6 +704,10 @@ async fn deliver(
             revision: 1,
             sources: context.sources.clone(),
             delivery: Some(delivery.clone()),
+            workspace_base: context
+                .next_agent
+                .as_ref()
+                .and_then(|target| workspace_base(&info.meta, &id, target)),
             ..Context::default()
         }
     };
@@ -726,13 +747,21 @@ async fn deliver(
     }
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
-    // The work moved on, so the original agent stops holding a Machine slot.
-    // Best effort: a refusal only leaves it idle, as before this handoff.
-    if target_id != id
-        && state.supervisor.has_live_worker(&id)
-        && let Err(reason) = state.supervisor.hibernate_session(&id)
-    {
-        tracing::info!(session = %id, %reason, "handed-off session kept its idle worker");
+    // The work moved on, so the original leaves the list and stops holding a
+    // Machine slot. It stays readable until Trash retention ends. Best effort:
+    // a refusal only leaves it as read-only history beside the continuation.
+    if target_id != id {
+        match super::session_trash::trash(&state, &auth.principal, &[], std::slice::from_ref(&id)) {
+            Ok(()) => delivery.source_trashed = true,
+            Err(reason) => {
+                tracing::info!(session = %id, %reason, "handed-off session stayed out of Trash");
+                if state.supervisor.has_live_worker(&id)
+                    && let Err(reason) = state.supervisor.hibernate_session(&id)
+                {
+                    tracing::info!(session = %id, %reason, "handed-off session kept its idle worker");
+                }
+            }
+        }
     }
     Ok(delivery)
 }
@@ -844,6 +873,7 @@ mod tests {
                 session_id: "destination".into(),
                 state: "preparing".into(),
                 error: None,
+                source_trashed: false,
             }),
             ..Context::default()
         };

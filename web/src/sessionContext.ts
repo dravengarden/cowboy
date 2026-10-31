@@ -20,6 +20,7 @@ export interface ContextDelivery {
   state: "preparing" | "accepted" | "failed" | "unknown";
   error?: string | null;
   session?: SessionMeta;
+  source_trashed?: boolean;
 }
 export interface SessionContext {
   revision: number;
@@ -353,6 +354,12 @@ export async function sendWithContext(
   sends.delete(id);
   if (receipt.session_id !== id) {
     openContextDestination(receipt);
+    if (receipt.source_trashed) {
+      // Lazily: Undo reaches back into the store that imports this module.
+      void import("./undoActions").then(({ recordUndo }) =>
+        recordUndo("Original moved to Trash", [{ kind: "restore_trash", sessions: [id] }])
+      );
+    }
   }
   return true;
 }

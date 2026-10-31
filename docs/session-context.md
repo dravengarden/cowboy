@@ -65,15 +65,17 @@ Session Settings; the Transcript carries no fork, branch or continuation
 controls.
 
 A continuation and a fork differ in shape. Continuing moves the work to a new
-agent, so there is one line and the original becomes history. Forking copies a
-conversation, so there are two live lines. An accepted handoff hibernates the
-original's idle agent (best effort; Session Settings still offers **Hibernate**
-if the worker stayed), and the session list marks the original **History**.
-Its Composer gives way to a dock: **Open** goes to the continuation, **Fork**
+agent, so there is one line and the original leaves. Forking copies a
+conversation, so there are two live lines. An accepted handoff moves the
+original to Trash, with Undo on the device that sent it. In Trash it stays
+readable, by the continuation through Cowboy MCP as well, until retention ends;
+its worktree is intact for **Restore** until then. If Trash refuses, the
+original stays as read-only history: the session list marks it **History** and
+its Composer gives way to a dock. **Open** goes to the continuation, **Fork**
 starts a separate session from this agent's conversation (natively where the
 Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
-original away and opens the continuation. The continuation can read that
-history until Trash retention ends. Writing in the original would silently
+original away and opens the continuation. Restoring leads to the same state.
+Writing in the original would silently
 split one piece of work in two, so the web offers no way to do it;
 Select sessions, **Continue or fork** and the session menu item are
 hidden for the same reason. While its agent is still busy the
@@ -151,11 +153,14 @@ created, then checked again against its actual admitted generation. A concurrent
 change can still fail after creation; the failed receipt explicitly identifies
 the unsent destination for inspection or deletion, and never retries the message.
 
-Git projects follow normal isolated-worktree creation. Other registered
-directories retain their existing sharing rules. This feature does not copy or
-move uncommitted work. The bootstrap tells the destination to inspect original
-worktree state and reconcile relevant changes explicitly. Selected source
-sessions are not stopped, modified or granted new access by a link.
+A continuation in the source's project on its execution Machine picks up the
+work where it stands: its new worktree starts from the source's `HEAD` with the
+source's uncommitted changes, through the same copy as a
+[fork](session-fork.md), including its limits and the 512 MiB refusal. The source
+worktree is never written, so Undo and Restore return it unchanged. Another
+project or Machine follows normal isolated-worktree creation and the changes
+stay with the source. Other registered directories retain their existing sharing
+rules. Selected source sessions are not stopped, modified or granted new access by a link.
 
 ## Back for in-place changes
 
