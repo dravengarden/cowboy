@@ -26,9 +26,9 @@ Session Settings answers independent questions, each in one place:
   selection applies at once, is not a prompt, and starts no reply. Removing a
   chip or **Cancel** in the Composer cue undoes it. Once a prompt carries a
   selection it joins the links.
-- **Where the work goes**: **Continue or fork** opens one form with the
-  target agent and two actions. **Continue on next message** moves the work;
-  **Fork now** keeps both live.
+- **Where the work goes**: **Replace or fork** opens one form with the
+  target agent and two actions. **Replace this session** moves the work;
+  **Fork to new session** keeps both live.
 
 The form preselects the current installation and subscription, or the staged
 target. How history travels follows from the target and is stated under the
@@ -39,7 +39,7 @@ compatible settings** (on by default). Clearing inheritance is the way past a
 target that refuses the source's restrictive permissions; nothing retries
 without it automatically.
 
-**Continue on next message** saves the target and links the current session
+**Replace this session** saves the target and links the current session
 ahead of the selected ones, without creating, stopping or starting a worker,
 then closes settings and focuses the Composer. The current session stays a
 removable source in the selection, and the action stays available for an
@@ -49,14 +49,14 @@ switch shows "Switching to SUBSCRIPTION on your next message · **Back**". Back
 (and **Cancel** in the Composer cue) removes the new agent and the current
 session's link and keeps other selected sources.
 
-**Fork now** ([session fork](session-fork.md)) acts immediately and opens the
+**Fork to new session** ([session fork](session-fork.md)) acts immediately and opens the
 new session, where its settings and links are configured. It stays on this
 session's project and Machines, so it is disabled for a changed placement, and
 it leaves this session's pending links and staged continuation untouched. An
 empty session offers only Continue.
 
 The session menu (mobile long press, Desktop session actions with `F`) offers
-**Continue or fork**, which opens that form. A continuation keeps its
+**Replace or fork**, which opens that form. A continuation keeps its
 source's title and links back to it; the mark is the persisted
 `session_continued_from:<id>` setting projected as `continued_from` on the
 session. Continuations created before that mark are recorded once at Controller
@@ -78,7 +78,7 @@ Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
 original away and opens the continuation. Restoring leads to the same state.
 Writing in the original would silently
 split one piece of work in two, so the web offers no way to do it;
-Select sessions, **Continue or fork** and the session menu item are
+Select sessions, **Replace or fork** and the session menu item are
 hidden for the same reason. While its agent is still busy the
 Composer stays, so the turn can be observed and stopped. Deleting or trashing
 the continuation returns the original to an ordinary session. The state is
@@ -91,7 +91,9 @@ Claude · Mink", or how many sessions it links) with **Cancel**, and the input
 placeholder reads "Message the new agent…" so the cue survives the mobile
 keyboard hiding auxiliary rows. After a handoff the link is history, not a
 next-send choice, so it leaves the Composer. The switch itself stays in Session
-Settings. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
+Settings. While a continuation prepares, or any session with its first message queued,
+its page shows only the progress: the setup form is for a session nothing has
+been sent to yet, and Session Settings stays available. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
 its empty and preparing state), with `+N` for its other links.
 
 The links list in Session Settings starts folded under "N links" and has one row per link: "Forked from",

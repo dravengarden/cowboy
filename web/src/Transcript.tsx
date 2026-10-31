@@ -705,10 +705,22 @@ function ConversationEmptyState({
   // removes. Typing is still invited — a prompt written now is queued and the
   // daemon drains it on the Running edge.
   const readiness = preparing ? "is starting" : "is ready";
+  // Once a first message is on its way there is nothing left to set up before
+  // it: the page only has to say the wait is working, not offer a form.
+  const committed = useStoreSelector((state) =>
+    kind === "preparing" && (
+      (state.queues.get(sessionId)?.length ?? 0) > 0 ||
+      state.sessions.some((entry) =>
+        entry.id === sessionId && entry.continued_from !== undefined
+      )
+    )
+  );
   const detail = kind === "preparing"
-    ? location
+    ? `${location
       ? `Creating an isolated workspace for ${location}.`
-      : "Creating an isolated workspace."
+      : "Creating an isolated workspace."}${
+      committed ? " Your message goes out as soon as it's ready." : ""
+    }`
     : sleeping
     ? kind === "cleared"
       ? "Context cleared. Settings are saved; the agent starts when you send."
@@ -847,7 +859,7 @@ function ConversationEmptyState({
           }}
         />
       )}
-      {(
+      {!committed && (
         <ButtonBase
           data-conversation-empty-settings
           title="Session settings"
@@ -901,7 +913,7 @@ function ConversationEmptyState({
           </Stack>
         </ButtonBase>
       )}
-      <SessionStartSettings key={sessionId} sessionId={sessionId} />
+      {!committed && <SessionStartSettings key={sessionId} sessionId={sessionId} />}
     </Stack>
   );
 }

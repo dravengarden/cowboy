@@ -1144,6 +1144,7 @@ fn unresolved_crash_detail_for_session(session: &Session) -> Option<&str> {
 
 const MOBILE_REVIEW_TAB_CAP: usize = 12;
 const MOBILE_REVIEW_PROGRESS_CAP: usize = 512;
+const MOBILE_REVIEW_BINDING_CAP: usize = 16;
 const MOBILE_REVIEW_POSITION_CAP: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1180,6 +1181,10 @@ struct MobileReviewState {
     /// reference. Absent means the repository's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     comparison: Option<String>,
+    /// Code contexts this session also works in, as `review_directory` values.
+    /// A binding names an existing context and grants no file access.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bindings: Vec<String>,
     #[serde(default = "default_mobile_review_mode")]
     mode: String,
     #[serde(default)]
@@ -1204,6 +1209,7 @@ impl Default for MobileReviewState {
             remote_review: None,
             remote_selected: false,
             comparison: None,
+            bindings: Vec::new(),
             mode: default_mobile_review_mode(),
             tabs: Vec::new(),
             active: None,
@@ -1239,6 +1245,11 @@ impl MobileReviewState {
         {
             state.comparison = None;
         }
+        let mut bound = HashSet::new();
+        state.bindings.retain(|context| {
+            valid_mobile_review_binding(context) && bound.insert(context.clone())
+        });
+        state.bindings.truncate(MOBILE_REVIEW_BINDING_CAP);
         if !matches!(state.mode.as_str(), "files" | "git") {
             state.mode = default_mobile_review_mode();
         }
@@ -1280,6 +1291,10 @@ impl MobileReviewState {
         }
         state
     }
+}
+
+fn valid_mobile_review_binding(context: &str) -> bool {
+    context != "project" && crate::review_directory::valid(context)
 }
 
 fn valid_mobile_review_comparison(value: &str) -> bool {
@@ -4269,6 +4284,22 @@ impl Hub {
                         ),
                     };
                 }
+                "bind" => {
+                    let context = mobile_review_string_arg(args, "context", 1024)?;
+                    if !valid_mobile_review_binding(&context) {
+                        return Err("bind: invalid context".to_owned());
+                    }
+                    if !state.bindings.contains(&context) {
+                        if state.bindings.len() >= MOBILE_REVIEW_BINDING_CAP {
+                            return Err("bind: too many bindings".to_owned());
+                        }
+                        state.bindings.push(context);
+                    }
+                }
+                "unbind" => {
+                    let context = mobile_review_string_arg(args, "context", 1024)?;
+                    state.bindings.retain(|bound| *bound != context);
+                }
                 "markReviewed" => {
                     let key = mobile_review_string_arg(args, "key", 2048)?;
                     match args.get("revision").and_then(serde_json::Value::as_str) {
@@ -4600,6 +4631,8 @@ impl Hub {
                         | "activate"
                         | "setMode"
                         | "setComparison"
+                        | "bind"
+                        | "unbind"
                         | "markReviewed"
                         | "setPosition"
                 ) {
@@ -9289,6 +9322,43 @@ mod core_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn mobile_review_bindings_name_contexts_and_stay_bounded() {
+        let hub = hub_with_session("bound");
+        let apply = |id: String, name: &str, context: &str| {
+            hub.sync_apply(
+                "mobile-review:bound",
+                id,
+                name,
+                &serde_json::json!({ "context": context }),
+            )
+        };
+        let read = || {
+            hub.inner.sessions.lock()["bound"]
+                .mobile_review
+                .bindings
+                .clone()
+        };
+
+        apply("b1".into(), "bind", "workspace::hawk::cowboy").unwrap();
+        apply("b2".into(), "bind", "workspace::hawk::cowboy").unwrap();
+        apply("b3".into(), "bind", "session::other").unwrap();
+        assert_eq!(read(), ["workspace::hawk::cowboy", "session::other"]);
+        assert!(apply("b4".into(), "bind", "/etc").is_err());
+        assert!(apply("b5".into(), "bind", "project").is_err());
+        apply("b6".into(), "unbind", "session::other").unwrap();
+        assert_eq!(read(), ["workspace::hawk::cowboy"]);
+        for index in 0..super::MOBILE_REVIEW_BINDING_CAP - 1 {
+            apply(format!("f{index}"), "bind", &format!("session::s{index}")).unwrap();
+        }
+        assert!(apply("over".into(), "bind", "session::more").is_err());
+
+        let restored = super::MobileReviewState::from_stored(serde_json::json!({
+            "bindings": ["session::a", "session::a", "../x", "project"]
+        }));
+        assert_eq!(restored.bindings, ["session::a"]);
     }
 
     #[test]
