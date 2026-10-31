@@ -119,9 +119,6 @@ fn route_permission(
         | RouteAuth::ProductSessionMutate => principal.can_reorder(),
         _ => false,
     };
-    // Shared Tools defaults have an owner-only writer, whichever plane the
-    // Web route is classified on.
-    let allowed = allowed && (name != "tools.defaults_set" || principal.role == AdminRole::Owner);
     if allowed {
         Ok(())
     } else {
