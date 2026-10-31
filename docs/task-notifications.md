@@ -1,9 +1,9 @@
 # Task notifications and per-account acknowledgement
 
-Status: contract for [background tasks](background-tasks.md) Phase 2, revised
-after the Astra Max design review (19 findings, none rejected; see
-[Decisions](#decisions)). Installed-app rules come from the Columbus PWA
-convention.
+Status: [background tasks](background-tasks.md) Phase 2, implemented; the
+physical iPhone acceptance below is outstanding. Revised after the Astra Max
+design review (19 findings, none rejected; see [Decisions](#decisions)).
+Installed-app rules come from the Columbus PWA convention.
 
 ## Starting point
 
@@ -40,8 +40,8 @@ An **intent** is one durable row for one occurrence, committed before any send.
 
 ```text
 notification_intents(
-  dedupe_key PK, owner_user_id, session_id, category, destination,
-  title_hint NULL, due_at_ms, expires_at_ms,
+  dedupe_key PK, owner_user_id, session_id, category, destination, marker,
+  due_at_ms, expires_at_ms,
   state, expanded_at_ms NULL, created_at_ms
 )
 ```
@@ -75,8 +75,8 @@ Rules:
   is a completion. `cancelled`, `Stopped`, `Ended` and `Not reporting` never
   notify.
 - **Write order.** A Call intent commits in the ledger transaction. An incident's
-  commits with the incident. An event's goes through the store writer in the
-  batch of its event.
+  is written by the same store write, right after the incident. An event's goes
+  through the store writer directly after its event.
 - **Durability boundary.** An event intent is exactly as durable as the event.
   The worker frame is acknowledged after projection, before the writer commits,
   so a Controller crash in that window loses the transcript row and its intent
@@ -85,11 +85,10 @@ Rules:
   is not part of this phase.
 - **Child sessions.** A managed Call's child and a subagent notify on the parent;
   `owner_user_id` is the parent's. System sessions write no intent.
-- **Resolution.** An input intent resolves when its request is answered,
-  withdrawn, or (approval) leaves the waiting set. The approval registry is
-  memory-only, so a pending approval intent is resolved at Controller start and
-  re-created by the next resubmission; `ON CONFLICT` makes that a state reset to
-  `pending` only if it never expanded.
+- **Resolution.** Nothing writes a resolution. Each send asks whether the input
+  still waits: the session log for a permission request, the approval registry
+  for an approval. The registry is memory-only, so an approval left pending by a
+  restart resolves at its next send unless the agent resubmitted.
 - **Expiry.** Delivery expiry only: 1 hour for input and failure, 15 minutes for
   completion. It never decides attention. The bar's unseen state stays derived
   from task state and acknowledgements.
@@ -167,9 +166,9 @@ per-device visibility check in `sw.js` is removed.
   be recalled; they carry only display-safe text.
 - Delivery rechecks that the owner can still see the session, that it is not
   muted, and that the intent is `pending` with no matching acknowledgement.
-- `title_hint` is agent-produced display data, sent only when
-  `showSessionNames` is on, truncated and never interpreted. Otherwise the copy
-  is generic.
+- Intents hold no text. The session title is read at send time and included
+  only when `showSessionNames` is on, truncated and never interpreted. Otherwise
+  the copy is generic.
 - **Destinations.** `destination` is `subagent:<child>` or `call:<id>` for a
   single task failure or completion; empty for requests, incidents and any
   aggregate of more than one. The link is `/?session=<id>` plus `#task=<key>` when
@@ -203,14 +202,15 @@ task_acknowledgements(owner_user_id, session_id REFERENCES sessions ON DELETE
 - `POST /api/sessions/{id}/tasks/acknowledge {task_key, marker}` is idempotent.
   The marker is `terminalSeq` for a subagent (falling back to Phase 1's marker for
   a row without it) and `finished_at_ms` for a Call.
-- The focused bootstrap carries the session's acknowledgements, and a
-  `task_acknowledged` outbound, scoped to the account, updates its other devices.
+- The focused bootstrap carries the session's acknowledgements, so another device
+  catches up the next time it opens or reconnects to the session.
 - Delivery reads this table, so an acknowledgement committed before its intent
   still stops the send; no ordering between them is required.
 - Rows live as long as their session, so a failed task does not become unseen
   again on reload.
-- A write made offline stays queued per account and session, and local state wins
-  until it lands.
+- A write that fails stays queued in the tab per session and is retried by the
+  next bootstrap. The device-local list keeps it hidden here meanwhile, so a
+  reload before it lands costs only the other devices' view.
 - Phase 1's device-local acknowledgements stay readable on that device and are
   not uploaded: the key is origin-wide and could belong to another account.
 - **Opening is not acknowledging for a link.** The inspector acknowledges on open
@@ -234,8 +234,7 @@ updates after termination; a new occurrence after resume; permission seqs after
 a worker restart; approval resubmission; audience freeze with an empty audience;
 restart resuming deliveries; retry including `Retry-After`; 404/410 removal;
 independent input Topics; aggregation; audience recheck; endpoint takeover and
-logout; preference migration; acknowledgement before the intent, across two
-clients and across sessions reusing a child id; presence deferral, stale lease and
+logout; preference migration; acknowledgement before the intent and across sessions reusing a child id; presence deferral, stale lease and
 input exemption; link-origin non-acknowledgement.
 
 Physical, per the PWA convention: on a locked iPhone with the installed app, an

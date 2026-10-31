@@ -281,6 +281,9 @@ pub struct SnapshotMark {
     pub incarnation: Option<String>,
     pub revision: u64,
     pub digest: [u8; 32],
+    pub terminal: bool,
+    /// The seq that started the current terminal occurrence.
+    pub terminal_seq: Option<u64>,
 }
 
 /// Digest of a snapshot payload without the Controller's own stamps.
@@ -291,6 +294,7 @@ pub fn snapshot_digest(update: &Value) -> [u8; 32] {
     if let Some(object) = copy.as_object_mut() {
         object.remove("observedSeq");
         object.remove("incarnation");
+        object.remove("terminalSeq");
     }
     sha2::Sha256::digest(copy.to_string().as_bytes()).into()
 }
@@ -304,6 +308,8 @@ pub fn mark_of(update: &Value) -> SnapshotMark {
             .map(str::to_owned),
         revision: update.get("revision").and_then(Value::as_u64).unwrap_or(0),
         digest: snapshot_digest(update),
+        terminal: subagent_terminal(update),
+        terminal_seq: update.get("terminalSeq").and_then(Value::as_u64),
     }
 }
 

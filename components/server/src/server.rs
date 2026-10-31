@@ -76,7 +76,7 @@ use crate::session_folders::{FolderActor, project_folders_value};
 use crate::store::{ActiveClientRelease, Store};
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
-use crate::web_push::{NotificationCategory, WebPushService, WebPushSubscription};
+use crate::web_push::WebPushService;
 #[cfg(test)]
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
@@ -96,6 +96,7 @@ mod execution;
 mod local_operator;
 mod machine_lanes;
 mod managed_calls;
+mod notifications;
 mod operator_approval;
 #[cfg(test)]
 mod persistence_tests;
@@ -394,6 +395,7 @@ struct AppState {
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
     web_push: Arc<WebPushService>,
+    notifications: notifications::Presence,
     public_origins: Arc<Vec<String>>,
     product_auth_enabled: bool,
     product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
@@ -1523,11 +1525,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             shutdown,
         ))
     });
-    let web_push_task = tokio::spawn(run_web_push_notifications(
-        hub.clone(),
-        Arc::clone(&web_push),
-        shutdown_rx.clone(),
-    ));
     // Reset credits belong to provider accounts, not sessions. Restore one
     // shared timer per provider and keep them independent from session queues.
     if let Some(store) = store.as_ref() {
@@ -1958,6 +1955,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         zed_adapter_socket: args.zed_adapter_socket,
         observability,
         web_push,
+        notifications: notifications::Presence::default(),
         public_origins: Arc::new(crate::product_auth::load_public_origins()),
         product_auth_enabled: args.product_auth_enabled,
         product_authentication,
@@ -1967,6 +1965,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
         capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
     });
+    let web_push_task = tokio::spawn(notifications::run(
+        Arc::clone(&state),
+        state.shutdown.clone(),
+    ));
     state.runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&state.runtime_health);
     let dispatcher_state = Arc::clone(&state);
@@ -2225,55 +2227,6 @@ async fn run_component_convergence(
                 snapshots.publish().await;
             });
         }
-    }
-}
-
-async fn run_web_push_notifications(
-    hub: Hub,
-    service: Arc<WebPushService>,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    let mut events = hub.subscribe();
-    loop {
-        let outbound = tokio::select! {
-            result = events.recv() => match result {
-                Ok(outbound) => outbound,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "Web Push observer lagged");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            },
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() { break; }
-                continue;
-            }
-        };
-        let notification = match outbound.outbound() {
-            Outbound::Event { envelope }
-                if matches!(envelope.event, Event::PermissionRequest { .. }) =>
-            {
-                Some((
-                    NotificationCategory::Permission,
-                    envelope.session_id.clone(),
-                ))
-            }
-            Outbound::Error {
-                session_id: Some(session_id),
-                ..
-            } => Some((NotificationCategory::Error, session_id.clone())),
-            _ => None,
-        };
-        let Some((category, session_id)) = notification else {
-            continue;
-        };
-        let title = hub
-            .session_info(&session_id)
-            .map_or_else(|| "Session".to_owned(), |info| info.meta.title);
-        let service = Arc::clone(&service);
-        tokio::spawn(async move {
-            service.notify(category, &session_id, &title).await;
-        });
     }
 }
 
@@ -2945,7 +2898,16 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                     evidence_end_ms: occurred_at_ms.saturating_add(30_000),
                     detail: serde_json::json!({ "source": "session_error" }),
                 })
+                .await?;
+            store
+                .record_occurrence(
+                    &crate::task_notifications::Occurrence::incident(session_id, id),
+                    now_ms(),
+                )
                 .await
+        }
+        StoreWrite::RecordOccurrence(occurrence) => {
+            store.record_occurrence(occurrence, now_ms()).await
         }
         StoreWrite::UpdateTitle { session_id, title } => {
             store.update_title(session_id, title).await
@@ -5855,6 +5817,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     // Notification enrollment belongs to the signed-in product user. Leaving
     // these routes to the API fallback incorrectly requires an admin cookie.
     // Product authentication still enforces session freshness and mutation origin.
+    if path == "/api/notifications/presence" {
+        return RouteAuth::Product;
+    }
     if (path == "/api/web-push/config" && matches!(*method, Method::GET | Method::HEAD))
         || (path == "/api/web-push/subscription" && matches!(*method, Method::PUT | Method::DELETE))
     {
@@ -8106,6 +8071,14 @@ async fn api_auth_logout(
         )
             .into_response();
     };
+    // This cookie session's enrollments end with it; a later account on the
+    // same installation must not receive them.
+    if let Err(error) = store
+        .remove_web_push_subscriptions_of_session(&session.session_id)
+        .await
+    {
+        tracing::warn!(%error, "removing Web Push subscriptions at logout");
+    }
     let provider_id = session.auth_provider_id.as_deref();
     let offer_provider_logout = match state.product_authentication.logout.provider_logout {
         crate::auth_plugins::ProviderLogoutPolicy::Never => false,
@@ -10940,8 +10913,12 @@ async fn serve_axum(
         .route("/api/machines/{id}/project-policy", put(projects::update_policy))
         .route("/api/web-push/config", get(api_web_push_config))
         .route(
+            "/api/notifications/presence",
+            put(notifications::renew_presence).delete(notifications::release_presence),
+        )
+        .route(
             "/api/web-push/subscription",
-            put(api_web_push_subscribe).delete(api_web_push_unsubscribe),
+            put(notifications::subscribe).delete(notifications::unsubscribe),
         )
         .route("/api/providers", get(api_providers))
         .route("/api/plugins", get(api_plugins))
@@ -11178,6 +11155,10 @@ async fn serve_axum(
             "/api/sessions/{id}/subagents/lookup",
             post(background_tasks::lookup),
         )
+        .route(
+            "/api/sessions/{id}/tasks/acknowledge",
+            post(notifications::acknowledge),
+        )
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
@@ -11319,43 +11300,11 @@ struct WebPushConfigResponse<'a> {
     application_server_key: &'a str,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WebPushUnsubscribeRequest {
-    endpoint: String,
-}
-
 async fn api_web_push_config(State(state): State<Arc<AppState>>) -> Response {
     Json(WebPushConfigResponse {
         application_server_key: state.web_push.public_key(),
     })
     .into_response()
-}
-
-async fn api_web_push_subscribe(
-    State(state): State<Arc<AppState>>,
-    Json(subscription): Json<WebPushSubscription>,
-) -> Response {
-    match state.web_push.upsert(subscription) {
-        Ok(()) => Json(serde_json::json!({ "subscribed": true })).into_response(),
-        Err(error) => {
-            tracing::warn!(%error, "rejecting Web Push subscription");
-            (StatusCode::BAD_REQUEST, "invalid Web Push subscription").into_response()
-        }
-    }
-}
-
-async fn api_web_push_unsubscribe(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<WebPushUnsubscribeRequest>,
-) -> Response {
-    match state.web_push.remove(&request.endpoint) {
-        Ok(()) => Json(serde_json::json!({ "subscribed": false })).into_response(),
-        Err(error) => {
-            tracing::warn!(%error, "removing Web Push subscription");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
 }
 
 /// Response body for `GET /version`.
@@ -12634,7 +12583,8 @@ async fn prometheus_metrics(
     );
     let body = body
         + &state.observability.health().prometheus()
-        + &crate::transcript_anchors::METRICS.prometheus();
+        + &crate::transcript_anchors::METRICS.prometheus()
+        + &notifications::COUNTERS.prometheus();
     (
         [(
             header::CONTENT_TYPE,
@@ -20454,6 +20404,9 @@ struct SessionBootstrapResponse {
     /// older Web clients are unaffected.
     #[serde(skip_serializing_if = "Option::is_none")]
     subagent_state: Option<serde_json::Value>,
+    /// The account's task acknowledgements in this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_acknowledgements: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -20470,6 +20423,7 @@ struct SessionBootstrapQuery {
 /// affairs. Live events can overlap this response and are deduplicated by seq.
 async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
     Path(session_id): Path<String>,
     Query(query): Query<SessionBootstrapQuery>,
 ) -> Response {
@@ -20481,11 +20435,18 @@ async fn api_session_bootstrap(
     let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let task_acknowledgements = notifications::acknowledgements(
+        state.store.as_ref(),
+        &authenticated.principal.user_id,
+        &session_id,
+    )
+    .await;
     (
         [(header::CACHE_CONTROL, "no-store")],
         Json(SessionBootstrapResponse {
             messages,
             subagent_state,
+            task_acknowledgements,
         }),
     )
         .into_response()

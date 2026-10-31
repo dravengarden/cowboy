@@ -165,7 +165,12 @@ import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
 import type { UsageSnapshot } from "./usageLimits";
 import { receiveCallApproval } from "./callApproval";
-import { forgetSessionAuthority, reconcileSubagents, timelineHighWater } from "./backgroundTasks";
+import {
+  forgetSessionAuthority,
+  receiveTaskAcknowledgements,
+  reconcileSubagents,
+  timelineHighWater,
+} from "./backgroundTasks";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import { editorHoldsUpdate } from "./updateIdleGate";
 import {
@@ -2087,6 +2092,7 @@ async function hydrateSession(
       if (!bootstrap.messages.some((message) => message.type === "snapshot" && message.session_id === sessionId)) {
         throw new Error("session bootstrap contained no transcript snapshot");
       }
+      receiveTaskAcknowledgements(sessionId, bootstrap.task_acknowledgements ?? []);
       // Repair cached subagent rows the bounded tail cannot (I5/I6). A
       // Controller without the contract leaves them as rendered (I7).
       void reconcileSubagents(

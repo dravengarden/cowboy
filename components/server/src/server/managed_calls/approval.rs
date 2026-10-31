@@ -222,6 +222,16 @@ impl Approvals {
         Some(agents.into_iter().collect())
     }
 
+    /// Whether a person is still being asked about this request.
+    pub(in crate::server) fn waiting(&self, parent: &str, request_id: &str) -> bool {
+        let now = Instant::now();
+        let mut parents = self.parents.lock();
+        parents.get_mut(parent).is_some_and(|entry| {
+            entry.prune(now);
+            entry.waiting.contains_key(request_id)
+        })
+    }
+
     /// The parent's prompt, or `None` when nothing waits.
     pub(in crate::server) fn view(&self, parent: &str, caller: &str) -> Option<Value> {
         let now = Instant::now();

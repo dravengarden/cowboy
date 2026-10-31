@@ -4,14 +4,17 @@ import {
   applySubagentAuthority,
   barSummary,
   buildTaskSummaries,
+  acknowledgeTask,
   authoritativeSubagent,
   callSummary,
   forgetSessionAuthority,
   groupTasks,
   originToolKey,
+  receiveTaskAcknowledgements,
   reconcileLoadedSubagents,
   reconcileSubagents,
   sessionAuthority,
+  setAcknowledgementTransport,
   setSubagentLookupTransport,
   type SubagentStateWire,
   subagentSummary,
@@ -472,4 +475,27 @@ test("the bar never counts a not-reporting row as working", () => {
   const silent = subagentSummary({ ...snapshot("a", "running", 1, "w1"), reporting: false });
   const bar = barSummary([silent], 0);
   assertEquals([bar.working, bar.notReporting, bar.visible], [0, 1, true]);
+});
+
+// Task notifications: acknowledgement.
+test("a failed acknowledgement is retried by the next bootstrap", async () => {
+  const sent: string[] = [];
+  let online = false;
+  setAcknowledgementTransport((_, ack) => {
+    if (!online) return Promise.reject(new Error("offline"));
+    sent.push(`${ack.task_key}@${ack.marker}`);
+    return Promise.resolve(true);
+  });
+  const failed = subagentSummary(subagentOf(
+    subagentUpdate("ack", "idle", 4, { stopReason: "error", observedSeq: 90, terminalSeq: 77 }) as never,
+  )!);
+  assertEquals(failed.attention, "failed_unseen");
+  acknowledgeTask("ack-session", failed);
+  await Promise.resolve();
+  await Promise.resolve();
+  online = true;
+  receiveTaskAcknowledgements("ack-session", []);
+  await Promise.resolve();
+  assertEquals(sent, ["subagent:ack@77"], "the marker is the terminal occurrence, not the latest observation");
+  setAcknowledgementTransport(null);
 });

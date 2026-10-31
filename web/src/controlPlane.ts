@@ -1,3 +1,4 @@
+import { startNotificationPresence } from "./notificationPresence";
 import { useDraftRoute } from "./documents/navigation";
 import { useSyncExternalStore } from "react";
 import { persisted } from "@cowboy/state-store";
@@ -36,21 +37,13 @@ function notificationSessionDeepLink(): string | null {
 let activeSessionId = notificationSessionDeepLink() ?? activeSessionStore.get();
 if (activeSessionId !== activeSessionStore.get()) activeSessionStore.set(activeSessionId);
 
-function publishActiveSessionToWorker(): void {
-  void globalThis.navigator?.serviceWorker?.ready.then((registration) => {
-    (registration.active ?? registration.waiting)?.postMessage({
-      type: "cowboy.active-session",
-      sessionId: /^#drafts(?:\/|$)/.test(globalThis.location?.hash ?? "") ? null : activeSessionId,
-    });
-  });
+function presentSession(): string | null {
+  if (/^#drafts(?:\/|$)/.test(globalThis.location?.hash ?? "")) return null;
+  const document = globalThis.document;
+  return document?.visibilityState === "visible" && document.hasFocus() ? activeSessionId : null;
 }
 
-if (typeof globalThis.addEventListener === "function") {
-  globalThis.addEventListener("focus", publishActiveSessionToWorker);
-  globalThis.addEventListener("hashchange", publishActiveSessionToWorker);
-  globalThis.document?.addEventListener("visibilitychange", publishActiveSessionToWorker);
-  publishActiveSessionToWorker();
-}
+const publishPresence = startNotificationPresence(presentSession);
 
 export function getActiveSessionId(): string | null {
   return activeSessionId;
@@ -61,7 +54,7 @@ export function setActiveSessionId(id: string | null): void {
   if (id === activeSessionId) return;
   activeSessionId = id;
   activeSessionStore.set(id);
-  publishActiveSessionToWorker();
+  publishPresence();
   for (const listener of activeSessionListeners) listener();
 }
 

@@ -155,6 +155,24 @@ impl Store {
     }
 }
 
+/// A Call's ending is its notification occurrence, committed with the ledger
+/// transition (docs/task-notifications.md). Findings are not a failure, and a
+/// cancelled Call was asked to stop.
+fn call_occurrence(next: &Record) -> Option<crate::task_notifications::Occurrence> {
+    use crate::task_notifications::{Category, Occurrence};
+    let category = match next.state {
+        State::Failed => Category::Failure,
+        State::Completed => Category::Completion,
+        _ => return None,
+    };
+    Some(Occurrence::call(
+        &next.placement.parent_session_id,
+        &next.call_id,
+        category,
+        next.finished_at_ms.unwrap_or(next.updated_at_ms),
+    ))
+}
+
 macro_rules! implementation {
     ($backend:ty) => {
         impl $backend {
@@ -274,13 +292,27 @@ macro_rules! implementation {
             async fn advance_managed_call(&self, previous: &Record, next: &Record) -> Result<bool> {
                 let old_document = serde_json::to_string(previous)?;
                 let document = serde_json::to_string(next)?;
+                let mut tx = self.pool.begin().await?;
                 let result = sqlx::query("UPDATE managed_agent_calls SET revision = $1, document = $2, document_sha256 = $3, state = $8 WHERE call_id = $4 AND parent_session_id = $5 AND revision = $6 AND document_sha256 = $7")
                     .bind(i64::try_from(next.revision)?).bind(&document).bind(checksum(&document))
                     .bind(&previous.call_id).bind(&previous.placement.parent_session_id)
                     .bind(i64::try_from(previous.revision)?).bind(checksum(&old_document))
                     .bind(next.state.code())
-                    .execute(&self.pool).await?;
-                Ok(result.rows_affected() == 1)
+                    .execute(&mut *tx).await?;
+                let advanced = result.rows_affected() == 1;
+                if advanced && let Some(occurrence) = call_occurrence(next) {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let category = occurrence.category;
+                    sqlx::query(crate::store::task_notifications::INSERT_INTENT)
+                        .bind(&occurrence.dedupe_key).bind(category.code())
+                        .bind(&occurrence.destination).bind(&occurrence.marker)
+                        .bind(now.saturating_add(category.delay_ms()))
+                        .bind(now.saturating_add(category.ttl_ms()))
+                        .bind(now).bind(&occurrence.session_id)
+                        .execute(&mut *tx).await?;
+                }
+                tx.commit().await?;
+                Ok(advanced)
             }
         }
     };

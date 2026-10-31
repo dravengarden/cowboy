@@ -1,8 +1,7 @@
-use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,14 +10,14 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
-use parking_lot::Mutex;
 use rand::rngs::OsRng;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, Serialize};
 use web_push_native::{Auth, WebPushBuilder, p256::PublicKey};
 
+use crate::task_notifications::Category;
+
 const VAPID_KEY_FILE: &str = "web-push-vapid.key";
-const SUBSCRIPTIONS_FILE: &str = "web-push-subscriptions.json";
 const VAPID_SUBJECT: &str = "mailto:dravengarden@gmail.com";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,9 +29,13 @@ pub struct NotificationCategories {
     pub error: bool,
 }
 
+/// Preferences an enrollment stores. `schema` 2 is the first with an explicit
+/// completion opt-in (docs/task-notifications.md#preferences).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebPushPreferences {
+    #[serde(default)]
+    pub schema: u32,
     pub show_session_names: bool,
     pub categories: NotificationCategories,
     #[serde(default)]
@@ -54,46 +57,27 @@ pub struct WebPushSubscription {
     pub preferences: WebPushPreferences,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct StoredSubscriptions {
-    subscriptions: Vec<WebPushSubscription>,
+/// What one push asks of the push service (RFC 8030).
+#[derive(Debug, Clone)]
+pub struct PushRequest<'a> {
+    pub payload: &'a [u8],
+    pub urgent: bool,
+    pub ttl: Duration,
+    /// Replaces an undelivered message with the same topic.
+    pub topic: &'a str,
 }
 
+/// The push service's answer. Success means it accepted the message, never
+/// that a device presented it.
 #[derive(Debug, Clone, Copy)]
-pub enum NotificationCategory {
-    Permission,
-    Error,
-}
-
-impl NotificationCategory {
-    fn enabled(self, categories: &NotificationCategories) -> bool {
-        match self {
-            Self::Permission => categories.permission,
-            Self::Error => categories.error,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Permission => "permission",
-            Self::Error => "error",
-        }
-    }
-
-    fn copy(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Permission => ("Cowboy needs permission", "Review the pending request."),
-            Self::Error => ("Cowboy session error", "Open the session for details."),
-        }
-    }
+pub struct PushResponse {
+    pub status: reqwest::StatusCode,
+    pub retry_after: Option<Duration>,
 }
 
 pub struct WebPushService {
     signing_key: SigningKey,
     public_key: String,
-    subscriptions_path: PathBuf,
-    subscriptions: Mutex<Vec<WebPushSubscription>>,
     client: reqwest::Client,
 }
 
@@ -108,8 +92,6 @@ impl WebPushService {
                 .to_encoded_point(false)
                 .as_bytes(),
         );
-        let subscriptions_path = data_dir.join(SUBSCRIPTIONS_FILE);
-        let subscriptions = load_subscriptions(&subscriptions_path)?;
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
@@ -118,8 +100,6 @@ impl WebPushService {
         Ok(Arc::new(Self {
             signing_key,
             public_key,
-            subscriptions_path,
-            subscriptions: Mutex::new(subscriptions),
             client,
         }))
     }
@@ -128,113 +108,32 @@ impl WebPushService {
         &self.public_key
     }
 
-    pub fn upsert(&self, subscription: WebPushSubscription) -> anyhow::Result<()> {
-        validate_subscription(&subscription)?;
-        let mut subscriptions = self.subscriptions.lock();
-        if let Some(existing) = subscriptions
-            .iter_mut()
-            .find(|existing| existing.endpoint == subscription.endpoint)
-        {
-            *existing = subscription;
-        } else {
-            if subscriptions.len() >= 32 {
-                return Err(anyhow!("too many notification subscriptions"));
-            }
-            subscriptions.push(subscription);
-        }
-        persist_subscriptions(&self.subscriptions_path, &subscriptions)
-    }
-
-    pub fn remove(&self, endpoint: &str) -> anyhow::Result<()> {
-        let mut subscriptions = self.subscriptions.lock();
-        subscriptions.retain(|subscription| subscription.endpoint != endpoint);
-        persist_subscriptions(&self.subscriptions_path, &subscriptions)
-    }
-
-    pub async fn notify(
+    pub async fn send(
         &self,
-        category: NotificationCategory,
-        session_id: &str,
-        session_title: &str,
-    ) {
-        if !safe_session_id(session_id) {
-            return;
-        }
-        let subscriptions = self.subscriptions.lock().clone();
-        let mut expired = Vec::new();
-        for subscription in subscriptions {
-            if !category.enabled(&subscription.preferences.categories)
-                || subscription
-                    .preferences
-                    .muted_session_ids
-                    .iter()
-                    .any(|muted| muted == session_id)
-            {
-                continue;
-            }
-            let (title, generic_body) = category.copy();
-            let body = if subscription.preferences.show_session_names {
-                format!(
-                    "{} — {generic_body}",
-                    session_title.chars().take(120).collect::<String>()
-                )
-            } else {
-                generic_body.to_owned()
-            };
-            let payload = serde_json::json!({
-                "version": 1,
-                "category": category.name(),
-                "sessionId": session_id,
-                "title": title,
-                "body": body,
-            });
-            match self
-                .send(&subscription, payload.to_string().as_bytes())
-                .await
-            {
-                Ok(status)
-                    if status == reqwest::StatusCode::GONE
-                        || status == reqwest::StatusCode::NOT_FOUND =>
-                {
-                    expired.push(subscription.endpoint);
-                }
-                Ok(status) if status.is_success() => {}
-                Ok(status) => tracing::warn!(%status, "Web Push service rejected notification"),
-                Err(error) => tracing::warn!(%error, "Web Push delivery failed"),
-            }
-        }
-        if !expired.is_empty() {
-            let expired: HashSet<_> = expired.into_iter().collect();
-            let mut subscriptions = self.subscriptions.lock();
-            subscriptions.retain(|subscription| !expired.contains(&subscription.endpoint));
-            if let Err(error) = persist_subscriptions(&self.subscriptions_path, &subscriptions) {
-                tracing::warn!(%error, "persisting expired Web Push subscription cleanup");
-            }
-        }
-    }
-
-    async fn send(
-        &self,
-        subscription: &WebPushSubscription,
-        payload: &[u8],
-    ) -> anyhow::Result<reqwest::StatusCode> {
-        let p256dh =
-            PublicKey::from_sec1_bytes(&URL_SAFE_NO_PAD.decode(&subscription.keys.p256dh)?)
-                .context("decoding Web Push client public key")?;
-        let auth_bytes = URL_SAFE_NO_PAD.decode(&subscription.keys.auth)?;
+        endpoint: &str,
+        keys: &SubscriptionKeys,
+        push: &PushRequest<'_>,
+    ) -> anyhow::Result<PushResponse> {
+        let p256dh = PublicKey::from_sec1_bytes(&URL_SAFE_NO_PAD.decode(&keys.p256dh)?)
+            .context("decoding Web Push client public key")?;
+        let auth_bytes = URL_SAFE_NO_PAD.decode(&keys.auth)?;
         if auth_bytes.len() != 16 {
             return Err(anyhow!("invalid Web Push auth secret length"));
         }
         let auth = Auth::clone_from_slice(&auth_bytes);
-        let mut request =
-            WebPushBuilder::new(subscription.endpoint.parse()?, p256dh, auth).build(payload)?;
-        request.headers_mut().insert(
+        let mut request = WebPushBuilder::new(endpoint.parse()?, p256dh, auth)
+            .with_valid_duration(push.ttl)
+            .build(push.payload)?;
+        let headers = request.headers_mut();
+        headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&vapid_authorization(
-                &subscription.endpoint,
-                &self.signing_key,
-            )?)?,
+            HeaderValue::from_str(&vapid_authorization(endpoint, &self.signing_key)?)?,
         );
+        headers.insert(
+            "urgency",
+            HeaderValue::from_static(if push.urgent { "high" } else { "normal" }),
+        );
+        headers.insert("topic", HeaderValue::from_str(push.topic)?);
         let (parts, body) = request.into_parts();
         let response = self
             .client
@@ -243,8 +142,35 @@ impl WebPushService {
             .body(body)
             .send()
             .await?;
-        Ok(response.status())
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        Ok(PushResponse {
+            status: response.status(),
+            retry_after,
+        })
     }
+}
+
+/// The storage key of an endpoint; endpoints are capabilities and stay out of
+/// delivery rows and logs.
+#[must_use]
+pub fn endpoint_sha256(endpoint: &str) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(endpoint.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// RFC 8030 topics are at most 32 URL-safe characters.
+#[must_use]
+pub fn push_topic(identity: &str) -> String {
+    use sha2::Digest as _;
+    URL_SAFE_NO_PAD.encode(&sha2::Sha256::digest(identity.as_bytes())[..24])
 }
 
 pub fn safe_session_id(value: &str) -> bool {
@@ -255,7 +181,35 @@ pub fn safe_session_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-fn validate_subscription(subscription: &WebPushSubscription) -> anyhow::Result<()> {
+impl WebPushPreferences {
+    /// Map an unversioned value: only permission requests were ever delivered
+    /// as input, and `completed` was a default, not an opt-in.
+    #[must_use]
+    pub fn migrated(mut self) -> Self {
+        if self.schema < 2 {
+            self.categories.input = self.categories.permission;
+            self.categories.completed = false;
+            self.schema = 2;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn wants(&self, category: Category, session_id: &str) -> bool {
+        let enabled = match category {
+            Category::Input => self.categories.input,
+            Category::Failure => self.categories.error,
+            Category::Completion => self.categories.completed,
+        };
+        enabled
+            && !self
+                .muted_session_ids
+                .iter()
+                .any(|muted| muted == session_id)
+    }
+}
+
+pub fn validate_subscription(subscription: &WebPushSubscription) -> anyhow::Result<()> {
     let endpoint = reqwest::Url::parse(&subscription.endpoint)?;
     let host = endpoint.host_str().unwrap_or_default();
     if endpoint.scheme() != "https"
@@ -320,29 +274,6 @@ fn vapid_authorization(endpoint: &str, signing_key: &SigningKey) -> anyhow::Resu
     ))
 }
 
-fn load_subscriptions(path: &Path) -> anyhow::Result<Vec<WebPushSubscription>> {
-    let Ok(bytes) = std::fs::read(path) else {
-        return Ok(Vec::new());
-    };
-    let mut stored: StoredSubscriptions =
-        serde_json::from_slice(&bytes).context("reading Web Push subscriptions")?;
-    stored.subscriptions.retain(|subscription| {
-        let valid = validate_subscription(subscription).is_ok();
-        if !valid {
-            tracing::warn!("ignoring invalid persisted Web Push subscription");
-        }
-        valid
-    });
-    Ok(stored.subscriptions)
-}
-
-fn persist_subscriptions(path: &Path, subscriptions: &[WebPushSubscription]) -> anyhow::Result<()> {
-    let bytes = serde_json::to_vec(&StoredSubscriptions {
-        subscriptions: subscriptions.to_vec(),
-    })?;
-    atomic_write_private(path, &bytes)
-}
-
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
     let mut file = OpenOptions::new()
@@ -372,6 +303,7 @@ mod tests {
                 auth: URL_SAFE_NO_PAD.encode([5_u8; 16]),
             },
             preferences: WebPushPreferences {
+                schema: 2,
                 show_session_names: false,
                 categories: NotificationCategories {
                     completed: true,
@@ -386,6 +318,91 @@ mod tests {
         let mut internal = valid.clone();
         internal.endpoint = "https://127.0.0.1/private".to_owned();
         assert!(validate_subscription(&internal).is_err());
+    }
+
+    #[test]
+    fn unversioned_preferences_never_opt_into_completions() {
+        let legacy = |input, permission, completed| WebPushPreferences {
+            schema: 0,
+            show_session_names: false,
+            categories: NotificationCategories {
+                completed,
+                input,
+                permission,
+                error: true,
+            },
+            muted_session_ids: vec!["muted".to_owned()],
+        };
+        let migrated = legacy(true, false, true).migrated();
+        assert_eq!(migrated.schema, 2);
+        assert!(!migrated.categories.input, "permission was the only input");
+        assert!(!migrated.categories.completed);
+        assert!(migrated.wants(Category::Failure, "s"));
+        assert!(!migrated.wants(Category::Failure, "muted"));
+        let mut chosen = legacy(true, true, false).migrated();
+        chosen.categories.completed = true;
+        assert!(
+            chosen.clone().migrated().categories.completed,
+            "schema 2 is kept"
+        );
+    }
+
+    /// One real request to a local push service: the RFC 8030 headers arrive and
+    /// `Retry-After` comes back.
+    #[tokio::test]
+    async fn a_push_carries_its_delivery_headers() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let root = tempfile::tempdir().unwrap();
+        let service = WebPushService::open(root.path()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 8_192];
+            let read = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 429 Too Many\r\nretry-after: 7\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&request[..read]).to_lowercase()
+        });
+        let client = SigningKey::random(&mut OsRng);
+        let keys = SubscriptionKeys {
+            p256dh: URL_SAFE_NO_PAD.encode(
+                client.verifying_key().to_encoded_point(false).as_bytes(),
+            ),
+            auth: URL_SAFE_NO_PAD.encode([5_u8; 16]),
+        };
+        let response = service
+            .send(
+                &format!("http://{address}/push"),
+                &keys,
+                &PushRequest {
+                    payload: b"{}",
+                    urgent: true,
+                    ttl: Duration::from_secs(120),
+                    topic: "topic-1",
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status.as_u16(), 429);
+        assert_eq!(response.retry_after, Some(Duration::from_secs(7)));
+        let request = server.await.unwrap();
+        assert!(request.contains("urgency: high"), "{request}");
+        assert!(request.contains("topic: topic-1"), "{request}");
+        assert!(request.contains("ttl: 120"), "{request}");
+    }
+
+    #[test]
+    fn topics_fit_rfc8030() {
+        let topic = push_topic("cowboy-session-with-a-long-name-failure");
+        assert!(topic.len() <= 32);
+        assert!(
+            topic
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        );
     }
 
     #[test]

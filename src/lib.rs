@@ -235,6 +235,7 @@ pub mod migration_policy;
 #[cfg(all(test, feature = "full"))]
 pub mod protocol_contract;
 #[cfg(feature = "full")]
+pub mod task_notifications;
 pub mod web_push;
 
 #[cfg(any(feature = "full", feature = "machine-host"))]

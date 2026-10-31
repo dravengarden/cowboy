@@ -85,6 +85,11 @@ fn current_authority(
 }
 
 impl Coordinator {
+    /// Whether a person is still being asked about this request.
+    pub(in crate::server) fn approval_waiting(&self, parent: &str, request_id: &str) -> bool {
+        self.approvals.waiting(parent, request_id)
+    }
+
     pub(in crate::server) fn notify(&self) {
         self.changed.notify_waiters();
     }
@@ -1141,6 +1146,12 @@ fn await_approval(
     match approvals.refused(&meta.id, request, requested, code) {
         super::approval::Gate::Declined => Err(error("calls_declined", "not_submitted")),
         super::approval::Gate::Pending => {
+            state
+                .hub
+                .record_occurrence(crate::task_notifications::Occurrence::approval(
+                    &meta.id,
+                    &request.request_id,
+                ));
             state
                 .hub
                 .broadcast_call_approval(&meta.id, approvals.view(&meta.id, &meta.provider));

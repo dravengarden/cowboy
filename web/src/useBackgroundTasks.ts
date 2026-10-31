@@ -239,7 +239,7 @@ export function useBackgroundTasks(
     [anchored.calls, listedCalls],
   );
   const approval = useCallApproval(sessionId);
-  const acknowledged = useAcknowledgements();
+  const acknowledged = useAcknowledgements(sessionId);
   const stopStates = useStopStates();
   const unreachableMachines = useMemo(
     () => new Set(machines.filter((machine) => !machine.connected).map((machine) => machine.id)),

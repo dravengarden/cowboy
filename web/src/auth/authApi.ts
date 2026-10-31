@@ -1,3 +1,4 @@
+import { disableSystemNotifications, getSystemNotificationPreferences } from "../systemNotifications";
 import {
   isHostSlotId,
   isPluginGeneration,
@@ -694,6 +695,16 @@ export interface DeviceAuthorizationInfo {
   status: "pending" | "approved" | "denied";
 }
 
+/** The next account on this installation must not inherit this enrollment.
+ *  Bounded: signing out never waits on a service worker. */
+function releaseNotificationsBeforeLogout(): Promise<void> {
+  if (!getSystemNotificationPreferences().enabled) return Promise.resolve();
+  return Promise.race([
+    disableSystemNotifications().catch(() => undefined),
+    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 2_000)),
+  ]);
+}
+
 export const authApi = {
   request: authProtocolRequest,
   status: () => fetchAuthStatus(),
@@ -752,11 +763,13 @@ export const authApi = {
     scope: ProductLogoutScope = "current",
     providerLogout = false,
   ) =>
-    readJson<ProductLogoutResult>("/api/auth/logout", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scope, provider_logout: providerLogout }),
-    }),
+    releaseNotificationsBeforeLogout().then(() =>
+      readJson<ProductLogoutResult>("/api/auth/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scope, provider_logout: providerLogout }),
+      })
+    ),
   listSessions: () => readJson<ProductSessionInventory>("/api/auth/sessions"),
   deleteSession: (id: string) =>
     readJson<{ ok: boolean }>(

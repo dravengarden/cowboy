@@ -232,6 +232,11 @@ function TaskDetail({
       {task.subtitle && task.source !== "subagent" && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{task.subtitle}</Typography>
       )}
+      {task.attention === "failed_unseen" && (
+        <Button size="small" data-task-mark-seen onClick={() => acknowledgeTask(sessionId, task)}>
+          Mark as seen
+        </Button>
+      )}
       {/* A Call's details carry their own Stop and Open as session. */}
       {((task.canStop && task.source !== "call") || stopMessage) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
@@ -407,10 +412,14 @@ export function BackgroundTasksInspector({
     }
   }, [sessionId, byKey]);
 
-  // Opening details acknowledges an unseen failure on this device.
+  // Opening details acknowledges an unseen failure. A notification's link only
+  // opens them: reaching a row is not seeing it, so it asks for an explicit
+  // Mark as seen (docs/task-notifications.md#acknowledgement).
   useEffect(() => {
-    if (open && selected && (desktop || level !== "list")) acknowledgeTask(selected);
-  }, [open, selected, desktop, level]);
+    if (open && selected && state.origin !== "link" && (desktop || level !== "list")) {
+      acknowledgeTask(sessionId, selected);
+    }
+  }, [open, selected, desktop, level, sessionId, state.origin]);
 
   // Mobile: list -> detail -> conversation, one history entry per level, so
   // the system Back walks up a level and finally returns to the transcript.

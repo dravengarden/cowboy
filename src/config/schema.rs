@@ -43,6 +43,7 @@ pub const PLUGIN_AUTO_UPDATE_IDLE_AFTER: Key<Duration> =
     Key::new(Scope::Service, "plugins.auto_update_idle_after");
 pub const PLUGIN_AUTO_UPDATE_IDLE_LIMIT: Key<Duration> =
     Key::new(Scope::Service, "plugins.auto_update_idle_limit");
+pub const NOTIFICATIONS_DELIVERY: Key<bool> = Key::new(Scope::Service, "notifications.delivery");
 pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
     Key::new(Scope::Service, "sessions.reclaim_on_capacity");
 pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
@@ -194,6 +195,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(12)),
         reload: Reload::Live,
         doc: "Idle time after which the fleet policy stops restarting a session's worker\nfor each new release. The session then adopts the installed release when it\nis next opened, so one nobody is using does not resume its native session on\nevery release. Workerless sessions are still re-pinned.",
+    },
+    Field {
+        key: "notifications.delivery",
+        kind: Kind::Bool,
+        default: Value::Bool(true),
+        reload: Reload::Live,
+        doc: "Deliver task notifications over Web Push. Turning this off stops delivery;\nintents are still recorded and expire unsent. It exists for rollback.",
     },
     Field {
         key: "sessions.reclaim_on_capacity",
