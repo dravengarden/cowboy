@@ -106,10 +106,10 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     check([busy, numeric].every((node) => {
       const track = node.querySelector(".MuiCircularProgress-track");
       return track !== null && getComputedStyle(track).display !== "none" &&
-        Number.parseFloat(getComputedStyle(track).opacity) >= 0.55;
+        Number.parseFloat(getComputedStyle(track).opacity) <= 0.25;
     }) && getComputedStyle(determinate.querySelector(".MuiCircularProgress-track")!).display === "none" &&
       getComputedStyle(starting.querySelector(".MuiCircularProgress-track")!).display === "none",
-      "Native full tracks show for waits without changing startup or determinate progress");
+      "Faint full tracks show for waits without changing startup or determinate progress");
     check([busy, numeric, container.querySelector('[aria-label="Loading 11"]')!].every((node) => {
       const svg = node.querySelector("svg")!;
       const arc = node.querySelector<SVGCircleElement>(".MuiCircularProgress-circle")!;
@@ -126,6 +126,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
           const moving = arc.getBoundingClientRect();
           const pattern = style.strokeDasharray.split(/[, ]+/).map(Number.parseFloat);
           return style.transform === "none" &&
+            Math.abs(pattern[0]! - circumference / 4) < 0.01 &&
             Math.abs(pattern.reduce((sum, length) => sum + length, 0) - circumference) < 0.01 &&
             Math.abs(Number.parseFloat(style.strokeDashoffset) + time / 800 * circumference) < 0.01 &&
             Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
@@ -142,7 +143,7 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     document.body.append(shell);
     try {
       const mark = shell.querySelector(".app-splash-spinner")!;
-      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor !== "rgba(0, 0, 0, 0)", "Pre-mount splash uses a complete circular wait indicator");
+      check(getComputedStyle(mark).animationName === "cowboy-splash-rotate" && getComputedStyle(mark).borderTopStyle === "solid" && getComputedStyle(mark).borderRightColor !== "rgba(0, 0, 0, 0)" && getComputedStyle(mark).borderRightColor !== getComputedStyle(mark).borderTopColor, "Pre-mount splash uses a quarter arc over a faint full track");
     } finally {
       shell.remove();
     }
