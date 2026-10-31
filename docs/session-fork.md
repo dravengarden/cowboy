@@ -15,10 +15,9 @@ keeps the complete model context and can reuse the Provider prompt cache.
   session opens at once (on Desktop with the composer focused; Mobile keeps
   the keyboard down until the user taps the composer). While the source is
   working, the item waits for the turn to end.
-- **Fork from here**, shown under each assistant message that ends a turn,
-  forks the conversation up to and including that message. Later turns are
-  not part of the fork. It needs the Provider message ID that Claude Code and
-  Codex attach to their answers.
+- Forking through an earlier answer is available to agents and scripts with
+  `message_id` (below). The Transcript shows no fork action: switches and
+  branches are made in Session Settings.
 - `sessions.fork` in Cowboy MCP and `POST /api/sessions/:id/fork` expose the
   same operation to agents and scripts.
 
@@ -26,8 +25,9 @@ The fork keeps its source's Provider, subscription and login, runtime Machine,
 execution Machine, project and supported settings (model, reasoning,
 permissions, Memory, Calls, send policy and automatic Provider updates). Its
 title is the source title with a ` (fork)` suffix, it is placed directly after
-the source in the same folder, and its list row shows a **Fork** badge. Its
-transcript starts with a "Forked from SOURCE" marker that opens the source.
+the source in the same folder, and its list row shows a **Fork** badge. Session
+Settings shows "Forked from SOURCE · Open"; the Transcript itself has no
+marker.
 To use another agent, subscription or project, use **Continue in new agent…**
 instead; native transcripts never move between accounts or Machines.
 

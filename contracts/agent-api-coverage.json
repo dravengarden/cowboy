@@ -55,6 +55,8 @@
     "session_context::set": "sessions.context_set",
     "session_context::send": "sessions.context_send",
     "session_context::fork": "sessions.fork",
+    "config_revert::get": "sessions.config_revert",
+    "config_revert::restore": "sessions.config_revert_restore",
     "api_observability_batch": "exception:streams — telemetry ingestion remains collector/browser-owned; MCP consumes bounded diagnostics.",
     "api_observability_incidents": "diagnostics.incidents",
     "api_otlp": "exception:streams — telemetry ingestion remains collector/browser-owned; MCP consumes bounded diagnostics.",

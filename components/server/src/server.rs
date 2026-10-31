@@ -11,6 +11,7 @@
 //! challenge before WebSocket protocol negotiation.
 
 mod agent_tools;
+mod config_revert;
 pub(crate) use agent_tools::launch_extensions;
 mod dormant_pins;
 mod folder_defaults;
@@ -3613,6 +3614,9 @@ async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         cmid,
         explicit,
     } = req;
+    // A sent message makes the latest in-place agent change part of the
+    // conversation; Settings can no longer go Back to the previous values.
+    config_revert::clear(hub, &session_id);
     let retain = |session_id: String, text, content, cmid, error: &str| {
         let session = session_id.clone();
         retain_failed_dispatch(hub, session_id, text, content, cmid, error);
@@ -11076,6 +11080,11 @@ async fn serve_axum(
         .route("/api/sessions/{id}/context", get(session_context::get).put(session_context::set))
         .route("/api/sessions/{id}/context/send", post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)))
         .route("/api/sessions/{id}/fork", post(session_context::fork))
+        .route("/api/sessions/{id}/config-revert", get(config_revert::get))
+        .route(
+            "/api/sessions/{id}/config-revert/restore",
+            post(config_revert::restore),
+        )
         .route("/api/sessions/{id}/delivery/{operation}", get(send_delivery::receipt))
         .route("/api/sessions/{id}/delivery-options", get(send_delivery::options))
         .route("/api/sessions/{id}/delivery-policy", put(send_delivery::set_policy))
@@ -22271,6 +22280,9 @@ fn handle_command(
             // cwd default, so this only "takes" on a session's first prompt and
             // never overrides a manual rename.
             let auto = first_prompt_title(&text, &content);
+            if !(text.is_empty() && content.is_empty()) {
+                config_revert::clear(&state.hub, &session_id);
+            }
             let blocks: Vec<ContentBlock> = if content.is_empty() {
                 if text.is_empty() {
                     tracing::warn!("Prompt with neither text nor content; dropping");
@@ -22395,28 +22407,7 @@ fn handle_command(
             session_id,
             config_id,
             value,
-        } => {
-            session_configuration::prepare(state, &session_id);
-            match state.supervisor.set_managed_config_option(
-                &session_id,
-                &config_id,
-                value.clone(),
-            ) {
-                Ok(true) => Ok(()),
-                Ok(false) => {
-                    state
-                        .hub
-                        .set_config_preference(&session_id, config_id.clone(), value.clone())
-                        .and_then(|()| {
-                            state.supervisor.send(
-                                &session_id,
-                                AgentCommand::SetConfigOption { config_id, value },
-                            )
-                        })
-                }
-                Err(error) => Err(error),
-            }
-        },
+        } => config_revert::apply(state, &session_id, config_id, value, true),
         // Opening is inspection; stopped sessions remain stopped until work is
         // submitted. Live ownership is reconciled without a throwaway prompt.
         // Opening a trashed session is inspection only; it never wakes.

@@ -49,7 +49,6 @@ import {
   ChatBubbleOutline,
   CheckCircleOutline,
   ChevronRight,
-  CallSplitOutlined,
   CleaningServices,
   Close,
   CloudUpload,
@@ -75,10 +74,6 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
-import { documentNotice } from "./documents/DocumentNotifications";
-import { requestPickSession } from "./sessionPickRequest";
-import { forkAvailability, forkSession } from "./sessionFork";
-import { isManagedChild } from "./managedCalls";
 import { SubagentCard } from "./SubagentCard";
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
@@ -116,7 +111,6 @@ import {
   COMPACTING_NOTICE,
   type ContentChunk,
   derive,
-  forkableAnswerKeys,
   isCompactingTail,
   isCompactionCommandText,
   isCompactionCompletionTail,
@@ -258,7 +252,6 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { isImeKeyEvent } from "./imeKey";
-import { SessionContextCue } from "./SessionContextCue";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -1505,49 +1498,6 @@ function OptimisticUserBubble({
         </Stack>
       )}
     </Stack>
-  );
-}
-
-const NO_FORK_ANSWERS: ReadonlyMap<string, string> = new Map();
-
-/** A quiet action under a turn-final answer: fork the conversation through it. */
-function ForkFromHere({
-  sessionId,
-  messageId,
-}: {
-  sessionId: string;
-  messageId: string;
-}): React.JSX.Element {
-  const [pending, setPending] = useState(false);
-  return (
-    <Button
-      data-transcript-fork-from-here
-      size="small"
-      disabled={pending}
-      startIcon={<CallSplitOutlined sx={{ fontSize: glyphSize(14) }} />}
-      onClick={(): void => {
-        setPending(true);
-        void forkSession(sessionId, { messageId })
-          .then((receipt) =>
-            requestPickSession(receipt.session_id, receipt.session ?? undefined)
-          )
-          .catch((error: Error) => documentNotice(error.message))
-          .finally(() => setPending(false));
-      }}
-      sx={{
-        alignSelf: "flex-start",
-        mt: 0.25,
-        minWidth: 0,
-        px: 0.75,
-        py: 0,
-        typography: "caption",
-        color: "text.secondary",
-        opacity: 0.7,
-        "&:hover, &:focus-visible": { opacity: 1 },
-      }}
-    >
-      {pending ? "Forking…" : "Fork from here"}
-    </Button>
   );
 }
 
@@ -3099,7 +3049,6 @@ const ItemView = memo(function ItemView({
   desktop,
   selectedToolKey,
   onOpenTool,
-  forkMessageId,
 }: {
   item: RenderItem;
   sessionId: string;
@@ -3115,8 +3064,6 @@ const ItemView = memo(function ItemView({
   desktop: boolean;
   selectedToolKey: string | null;
   onOpenTool: (key: string) => void;
-  /** Provider message ID when this answer ends a turn a fork can start from. */
-  forkMessageId?: string | undefined;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message": {
@@ -3133,13 +3080,7 @@ const ItemView = memo(function ItemView({
           desktop={desktop}
         />
       );
-      if (!forkMessageId) return bubble;
-      return (
-        <>
-          {bubble}
-          <ForkFromHere sessionId={sessionId} messageId={forkMessageId} />
-        </>
-      );
+      return bubble;
     }
     case "thought":
       return (
@@ -3249,40 +3190,8 @@ const ItemView = memo(function ItemView({
       );
     }
     case "forked":
-      return (
-        <Box
-          data-transcript-fork-origin
-          role="status"
-          sx={(theme) => ({
-            alignSelf: "center",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 0.625,
-            my: 0.75,
-            px: 1,
-            py: 0.25,
-            borderRadius: 999,
-            color: "text.secondary",
-            bgcolor: alpha(theme.palette.background.paper, 0.66),
-            border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
-          })}
-        >
-          <CallSplitOutlined
-            sx={{ fontSize: glyphSize(15), color: "primary.main" }}
-          />
-          <Typography variant="caption" sx={{ fontWeight: 650 }}>
-            {item.atMessage ? "Forked from an answer in" : "Forked from"}{" "}
-            {item.sourceTitle || "another session"}
-          </Typography>
-          <Button
-            size="small"
-            onClick={(): void => requestPickSession(item.sourceSessionId)}
-            sx={{ minWidth: 0, px: 0.75, py: 0, typography: "caption" }}
-          >
-            Open
-          </Button>
-        </Box>
-      );
+      // Filtered out of the Transcript; provenance lives in Session Settings.
+      return null;
     case "cleared":
       // A compact context boundary, not a full-width divider. The old pair of
       // rules visually split an otherwise empty transcript and competed with
@@ -3947,16 +3856,6 @@ export function Transcript({
     timeline,
   );
   const streamingRowKey = lastIsStreamingAssistant ? lastItem?.key ?? null : null;
-  const forkOffered = useStoreSelector((state) => {
-    const session = state.sessions.find((entry) => entry.id === sessionId);
-    return !!session && !isManagedChild(session) &&
-      forkAvailability(session, state.machines) !== null;
-  });
-  const turnRunning = status === "busy" || status === "starting";
-  const forkAnswers = useMemo(
-    () => forkOffered ? forkableAnswerKeys(items, turnRunning) : NO_FORK_ANSWERS,
-    [forkOffered, items, turnRunning],
-  );
   const compacting = working && isCompactingTail(timeline);
   const showLiveCompactionRequest = working &&
     isCompactionRequestTail(timeline);
@@ -5946,12 +5845,6 @@ export function Transcript({
                 />
               )}
 
-              {/* Directly below the newest turn: where this conversation went. */}
-              <SessionContextCue
-                sessionId={sessionId}
-                desktop={desktopNavigation}
-                placement="end"
-              />
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
                 (timeline growth or live terminal output) on a working turn,
@@ -6057,6 +5950,9 @@ export function Transcript({
                 .slice()
                 .reverse()
                 .filter((item) =>
+                  // Provenance (forked/continued) lives in Session Settings;
+                  // the conversation itself carries no branch mechanics.
+                  item.kind !== "forked" &&
                   !(item.kind === "lifecycle" &&
                     !shouldPaintTranscriptLifecycle(item.status)) &&
                   !(item.kind === "message" &&
@@ -6116,7 +6012,6 @@ export function Transcript({
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}
                       onOpenTool={openTool}
-                      forkMessageId={forkAnswers.get(item.key)}
                     />
                   </Box>
                 ))}
@@ -6129,14 +6024,6 @@ export function Transcript({
                     flex: `0 0 ${recycledHeight}px`,
                     pointerEvents: "none",
                   }}
-                />
-              )}
-              {/* The conversation's true first row: where it came from. */}
-              {recycledHeight === 0 && (paging?.reachedStart ?? true) && (
-                <SessionContextCue
-                  sessionId={sessionId}
-                  desktop={desktopNavigation}
-                  placement="start"
                 />
               )}
               {paging != null && shouldShowScrollbackLoadingSkeleton({

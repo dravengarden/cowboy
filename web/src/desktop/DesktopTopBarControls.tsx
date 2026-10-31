@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { ConfigRevertBack } from "../ConfigRevertBack";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import {
@@ -1969,7 +1970,7 @@ export function DesktopTopBarControls({
         title="Run configuration"
         description={dead
           ? "Changes are saved for your next message. The session stays asleep."
-          : "Changes apply immediately to this session."}
+          : "Changes apply immediately; Back restores them until your next message."}
         icon={<Tune sx={{ color: "primary.main" }} />}
         width={900}
         shortcutGroups={[{
@@ -1993,6 +1994,9 @@ export function DesktopTopBarControls({
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
+          <Box sx={{ px: 2.25, pt: 1.25, "&:empty": { display: "none" } }}>
+            <ConfigRevertBack sessionId={sessionId} options={options} />
+          </Box>
           <Box
             sx={{
               px: 2.25,
@@ -2023,8 +2027,8 @@ export function DesktopTopBarControls({
             ))}
           </Box>
           <Box sx={{ px: 2.25, pb: 1.75 }}>
-            <SessionToolsSection sessionId={sessionId} />
             {session && <SessionContextSettings session={session} />}
+            <SessionToolsSection sessionId={sessionId} />
           </Box>
         </Box>
       </DesktopModal>

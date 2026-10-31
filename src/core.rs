@@ -3685,6 +3685,7 @@ impl Hub {
                 settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
                 settings_keys::SESSION_CONTINUED_FROM_PREFIX,
                 settings_keys::SESSION_FORK_PREFIX,
+                settings_keys::SESSION_CONFIG_REVERT_PREFIX,
             ] {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
@@ -5688,6 +5689,29 @@ impl Hub {
         sessions
             .get(session_id)
             .map(|session| session.config_preferences.clone())
+    }
+
+    /// The value one config option holds now: the durable selection, else the
+    /// agent's last advertised current value.
+    #[must_use]
+    pub fn current_config_value(
+        &self,
+        session_id: &str,
+        config_id: &str,
+    ) -> Option<serde_json::Value> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(session_id)?;
+        if let Some(selected) = session.config_preferences.get(config_id) {
+            return Some(selected.clone());
+        }
+        session
+            .config_options
+            .as_ref()?
+            .as_array()?
+            .iter()
+            .find(|option| option.get("id").and_then(serde_json::Value::as_str) == Some(config_id))
+            .and_then(config_current_value)
+            .cloned()
     }
 
     /// Record one user-selected config value and immediately fan out the

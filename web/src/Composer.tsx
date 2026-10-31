@@ -373,6 +373,7 @@ import {
   composerStackExpandedStore,
   toggleComposerStackPanel,
 } from "./composerStackAccordion";
+import { ConfigRevertBack } from "./ConfigRevertBack";
 import {
   COMPOSER_STACK_DISCLOSURE_TIMEOUT,
   composerStackDisclosureSx,
@@ -7066,6 +7067,7 @@ function ComposerSheet({
                 Changes are saved for your next message. The session stays asleep.
               </Typography>
             )}
+            {session && <ConfigRevertBack sessionId={session.id} options={options} />}
             {loading
               ? (
                 <Stack
@@ -7242,9 +7244,11 @@ function ComposerSheet({
       )}
       {session && !isManagedChild(session) && (
         <>
+          {/* Right under the Agent block: model and reasoning apply in place;
+              another subscription or Provider is a Switch with Back. */}
+          <SessionContextSettings session={session} />
           <Divider />
           <SessionToolsSection sessionId={session.id} />
-          <SessionContextSettings session={session} />
         </>
       )}
       {session && (
