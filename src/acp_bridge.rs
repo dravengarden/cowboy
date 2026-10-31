@@ -44,6 +44,9 @@ use crate::acp::STARTUP_PHASE_TIMEOUT;
 use crate::cli::ServeAcpArgs;
 use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 
+#[path = "acp_bridge_subagents.rs"]
+mod subagents;
+
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 // The daemon's POST /api/sessions returns before the provider completes its ACP
@@ -171,6 +174,8 @@ struct CachedSession {
     resume_after: Option<Option<u64>>,
     last_seq: Option<u64>,
     last_detail: Option<String>,
+    /// What the client was told about this session's subagents.
+    subagents: subagents::SubagentProjection,
 }
 
 impl CachedSession {
@@ -216,6 +221,8 @@ struct BridgeState {
     config_options: HashMap<String, Vec<SessionConfigOption>>,
     config_waiters: HashMap<String, Vec<oneshot::Sender<Vec<SessionConfigOption>>>>,
     delete_waiters: HashMap<String, Vec<oneshot::Sender<Result<(), String>>>>,
+    /// The client declared `clientCapabilities.subagents`.
+    subagent_client: bool,
 }
 
 /// What a reconnected, attached session missed, in transcript order.
@@ -255,8 +262,17 @@ impl BridgeState {
             cached.replaying = false;
             cached.resume_after = None;
             cached.replay_buffer.clear();
+            cached.subagents = subagents::SubagentProjection::default();
         }
         self.config_waiters.remove(session_id);
+    }
+
+    /// The attached session whose subagent `child` the client was told about.
+    fn subagent_parent(&self, child: &str) -> Option<String> {
+        self.sessions
+            .iter()
+            .find(|(_, cached)| cached.attached && cached.subagents.knows(child))
+            .map(|(session_id, _)| session_id.clone())
     }
 
     /// Adopt the daemon's authoritative session list. A session that left the
@@ -634,6 +650,8 @@ async fn run_acp_server(
         .name("cowboy-serve-acp")
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx: ConnectionTo<Client>| {
+                initialize_bridge.state.lock().subagent_client =
+                    request.client_capabilities.subagents.is_some();
                 let capabilities = AgentCapabilities::new()
                     .load_session(true)
                     .prompt_capabilities(
@@ -883,7 +901,18 @@ async fn run_acp_server(
         )
         .on_receive_notification(
             async move |notification: CancelNotification, _cx: ConnectionTo<Client>| {
-                cancel_bridge.cancel_prompts(notification.session_id.0.as_ref());
+                let session_id = notification.session_id.0.as_ref();
+                // A subagent client stops one subagent by cancelling its
+                // child session; Cowboy addresses it through its parent.
+                let parent = cancel_bridge.state.lock().subagent_parent(session_id);
+                if let Some(parent) = parent {
+                    cancel_bridge.send_command(Inbound::CancelSubagent {
+                        session_id: parent,
+                        subagent_session_id: session_id.to_owned(),
+                    })?;
+                    return Ok(());
+                }
+                cancel_bridge.cancel_prompts(session_id);
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -1108,6 +1137,8 @@ impl Bridge {
         cached.replaying = replaying;
         cached.resume_after = None;
         cached.replay_buffer.clear();
+        // A loaded thread is rebuilt from its replay, subagents included.
+        cached.subagents = subagents::SubagentProjection::default();
         was_attached
     }
 
@@ -1465,7 +1496,7 @@ impl Bridge {
         history.sort_unstable_by_key(|event| event.seq);
         history.dedup_by_key(|event| event.seq);
         for envelope in &history {
-            Self::forward_replay_envelope(cx, envelope)?;
+            self.forward_replay_envelope(cx, envelope)?;
         }
         let status = self.status(session_id);
         // A turn that is still waiting for an answer keeps waiting after the
@@ -1592,19 +1623,43 @@ impl Bridge {
     }
 
     fn forward_replay_envelope(
+        &self,
         cx: &ConnectionTo<Client>,
         envelope: &Envelope,
     ) -> Result<(), String> {
-        if let Event::Update { update } = &envelope.event
-            && let Ok(update) = serde_json::from_value::<SessionUpdate>(update.clone())
-        {
-            cx.send_notification(SessionNotification::new(
-                envelope.session_id.clone(),
-                update,
-            ))
-            .map_err(|error| error.to_string())?;
+        if let Event::Update { update } = &envelope.event {
+            for notification in self.client_updates(&envelope.session_id, update) {
+                cx.send_notification(notification)
+                    .map_err(|error| error.to_string())?;
+            }
         }
         Ok(())
+    }
+
+    /// The ACP notifications for one transcript update. A `cowboy_subagent`
+    /// snapshot is projected for this client (see [`subagents`]); an update
+    /// with no ACP form is dropped.
+    fn client_updates(
+        &self,
+        session_id: &str,
+        update: &serde_json::Value,
+    ) -> Vec<SessionNotification> {
+        if update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some(subagents::SUBAGENT_UPDATE)
+        {
+            let mut state = self.state.lock();
+            let standard = state.subagent_client;
+            return state
+                .sessions
+                .get_mut(session_id)
+                .map(|cached| cached.subagents.project(session_id, update, standard))
+                .unwrap_or_default();
+        }
+        serde_json::from_value::<SessionUpdate>(update.clone())
+            .map(|update| vec![SessionNotification::new(session_id.to_owned(), update)])
+            .unwrap_or_default()
     }
 
     async fn run_daemon(
@@ -2081,11 +2136,8 @@ impl Bridge {
     ) -> Result<(), agent_client_protocol::Error> {
         match &envelope.event {
             Event::Update { update } => {
-                if let Ok(update) = serde_json::from_value::<SessionUpdate>(update.clone()) {
-                    cx.send_notification(SessionNotification::new(
-                        envelope.session_id.clone(),
-                        update,
-                    ))?;
+                for notification in self.client_updates(&envelope.session_id, update) {
+                    cx.send_notification(notification)?;
                 }
             }
             Event::PermissionRequest {
@@ -2215,8 +2267,15 @@ impl Bridge {
         tool_call: &serde_json::Value,
         options: &serde_json::Value,
     ) -> Result<(), agent_client_protocol::Error> {
+        let mut tool_call = tool_call.clone();
+        let standard = self.state.lock().subagent_client;
+        // A subagent's request is asked in its child session, or named in the
+        // title for a client without subagents. The answer still goes to the
+        // parent session, which owns the request.
+        let asking_session = subagents::subagent_request(&mut tool_call, standard)
+            .unwrap_or_else(|| session_id.to_owned());
         let request = serde_json::from_value::<RequestPermissionRequest>(serde_json::json!({
-            "sessionId": session_id,
+            "sessionId": asking_session,
             "toolCall": tool_call,
             "options": options
         }));
@@ -2225,7 +2284,7 @@ impl Bridge {
             return Ok(());
         };
         let bridge = self.clone();
-        let permission_session = request.session_id.0.to_string();
+        let permission_session = session_id.to_owned();
         let permission_cx = cx.clone();
         cx.spawn(async move {
             match permission_cx.send_request(request).block_task().await {
@@ -3572,5 +3631,73 @@ mod tests {
         assert!(!cached.attached);
         assert!(!cached.replaying);
         assert!(cached.replay_buffer.is_empty());
+    }
+
+    fn subagent_snapshot(revision: u64, state: &str) -> serde_json::Value {
+        serde_json::json!({
+            "sessionUpdate": "cowboy_subagent",
+            "sessionId": "child",
+            "revision": revision,
+            "title": "Explore",
+            "state": state,
+            "cancellable": state == "running",
+            "activity": [],
+        })
+    }
+
+    #[test]
+    fn subagent_snapshots_follow_the_client_capability_and_a_reload() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        let kinds = |bridge: &Bridge, revision| {
+            bridge
+                .client_updates("sess-1", &subagent_snapshot(revision, "running"))
+                .into_iter()
+                .map(|notification| {
+                    serde_json::to_value(notification).unwrap()["update"]["sessionUpdate"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        // A client without subagents sees a tool call, once.
+        assert_eq!(kinds(&bridge, 1), ["tool_call"]);
+        assert!(kinds(&bridge, 1).is_empty());
+        // A reloaded thread starts over: the replay announces it again.
+        bridge.attach("sess-1", true);
+        assert_eq!(kinds(&bridge, 1), ["tool_call"]);
+
+        bridge.state.lock().subagent_client = true;
+        bridge.attach("sess-1", true);
+        assert_eq!(kinds(&bridge, 2), ["subagent_update"]);
+        // Ordinary updates are unchanged; an unknown one is dropped.
+        assert_eq!(bridge.client_updates("sess-1", &serde_json::json!({
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"},
+        })).len(), 1);
+        assert!(
+            bridge
+                .client_updates(
+                    "sess-1",
+                    &serde_json::json!({ "sessionUpdate": "cowboy_unknown" })
+                )
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelling_an_announced_child_session_stops_that_subagent() {
+        let (bridge, _commands) = fixture_bridge();
+        listed(&bridge, true);
+        bridge.state.lock().subagent_client = true;
+        assert!(bridge.state.lock().subagent_parent("child").is_none());
+        bridge.client_updates("sess-1", &subagent_snapshot(1, "running"));
+        assert_eq!(
+            bridge.state.lock().subagent_parent("child").as_deref(),
+            Some("sess-1")
+        );
+        // The detached thread no longer owns its subagents.
+        bridge.state.lock().detach_session("sess-1");
+        assert!(bridge.state.lock().subagent_parent("child").is_none());
     }
 }
