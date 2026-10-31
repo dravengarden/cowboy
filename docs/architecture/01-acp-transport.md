@@ -58,6 +58,13 @@ their own tools (Claude Code's Read/Write/Bash, etc.) then operate **directly on
 disk themselves** — cowboy never has to build a PTY backend or fs sandbox. This
 is the single biggest scope-reducer in the design.
 
+It does advertise the presentation capabilities it renders: `session.compaction`,
+`session.notices`, form/URL `elicitation` and `subagents`. With `subagents`, a
+notification may belong to a child session rather than the one Cowboy opened;
+`handle_session_notification` routes those through `src/acp_subagents.rs`
+before anything else, so a child's messages, tool calls, usage and
+configuration never reach the parent (see [subagents](../subagents.md)).
+
 ## Handshake & session start
 
 `run_session()` performs the ACP handshake:
@@ -180,7 +187,8 @@ trust is **last agent-streamed turn progress**:
   transcript so an unbounded `tail -f` cannot evict history). A pending
   human permission is not a wedge. A silent open tool is: Grok
   `exit_plan_mode` stays `pending` until the host confirms, and reconnect
-  `available_commands_update` frames must not reset the clock.
+  `available_commands_update` frames must not reset the clock. A subagent's
+  own updates count too: a parent waiting on a working child is not silent.
 - **A wait the provider scheduled is not silence.** Claude's SDK answers a 429
   by sleeping until the limit resets, streaming nothing meanwhile. Cowboy
   subscribes to its `api_error` frames, waits out a retry that lands inside the

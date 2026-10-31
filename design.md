@@ -69,6 +69,14 @@ channel: a permission request whose tool call carries the request under
 render the form and answer `accept:<content JSON>`; older clients still offer
 the two choices. The transcript records only the outcome, never the content.
 
+Cowboy advertises `subagents` too. Adapters then run each subagent as its own
+child ACP session (updates under the child's `sessionId`, `subagent_update`
+and linked `session_message`s on the parent) instead of an opaque tool call.
+The worker never mixes a child's updates into the parent timeline: it folds
+each child into one bounded `cowboy_subagent` snapshot row of the parent,
+names the subagent on the permission requests it raises, and can stop it alone
+with `session/cancel` on the child id. See [docs/subagents.md](docs/subagents.md).
+
 ## 3. Topology
 
 ```
