@@ -72,6 +72,46 @@ function userCodexConfig() {
   }
 }
 
+// codex-acp logs in with DEFAULT_AUTH_REQUEST whenever the native app-server
+// reports that a login is required. Its API-key method reads only this
+// process environment, so for a ChatGPT login that expired it fails with an
+// internal "CODEX_API_KEY or OPENAI_API_KEY is not set" error. Without a
+// default request the adapter answers ACP authRequired, which Cowboy turns
+// into its "reconnect the account" state. Declare the API-key request only
+// when the projected credential is an API key; keep any other explicit
+// request (offline conformance fixtures select chat-gpt).
+export const API_KEY_AUTH_REQUEST = JSON.stringify({ methodId: "api-key" });
+const API_KEY_VARIABLES = ["CODEX_API_KEY", "OPENAI_API_KEY"];
+
+export function defaultAuthRequest(environment) {
+  const hasKey = API_KEY_VARIABLES.some((name) =>
+    typeof environment[name] === "string" && environment[name].trim() !== ""
+  );
+  const declared = environment.DEFAULT_AUTH_REQUEST;
+  if (declared === undefined || declared === "") {
+    return hasKey ? API_KEY_AUTH_REQUEST : undefined;
+  }
+  let request;
+  try {
+    request = JSON.parse(declared);
+  } catch {
+    throw new Error("Invalid default Codex authentication request");
+  }
+  if (
+    request?.methodId === "api-key" && !hasKey &&
+    !request?._meta?.["api-key"]?.apiKey
+  ) {
+    return undefined;
+  }
+  return declared;
+}
+
+export function applyDefaultAuthRequest(environment = process.env) {
+  const request = defaultAuthRequest(environment);
+  if (request === undefined) delete environment.DEFAULT_AUTH_REQUEST;
+  else environment.DEFAULT_AUTH_REQUEST = request;
+}
+
 // A signed managed launch profile selects this mode explicitly. It never
 // inherits ordinary full-access arguments and never starts Matrix memory.
 export const MANAGED_PROFILE_FLAG = "--cowboy-managed-profile=read-only-v1";
@@ -147,6 +187,7 @@ async function managedMain(args, profile) {
   configuration.push(...managedMcpOverrides(listing.stdout));
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   process.env.COWBOY_PRIVATE_MANAGED_PROFILE = profile;
+  applyDefaultAuthRequest();
   if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
     // Use the same native execution binding, without the ordinary session's
     // memory / Cowboy MCP enrollment. The keeper still enforces read-only.
@@ -202,6 +243,7 @@ export async function main(args) {
     );
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
+  applyDefaultAuthRequest();
   if (
     !inspection &&
     (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
