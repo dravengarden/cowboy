@@ -72,7 +72,9 @@ A child's `session/request_permission` and session-scoped
 transcript record, the Desktop approval dock and the Mobile overlay name the
 subagent. A subagent's request stays pending across the parent's turn end.
 System, Full Access and managed read-only sessions answer child requests
-exactly like their own, so a managed child never waits on a person.
+exactly like their own, so a managed child never waits on a person. An
+`elicitation/complete` names only the elicitation, so it resolves a child's
+pending URL elicitation exactly like the parent's.
 
 ## Stopping the whole session
 

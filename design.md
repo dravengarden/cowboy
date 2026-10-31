@@ -68,6 +68,30 @@ channel: a permission request whose tool call carries the request under
 `_cowboy.elicitation`, with `accept`/`decline` options. Current Web surfaces
 render the form and answer `accept:<content JSON>`; older clients still offer
 the two choices. The transcript records only the outcome, never the content.
+The form draws an option's plain-text preview (Claude AskUserQuestion,
+`oneOf[]._meta["_claude/askUserQuestionOption"].preview`) collapsed under the
+option, and a countdown when Codex's `request_user_input` will answer itself
+(`_meta.codex.autoResolutionMs`, counted from when the client first drew it).
+When the agent sends `elicitation/complete` for a URL elicitation that is still
+pending, the worker accepts that request and resolves it on every surface.
+
+Two more additive points ride existing ACP fields. A tool's programmatic name
+is ACP's standard `ToolCall.name` / `ToolCallUpdate.name` first, with the
+older `_meta.<provider>.toolName` as fallback, for renderer choice and for
+the `ScheduleWakeup` bridge. For the Codex ACP behavior family,
+`session/new`, `session/resume` and `session/fork` carry
+`_meta.mcpStartupAwaitTimeoutMs = 15000`: codex-acp holds the request until
+the declared MCP servers have started (or the wait ends), so the first turn
+already sees their tools, and reports a server that failed as a failed
+`mcp__<server>__startup` tool call. The wait is far below each startup
+watchdog phase. codex-acp applies it only to servers
+declared in the request's `mcpServers`, and Cowboy currently configures its
+MCP servers through Codex config instead, so the key is inert until that
+changes. The Web also renders a predicted next prompt published as
+`session_info_update._meta.promptSuggestions` (ghost text Tab fills on
+Desktop, a chip on Mobile; never sent, live only). The pinned Claude and Codex
+adapters publish it only to JetBrains AIR clients, which Cowboy does not claim
+to be, so it stays dormant with those adapters.
 
 Cowboy advertises `subagents` too. Adapters then run each subagent as its own
 child ACP session (updates under the child's `sessionId`, `subagent_update`
