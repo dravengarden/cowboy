@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { alpha, Box, Button, keyframes, Stack, Typography } from "@mui/material";
+import { useEffect, useRef, useState } from "react";
+import { Alert, Box, Button, ButtonBase, keyframes, Stack, Typography } from "@mui/material";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
-import EastRounded from "@mui/icons-material/EastRounded";
+import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
+import HistoryRounded from "@mui/icons-material/HistoryRounded";
 import { glyphSize } from "./surface/desktopSize";
 import { mobileComposerPanelFrameSx, mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
 import { ProviderIcon } from "./ProviderIcon";
@@ -19,8 +20,11 @@ import { requestPickSession } from "./sessionPickRequest";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity, sessionAccountIdentity } from "./accountIdentity";
 import { contextCue } from "./contextCue";
-import { useStoreSelector } from "./store";
+import { trashItems, useStoreSelector } from "./store";
+import { requestSessionReveal } from "./sessionReveal";
+import type { SessionMeta } from "./protocol";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
+import { duplicateMode, duplicateSession, forkAvailability, forkSession } from "./sessionFork";
 
 /** Context for one session, read only after the Service announced it. */
 export function useAnnouncedSessionContext(
@@ -41,10 +45,29 @@ export function useAnnouncedSessionContext(
   return useSessionContext(sessionId, known || linked).data;
 }
 
+/** The session that took over from this one, if any. Synced with the session
+ *  list, so it holds after a reload and on every device; deleting the
+ *  continuation returns its source to an ordinary session. */
+export function useContinuation(sessionId: string): SessionMeta | undefined {
+  return useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.continued_from === sessionId)
+  );
+}
+
+/** A handed-off session is history: its Composer gives way to the dock unless
+ *  its agent is still working, which must stay stoppable and observable. */
+export function useHandedOff(sessionId: string): boolean {
+  const continuation = useContinuation(sessionId);
+  const status = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === sessionId)?.status
+  );
+  return continuation !== undefined && status !== "busy" && status !== "starting";
+}
+
 /** Where a context cue renders. A pending choice changes the next send, so
  *  it stays on the Composer. Provenance is history: Session Settings keeps its
  *  actions ("start": where it came from, "end": where it continued), and
- *  `SessionHandoffSeam` shows the same link in the conversation itself. */
+ *  `SessionContinuedFrom` opens the conversation with the same link. */
 export type SessionContextCuePlacement = "composer" | "start" | "end";
 
 const arrive = keyframes`
@@ -120,7 +143,9 @@ export function SessionContextCue(
     : {
       label: "Open",
       run: () => {
-        if (cue.kind === "continued_from") requestPickSession(cue.id);
+        if (cue.kind !== "continued_from") return;
+        if (cue.before === undefined) requestPickSession(cue.id);
+        else requestSessionReveal(cue.id, undefined, cue.before);
       },
     };
   const hibernate = (): void => {
@@ -253,185 +278,172 @@ export function SessionContextCue(
   );
 }
 
-/** The two agents of a handoff, older behind newer. */
-function HandoffMarks(
-  { from, to }: { from?: string | undefined; to?: string | undefined },
-): React.JSX.Element {
-  const mark = (provider: string | undefined, behind: boolean): React.JSX.Element => (
-    <Box
-      sx={{
-        display: "grid",
-        placeItems: "center",
-        width: 32,
-        height: 32,
-        flexShrink: 0,
-        borderRadius: "50%",
-        border: 1,
-        borderColor: "divider",
-        bgcolor: "background.paper",
-        ...(behind ? { opacity: 0.72 } : { ml: -1.25 }),
-      }}
-    >
-      {provider
-        ? <ProviderIcon provider={provider} sx={{ fontSize: 18 }} />
-        : <LinkOutlined sx={{ fontSize: 18, color: "primary.main" }} />}
-    </Box>
-  );
-  return (
-    <Box aria-hidden sx={{ display: "flex", flexShrink: 0 }}>
-      {mark(from, true)}
-      {mark(to, false)}
-    </Box>
-  );
-}
-
-/** Where this conversation came from (first row) or went (last row). The
- *  switch itself stays in Session Settings; this is the read-only record that
- *  makes the two sessions read as one piece of work. A short rail joins the
- *  card to the conversation it continues. */
-export function SessionHandoffSeam(
-  { sessionId, position, desktop = false }: {
-    sessionId: string;
-    position: "start" | "end";
-    desktop?: boolean;
-  },
+/** The first thing a continuation shows: one link back to where its work
+ *  came from. Following it lands on the moment of the handoff. */
+export function SessionContinuedFrom(
+  { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === sessionId)
   );
-  // Announcements are per tab. After a reload only the synced continuation
-  // mark says this session has a handoff to read, in either direction.
-  const continued = useStoreSelector((state) =>
-    state.sessions.some((entry) => entry.continued_from === sessionId)
-  );
-  const context = useAnnouncedSessionContext(
-    sessionId,
-    continued || session?.continued_from !== undefined,
-  );
+  // Announcements are per tab; after a reload the synced mark says to read.
+  const context = useAnnouncedSessionContext(sessionId, session?.continued_from !== undefined);
   const { data: accounts } = useSubscriptionAccounts();
-  const delivery = context?.delivery;
-  const stored = useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.id === delivery?.session_id)
-  );
   const cue = contextCue(
     sessionId,
     context,
-    (provider, account) => accountIdentity(accounts, provider, account).label,
+    (provider, account) => accountIdentity(accounts, provider, account).short,
   );
-  if (!cue || cuePlacement(cue.kind) !== position) return null;
-  const incoming = cue.kind === "continued_from";
-  if (!incoming && cue.kind !== "continued_in") return null;
-  const destination = stored ?? delivery?.session;
-  const here = session && {
-    provider: session.provider,
-    label: sessionAccountIdentity(accounts, session).label,
-  };
-  const there = destination && {
-    provider: destination.provider,
-    label: sessionAccountIdentity(accounts, destination).label,
-  };
-  const from = incoming ? { provider: cue.provider, label: cue.label } : here;
-  const to = incoming ? here : there;
-  const title = incoming
-    ? `${cue.title}${cue.more > 0 ? ` +${cue.more}` : ""}`
-    : destination?.title || "A new agent";
-  const agents = from?.label && to?.label
-    ? from.label === to.label ? [to.label] : [from.label, to.label]
-    : [];
-  const rail = (
-    <Box
-      aria-hidden
-      sx={(theme) => ({
-        width: "2px",
-        height: 16,
-        bgcolor: alpha(theme.palette.primary.main, 0.4),
-      })}
-    />
+  const source = cue?.kind === "continued_from" ? cue : undefined;
+  const sourceSession = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === source?.id)
   );
+  const trashed = useStoreSelector((state) =>
+    state.trashedSessions.some((entry) => entry.id === source?.id)
+  );
+  if (!source || !session) return null;
+  const title = `${source.title}${source.more > 0 ? ` +${source.more}` : ""}`;
+  const here = sessionAccountIdentity(accounts, session).short;
+  const change = source.label && source.label !== here ? `${source.label} → ${here}` : "";
+  return (
+    <Box sx={{ display: "flex", justifyContent: "center", flexShrink: 0, px: 1.5, pt: 1, maxWidth: "100%" }}>
+      <ButtonBase
+        data-session-handoff="start"
+        disabled={trashed}
+        aria-label={`Continued from ${title}${trashed ? ", in Trash" : ""}`}
+        title={trashed ? "This session is in Trash" : "Open where this conversation was handed off"}
+        onClick={(): void => {
+          if (source.before === undefined) requestPickSession(source.id, sourceSession);
+          else requestSessionReveal(source.id, sourceSession, source.before);
+        }}
+        sx={{
+          gap: 0.5,
+          minWidth: 0,
+          maxWidth: "100%",
+          minHeight: 32,
+          pl: 1.25,
+          pr: 0.75,
+          borderRadius: 999,
+          color: "text.secondary",
+          bgcolor: "action.hover",
+          animation: `${arrive} 240ms ease-out`,
+          "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+        }}
+      >
+        <HistoryRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />
+        <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+          Continued from{" "}
+          <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{title}</Box>
+          {trashed ? " · in Trash" : change && ` · ${change}`}
+        </Typography>
+        {!trashed && <ChevronRightRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />}
+      </ButtonBase>
+    </Box>
+  );
+}
+
+/** Replaces the Composer of a handed-off session. Writing here would silently
+ *  split one piece of work in two, so the dock offers what can still happen:
+ *  go to the session that took over, deliberately branch this agent, or clear
+ *  this history away. */
+export function SessionHandedOffDock(
+  { sessionId, desktop = false }: { sessionId: string; desktop?: boolean },
+): React.JSX.Element | null {
+  const session = useStoreSelector((state) =>
+    state.sessions.find((entry) => entry.id === sessionId)
+  );
+  const machines = useStoreSelector((state) => state.machines);
+  const continuation = useContinuation(sessionId);
+  const { data: accounts } = useSubscriptionAccounts();
+  const [busy, setBusy] = useState<"fork" | "trash" | null>(null);
+  const [error, setError] = useState("");
+  // A retry after an unknown outcome returns the same fork.
+  const operation = useRef(`fork-${crypto.randomUUID()}`);
+  if (!session || !continuation) return null;
+  const openContinuation = (): void => requestPickSession(continuation.id, continuation);
+  const run = (kind: "fork" | "trash", action: () => Promise<void>): void => {
+    setBusy(kind);
+    setError("");
+    void action()
+      .catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : "That did not work")
+      )
+      .finally(() => setBusy(null));
+  };
+  const fork = async (): Promise<void> => {
+    const account = session.provider_account_id || "default";
+    const receipt = duplicateMode({
+        sourceProvider: session.provider,
+        sourceAccount: account,
+        provider: session.provider,
+        account,
+        forkAvailable: forkAvailability(session, machines) === "ready",
+      }) === "fork"
+      ? await forkSession(sessionId, { operation: operation.current })
+      : await duplicateSession(sessionId, {
+        provider: session.provider,
+        provider_account_id: account,
+      }, operation.current);
+    requestPickSession(receipt.session_id, receipt.session ?? undefined);
+  };
+  const account = sessionAccountIdentity(accounts, continuation).short;
   return (
     <Box
-      data-session-handoff={position}
+      data-session-handed-off
+      data-composer-stack-slot="handed-off"
       sx={{
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        flexShrink: 0,
-        width: "100%",
+        gap: 1,
+        minWidth: 0,
         boxSizing: "border-box",
-        px: desktop ? 2 : 1.5,
-        pt: position === "start" ? 1.5 : 0,
-        pb: position === "end" ? 1.5 : 0,
-        animation: `${arrive} 240ms ease-out`,
-        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+        p: desktop ? 1.5 : 1.25,
+        ...(desktop
+          ? { flexShrink: 0 }
+          : { ...mobileComposerPanelFrameSx, bgcolor: "background.default" }),
       }}
     >
-      {position === "end" && rail}
-      <Stack
-        role="group"
-        aria-label={`${incoming ? "Continued from" : "Continued in"} ${title}`}
-        direction="row"
-        alignItems="center"
-        spacing={1.25}
-        sx={{
-          width: "100%",
-          maxWidth: 560,
-          minWidth: 0,
-          boxSizing: "border-box",
-          pl: 1.25,
-          pr: 0.75,
-          py: 1,
-          border: 1,
-          borderColor: "divider",
-          borderRadius: 1.5,
-          bgcolor: "background.paper",
-          textAlign: "left",
-        }}
-      >
-        <HandoffMarks from={from?.provider} to={to?.provider} />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            variant="overline"
-            color="text.secondary"
-            sx={{ display: "block", lineHeight: 1.4 }}
-          >
-            {incoming ? "Continued from" : "Continued in"}
-          </Typography>
-          <Typography variant="body2" noWrap title={title} sx={{ fontWeight: 600 }}>
-            {title}
-          </Typography>
-          {agents.length > 0 && (
-            <Stack
-              direction="row"
-              alignItems="center"
-              flexWrap="wrap"
-              useFlexGap
-              sx={{ columnGap: 0.5, color: "text.secondary" }}
-            >
-              <Typography variant="caption">{agents[0]}</Typography>
-              {agents[1] && (
-                <>
-                  <EastRounded
-                    titleAccess="to"
-                    sx={{ fontSize: glyphSize(14), color: "primary.main" }}
-                  />
-                  <Typography variant="caption">{agents[1]}</Typography>
-                </>
-              )}
-            </Stack>
-          )}
-        </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+          Continued in {continuation.title || "a new agent"} · {account}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+          This session is read-only history.
+        </Typography>
+      </Box>
+      {error && <Alert severity="error">{error}</Alert>}
+      <Stack direction="row" spacing={0.5} alignItems="center">
         <Button
-          size="small"
-          onClick={(): void => {
-            if (incoming) requestPickSession(cue.id);
-            else if (delivery) openContextDestination(delivery);
-          }}
-          sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
+          variant="contained"
+          disableElevation
+          disabled={busy !== null}
+          onClick={openContinuation}
+          sx={{ flex: 1, minWidth: 0, textTransform: "none" }}
         >
           Open
         </Button>
+        <Button
+          disabled={busy !== null}
+          title="Start a separate session from this agent's conversation"
+          onClick={() => run("fork", fork)}
+          sx={{ flexShrink: 0, textTransform: "none" }}
+        >
+          {busy === "fork" ? "Forking…" : "Fork"}
+        </Button>
+        <Button
+          color="inherit"
+          disabled={busy !== null}
+          title="The continuation can read this history until Trash retention ends"
+          onClick={() =>
+            run("trash", async () => {
+              await trashItems({ sessions: [sessionId] });
+              openContinuation();
+            })}
+          sx={{ flexShrink: 0, color: "text.secondary", textTransform: "none" }}
+        >
+          {busy === "trash" ? "Moving…" : "Move to Trash"}
+        </Button>
       </Stack>
-      {position === "start" && rail}
     </Box>
   );
 }

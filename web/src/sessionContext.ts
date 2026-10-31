@@ -32,6 +32,8 @@ export interface SessionContext {
     title?: string;
     provider?: string;
     provider_account_id?: string;
+    /** Exclusive history boundary captured when this link was sent. */
+    before?: number | null;
   }[];
   delivery: ContextDelivery | null;
   max_sources: number;

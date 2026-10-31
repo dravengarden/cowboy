@@ -205,9 +205,18 @@ fn view(
 ) -> Result<serde_json::Value, String> {
     owned(state, principal, id)?;
     let context = crate::session_context::read(&state.hub, id)?;
+    let boundary = |source: &String| {
+        context
+            .injection
+            .as_ref()?
+            .sources
+            .iter()
+            .find(|linked| &linked.session_id == source)
+            .map(|linked| linked.before)
+    };
     let sources: Vec<_> = context.sources.iter().map(|source| {
         match owned(state, principal, source) {
-            Ok(info) => serde_json::json!({"id":source,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"workspace":info.meta.workspace_name}),
+            Ok(info) => serde_json::json!({"id":source,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"workspace":info.meta.workspace_name,"before":boundary(source)}),
             Err(_) => serde_json::json!({"id":source,"available":false}),
         }
     }).collect();
@@ -650,6 +659,14 @@ async fn deliver(
     }
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
+    // The work moved on, so the original agent stops holding a Machine slot.
+    // Best effort: a refusal only leaves it idle, as before this handoff.
+    if target_id != id
+        && state.supervisor.has_live_worker(&id)
+        && let Err(reason) = state.supervisor.hibernate_session(&id)
+    {
+        tracing::info!(session = %id, %reason, "handed-off session kept its idle worker");
+    }
     Ok(delivery)
 }
 

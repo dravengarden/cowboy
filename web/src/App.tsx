@@ -148,6 +148,7 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestDuplicate, requestNewAgent } from "./sessionSettingsOpen";
+import { useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -859,6 +860,13 @@ function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
+    // Sources of a continuation, as a stable value so a `sessions` frame for
+    // another reason re-renders no row.
+    const handedOffIds = useStoreSelector((snapshot) =>
+        snapshot.sessions.flatMap((entry) => entry.continued_from ? [entry.continued_from] : []).sort().join("\n"));
+    const handedOff = useMemo(() => new Set(handedOffIds.split("\n")), [handedOffIds]);
+    // A handed-off session is history; continuing it again would split the work.
+    const menuHandedOff = useContinuation(menuAnchor?.row.id ?? "") !== undefined;
     useSystemNotificationPreferences();
     const menuSessionMuted = menuAnchor
         ? sessionNotificationsMuted(menuAnchor.row.id)
@@ -2336,7 +2344,7 @@ function SessionList({
                     <SessionRowMemo
                         key={s.id}
                         deps={[
-                            s, s.id === activeId, deleting, jumpLabel, desktop, pinned, copyTargeted,
+                            s, s.id === activeId, handedOff.has(s.id), deleting, jumpLabel, desktop, pinned, copyTargeted,
                             row.depth, sortable.drag, dropFolderName, dropHighlight(row, s.id),
                             pulse === undefined ? null : (pulse as { animation?: string }).animation,
                             accounts, mobileDrawer,
@@ -2544,16 +2552,19 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
-                                    {s.continued_from && (
-                                        // A continuation keeps its source's title; this tells the
-                                        // adjacent pair apart without renaming either session.
+                                    {handedOff.has(s.id) && (
+                                        // The pair shares a title; this marks the one the work left.
                                         <Chip
-                                            data-session-continued
+                                            data-session-history
                                             size="small"
-                                            variant="outlined"
-                                            label="Continued"
-                                            title="Continues an earlier session with a new agent"
-                                            sx={{ height: "1.65em", fontSize: "0.6875rem", flexShrink: 0, "& .MuiChip-label": { px: "0.5em" } }}
+                                            label="History"
+                                            title="Continued in a new agent; this session is read-only"
+                                            sx={{
+                                                height: "1.25rem", flexShrink: 0, fontSize: "0.6875rem",
+                                                border: "1px solid transparent", boxShadow: "none", color: "text.secondary",
+                                                bgcolor: (theme) => alpha(theme.palette.text.secondary, theme.palette.mode === "dark" ? 0.22 : 0.14),
+                                                "& .MuiChip-label": { px: "0.5rem" },
+                                            }}
                                         />
                                     )}
                                     {s.forked_from && (
@@ -2867,7 +2878,7 @@ function SessionList({
                         />
                     </MenuItem>
                 )}
-                {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                     <MenuItem
                         data-session-continue-new-agent
                         onClick={(): void => {
@@ -3023,7 +3034,7 @@ function SessionList({
                                     <Kbd keys="F" />
                                 </Button>
                             )}
-                            {menuAnchor && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
+                            {menuAnchor && !menuHandedOff && !menuAnchor.row.system && !isManagedChild(menuAnchor.row) && (
                                 <Button data-session-shortcut="a" data-session-continue-new-agent fullWidth startIcon={<ForkRightOutlined />} onClick={(): void => { const row = menuAnchor.row; setMenuAnchor(null); requestPickSession(row.id, row); requestNewAgent(row.id); }} sx={{ justifyContent: "flex-start" }}>
                                     <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Continue in new agent…</Box>
                                     <Kbd keys="A" />

@@ -29,7 +29,7 @@ import {
 } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { ConfirmSheet } from "./Sheet";
-import { SessionProvenance } from "./SessionContextCue";
+import { SessionProvenance, useContinuation } from "./SessionContextCue";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity } from "./accountIdentity";
 import {
@@ -47,6 +47,7 @@ export function SessionContextSettings(
   const section = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const pending = data && data.revision !== data.applied_revision;
+  const handedOff = useContinuation(session.id) !== undefined;
   useEffect(() => {
     const take = () => {
       if (!takeNewAgentRequest(session.id)) return;
@@ -69,66 +70,71 @@ export function SessionContextSettings(
       sx={{ minWidth: 0, pb: open ? 2 : 0 }}
     >
       {provenance && <SessionProvenance sessionId={session.id} />}
-      <Button
-        startIcon={<LinkOutlined />}
-        endIcon={
-          <ExpandMore sx={{ transform: open ? "rotate(180deg)" : undefined }} />
-        }
-        aria-expanded={open}
-        aria-keyshortcuts="Enter"
-        onClick={() => {
-          setStartNewAgent(false);
-          // Functional: a save that just closed the editor may not have
-          // re-rendered yet, and a stale `open` would close it again.
-          setOpen((value) => !value);
-        }}
-        sx={{ justifyContent: "flex-start", textTransform: "none" }}
-      >
-        Switch agent or link context{pending
-          ? " · Pending"
-          : data?.sources.length
-          ? ` · ${data.sources.length} linked`
-          : ""}
-      </Button>
-      {pending && !open && (
-        <PendingSwitch session={session} context={data} onBack={() => void reload()} />
-      )}
-      {open && (
-        <Stack spacing={1.5} sx={{ pt: 1 }}>
-          {error && (
-            <Alert
-              severity="error"
-              action={<Button onClick={() => void reload()}>Retry</Button>}
-            >
-              {error}
-            </Alert>
-          )}
-          {!data && !error && (
-            <Typography variant="body2">Loading context…</Typography>
-          )}
-          {data && (
-            <ContextEditor
-              key={`${session.id}:${startNewAgent}`}
-              session={session}
-              observed={data}
-              startNewAgent={startNewAgent}
-              onSaved={(staged) => {
-                void reload();
-                setOpen(false);
-                setStartNewAgent(false);
-                // A staged choice applies to the next message: go write it.
-                if (staged) {
-                  closeSessionSettings(session.id);
-                  requestComposerFocus(session.id);
-                }
-              }}
-              onCancel={() => {
-                setOpen(false);
-                setStartNewAgent(false);
-              }}
-            />
-          )}
-        </Stack>
+      {/* Its work moved on: a further switch from here would split it. */}
+      {!handedOff && (
+        <>
+        <Button
+          startIcon={<LinkOutlined />}
+          endIcon={
+            <ExpandMore sx={{ transform: open ? "rotate(180deg)" : undefined }} />
+          }
+          aria-expanded={open}
+          aria-keyshortcuts="Enter"
+          onClick={() => {
+            setStartNewAgent(false);
+            // Functional: a save that just closed the editor may not have
+            // re-rendered yet, and a stale `open` would close it again.
+            setOpen((value) => !value);
+          }}
+          sx={{ justifyContent: "flex-start", textTransform: "none" }}
+        >
+          Switch agent or link context{pending
+            ? " · Pending"
+            : data?.sources.length
+            ? ` · ${data.sources.length} linked`
+            : ""}
+        </Button>
+        {pending && !open && (
+          <PendingSwitch session={session} context={data} onBack={() => void reload()} />
+        )}
+        {open && (
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            {error && (
+              <Alert
+                severity="error"
+                action={<Button onClick={() => void reload()}>Retry</Button>}
+              >
+                {error}
+              </Alert>
+            )}
+            {!data && !error && (
+              <Typography variant="body2">Loading context…</Typography>
+            )}
+            {data && (
+              <ContextEditor
+                key={`${session.id}:${startNewAgent}`}
+                session={session}
+                observed={data}
+                startNewAgent={startNewAgent}
+                onSaved={(staged) => {
+                  void reload();
+                  setOpen(false);
+                  setStartNewAgent(false);
+                  // A staged choice applies to the next message: go write it.
+                  if (staged) {
+                    closeSessionSettings(session.id);
+                    requestComposerFocus(session.id);
+                  }
+                }}
+                onCancel={() => {
+                  setOpen(false);
+                  setStartNewAgent(false);
+                }}
+              />
+            )}
+          </Stack>
+        )}
+        </>
       )}
     </Box>
   );
@@ -254,7 +260,8 @@ function ContextEditor(
           review it; your choices have not been applied.
         </Alert>
       )}
-      {receipt && (
+      {/* Only a send that still needs attention speaks here. */}
+      {receipt && receipt.state !== "accepted" && (
         <Alert
           severity={receipt.state === "failed"
             ? "error"
@@ -262,11 +269,9 @@ function ContextEditor(
             ? "warning"
             : "info"}
         >
-          {receipt.state === "accepted"
-            ? "The last message was accepted."
-            : receipt.error || (receipt.state === "failed"
-              ? "The message was not submitted. Update these choices or clear them to keep using this agent."
-              : "The previous send is being checked. Inspect the destination before doing anything again.")}
+          {receipt.error || (receipt.state === "failed"
+            ? "The message was not submitted. Update these choices or clear them to keep using this agent."
+            : "The previous send is being checked. Inspect the destination before doing anything again.")}
           {receipt.session_id !== session.id && (
             <Button
               size="small"

@@ -7,7 +7,7 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { SessionDuplicateSettings } from "./SessionDuplicateSettings";
-import { SessionContextCue, SessionHandoffSeam } from "./SessionContextCue";
+import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
@@ -258,7 +258,7 @@ export async function runSessionContextBrowserConformance(
   // Both surfaces open a picker: touch a sheet list, Desktop the Sessions
   // folder tree in a modal.
   const openChoices = async (_desktop: boolean) => {
-    button("Context from sessions").click();
+    button("Select sessions").click();
     await until(() =>
       document.querySelector("[data-context-choices]") !== null
     );
@@ -311,11 +311,11 @@ export async function runSessionContextBrowserConformance(
           >
             {state.lastError?.message}
           </output>
-          <SessionHandoffSeam sessionId={sessions[0]!.id} desktop={desktop} position="start" />
-          <SessionHandoffSeam sessionId={sessions[1]!.id} desktop={desktop} position="end" />
-          <SessionHandoffSeam sessionId={sessions[2]!.id} desktop={desktop} position="end" />
+          <SessionContinuedFrom sessionId={sessions[3]!.id} />
+          <SessionContinuedFrom sessionId={sessions[2]!.id} />
+          <SessionHandedOffDock sessionId={sessions[1]!.id} desktop={desktop} />
+          <SessionHandedOffDock sessionId={sessions[2]!.id} desktop={desktop} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
-          <SessionHandoffSeam sessionId={sessions[0]!.id} desktop={desktop} position="end" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="start" />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
@@ -374,8 +374,25 @@ export async function runSessionContextBrowserConformance(
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
       await until(() => Boolean(button("Switch agent or link context")));
       await until(() =>
-        contextReads.some((url) => url.includes(`/${sessions[1]!.id}/context`))
+        contextReads.some((url) => url.includes(`/${sessions[3]!.id}/context`))
       );
+      await until(() => Boolean(exactButton("Fork")));
+      check(
+        container.querySelectorAll("[data-session-handed-off]").length === 1 &&
+          Boolean(exactButton("Move to Trash")),
+        `${mode}: only a session that was continued is history, and it can be cleared away`,
+      );
+      exactButton("Fork").click();
+      await until(() => writes.some((write) => write.url.endsWith("/duplicate")));
+      check(
+        writes.some((write) =>
+          write.url.endsWith(`/${sessions[1]!.id}/duplicate`) &&
+          write.body.provider_account_id === "mink"
+        ),
+        `${mode}: forking keeps this agent's subscription in a new session`,
+      );
+      await until(() => !button("Forking"));
+      writes.length = 0;
       check(
         !contextReads.some((url) => url.includes(`/${sessions[2]!.id}/context`)),
         `${mode}: a reloaded handoff is read from its synced mark, an ordinary session is not`,
@@ -524,7 +541,7 @@ export async function runSessionContextBrowserConformance(
         await new Promise((resolve) => setTimeout(resolve, 350));
         check(
           parentDismissals === 0 &&
-            document.activeElement === button("Context from sessions"),
+            document.activeElement === button("Select sessions"),
           "mobile: Escape on the footer closes only the picker and restores the trigger",
         );
         await openChoices(desktop);
@@ -698,12 +715,6 @@ export async function runSessionContextBrowserConformance(
           document.querySelector('[data-session-context-cue="continued_in"]'),
         )
       );
-      check(
-        document.querySelector('[data-session-handoff="end"]')?.textContent
-          ?.includes("Continued in") === true,
-        `${mode}: the original's Transcript records where the work went`,
-      );
-      await observe?.(`${mode}-handoff`);
       check(
         Boolean(
           document.querySelector(
