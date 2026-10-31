@@ -237,6 +237,11 @@ export async function runSessionContextBrowserConformance(
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((
       button,
     ) => button.textContent?.includes(text))!;
+  // The commit label "Switch" is also a prefix of the section toggle.
+  const exactButton = (text: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((
+      button,
+    ) => button.textContent?.trim() === text)!;
   // Both surfaces open a picker: touch a sheet list, Desktop the Sessions
   // folder tree in a modal.
   const openChoices = async (_desktop: boolean) => {
@@ -342,8 +347,8 @@ export async function runSessionContextBrowserConformance(
         desktop ? 680 : 360
       }px;max-width:100%;padding:16px;box-sizing:border-box;margin:auto`;
       flushSync(() => root.render(<Fixture key={mode} desktop={desktop} />));
-      await until(() => Boolean(button("Context & next agent")));
-      button("Context & next agent").click();
+      await until(() => Boolean(button("Switch agent or link context")));
+      button("Switch agent or link context").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );
@@ -526,12 +531,12 @@ export async function runSessionContextBrowserConformance(
         writes.length === 1 && writes[0]!.url.endsWith("/context"),
         `${mode}: saving links only writes a preference`,
       );
-      button("Context & next agent").click();
+      button("Switch agent or link context").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );
       check(
-        !button("Save changes") && Boolean(button("Cancel pending changes")),
+        !button("Save changes") && Boolean(button("Cancel linked context")),
         `${mode}: saved selection shows pending state and a distinct cancel action`,
       );
       container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
@@ -585,7 +590,11 @@ export async function runSessionContextBrowserConformance(
         `${mode}: another subscription needs no in-place hint`,
       );
       await observe?.(`${mode}-selection`);
-      button("Save changes").click();
+      check(
+        Boolean(exactButton("Switch")) && !button("Save changes"),
+        `${mode}: another subscription is committed with Switch`,
+      );
+      exactButton("Switch").click();
       await until(() =>
         context.revision === 2 &&
         !container.querySelector("[data-context-editor]")
@@ -613,14 +622,14 @@ export async function runSessionContextBrowserConformance(
         ),
         `${mode}: the composer cue names the pending agent's subscription`,
       );
-      button("Context & next agent").click();
-      await until(() => Boolean(button("Cancel pending changes")));
+      button("Switch agent or link context").click();
+      await until(() => Boolean(button("Back to current agent")));
       check(
         !button("Save changes"),
         `${mode}: loading a saved agent is not an unsaved edit`,
       );
       await observe?.(`${mode}-pending`);
-      button("Context & next agent").click();
+      button("Switch agent or link context").click();
       await until(() => !container.querySelector("[data-context-editor]"));
       await frontPrompt(sessions[0]!.id, "", []);
       check(
@@ -660,13 +669,13 @@ export async function runSessionContextBrowserConformance(
       check(
         Boolean(
           document.querySelector(
-            '[data-session-context-cue="continued_in"][data-transcript-context-marker="end"]',
+            '[data-session-context-cue="continued_in"][data-session-provenance="end"]',
           ),
         ) &&
           !document.querySelector(
             '[data-composer-stack-slot="context"][data-session-context-cue^="continued"]',
           ),
-        `${mode}: the original session links to where it continued from the Transcript end, not the Composer`,
+        `${mode}: the original session links to where it continued from Settings, not the Composer`,
       );
       // An idle original agent can be hibernated straight from the cue.
       const idle = { ...sessions[0]!, status: "running" as const };
@@ -721,7 +730,7 @@ export async function runSessionContextBrowserConformance(
           writes.filter((write) => write.url.endsWith("/send")).length === 2,
         `${mode}: lost-reply navigation explains the result on the destination without resending`,
       );
-      button("Context & next agent").click();
+      button("Switch agent or link context").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );
@@ -756,9 +765,9 @@ export async function runSessionContextBrowserConformance(
         writes.length === writeCount,
         `${mode}: discarding a local edit never changes stored context`,
       );
-      button("Context & next agent").click();
-      await until(() => Boolean(button("Cancel pending changes")));
-      button("Cancel pending changes").click();
+      button("Switch agent or link context").click();
+      await until(() => Boolean(button("Cancel linked context")));
+      button("Cancel linked context").click();
       await until(() =>
         !container.querySelector("[data-context-editor]") &&
         writes.length > writeCount
@@ -801,9 +810,9 @@ export async function runSessionContextBrowserConformance(
       );
       document.removeEventListener(CLOSE_SESSION_SETTINGS_EVENT, recordSurface);
       document.removeEventListener(COMPOSER_FOCUS_EVENT, recordSurface);
-      button("Context & next agent").click();
-      await until(() => Boolean(button("Cancel pending changes")));
-      button("Cancel pending changes").click();
+      button("Switch agent or link context").click();
+      await until(() => Boolean(button("Back to current agent")));
+      button("Back to current agent").click();
       await until(() =>
         !context.next_agent && context.revision === context.applied_revision
       );
@@ -811,8 +820,8 @@ export async function runSessionContextBrowserConformance(
       const workspace = sessions[0]!.workspace_id;
       delete sessions[0]!.workspace_id;
       flushSync(() => root.render(<Fixture desktop={desktop} />));
-      await until(() => Boolean(button("Context & next agent")));
-      button("Context & next agent").click();
+      await until(() => Boolean(button("Switch agent or link context")));
+      button("Switch agent or link context").click();
       await until(() =>
         Boolean(container.querySelector("[data-context-editor]"))
       );

@@ -273,6 +273,16 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/delivery-options",
             get(web::send_delivery::options),
         ),
+        "sessions.config_revert" => (
+            "GET",
+            "/api/sessions/{session_id}/config-revert",
+            get(web::config_revert::get),
+        ),
+        "sessions.config_revert_restore" => (
+            "POST",
+            "/api/sessions/{session_id}/config-revert/restore",
+            post(web::config_revert::restore),
+        ),
         "sessions.context" => (
             "GET",
             "/api/sessions/{session_id}/context",

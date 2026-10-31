@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
+import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import { glyphSize } from "./surface/desktopSize";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import {
@@ -37,9 +38,9 @@ export function useAnnouncedSessionContext(
 }
 
 /** Where a context cue renders. A pending choice changes the next send, so
- *  it stays on the Composer. Provenance is history: "Context from" opens the
- *  Transcript and "continued in" closes it, instead of a permanent card
- *  between the reply and the input. */
+ *  it stays on the Composer. Provenance is history and lives in Session
+ *  Settings ("start": where it came from, "end": where it continued); the
+ *  Transcript carries no branch mechanics. */
 export type SessionContextCuePlacement = "composer" | "start" | "end";
 
 function cuePlacement(kind: string): SessionContextCuePlacement {
@@ -125,33 +126,19 @@ export function SessionContextCue(
       .finally(() => setBusy(false));
   };
   if (placement !== "composer") {
-    // A quiet divider in the conversation's own flow, like a date separator.
+    // One quiet provenance row in Session Settings.
     return (
       <Box
         role="status"
         data-session-context-cue={cue.kind}
-        data-transcript-context-marker={placement}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-          px: desktop ? 2 : 1.5,
-          py: placement === "start" ? 1.5 : 1,
-          color: "text.secondary",
-          "&::before, &::after": {
-            content: '""',
-            flex: "1 1 1.5rem",
-            minWidth: "1.5rem",
-            borderTop: 1,
-            borderColor: "divider",
-          },
-        }}
+        data-session-provenance={placement}
+        sx={{ display: "flex", alignItems: "center", minWidth: 0, color: "text.secondary" }}
       >
         <Stack
           direction="row"
           alignItems="center"
           spacing={0.5}
-          sx={{ minWidth: 0, maxWidth: "min(100%, 34rem)" }}
+          sx={{ minWidth: 0, maxWidth: "100%" }}
         >
           <LinkOutlined
             sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "primary.main" }}
@@ -255,5 +242,57 @@ export function SessionContextCue(
         </Button>
       </Stack>
     </Box>
+  );
+}
+
+/** Where this session came from and where it continued, for Session
+ *  Settings. Renders nothing for an ordinary session. */
+export function SessionProvenance(
+  { sessionId }: { sessionId: string },
+): React.JSX.Element | null {
+  const forked = useStoreSelector((state) => {
+    const session = state.sessions.find((entry) => entry.id === sessionId);
+    const source = session?.forked_from;
+    if (!source) return null;
+    const title = state.sessions.find((entry) => entry.id === source)?.title;
+    return { source, title: title || "another session" };
+  });
+  const context = useAnnouncedSessionContext(sessionId);
+  const { data: accounts } = useSubscriptionAccounts();
+  const cue = contextCue(
+    sessionId,
+    context,
+    (provider, account) => accountIdentity(accounts, provider, account).label,
+  );
+  const continued = cue?.kind === "continued_from" || cue?.kind === "continued_in";
+  if (!forked && !continued) return null;
+  return (
+    <Stack data-session-provenance-list spacing={0.25} sx={{ minWidth: 0 }}>
+      {forked && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.5}
+          data-session-provenance="forked"
+          sx={{ minWidth: 0, color: "text.secondary" }}
+        >
+          <CallSplitOutlined
+            sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "primary.main" }}
+          />
+          <Typography variant="caption" noWrap sx={{ minWidth: 0 }} title={forked.title}>
+            Forked from {forked.title}
+          </Typography>
+          <Button
+            size="small"
+            onClick={() => requestPickSession(forked.source)}
+            sx={{ flexShrink: 0, minWidth: 0, px: 0.75, textTransform: "none" }}
+          >
+            Open
+          </Button>
+        </Stack>
+      )}
+      <SessionContextCue sessionId={sessionId} placement="start" />
+      <SessionContextCue sessionId={sessionId} placement="end" />
+    </Stack>
   );
 }

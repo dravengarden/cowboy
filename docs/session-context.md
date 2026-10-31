@@ -13,8 +13,10 @@ accounts.
 ## User flow
 
 New Session has an optional **Context from sessions** multiselect. Existing
-sessions expose **Context & next agent** in mobile settings, desktop Run
-Configuration and the empty-session configuration workspace.
+sessions expose **Switch agent or link context** directly under the Agent
+block in mobile settings and desktop Run Configuration, and in the
+empty-session configuration workspace. Every switch is a click in Session
+Settings; the Transcript carries no fork, branch or continuation controls.
 
 Selecting **Continue with a new agent** initially includes the current session as a
 source. Users may select other sessions or remove every source. The current
@@ -22,11 +24,15 @@ project, execution Machine, runtime Machine and subscription are preselected.
 Only installation and subscription are shown initially; **More options** exposes
 project, the optional preset and **Inherit compatible settings** (on by default).
 For the same Provider, an empty preset means inherit current model and reasoning.
-**Save changes**
-appears only after an edit and saves these choices without creating, stopping or
+The commit button
+appears only after an edit: **Switch** when the new agent's Provider or
+subscription differs, otherwise **Save changes** (links only, or a same-agent
+fresh conversation). It saves these choices without creating, stopping or
 starting a worker. **Discard** leaves stored choices unchanged. The current
-agent and its identity remain intact. Saved choices show their pending state;
-**Cancel pending changes** removes the pending configuration.
+agent and its identity remain intact. A saved switch shows "Switching to
+SUBSCRIPTION on your next message · **Back**" while the section is collapsed;
+**Back to current agent** (or **Cancel linked context** for links only)
+removes the pending configuration until the next message is sent.
 
 The session menu (mobile long press, Desktop session actions with `A`) offers
 **Continue in new agent…**: it opens that session's settings with the new agent
@@ -44,11 +50,11 @@ While choices are pending, a one-line cue above the Composer says what the
 next message does ("starts a new agent · Claude · Mink", or how many sessions
 it links) with **Cancel**, and the input placeholder reads "Message the new
 agent…" so the cue survives the mobile keyboard hiding auxiliary rows. After a
-handoff the link is history, not a next-send choice, so it leaves the Composer:
-the destination's Transcript opens with a "Continued from SOURCE · Open"
-divider (shown once its first page is loaded), and the original's Transcript
-ends with "Continued in a new agent · Open" below the newest turn. Both
-directions stay one tap without a permanent card between reply and input.
+handoff the link is history, not a next-send choice, so it leaves the Composer
+and lives in Session Settings above **Switch agent or link context**: the
+destination shows "Continued from SOURCE · Open", the original "Continued in a
+new agent · Open" (with **Hibernate** when available), and a fork "Forked from
+SOURCE · Open". Both directions stay one tap without any Transcript marker.
 Sessions without announced context render and fetch nothing for this cue.
 
 On mobile, **Context from sessions** opens a separate sheet above Settings or
@@ -103,6 +109,23 @@ directories retain their existing sharing rules. This feature does not copy or
 move uncommitted work. The bootstrap tells the destination to inspect original
 worktree state and reconcile relevant changes explicitly. Selected source
 sessions are not stopped, modified or granted new access by a link.
+
+## Back for in-place changes
+
+Model, reasoning, permissions and other live options still apply at once.
+The first change of each option since the last sent message records the value
+it replaced (`session_config_revert:<id>`, announced to every device). The
+Agent block then shows "Changed from Opus · High · **Back**"; Back re-applies
+those values through the same configuration path. Setting an option back to
+its recorded value forgets it. Sending any message to the agent (typed,
+queued, scheduled, steered or a wakeup) clears the record once it reaches the
+agent, so Back is never available
+for a conversation that already used the new values. Agents use
+`sessions.config_revert` and `sessions.config_revert_restore`; the HTTP
+contract is `GET /api/sessions/SESSION/config-revert` and
+`POST /api/sessions/SESSION/config-revert/restore` (409 once a message was
+sent, on a trashed session or during a Provider change). Restore applies values
+in the agent's option order and keeps Back for any value it could not apply.
 
 ## What changes in place
 

@@ -30,6 +30,9 @@ pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_upd
 pub const AGENT_TOOLS_PREFIX: &str = "agent_tools:";
 /// A session's agent tools override; the session id follows.
 pub const SESSION_TOOLS_PREFIX: &str = "session_tools:";
+/// Values an in-place agent change replaced, restorable until the next send;
+/// the session id follows.
+pub const SESSION_CONFIG_REVERT_PREFIX: &str = "session_config_revert:";
 /// One-shot request to adopt the installed Provider release once the session
 /// is idle; the session id follows.
 pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_update_when_idle:";
@@ -52,6 +55,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
+            SESSION_CONFIG_REVERT_PREFIX,
         ]
         .into_iter()
         .any(|prefix| {
@@ -82,6 +86,7 @@ pub fn examples() -> Vec<String> {
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
+        format!("{SESSION_CONFIG_REVERT_PREFIX}sess-1"),
     ]
 }
 
@@ -101,6 +106,7 @@ mod tests {
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
+            SESSION_CONFIG_REVERT_PREFIX,
         ] {
             assert!(!is_persisted_setting_key(key), "{key}");
         }

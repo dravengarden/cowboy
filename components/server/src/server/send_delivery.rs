@@ -101,7 +101,7 @@ pub(super) fn begin(
     if info.meta.status != Status::Busy {
         return Err("there is no current turn; choose next_turn".into());
     }
-    state.supervisor.start_steer(
+    let delivery = state.supervisor.start_steer(
         session,
         blocks
             .into_iter()
@@ -110,7 +110,10 @@ pub(super) fn begin(
         cmid,
         target,
         next_checkpoint,
-    )
+    )?;
+    // A steered message is sent too: it ends the Back window.
+    super::config_revert::clear(&state.hub, session);
+    Ok(delivery)
 }
 
 pub(super) fn result(outcome: &str) -> serde_json::Value {

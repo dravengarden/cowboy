@@ -29,6 +29,9 @@ import {
 } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { ConfirmSheet } from "./Sheet";
+import { SessionProvenance } from "./SessionContextCue";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { accountIdentity } from "./accountIdentity";
 import {
   closeSessionSettings,
   requestComposerFocus,
@@ -65,6 +68,7 @@ export function SessionContextSettings(
       data-session-context
       sx={{ minWidth: 0, pb: open ? 2 : 0 }}
     >
+      <SessionProvenance sessionId={session.id} />
       <Button
         startIcon={<LinkOutlined />}
         endIcon={
@@ -74,22 +78,20 @@ export function SessionContextSettings(
         aria-keyshortcuts="Enter"
         onClick={() => {
           setStartNewAgent(false);
-          setOpen(!open);
+          // Functional: a save that just closed the editor may not have
+          // re-rendered yet, and a stale `open` would close it again.
+          setOpen((value) => !value);
         }}
         sx={{ justifyContent: "flex-start", textTransform: "none" }}
       >
-        Context & next agent{pending
+        Switch agent or link context{pending
           ? " · Pending"
           : data?.sources.length
           ? ` · ${data.sources.length} linked`
           : ""}
       </Button>
       {pending && !open && (
-        <Typography variant="caption" display="block" color="text.secondary">
-          {data.next_agent
-            ? "A fresh agent starts on your next message. Current agent is preserved."
-            : "Linked context will be read on your next message."}
-        </Typography>
+        <PendingSwitch session={session} context={data} onBack={() => void reload()} />
       )}
       {open && (
         <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -468,7 +470,14 @@ function ContextEditor(
                   (!placement.ready || !subscription.allowed || !validPreset))}
                 onClick={() => void save()}
               >
-                {saving ? "Saving…" : "Save changes"}
+                {saving
+                  ? "Saving…"
+                  : nextAgent && !sameAgent &&
+                      (nextAgent.provider !== session.provider ||
+                        nextAgent.provider_account_id !==
+                          (session.provider_account_id || "default"))
+                  ? "Switch"
+                  : "Save changes"}
               </Button>
               <Button disabled={saving} onClick={onCancel}>Discard</Button>
             </Stack>
@@ -485,7 +494,7 @@ function ContextEditor(
               onClick={() => void save(true)}
               sx={{ alignSelf: "flex-start" }}
             >
-              Cancel pending changes
+              {snapshot.next_agent ? "Back to current agent" : "Cancel linked context"}
             </Button>
           </Stack>
         )
@@ -535,6 +544,66 @@ function ContextEditor(
           may have completed.
         </Typography>
       </ConfirmSheet>
+    </Stack>
+  );
+}
+
+/** The collapsed summary of a saved switch, with Back until the next send. */
+function PendingSwitch(
+  { session, context, onBack }: {
+    session: SessionMeta;
+    context: SessionContext;
+    onBack: () => void;
+  },
+): React.JSX.Element {
+  const { data: accounts } = useSubscriptionAccounts();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState("");
+  const next = context.next_agent;
+  const text = next
+    ? `Switching to ${
+      accountIdentity(accounts, next.provider, next.provider_account_id).label
+    } on your next message`
+    : "Linked context will be read on your next message";
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      spacing={0.5}
+      data-session-pending-switch
+      sx={{ minWidth: 0 }}
+    >
+      <Typography
+        variant="caption"
+        color={failure ? "error" : "text.secondary"}
+        noWrap
+        sx={{ minWidth: 0 }}
+        title={failure || text}
+      >
+        {failure || text}
+      </Typography>
+      <Button
+        size="small"
+        disabled={busy}
+        data-session-switch-back
+        onClick={() => {
+          setBusy(true);
+          setFailure("");
+          void saveSessionContext(session.id, {
+            revision: context.revision,
+            sources: [],
+            next_agent: null,
+          }).catch((error: unknown) =>
+            setFailure(error instanceof Error ? error.message : "Could not go back")
+          ).finally(() => {
+            setBusy(false);
+            onBack();
+          });
+        }}
+        sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
+      >
+        Back
+      </Button>
     </Stack>
   );
 }
