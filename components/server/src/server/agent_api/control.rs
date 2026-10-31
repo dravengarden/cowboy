@@ -110,6 +110,9 @@ fn route_permission(
 ) -> Result<(), &'static str> {
     use web::RouteAuth;
     let allowed = match web::classify_route(method, path) {
+        // Shared Tools defaults have an owner-only writer; reject before
+        // dispatch like the Web handler does.
+        _ if name == "tools.defaults_set" => principal.role == AdminRole::Owner,
         RouteAuth::Public | RouteAuth::Product | RouteAuth::ProductSessionSee => true,
         RouteAuth::ProductOperator
         | RouteAuth::ProductOrAdminOperator
