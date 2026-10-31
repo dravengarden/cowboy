@@ -31,6 +31,7 @@ import {
   Divider,
   IconButton,
   ListItemButton,
+  ListItemText,
   Popover,
   Stack,
   Toolbar,
@@ -3109,10 +3110,28 @@ export function ReviewApp({
     ? sessionById.get(previousSessionId)
     : undefined;
   const linkedContext = useAnnouncedSessionContext(currentSession?.id ?? "", !!(currentSession?.continued_from || currentSession?.forked_from));
-  const linkedSessions = useMemo(
-    () => reviewLinkedSessions(currentSession, linkedContext, sessions),
-    [currentSession, linkedContext, sessions],
+  const boundContexts = useMemo(
+    () =>
+      currentSession
+        ? (sessionReview.bindings ?? []).map((value) => ({
+          value,
+          ...resolveReviewDirectory(value, currentSession, sessions, machineInventories),
+        }))
+        : [],
+    [currentSession, machineInventories, sessionReview.bindings, sessions],
   );
+  const linkedSessions = useMemo(
+    () =>
+      reviewLinkedSessions(currentSession, linkedContext, sessions).filter((session) =>
+        !sessionReview.bindings?.includes(`session::${session.id}`)
+      ),
+    [currentSession, linkedContext, sessionReview.bindings, sessions],
+  );
+  const viewedContext = projectCodeContext
+    ? projectCodeContext.workspaceId && projectCodeContext.kind !== "Worktree"
+      ? `workspace::${projectCodeContext.machineId}::${projectCodeContext.workspaceId}`
+      : `session::${projectCodeContext.sessionId}`
+    : undefined;
   const contextReturnSession = explicitProjectContext
     ? currentSession
     : previousSession;
@@ -3222,11 +3241,11 @@ export function ReviewApp({
     setSourceTarget(undefined);
     setSessionSwitcherOpen(false);
   };
-  /** Read a linked session's worktree; the Agent stays on this session. */
-  const openLinkedSession = (session: SessionMeta): void => {
+  /** Read another code context; the Agent stays on this session. */
+  const openBoundContext = (value: string): void => {
     if (!currentSession) return;
     navigationHaptic();
-    const resolved = resolveReviewDirectory(`session::${session.id}`, currentSession, sessions, machineInventories);
+    const resolved = resolveReviewDirectory(value, currentSession, sessions, machineInventories);
     if (!resolved.context) { setContextError(resolved.error); return; }
     setContextError(undefined);
     setProjectCodeContext({ ...resolved.context, ownerSessionId: boundWorkspace?.sessionId ?? null });
@@ -3234,6 +3253,8 @@ export function ReviewApp({
     setSourceTarget(undefined);
     setSessionSwitcherOpen(false);
   };
+  const openLinkedSession = (session: SessionMeta): void =>
+    openBoundContext(`session::${session.id}`);
   const openRepositoryPull = (choice: Choice, pull: PullSummary): void => {
     const sessionId = workspace?.sessionId;
     if (!sessionId) return;
@@ -3371,6 +3392,7 @@ export function ReviewApp({
           }}
         >
           <ButtonBase
+            data-review-context-button
             aria-label={projectCodeContext
               ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
               : `Switch session. Current session ${currentSession?.title ?? "none"}`}
@@ -3977,6 +3999,61 @@ export function ReviewApp({
                   { value: "projects", label: "Projects" },
                 ]}
               />
+            )}
+            {(boundContexts.length > 0 || viewedContext) && (
+              <Stack spacing={1}>
+                {boundContexts.length > 0 && (
+                  <Stack spacing={0.5}>
+                    <Typography
+                      variant="overline"
+                      color="text.secondary"
+                      sx={{
+                        px: 1.25,
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                      }}
+                    >
+                      Bound repositories
+                    </Typography>
+                    {boundContexts.map(({ value, context, error }) => (
+                      <Stack key={value} direction="row" alignItems="center">
+                        <ListItemButton
+                          data-review-binding={value}
+                          disabled={!context}
+                          selected={viewedContext === value}
+                          onClick={() => openBoundContext(value)}
+                          sx={{ minHeight: 44, borderRadius: 1.5, px: 1.25 }}
+                        >
+                          <ListItemText
+                            primary={context?.title ?? value}
+                            secondary={error ?? context?.cwd}
+                            primaryTypographyProps={{ noWrap: true }}
+                            secondaryTypographyProps={{ noWrap: true }}
+                          />
+                        </ListItemButton>
+                        <IconButton
+                          size="small"
+                          aria-label={`Unbind ${context?.title ?? value}`}
+                          onClick={() =>
+                            mutateReviewState(currentSession!.id, "unbind", { context: value })}
+                        >
+                          <Close fontSize="small" />
+                        </IconButton>
+                      </Stack>
+                    ))}
+                  </Stack>
+                )}
+                {currentSession && viewedContext &&
+                  !sessionReview.bindings?.includes(viewedContext) && (
+                  <Button
+                    data-review-bind-current
+                    onClick={() =>
+                      mutateReviewState(currentSession.id, "bind", { context: viewedContext })}
+                  >
+                    {`Bind ${projectCodeContext?.title ?? "this context"} to this session`}
+                  </Button>
+                )}
+              </Stack>
             )}
             {!selectedContextProject && contextTab === "sessions" && (
               <Stack spacing={1.5}>
