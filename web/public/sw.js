@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v2086";
+const VERSION = "cowboy-v2087";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();
 const ASSET_CACHE = `${VERSION}-assets`;
@@ -204,7 +204,7 @@ function refreshShell() {
       // start. Fetching it again would quietly put it back as the shell.
       if (await rollbackAttempts() > 0) return false;
       const response = await fetch("/", { cache: "no-store", credentials: "same-origin" });
-      if (!response.ok || response.type !== "basic") return false;
+      if (!isShellResponse({ pathname: "/" }, response)) return false;
       const html = await response.clone().text();
       const urls = bootAssetUrls(html);
       const assets = await caches.open(ASSET_CACHE);

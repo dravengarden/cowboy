@@ -2072,6 +2072,10 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             accepted,
             reason,
         } => {
+            if foreign_session(shared, &session_id) {
+                reject_foreign_frame(shared, &session_id, "CommandAck");
+                return Ok(());
+            }
             let command = {
                 let mut pending = shared.pending.lock();
                 if pending.get(&command_id).is_some_and(|command| {
@@ -4818,6 +4822,24 @@ mod tests {
         assert!(runtime.shared.workers.lock().is_empty());
         assert!(runtime.shared.declarations.lock().is_empty());
         assert!(written.is_empty());
+
+        runtime.shared.sent.lock().insert("unmatched".to_owned());
+        handle_frame(
+            &runtime.shared,
+            Frame::CommandAck {
+                session_id: "victim".to_owned(),
+                command_id: "unmatched".to_owned(),
+                accepted: false,
+                reason: Some("session workspace was replaced or removed: forged".to_owned()),
+            },
+            &mut written,
+        )
+        .await
+        .unwrap();
+        assert!(
+            runtime.shared.sent.lock().contains("unmatched"),
+            "a foreign acknowledgement had an effect"
+        );
     }
 
     #[tokio::test]

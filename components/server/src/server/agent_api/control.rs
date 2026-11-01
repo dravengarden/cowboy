@@ -240,13 +240,12 @@ fn named_sessions<'a>(name: &str, input: &'a Value) -> Vec<&'a str> {
 }
 
 fn placement_stays_on(body: &Value, own: &str, parent: &SessionMeta) -> bool {
+    // An omitted runtime would resolve later from a folder or Service default,
+    // so a remote parent must name one this check can see.
     body["machine_id"].as_str() == Some(own)
-        && match body.get("runtime_machine_id") {
-            None | Some(Value::Null) => true,
-            Some(runtime) => runtime
-                .as_str()
-                .is_some_and(|runtime| runtime == own || runtime == parent.machine_id),
-        }
+        && body["runtime_machine_id"]
+            .as_str()
+            .is_some_and(|runtime| runtime == own || runtime == parent.machine_id)
 }
 
 /// A parent executing outside the Controller's host holds no authority over
@@ -282,6 +281,12 @@ fn machine_scope(
                     Some(next) => placement_stays_on(next, &own, parent),
                 }
         }
+        // The staged destination is created at send time, not when it was set.
+        "sessions.context_send" => {
+            !sessions.is_empty()
+                && stored_next_agent(hub, sessions[0])?
+                    .is_none_or(|next| placement_stays_on(&serde_json::json!(next), &own, parent))
+        }
         // A folder holds sessions on any Machine.
         "sessions.trash" | "sessions.restore" | "sessions.purge" => {
             !sessions.is_empty()
@@ -309,8 +314,19 @@ fn machine_scope(
     if allowed { Ok(()) } else { Err(DENIED) }
 }
 
+fn stored_next_agent(
+    hub: &crate::core::Hub,
+    id: &str,
+) -> Result<Option<crate::session_context::NextAgent>, &'static str> {
+    crate::session_context::read(hub, id)
+        .map(|context| context.next_agent)
+        .map_err(|_| "unavailable")
+}
+
 /// Same conversation family: walk continuation and fork links to their roots.
-fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> String {
+/// `None` when a link is missing or the walk is cut short: the true root is then
+/// unknown, and callers must not read that as an unrelated session.
+fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> Option<String> {
     let mut current = session.id.clone();
     let mut source = session
         .forked_from
@@ -318,10 +334,10 @@ fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> String {
         .or(session.continued_from.clone());
     // A corrupt cycle ends the walk; the links are otherwise bounded by history.
     for _ in 0..256 {
-        let Some(id) = source else { break };
-        let Some(info) = hub.session_info(&id) else {
-            return id;
+        let Some(id) = source else {
+            return Some(current);
         };
+        let info = hub.session_info(&id)?;
         source = info
             .meta
             .forked_from
@@ -329,7 +345,15 @@ fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> String {
             .or(info.meta.continued_from.clone());
         current = id;
     }
-    current
+    None
+}
+
+fn same_lineage(hub: &crate::core::Hub, first: &SessionMeta, second: &SessionMeta) -> bool {
+    first.id == second.id
+        || match (lineage_root(hub, first), lineage_root(hub, second)) {
+            (Some(first), Some(second)) => first == second,
+            _ => true,
+        }
 }
 
 /// Calls and memory are what a person approves for a session, so its own agent
@@ -340,19 +364,49 @@ fn tools_widening(
     name: &str,
     input: &Value,
 ) -> Result<(), &'static str> {
-    if name != "tools.session_set" {
-        return Ok(());
+    const DENIED: &str = "tools_widening_denied";
+    match name {
+        // Clearing shared defaults can restore what this session's policy denies.
+        "tools.defaults_set" => Err(DENIED),
+        "tools.session_set" => {
+            let target = input["session_id"].as_str().ok_or("invalid_argument")?;
+            let target = hub.session_info(target).ok_or("not_found")?.meta;
+            if !same_lineage(hub, parent, &target) {
+                return Ok(());
+            }
+            let update =
+                serde_json::from_value(input["body"].clone()).map_err(|_| "invalid_argument")?;
+            if web::agent_tools::override_widens(hub, &target, &update) {
+                return Err(DENIED);
+            }
+            Ok(())
+        }
+        // A fresh session must not shed the switches a person set on this one.
+        "sessions.create" => {
+            let provider = input["body"]["provider"]
+                .as_str()
+                .unwrap_or(&parent.provider);
+            if web::agent_tools::fresh_session_widens(hub, parent, provider) {
+                return Err(DENIED);
+            }
+            Ok(())
+        }
+        "sessions.context_set" | "sessions.context_send" => {
+            let source = input["session_id"].as_str().ok_or("invalid_argument")?;
+            let source = hub.session_info(source).ok_or("not_found")?.meta;
+            if !same_lineage(hub, parent, &source) {
+                return Ok(());
+            }
+            // Only inheritance carries the source's Tools to the continuation.
+            let sheds = if name == "sessions.context_set" {
+                input["body"]["next_agent"]["inherit_settings"] == false
+            } else {
+                stored_next_agent(hub, &source.id)?.is_some_and(|next| !next.inherit_settings)
+            };
+            if sheds { Err(DENIED) } else { Ok(()) }
+        }
+        _ => Ok(()),
     }
-    let target = input["session_id"].as_str().ok_or("invalid_argument")?;
-    let target = hub.session_info(target).ok_or("not_found")?.meta;
-    if target.id != parent.id && lineage_root(hub, &target) != lineage_root(hub, parent) {
-        return Ok(());
-    }
-    let update = serde_json::from_value(input["body"].clone()).map_err(|_| "invalid_argument")?;
-    if web::agent_tools::override_widens(hub, &target, &update) {
-        return Err("tools_widening_denied");
-    }
-    Ok(())
 }
 
 fn write_gate(

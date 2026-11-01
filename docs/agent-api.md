@@ -427,6 +427,10 @@ Writes use one stable identity:
 
 The adapter invokes existing product handlers/typed command writers. It accepts
 no arbitrary URL, headers, cookies, SQL, shell command or host delegation.
+An agent never writes shared Tools defaults, stages a continuation of its own
+lineage without inheritance, or starts a fresh session holding a Tools switch it
+lacks (`tools_widening_denied`). A remote parent names `runtime_machine_id`
+explicitly, and a stored destination is judged again at send time.
 An active product Operator can write; Service configuration and shared Tools
 defaults require Owner. Session targets remain same-owner, non-system and
 non-closing even for an Owner; nested sync targets and draft moves follow the

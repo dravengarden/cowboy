@@ -480,6 +480,20 @@ pub(super) fn override_widens(
             .any(|target| !before.calls.targets.contains(target))
 }
 
+/// Whether a new session under `provider`'s defaults holds a switch `parent`
+/// lacks. Targets are skipped: they legitimately differ between providers.
+pub(super) fn fresh_session_widens(
+    hub: &crate::core::Hub,
+    parent: &crate::core::SessionMeta,
+    provider: &str,
+) -> bool {
+    let before = hub_effective(hub, parent);
+    let after = hub_agent_defaults(hub, provider).0.for_caller(provider);
+    (after.memory.tools && !before.memory.tools)
+        || (after.memory.recall && !before.memory.recall)
+        || (after.calls.enabled && !before.calls.enabled)
+}
+
 /// The session-extension switches a worker launch carries. A change applies
 /// at the session's next worker start.
 pub(crate) fn launch_extensions(

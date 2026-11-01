@@ -429,8 +429,13 @@ mod machine_scope_and_tools {
         let (hub, parent, _, colocated) = fleet();
         let at = (&hub, &colocated);
         let create = |body: Value| scope(at, &parent, "sessions.create", json!({"body":body}));
-        assert_eq!(create(json!({"machine_id":"ovh"})), Ok(()));
+        assert_eq!(
+            create(json!({"machine_id":"ovh","runtime_machine_id":"ovh"})),
+            Ok(())
+        );
         assert_eq!(create(json!({"machine_id":"hawk"})), DENIED);
+        // A folder or Service default would pick the runtime after this check.
+        assert_eq!(create(json!({"machine_id":"ovh"})), DENIED);
         // Omitted placement would resolve through mutable folder defaults.
         assert_eq!(create(json!({"folder_id":"f"})), DENIED);
         assert_eq!(
@@ -543,6 +548,92 @@ mod machine_scope_and_tools {
             "tools.session_set",
             &json!({"session_id":id,"body":body}),
         )
+    }
+
+    fn stage(hub: &Hub, id: &str, machine: &str, runtime: &str, inherit: bool) {
+        hub.set_setting(
+            crate::session_context::key(id),
+            json!({"revision":1,"next_agent":{"provider":"codex",
+                "provider_account_id":"default","machine_id":machine,"cwd":"/tmp",
+                "runtime_machine_id":runtime,"inherit_settings":inherit}}),
+        );
+    }
+
+    #[test]
+    fn a_stored_destination_is_judged_when_it_is_sent() {
+        let (hub, parent, _, colocated) = fleet();
+        let at = (&hub, &colocated);
+        let send = json!({"session_id":"ovh-peer","text":"x"});
+        stage(&hub, "ovh-peer", "hawk", "hawk", true);
+        assert_eq!(
+            scope(at, &parent, "sessions.context_send", send.clone()),
+            Err("machine_scope_denied")
+        );
+        stage(&hub, "ovh-peer", "ovh", "ovh", true);
+        assert_eq!(scope(at, &parent, "sessions.context_send", send), Ok(()));
+    }
+
+    #[test]
+    fn agents_cannot_shed_tools_through_defaults_or_continuations() {
+        const DENIED: Result<(), &str> = Err("tools_widening_denied");
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        add(&hub, "continued", "hawk", None);
+        hub.set_continued_from("continued", Some("parent".to_owned()));
+        assert_eq!(
+            tools_widening(
+                &hub,
+                &parent,
+                "tools.defaults_set",
+                &json!({"settings":null})
+            ),
+            DENIED
+        );
+        let shed =
+            json!({"session_id":"continued","body":{"next_agent":{"inherit_settings":false}}});
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.context_set", &shed),
+            DENIED
+        );
+        let send = json!({"session_id":"continued"});
+        stage(&hub, "continued", "hawk", "hawk", false);
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.context_send", &send),
+            DENIED
+        );
+        stage(&hub, "continued", "hawk", "hawk", true);
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.context_send", &send),
+            Ok(())
+        );
+        let create = json!({"body":{"provider":"codex"}});
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.create", &create),
+            Ok(())
+        );
+        calls_off(&hub, "parent");
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.create", &create),
+            DENIED
+        );
+    }
+
+    #[test]
+    fn a_missing_ancestor_never_reads_as_an_unrelated_session() {
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        add(&hub, "orphan", "hawk", None);
+        hub.set_continued_from("orphan", Some("purged".to_owned()));
+        calls_off(&hub, "orphan");
+        assert_eq!(
+            set(
+                &hub,
+                &parent,
+                "orphan",
+                json!({"schema":1,"calls":{"enabled":true}})
+            ),
+            Err("tools_widening_denied")
+        );
     }
 
     #[test]
