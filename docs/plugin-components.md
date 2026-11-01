@@ -93,6 +93,9 @@ places the opaque session identity in the loopback gateway URLs and the gateway
 restores it, attributing chat and fetch usage to the session. DeepSeek Harness
 also gains a Recommended preset. Native pins are unchanged.
 
+Component release 3.79.0 records matrix 1.0.5, which declares macOS: a data-only
+memory backend runs wherever its Machine does.
+
 Component release 3.76.0 records memory-client 0.2.1, which uses the session's
 Machine relay and never fails a launch or holds a turn beyond its budget. Claude
 Code and Codex advance one patch version. Native pins are unchanged.

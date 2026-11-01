@@ -160,6 +160,7 @@ mod tests {
                     manual_refresh_after_ms: 0,
                     next_auto_refresh_at_ms: 61000,
                     stale: false,
+                    failures: 0,
                 }),
                 rate_limits: Some(json!({"rateLimitsByLimitId": {
                     "claude-five_hour": {"primary":{"usedPercent":20,"resetsAt":42}},

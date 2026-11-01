@@ -448,6 +448,7 @@ test("usage slot context is host-owned presentation for plugin UI", () => {
       manual_refresh_after_ms: 32_000,
       next_auto_refresh_at_ms: 62_000,
       stale: true,
+      failures: 3,
     },
   };
   const context = providerUsageSlotContext(usage, {
@@ -469,8 +470,8 @@ test("usage slot context is host-owned presentation for plugin UI", () => {
   );
 });
 
-test("stale provider metadata has one compact cross-surface label", () => {
-  assertEquals(
+test("stale provider metadata is labelled only after the quick retries fail", () => {
+  const stale = (failures: number) =>
     providerUsageRefreshLabel({
       provider: "openai",
       status: "available",
@@ -481,10 +482,12 @@ test("stale provider metadata has one compact cross-surface label", () => {
         manual_refresh_after_ms: 32_000,
         next_auto_refresh_at_ms: 62_000,
         stale: true,
+        failures,
       },
-    }),
-    "Cached · retrying automatically",
-  );
+    });
+  assertEquals(stale(1), undefined);
+  assertEquals(stale(2), undefined);
+  assertEquals(stale(3), "Cached · retrying automatically");
 });
 
 test("desktop summary excludes model buckets and keeps provider account order", () => {

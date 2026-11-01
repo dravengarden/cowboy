@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, Handle, Scope, schema};
 
+/// Consecutive failures retried quickly before the ordinary account interval
+/// and exponential backoff resume. A transient failure (a Controller restart,
+/// a Machine reconnecting, a Plugin generation switch) usually clears within a
+/// minute; waiting ten minutes left cards stale and noisy. The Provider window
+/// and start spacing still bound every retry.
+pub const QUICK_RETRIES: u32 = 2;
+const QUICK_RETRY_MS: i64 = 60_000;
+
 #[derive(Clone)]
 pub struct Limiter {
     inner: Arc<parking_lot::Mutex<State>>,
@@ -71,6 +79,8 @@ pub enum Outcome {
     /// A reserved start that sent nothing; keep its charge, change no backoff.
     Unused,
     Failure,
+    /// The Provider rate-limited the query: never retry quickly.
+    Throttled,
     Authentication,
     LocalFailure,
 }
@@ -167,7 +177,10 @@ impl Limiter {
         let slot = state.durable.accounts.get(account);
         let mut next = slot
             .map_or(0, |slot| {
-                if polling {
+                // A quick retry is due by its own deadline, not the interval.
+                if polling && (1..=QUICK_RETRIES).contains(&slot.failures) {
+                    slot.next_allowed_ms
+                } else if polling {
                     slot.next_allowed_ms
                         .max(slot.last_attempt_ms.saturating_add(super::duration_ms(
                             config.get(&schema::USAGE_ACCOUNT_INTERVAL),
@@ -274,16 +287,30 @@ impl Limiter {
         match outcome {
             Outcome::Success => slot.failures = 0,
             Outcome::Unused => {}
-            Outcome::Failure | Outcome::Authentication | Outcome::LocalFailure => {
+            Outcome::Failure
+            | Outcome::Throttled
+            | Outcome::Authentication
+            | Outcome::LocalFailure => {
                 slot.failures = slot.failures.saturating_add(1);
-                let backoff = if matches!(outcome, Outcome::Authentication) {
-                    max_backoff
+                if outcome == Outcome::Throttled {
+                    slot.failures = slot.failures.max(QUICK_RETRIES + 1);
+                }
+                if outcome != Outcome::Authentication && slot.failures <= QUICK_RETRIES {
+                    // Replace the start's interval reservation: the outcome is
+                    // now known, and the retry is bounded by Provider pacing.
+                    slot.next_allowed_ms = now
+                        .saturating_add(QUICK_RETRY_MS.saturating_mul(i64::from(slot.failures)))
+                        .max(slot.last_attempt_ms);
                 } else {
-                    interval
-                        .saturating_mul(1_i64 << slot.failures.min(10))
-                        .min(max_backoff)
-                };
-                slot.next_allowed_ms = slot.next_allowed_ms.max(now.saturating_add(backoff));
+                    let backoff = if outcome == Outcome::Authentication {
+                        max_backoff
+                    } else {
+                        interval
+                            .saturating_mul(1_i64 << (slot.failures - QUICK_RETRIES).min(10))
+                            .min(max_backoff)
+                    };
+                    slot.next_allowed_ms = slot.next_allowed_ms.max(now.saturating_add(backoff));
+                }
             }
         }
         // A Provider outage/rate-limit must not immediately switch accounts.
@@ -295,14 +322,22 @@ impl Limiter {
             .or_default();
         match outcome {
             Outcome::Success => backoff.failures = 0,
-            Outcome::Failure => {
+            Outcome::Failure | Outcome::Throttled => {
                 backoff.failures = backoff.failures.saturating_add(1);
-                let window = super::duration_ms(self.config.get(&schema::USAGE_PROVIDER_WINDOW));
-                backoff.next_allowed_ms = now.saturating_add(
-                    window
-                        .saturating_mul(1_i64 << backoff.failures.min(10))
-                        .min(max_backoff),
-                );
+                if outcome == Outcome::Throttled {
+                    backoff.failures = backoff.failures.max(QUICK_RETRIES + 1);
+                }
+                // Quick retries stay inside the Provider window and spacing;
+                // a Provider-wide pause starts once they are exhausted.
+                if backoff.failures > QUICK_RETRIES {
+                    let window =
+                        super::duration_ms(self.config.get(&schema::USAGE_PROVIDER_WINDOW));
+                    backoff.next_allowed_ms = now.saturating_add(
+                        window
+                            .saturating_mul(1_i64 << (backoff.failures - QUICK_RETRIES).min(10))
+                            .min(max_backoff),
+                    );
+                }
             }
             Outcome::Authentication | Outcome::LocalFailure | Outcome::Unused => {}
         }
@@ -310,6 +345,16 @@ impl Limiter {
             state.failed_closed = true;
         }
         state.active.remove(provider);
+    }
+
+    /// Consecutive failed attempts of `account` since its last success.
+    pub fn account_failures(&self, account: &str) -> u32 {
+        self.inner
+            .lock()
+            .durable
+            .accounts
+            .get(account)
+            .map_or(0, |slot| slot.failures)
     }
 
     /// New credentials supersede an authentication failure: drop that
@@ -454,18 +499,41 @@ mod tests {
     #[test]
     fn failure_backoff_applies_across_accounts_and_does_not_exceed_configured_max() {
         let limiter = Limiter::new(None);
-        limiter
-            .start("anthropic", "lynx", 1000)
-            .unwrap_or_else(|_| panic!("first"))
-            .finish(Outcome::Failure, 2000);
+        let fail = |now: i64| {
+            limiter
+                .start("anthropic", "lynx", now)
+                .unwrap_or_else(|_| panic!("start at {now}"))
+                .finish(Outcome::Failure, now);
+        };
+        // Two quick retries, one and then two minutes later, inside the
+        // Provider spacing and without a Provider-wide pause.
+        fail(1000);
         assert_eq!(
-            limiter.view("anthropic", "lynx", 2000).next_allowed_ms,
-            602_000
+            limiter.view("anthropic", "lynx", 1000).next_allowed_ms,
+            61_000
         );
         assert_eq!(
-            limiter.view("anthropic", "otter", 2000).next_allowed_ms,
-            242_000
+            limiter.view("anthropic", "otter", 1000).next_allowed_ms,
+            61_000
         );
+        assert_eq!(limiter.account_failures("lynx"), 1);
+        fail(61_000);
+        assert_eq!(
+            limiter.view("anthropic", "lynx", 61_000).next_allowed_ms,
+            181_000
+        );
+        // The third failure exhausts the retries: the account interval doubles
+        // and other accounts of the Provider pause too.
+        fail(181_000);
+        assert_eq!(
+            limiter.view("anthropic", "lynx", 181_000).next_allowed_ms,
+            781_000
+        );
+        assert_eq!(
+            limiter.view("anthropic", "otter", 181_000).next_allowed_ms,
+            421_000
+        );
+        assert_eq!(limiter.account_failures("lynx"), 3);
         for index in 0..12 {
             let now = limiter.view("anthropic", "lynx", 1000).next_allowed_ms;
             limiter
@@ -474,6 +542,12 @@ mod tests {
                 .finish(Outcome::Failure, now);
             assert!(limiter.view("anthropic", "lynx", now).next_allowed_ms <= now + 3_600_000);
         }
+        let now = limiter.view("anthropic", "lynx", 1000).next_allowed_ms;
+        limiter
+            .start("anthropic", "lynx", now)
+            .unwrap_or_else(|_| panic!("recover"))
+            .finish(Outcome::Success, now);
+        assert_eq!(limiter.account_failures("lynx"), 0);
     }
 
     #[test]
@@ -503,6 +577,24 @@ mod tests {
     }
 
     #[test]
+    fn a_rate_limited_query_skips_quick_retries() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("openai", "pika", 1000)
+            .unwrap_or_else(|_| panic!("start"))
+            .finish(Outcome::Throttled, 1000);
+        assert_eq!(limiter.account_failures("pika"), QUICK_RETRIES + 1);
+        assert_eq!(
+            limiter.view("openai", "pika", 1000).next_allowed_ms,
+            601_000
+        );
+        assert_eq!(
+            limiter.view("openai", "other", 1000).next_allowed_ms,
+            241_000
+        );
+    }
+
+    #[test]
     fn local_failure_backs_off_only_its_account() {
         let limiter = Limiter::new(None);
         limiter
@@ -511,7 +603,7 @@ mod tests {
             .finish(Outcome::LocalFailure, 2000);
         assert_eq!(
             limiter.view("anthropic", "offline", 2000).next_allowed_ms,
-            602_000
+            62_000
         );
         limiter
             .start("anthropic", "online", 61_000)
@@ -560,7 +652,9 @@ mod tests {
                 .start("anthropic", "otter", now)
                 .unwrap_or_else(|_| panic!("start")),
         );
-        assert!(limiter.view("anthropic", "otter", now).next_allowed_ms >= now + 600_000);
+        // A dropped permit is charged as a failure: its quick retry waits.
+        assert!(limiter.view("anthropic", "otter", now).next_allowed_ms >= now + 60_000);
+        assert_eq!(limiter.account_failures("otter"), 1);
         let root = tempfile::tempdir().unwrap();
         let broken = Limiter::new(Some(root.path().join("missing").join("limits.json")));
         assert!(broken.start("anthropic", "otter", i64::MAX - 1).is_err());
