@@ -484,3 +484,12 @@ because those surfaces *contain* the blur.
 | Resting frost | `web/src/frostedGlass.ts` `frostedChrome` |
 | Keyboard inset clamp | `web/src/keyboardGeometry.ts` |
 | Shell composition | `web/src/App.tsx`, `ReviewDrawerShell.tsx` |
+
+## Stalled Transcript scrolling
+
+`web/src/transcriptScrollWatch.ts` reports `transcript_scroll_stalled` when a
+vertical swipe that started on the Transcript moved nothing although it had
+room. It is read-only and passive, and measures only after such a gesture. Read
+it with `cowboy logs query --event transcript_scroll_stalled`: `hit_inside`,
+`pointer_events`, `drawer_open` and `prevented` separate a covered scroller, a
+stale drawer state and a claimed gesture from a WebKit scrolling-node fault.
