@@ -15,6 +15,11 @@ const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 
+test("a session with its first message on the way drops the setup form", () => {
+  assertEquals(transcriptSource.includes("{!committed && <SessionStartSettings"), true);
+  assertEquals(transcriptSource.includes("{!committed && (\n        <ButtonBase"), true);
+});
+
 test("mobile new session actions stay in the non-overlay sheet footer", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function CreateDialog("),

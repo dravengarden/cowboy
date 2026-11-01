@@ -32,6 +32,9 @@ read-only package/config source rather than by sharing mutable Zed state.
 The process, licensing, trust, and version-pinning contract is defined in
 [14-zed-code-provider.md](14-zed-code-provider.md).
 
+Desktop shows the same Review in the Conversation pane (`␣V`), so the Prompt
+stays beside the code. Its layout is still the phone's single column.
+
 ## Latency model
 
 The useful first screen is Git changes, followed by the worktree root and the
@@ -170,6 +173,15 @@ session it links. Sessions this one forked from, continued or has read appear
 as **Linked sessions** in the context control, and a session with no changes
 offers **Review linked session** in place of the empty list. Either reads that
 worktree without moving the Agent.
+
+A session can also bind other code contexts, for work that spans repositories
+its own worktree does not hold. Bindings are the session's Review state, set by
+the reader from the context control (**Bind … to this session**) or by an agent
+with the `bind` and `unbind` mutations. A binding is a browsing value
+(`session::<id>`, `workspace::<machine>::<id>`), so it names a context that
+Code can already open and grants no file access; every read keeps its own
+authority check. A project binding therefore shows that registered checkout,
+not a task worktree of it.
 
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists

@@ -11,7 +11,10 @@ import type { SessionMeta } from "./protocol";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { Suspense, use } from "react";
 import { MobileReviewBoundary } from "./mobile/review/MobileReviewPage";
-import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "./mobile/appPagerMotion";
+import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent, openMobileProduct } from "./mobile/appPagerMotion";
+import { DesktopWorkspace } from "./desktop/DesktopWorkspace";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 import { getDraft, setDraft } from "./draftStore";
 
 const wait = (ms = 50) =>
@@ -429,7 +432,13 @@ async function checkLinkedSessionReview(
     "Reviewing the linked session should read its worktree",
   );
   check(getActiveSessionId() === "copy", "Reviewing a linked session moved the Agent");
-  return "a clean session reviews its linked session's worktree without moving the Agent";
+  fixture.mutations.length = 0;
+  flushSync(() => document.querySelector<HTMLElement>('[aria-label="Open Review context"], [data-review-context-button]')?.click());
+  await until(() => !!document.querySelector("[data-review-bind-current]"), "A viewed context should offer binding");
+  flushSync(() => document.querySelector<HTMLElement>("[data-review-bind-current]")!.click());
+  await until(() => !!document.querySelector('[data-review-binding="session::worktree"]'), "A binding should list its context");
+  await until(() => fixture.mutations.some((mutation) => mutation.includes("bind")), "The binding was not saved");
+  return "a clean session reviews and binds its linked session's worktree without moving the Agent";
 }
 
 async function checkReviewCompareAndSelection(
@@ -919,12 +928,61 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
   }
 }
 
+async function checkDesktopReviewPane(): Promise<string> {
+  const host = document.createElement("div");
+  host.style.cssText = "height:600px;display:flex";
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() =>
+      root.render(
+        <SurfaceProvider>
+          <BrowserProductTheme>
+            <DesktopWorkspaceProvider>
+              <DesktopCommandProvider>
+                <DesktopWorkspace
+                  promptWidth={320}
+                  resizing={false}
+                  onResizeStart={() => {}}
+                  prompt={<div />}
+                  conversation={<div data-fixture-transcript>Transcript</div>}
+                  sessionId="worktree"
+                  projection="history"
+                  onProjectionChange={() => {}}
+                />
+              </DesktopCommandProvider>
+            </DesktopWorkspaceProvider>
+          </BrowserProductTheme>
+        </SurfaceProvider>,
+      )
+    );
+    const toggle = () => host.querySelector<HTMLElement>("[data-desktop-review-toggle]");
+    await until(() => !!toggle(), "Desktop should offer Review");
+    const transcript = host.querySelector("[data-fixture-transcript]");
+    flushSync(() => toggle()!.click());
+    await until(
+      () => host.querySelector("[data-desktop-review]")?.textContent?.includes("Compare") === true ||
+        !!host.querySelector("[data-desktop-review] [data-review-compare]"),
+      "Review should open in the Conversation pane",
+    );
+    check(transcript?.isConnected, "Opening Review unmounted the transcript");
+    openMobileProduct("agent");
+    await until(() => !host.querySelector("[data-desktop-review]"), "Agent should return to the Conversation");
+    check(host.querySelector("[data-fixture-transcript]") === transcript, "Returning replaced the transcript");
+    return "Desktop shows Review in the Conversation pane and returns to the same transcript";
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
 export async function runReviewCompareBrowserConformance(): Promise<string[]> {
   const fixture = renderReviewContextPreview(false, false, true, true);
   try {
     return [
       await checkReviewCompareAndSelection(fixture),
       await checkLinkedSessionReview(fixture),
+      await checkDesktopReviewPane(),
     ];
   } finally {
     fixture.cleanup();

@@ -120,6 +120,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   focusPrompt: "P",
   focusTopbar: "T",
   focusConversation: "C",
+  // `V` for View: `R` renames.
+  review: "V",
   focusPlan: "L",
   // Managed calls delegated to other Agents: `G` for aGents.
   focusCalls: "G",
@@ -216,6 +218,7 @@ export const DESKTOP_SHORTCUTS = {
   focusConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.focusConversation,
   ),
+  review: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.review),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
   focusCalls: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
@@ -264,6 +267,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
   t: "group:t",
   c: "workspace.focusConversation",
+  v: "conversation.toggleReview",
   l: "prompt.focusPlan",
   g: "prompt.focusCalls",
   q: "prompt.focusQueue",

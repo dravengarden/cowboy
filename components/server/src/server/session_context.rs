@@ -639,6 +639,10 @@ async fn preparation_failed(
     save(state, id, context).await
 }
 
+fn continuation_blocked(queue_count: usize, in_flight: bool, status: Status) -> bool {
+    queue_count > 0 || in_flight || matches!(status, Status::Busy | Status::Starting)
+}
+
 async fn deliver(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -674,9 +678,11 @@ async fn deliver(
     }
     if info.queue_count > 0
         || (context.next_agent.is_some()
-            && (state.hub.session_has_in_flight_prompt(&id)
-                || matches!(info.meta.status, Status::Busy | Status::Starting)
-                || info.meta.background_tasks > 0))
+            && continuation_blocked(
+                info.queue_count,
+                state.hub.session_has_in_flight_prompt(&id),
+                info.meta.status,
+            ))
     {
         return Err("Wait for this agent to finish, or stop it and resolve its queue before starting the new context".into());
     }
@@ -760,7 +766,14 @@ async fn deliver(
     // The work moved on, so the original leaves the list and stops holding a
     // Machine slot. It stays readable until Trash retention ends. Best effort:
     // a refusal only leaves it as read-only history beside the continuation.
-    if target_id != id {
+    // Background activity belongs to the old account. It must neither block
+    // sending to the new one nor be retired by the continuation's cleanup.
+    if target_id != id
+        && state
+            .hub
+            .session_info(&id)
+            .is_some_and(|source| source.meta.background_tasks == 0)
+    {
         match super::session_trash::trash(&state, &auth.principal, &[], std::slice::from_ref(&id)) {
             Ok(()) => {
                 delivery.source_trashed = true;
@@ -812,6 +825,18 @@ pub(super) async fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_continuation_waits_only_for_foreground_work() {
+        // A finished/cancelled turn may retain background tasks on the old
+        // account. Those are deliberately not an admission input.
+        assert!(!continuation_blocked(0, false, Status::Running));
+        assert!(!continuation_blocked(0, false, Status::Exited));
+        assert!(continuation_blocked(1, false, Status::Running));
+        assert!(continuation_blocked(0, true, Status::Running));
+        assert!(continuation_blocked(0, false, Status::Busy));
+        assert!(continuation_blocked(0, false, Status::Starting));
+    }
 
     #[tokio::test]
     async fn carrier_is_recorded_once_and_survives_a_lost_reply() {

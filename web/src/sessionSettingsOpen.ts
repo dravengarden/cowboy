@@ -39,7 +39,7 @@ export function closeSessionSettings(sessionId: string): void {
   );
 }
 
-/** Open this session's settings at Move or fork. */
+/** Open this session's settings at Replace or fork. */
 export function requestNewFrom(sessionId: string): void {
   newFromRequests.set(sessionId, Date.now());
   document.dispatchEvent(

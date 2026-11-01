@@ -3396,6 +3396,8 @@ export interface MobileReviewState {
   readonly remote_selected?: boolean;
   /** `""` is uncommitted work; absent follows the repository default. */
   readonly comparison?: string;
+  /** Other code contexts this session works in. */
+  readonly bindings?: readonly string[];
   readonly mode: "files" | "git";
   readonly tabs: readonly MobileReviewTabState[];
   readonly active?: string;
@@ -3432,6 +3434,15 @@ const mobileReviewMutators = {
   ): MobileReviewState => {
     const { comparison: _comparison, ...rest } = value;
     return args.comparison === null ? rest : { ...rest, comparison: args.comparison };
+  },
+  bind: (value: MobileReviewState, args: { context: string }): MobileReviewState => ({
+    ...value,
+    bindings: [...new Set([...(value.bindings ?? []), args.context])],
+  }),
+  unbind: (value: MobileReviewState, args: { context: string }): MobileReviewState => {
+    const { bindings = [], ...rest } = value;
+    const kept = bindings.filter((context) => context !== args.context);
+    return kept.length > 0 ? { ...rest, bindings: kept } : rest;
   },
   open: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
     const existing = value.tabs.find((tab) => tab.path === args.path);
