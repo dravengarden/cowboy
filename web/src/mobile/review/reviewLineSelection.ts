@@ -109,3 +109,24 @@ export function reviewSelectionMessage(
   return `\`${selectionLocation(path, text, kind, selection)}\`${against}\n` +
     `${marker}${language}\n${snippet}\n${marker}\n\n`;
 }
+
+/**
+ * The first message of a fork asked to explain a selection. A fork already
+ * knows why the code changed, so it answers from that before re-reading, and
+ * its worktree is its own copy, so changing nothing is a request for focus.
+ */
+export function reviewExplainPrompt(
+  selection: string,
+  viewedRoot?: string | undefined,
+): string {
+  const where = viewedRoot
+    ? `\nThe reader is looking at ${viewedRoot}, not this worktree.`
+    : "";
+  return "Explain this code to the person reviewing it: what it does and why " +
+    "it is written this way, using what you remember of this work first. " +
+    `Do not change any files.${where}\n\n${selection}`;
+}
+
+export function reviewExplainTitle(path: string): string {
+  return `Explain · ${path.split("/").at(-1)}`;
+}

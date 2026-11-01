@@ -3,6 +3,8 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   diffSelectionLines,
   nextReviewLineSelection,
+  reviewExplainPrompt,
+  reviewExplainTitle,
   reviewSelectionMessage,
 } from "./reviewLineSelection.ts";
 
@@ -68,4 +70,14 @@ test("a source selection uses a fence longer than any inside it", () => {
     selection: { from: 2, to: 4 },
   });
   assertStringIncludes(message, "`README.md:2-4`\n````\n```\nb\n```\n````\n");
+});
+
+test("an Explain request carries the selection and says where it was read", () => {
+  const own = reviewExplainPrompt("`a.ts:1`");
+  assertStringIncludes(own, "Do not change any files.\n\n`a.ts:1`");
+  assertStringIncludes(
+    reviewExplainPrompt("x", "/tasks/source"),
+    "looking at /tasks/source",
+  );
+  assertEquals(reviewExplainTitle("src/review/app.ts"), "Explain · app.ts");
 });

@@ -42,6 +42,8 @@ export async function forkSession(
   sessionId: string,
   options: {
     messageId?: string;
+    /** The newest finished turn; needs no idle source. */
+    latestCompleted?: boolean;
     operation?: string;
     /** Live options (model, reasoning, …) the copy uses instead of the inherited ones. */
     config?: Record<string, string | boolean>;
@@ -56,6 +58,7 @@ export async function forkSession(
       body: JSON.stringify({
         operation: options.operation ?? operationId(),
         ...(options.messageId ? { message_id: options.messageId } : {}),
+        ...(options.latestCompleted ? { latest_completed: true } : {}),
         ...(options.config && Object.keys(options.config).length > 0
           ? { config: options.config }
           : {}),
