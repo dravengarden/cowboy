@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v2085";
+const VERSION = "cowboy-v2086";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();
 const ASSET_CACHE = `${VERSION}-assets`;
@@ -151,6 +151,11 @@ async function rollbackShell() {
   }
   // Nothing to fall back to. The caller keeps running whatever it has.
   return { ok: false, attempts: await rollbackAttempts() };
+}
+
+function isShellResponse(url, response) {
+  return url.pathname === "/" && response.ok && response.type === "basic" &&
+    /^text\/html\b/i.test(response.headers.get("content-type") ?? "");
 }
 
 async function cachedShell() {
@@ -412,9 +417,13 @@ self.addEventListener("fetch", (event) => {
       caches.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request).then((resp) => {
-          // Only cache the immutable (complete) pages — the server marks the
-          // still-growing latest page `no-store`, which we must not pin.
-          if (resp.ok && resp.type === "basic" && resp.headers.get("cache-control")?.includes("immutable")) {
+          // Only cache complete pages; the still-growing latest page must not be
+          // pinned. A complete page is `no-store` for the HTTP cache, which
+          // sign-out cannot clear, and is marked for this cache, which it can.
+          // `immutable` is how a Controller from before that split says so.
+          const cacheable = resp.headers.get("x-cowboy-history") === "complete" ||
+            resp.headers.get("cache-control")?.includes("immutable");
+          if (resp.ok && resp.type === "basic" && cacheable) {
             const copy = resp.clone();
             void caches.open(HISTORY_CACHE).then((c) => c.put(request, copy));
           }
@@ -457,9 +466,14 @@ self.addEventListener("fetch", (event) => {
       }
       try {
         const resp = await fetch(request);
-        if (resp.ok && resp.type === "basic") {
+        // Only the app document may become the shell. A shell-network parameter
+        // works on any URL, and whatever else answers it (a script, a public
+        // file) would otherwise open as the app on the next launch.
+        if (isShellResponse(url, resp)) {
           const copy = resp.clone();
           event.waitUntil(caches.open(SHELL_CACHE).then((c) => c.put("/", copy)));
+        } else {
+          event.waitUntil(refreshShell());
         }
         return resp;
       } catch {

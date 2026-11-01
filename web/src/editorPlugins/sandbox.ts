@@ -1,3 +1,4 @@
+import { EDITOR_PLUGIN_SANDBOX_BOOT } from "./sandboxBoot";
 import { EDITOR_PLUGIN_WORKER_PRELUDE } from "./workerPrelude";
 
 /** One plugin's message channel. The runtime never sees the realm behind it. */
@@ -16,23 +17,7 @@ export interface EditorPluginTransport {
 // removing the iframe terminates it.
 const SANDBOX_DOCUMENT = `<!doctype html><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:">
-<script>
-addEventListener("message", (event) => {
-  if (event.source !== parent || !event.data || event.data.t !== "cowboy-boot" || event.ports.length !== 1) return;
-  try {
-    const url = URL.createObjectURL(new Blob([event.data.code], { type: "text/javascript" }));
-    const worker = new Worker(url);
-    worker.addEventListener("error", (e) => {
-      e.preventDefault();
-      parent.postMessage({ t: "cowboy-sandbox-error", error: String(e.message || "Plugin failed to start") }, "*");
-    });
-    worker.postMessage(null, [event.ports[0]]);
-  } catch (error) {
-    parent.postMessage({ t: "cowboy-sandbox-error", error: String(error) }, "*");
-  }
-}, { once: true });
-parent.postMessage({ t: "cowboy-sandbox-ready" }, "*");
-</script>`;
+<script>${EDITOR_PLUGIN_SANDBOX_BOOT}</script>`;
 
 export function createSandboxTransport(main: string): EditorPluginTransport {
   const frame = document.createElement("iframe");
