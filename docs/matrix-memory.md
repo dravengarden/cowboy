@@ -49,7 +49,8 @@ the Provider's grant.
 | Claude DeepSeek | ACP worker | `claude-deepseek` |
 | Codex DeepSeek | ACP worker | `codex-deepseek` |
 
-The ACP worker declares Matrix through ACP `mcpServers`, prepends recall to the
+The ACP worker declares Matrix through ACP `mcpServers` (Grok defers these tools
+behind `search_tool`, so its recall says how to reach them), prepends recall to the
 prompt, and observes the session's own updates. Each client has its own
 credential and private provider scope and shares user, project and machine
 scopes with the others. Its home binding is
