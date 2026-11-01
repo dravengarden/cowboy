@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "deepseek-harness",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "component_release": "3.77.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
