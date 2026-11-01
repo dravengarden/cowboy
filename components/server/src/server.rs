@@ -2306,9 +2306,12 @@ async fn apply_store_batch(
     let mut events: BTreeMap<(String, u64), Envelope> = BTreeMap::new();
     let mut highwaters: HashMap<String, u64> = HashMap::new();
     let mut anchors: Vec<crate::transcript_anchors::AnchorWrite> = Vec::new();
+    let mut occurrences = Vec::new();
     let mut ok = true;
     for write in writes {
         match write {
+            // An occurrence must not split the batch around it.
+            write @ StoreWrite::RecordOccurrence(_) => occurrences.push(write),
             StoreWrite::AppendEvent(env) => {
                 highwaters
                     .entry(env.session_id.clone())
@@ -2370,6 +2373,9 @@ async fn apply_store_batch(
         }
     }
     ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors).await;
+    for write in &occurrences {
+        ok &= retry_store_write(store, write).await;
+    }
     ok
 }
 
