@@ -1,6 +1,11 @@
 import { useContext, useEffect, useState } from "react";
 import { ImageLightbox, type ImageLightboxProps } from "@cowboy/app-shell";
-import { isProtectedImageSource } from "./protectedImage";
+import {
+  imageDisplayUrl,
+  type ImageDisplayUrl,
+  isProtectedImageSource,
+  remoteImageHost,
+} from "./protectedImage";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 
 const EMPTY = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -14,22 +19,33 @@ export function ProtectedImageLightbox(props: ImageLightboxProps): React.JSX.Ele
   useEffect(() => {
     if (!source) return;
     const abort = new AbortController();
-    let objectUrl: string | undefined;
+    let display: ImageDisplayUrl | undefined;
     void fetch(source, { credentials: "same-origin", signal: abort.signal }).then(async (response) => {
       if (!response.ok) throw new Error("Image access failed");
       const blob = await response.blob();
       if (abort.signal.aborted) return;
-      objectUrl = URL.createObjectURL(blob);
-      setLoaded({ source, url: objectUrl });
+      const prepared = await imageDisplayUrl(blob);
+      if (abort.signal.aborted) {
+        prepared.release();
+        return;
+      }
+      display = prepared;
+      setLoaded({ source, url: prepared.url });
     }).catch(() => {});
     return () => {
       abort.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      display?.release();
     };
   }, [source]);
-  const images = props.images.map((item) => item.kind !== "inline-svg" && isProtectedImageSource(item.src)
-    ? { ...item, src: loaded?.source === item.src && source === item.src ? loaded.url : EMPTY }
-    : item);
+  // The gallery pages and preloads. A remote neighbour stays empty rather than
+  // trip the CSP.
+  const images = props.images.map((item) => {
+    if (item.kind === "inline-svg") return item;
+    if (isProtectedImageSource(item.src)) {
+      return { ...item, src: loaded?.source === item.src && source === item.src ? loaded.url : EMPTY };
+    }
+    return remoteImageHost(item.src) === null ? item : { ...item, src: EMPTY };
+  });
   // Desktop is keyboard-first: show the lightbox key map there.
   const desktop = useContext(SurfaceContext)?.kind === "desktop";
   return <ImageLightbox keyHints={desktop} {...props} images={images} />;

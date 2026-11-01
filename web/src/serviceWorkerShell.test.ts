@@ -63,7 +63,7 @@ class FakeCaches {
 }
 
 function basic(body: string, status = 200): Response {
-  const response = new Response(body, { status });
+  const response = new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
   Object.defineProperty(response, "type", { value: "basic" });
   return response;
 }
@@ -79,6 +79,7 @@ interface Worker {
   readonly fetched: string[];
   network: (url: string) => Promise<Response>;
   navigate(url: string): { response: Promise<Response>; settled: () => Promise<unknown> };
+  get(url: string): Promise<Response>;
   /** Everything the reply port received, settling message last. */
   message(data: unknown): Promise<unknown[]>;
 }
@@ -103,6 +104,18 @@ function startWorker(): Worker {
       });
       if (response === undefined) throw new Error("the worker did not answer " + url);
       return { response, settled: () => Promise.all(waits) };
+    },
+    get(url) {
+      let response: Promise<Response> | undefined;
+      listeners.get("fetch")!({
+        request: { method: "GET", url: ORIGIN + url, mode: "cors" },
+        respondWith: (value: Promise<Response> | Response) => {
+          response = Promise.resolve(value);
+        },
+        waitUntil: () => undefined,
+      });
+      if (response === undefined) throw new Error("the worker did not answer " + url);
+      return response;
     },
     message(data) {
       return new Promise((resolve) => {
@@ -218,6 +231,56 @@ test("a device with no shell, an update and a recovery all go to the network", a
   // Without a network those explicit requests still fall back to the cache.
   worker.network = () => Promise.reject(new TypeError("offline"));
   assertEquals(await (await worker.navigate("/?cowboy-update=2").response).text(), "deployed");
+});
+
+test("a shell parameter on another URL never becomes the app shell", async () => {
+  const worker = startWorker();
+  await (await worker.caches.open(SHELL)).put("/", basic("cached shell"));
+  const script = new Response("public script", { headers: { "content-type": "text/javascript" } });
+  Object.defineProperty(script, "type", { value: "basic" });
+  worker.network = (url) =>
+    Promise.resolve(url === "/" ? basic(shellHtml("/assets/main.js", [])) : url === "/assets/main.js" ? basic("a") : script);
+  const navigation = worker.navigate("/device-proof.js?cowboy-update=1");
+  assertEquals(await (await navigation.response).text(), "public script");
+  await navigation.settled();
+  assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
+});
+
+test("a non-HTML answer at the root never becomes the app shell", async () => {
+  const worker = startWorker();
+  await (await worker.caches.open(SHELL)).put("/", basic("cached shell"));
+  const text = new Response("not a document", { headers: { "content-type": "text/plain" } });
+  Object.defineProperty(text, "type", { value: "basic" });
+  worker.network = (url) =>
+    url === "/" && !worker.fetched.includes("/?cowboy-update=1")
+      ? Promise.reject(new TypeError("offline"))
+      : Promise.resolve(text.clone());
+  const navigation = worker.navigate("/?cowboy-update=1");
+  await navigation.response;
+  await navigation.settled();
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), "cached shell");
+});
+
+test("complete history pages stay in the worker cache sign-out can clear", async () => {
+  const worker = startWorker();
+  const page = (headers: Record<string, string>): Response => {
+    const response = new Response("{}", { headers });
+    Object.defineProperty(response, "type", { value: "basic" });
+    return response;
+  };
+  const history = `${version}-history`;
+  const answers: Record<string, Response> = {
+    "/api/history/s?before=1": page({ "cache-control": "private, no-store", "x-cowboy-history": "complete" }),
+    "/api/history/s?before=2": page({ "cache-control": "public, max-age=31536000, immutable" }),
+    "/api/history/s": page({ "cache-control": "no-store" }),
+  };
+  worker.network = (url) => Promise.resolve(answers[url]!);
+  for (const url of Object.keys(answers)) await worker.get(url);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const pinned = await Promise.all(
+    Object.keys(answers).map(async (url) => (await worker.caches.match(url, { cacheName: history })) !== undefined),
+  );
+  assertEquals(pinned, [true, true, false]);
 });
 
 test("the update action learns whether the deployed shell was downloaded", async () => {

@@ -112,6 +112,7 @@ mod projects;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
+mod web_security;
 mod zed_session;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
@@ -20242,6 +20243,11 @@ async fn api_code_file_raw(
                 (header::CONTENT_TYPE, result.media_type),
                 (header::ETAG, etag),
                 (header::CACHE_CONTROL, FILE_CACHE_CONTROL.to_owned()),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    web_security::UNTRUSTED_BYTES_CSP.to_owned(),
+                ),
             ],
             result.bytes,
         )
@@ -20572,11 +20578,12 @@ struct HistoryQuery {
 
 /// One cursor-addressed, event- and byte-bounded page of a session's history.
 /// The client pages UP from the WS tail; older pages arrive here. A COMPLETE
-/// past page never changes again, so it's served
-/// `immutable` (one year) — the browser + service worker then satisfy any
-/// re-fetch (scroll back, reload, post-recycle reload) with ZERO network. The
-/// still-growing latest page is `no-store`, but the client never asks for it
-/// (it has the tail over WS). Unknown session → 404; out-of-range page → `[]`.
+/// past page never changes again, so `x-cowboy-history: complete` lets the
+/// service worker satisfy any re-fetch (scroll back, reload, post-recycle
+/// reload) with ZERO network. It stays `no-store` for the HTTP cache because
+/// sign-out can clear the worker's cache but not that one. The still-growing
+/// latest page is unmarked, and the client never asks for it (it has the tail
+/// over WS). Unknown session → 404; out-of-range page → `[]`.
 async fn api_history(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -20616,9 +20623,11 @@ async fn api_history(
             return (StatusCode::SERVICE_UNAVAILABLE, "history unavailable").into_response();
         }
     };
-    let cache = "public, max-age=31536000, immutable";
     (
-        [(header::CACHE_CONTROL, cache)],
+        [
+            (header::CACHE_CONTROL.as_str(), "private, no-store"),
+            ("x-cowboy-history", "complete"),
+        ],
         Json(HistoryResponse {
             events,
             next_before_seq,
@@ -20743,7 +20752,12 @@ async fn api_artifact(
                     (header::CONTENT_TYPE, content_type),
                     (
                         header::CACHE_CONTROL,
-                        "public, max-age=31536000, immutable".to_owned(),
+                        "private, max-age=31536000, immutable".to_owned(),
+                    ),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+                    (
+                        header::CONTENT_SECURITY_POLICY,
+                        web_security::UNTRUSTED_BYTES_CSP.to_owned(),
                     ),
                 ],
                 bytes,
@@ -20984,7 +20998,13 @@ async fn static_handler(
             .body(Body::from(content))
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
-    (
+    let document_csp = name.ends_with(".html").then(|| {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok());
+        web_security::app_document_csp(&content, host)
+    });
+    let mut response = (
         [
             (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, cache_control.to_owned()),
@@ -20992,7 +21012,9 @@ async fn static_handler(
         ],
         Body::from(content),
     )
-        .into_response()
+        .into_response();
+    web_security::harden_static_response(response.headers_mut(), document_csp.as_deref());
+    response
 }
 
 #[cfg(test)]
