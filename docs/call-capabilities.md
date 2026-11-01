@@ -160,11 +160,17 @@ the Codex self-call above is outstanding.
 
 Each needs its own contract:
 
-- **Declared capabilities.** Manifest-level declarations per preset, so a model
-  exposes what it can do without a Cowboy release. Needs a Provider SDK and signed
-  plugin release, and opening `Purpose` with readers shipped before writers on
-  Controller, Machine and worker. This is what finally answers "different models
-  expose different abilities".
+- **Declared capabilities.** A signed preset listing the capabilities its model
+  serves, so a model exposes what it can do. Today Provider-level differences are
+  already the signed `managed_profiles`, and the models of one Provider offer the
+  same capabilities, so a declaration would change nothing. It is also not a small
+  change: Provider SDK source sits in every plugin's component closure, so editing
+  it means a component release and new signed versions of all plugins, and a
+  manifest using the field needs Machines and workers built from that SDK. A real
+  difference between models is what justifies that release.
+- **New capability kinds.** A capability outside the two profiles needs its own
+  signed profile, which the Machine and worker must read, and opening `Purpose`
+  with readers shipped before writers.
 - **Enforced task boundaries.** Separate generate from edit, or review from
   analysis, by carrying permitted native actions through the worker and adapter.
 - **The envelope and admission binding.** `{capability, inputs, implementation}`,
