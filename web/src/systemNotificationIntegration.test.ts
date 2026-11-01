@@ -16,11 +16,7 @@ test("service worker owns Apple push display and bounded session navigation", ()
 });
 
 test("controller, not a visible page or Hermes, delivers session events", () => {
-  assert(server.includes("run_web_push_notifications("));
-  assert(server.includes("NotificationCategory::Permission"));
-  assertEquals(server.includes("NotificationCategory::Completed"), false);
-  assertEquals(server.includes("NotificationCategory::Input"), false);
-  assert(server.includes("NotificationCategory::Error"));
+  assert(server.includes("notifications::run("));
   assertEquals(server.toLowerCase().includes("hermes"), false);
   assertEquals(store.includes("presentSessionNotification"), false);
 });

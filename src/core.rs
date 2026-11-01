@@ -1821,6 +1821,8 @@ pub enum StoreWrite {
         session_id: String,
         status: Status,
     },
+    /// Record one notification occurrence (docs/task-notifications.md).
+    RecordOccurrence(crate::task_notifications::Occurrence),
     /// Persist one session-scoped error independently of the lifecycle stream
     /// (for example, a rejected command or an ACP failure reported as text).
     RecordSessionError {
@@ -2252,6 +2254,16 @@ struct BackgroundLedger {
     latest: HashMap<String, (u64, serde_json::Value)>,
     /// The worker incarnation (Machine worker epoch) last seen for the session.
     incarnation: Option<String>,
+}
+
+/// Where an accepted subagent snapshot leaves its terminal occurrence.
+#[derive(Debug, Clone, Copy)]
+enum SubagentEnding {
+    Working,
+    /// A new terminal occurrence starts at this snapshot.
+    Ended,
+    /// Metadata of an occurrence that already ended, with its identity.
+    AlreadyEnded(Option<u64>),
 }
 
 /// The Hub's half of a `subagent_state` bootstrap.
@@ -5658,6 +5670,7 @@ impl Hub {
         {
             tracing::warn!(%error, session_id, "live image externalize failed");
         }
+        let mut occurrence = None;
         // A subagent snapshot is fenced by its producer identity (I4) before
         // it receives a seq: an exact duplicate or an older revision of the
         // same worker incarnation never becomes a newer observation.
@@ -5676,10 +5689,12 @@ impl Hub {
             }
             _ => None,
         };
-        if let (Some(child), Event::Update { update }) = (&subagent_child, &event)
-            && !self.accept_subagent_snapshot(session_id, child, update)
-        {
-            return;
+        let mut subagent_ending = None;
+        if let (Some(child), Event::Update { update }) = (&subagent_child, &event) {
+            match self.accept_subagent_snapshot(session_id, child, update) {
+                Some(ending) => subagent_ending = Some(ending),
+                None => return,
+            }
         }
         let mut subagent_anchor = None;
         let (envelope, durable_agent_session_id) = {
@@ -5714,6 +5729,31 @@ impl Hub {
                 && let Some(object) = update.as_object_mut()
             {
                 object.insert("observedSeq".to_owned(), serde_json::Value::from(seq));
+                // One terminal occurrence keeps one identity through later
+                // metadata updates; a new one starts at this seq.
+                match subagent_ending {
+                    Some(SubagentEnding::Ended) => {
+                        object.insert("terminalSeq".to_owned(), serde_json::Value::from(seq));
+                    }
+                    Some(SubagentEnding::AlreadyEnded(Some(terminal))) => {
+                        object.insert("terminalSeq".to_owned(), serde_json::Value::from(terminal));
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(child), Some(SubagentEnding::Ended), Event::Update { update }) =
+                (&subagent_child, subagent_ending, &event)
+            {
+                occurrence = crate::task_notifications::subagent_outcome(update).map(|category| {
+                    crate::task_notifications::Occurrence::subagent(
+                        session_id, child, seq, category,
+                    )
+                });
+            }
+            if matches!(event, Event::PermissionRequest { .. }) {
+                occurrence = Some(crate::task_notifications::Occurrence::permission(
+                    session_id, seq,
+                ));
             }
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
@@ -5774,6 +5814,9 @@ impl Hub {
                 .flatten();
             (envelope, durable_agent_session_id)
         };
+        if let (Some(child), Event::Update { update }) = (&subagent_child, &envelope.event) {
+            self.settle_subagent_mark(session_id, child, update);
+        }
         if let (Some(child), Some(anchor), Event::Update { update }) =
             (subagent_child, subagent_anchor, &envelope.event)
         {
@@ -5781,6 +5824,9 @@ impl Hub {
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
+            if let Some(occurrence) = occurrence {
+                let _ = tx.send(StoreWrite::RecordOccurrence(occurrence));
+            }
             if let Some(agent_session_id) = durable_agent_session_id {
                 let _ = tx.send(StoreWrite::SetAgentSessionId {
                     session_id: session_id.to_owned(),
@@ -5791,26 +5837,67 @@ impl Hub {
         self.fanout(Outbound::Event { envelope });
     }
 
-    /// I4: decide whether a subagent snapshot is a new observation.
+    /// Record a notification occurrence a non-event producer observed.
+    pub fn record_occurrence(&self, occurrence: crate::task_notifications::Occurrence) {
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::RecordOccurrence(occurrence));
+        }
+    }
+
+    /// Whether the permission request at `seq` still waits. A log that no longer
+    /// holds it cannot say otherwise: delivery then relies on expiry.
+    #[must_use]
+    pub fn permission_pending(&self, session_id: &str, seq: u64) -> bool {
+        let sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get(session_id) else {
+            return false;
+        };
+        let mut request = None;
+        for entry in &session.log {
+            match (&entry.event, request) {
+                (Event::PermissionRequest { request_id, .. }, None) if entry.seq == seq => {
+                    request = Some(request_id);
+                }
+                (Event::PermissionResolved { request_id, .. }, Some(asked))
+                    if request_id == asked =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    /// I4: decide whether a subagent snapshot is a new observation, and whether
+    /// it starts a terminal occurrence. `None` drops it.
     fn accept_subagent_snapshot(
         &self,
         session_id: &str,
         child: &str,
         update: &serde_json::Value,
-    ) -> bool {
+    ) -> Option<SubagentEnding> {
         use crate::transcript_anchors::{METRICS, SnapshotVerdict, judge_snapshot, mark_of};
         let mark = mark_of(update);
         let mut background = self.inner.background.lock();
         let ledger = background.entry(session_id.to_owned()).or_default();
-        match judge_snapshot(ledger.marks.get(child), &mark) {
+        let previous = ledger.marks.get(child);
+        let ending = match (mark.terminal, previous) {
+            (false, _) => SubagentEnding::Working,
+            (true, Some(previous)) if previous.terminal => {
+                SubagentEnding::AlreadyEnded(previous.terminal_seq)
+            }
+            (true, _) => SubagentEnding::Ended,
+        };
+        match judge_snapshot(previous, &mark) {
             SnapshotVerdict::Duplicate => {
                 METRICS.duplicates.fetch_add(1, Ordering::Relaxed);
-                return false;
+                return None;
             }
             SnapshotVerdict::Stale => {
                 METRICS.revision_stale.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(session = %session_id, child, "dropping an older subagent revision");
-                return false;
+                return None;
             }
             SnapshotVerdict::Conflict => {
                 METRICS.revision_conflicts.fetch_add(1, Ordering::Relaxed);
@@ -5820,7 +5907,20 @@ impl Hub {
             SnapshotVerdict::Accept => {}
         }
         ledger.marks.insert(child.to_owned(), mark);
-        true
+        Some(ending)
+    }
+
+    /// Keep the terminal identity the Hub stamped on the accepted snapshot.
+    fn settle_subagent_mark(&self, session_id: &str, child: &str, update: &serde_json::Value) {
+        let mut background = self.inner.background.lock();
+        if let Some(mark) = background
+            .get_mut(session_id)
+            .and_then(|ledger| ledger.marks.get_mut(child))
+        {
+            mark.terminal_seq = update
+                .get("terminalSeq")
+                .and_then(serde_json::Value::as_u64);
+        }
     }
 
     fn record_subagent_observation(

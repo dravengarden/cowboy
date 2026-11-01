@@ -68,6 +68,9 @@ export interface Subagent {
   /** The Controller's receipt seq of this snapshot (I2), or null for rows
    *  from before the Controller stamped it. Clients order by it. */
   observedSeq: number | null;
+  /** The seq that started this terminal occurrence; stable through later
+   *  metadata updates, so acknowledgement survives them. */
+  terminalSeq: number | null;
   /** The worker incarnation that reported it (I3), when stamped. */
   incarnation: string | null;
   /** The Controller no longer has this row (cleared or retired): never
@@ -136,6 +139,9 @@ export function subagentOf(update: AcpUpdate): Subagent | null {
     model: text(update["model"]),
     tokens: count((update["usage"] as { totalTokens?: unknown } | null | undefined)?.totalTokens),
     reporting: update["reporting"] !== false,
+    terminalSeq: typeof update["terminalSeq"] === "number" && Number.isFinite(update["terminalSeq"])
+      ? update["terminalSeq"]
+      : null,
     observedSeq: typeof update["observedSeq"] === "number" && Number.isFinite(update["observedSeq"])
       ? update["observedSeq"]
       : null,

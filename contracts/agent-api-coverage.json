@@ -96,8 +96,6 @@
     "api_usage_provider_refresh": "usage.refresh",
     "api_usage_refresh": "usage.refresh",
     "api_web_push_config": "exception:streams — device/browser push registration remains device-owned; use the UI.",
-    "api_web_push_subscribe": "exception:streams — device/browser push registration remains device-owned; use the UI.",
-    "api_web_push_unsubscribe": "exception:streams — device/browser push registration remains device-owned; use the UI.",
     "api_workspaces": "projects.workspaces",
     "draft_documents::history": "documents.history",
     "draft_documents::history_index": "documents.history",
@@ -156,7 +154,12 @@
     "version": "machines.list",
     "workspace_extensions::inventory": "exception:native — filesystem extension manifests/resources belong to native code tools and the workspace UI.",
     "workspace_extensions::resources": "exception:native — workspace file resources belong to native code tools.",
-    "ws_upgrade": "exception:streams — transport subscription/handshake; bounded MCP reads replace agent polling of streams."
+    "ws_upgrade": "exception:streams — transport subscription/handshake; bounded MCP reads replace agent polling of streams.",
+    "notifications::subscribe": "exception:streams — device/browser push registration remains device-owned; use the UI.",
+    "notifications::unsubscribe": "exception:streams — device/browser push registration remains device-owned; use the UI.",
+    "notifications::renew_presence": "exception:browser — Web Push enrollment and device presence belong to one browser installation; an agent has no push endpoint or focus to report.",
+    "notifications::release_presence": "exception:browser — Web Push enrollment and device presence belong to one browser installation; an agent has no push endpoint or focus to report.",
+    "notifications::acknowledge": "exception:human — acknowledging a task records that a person saw it; an agent marking it would hide a failure from them."
   },
   "websocket": {
     "ActivateAllDrafts": "drafts.activate_all",

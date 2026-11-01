@@ -182,7 +182,7 @@ impl Store {
 }
 
 macro_rules! implementation {
-    ($backend:ty, $subagent_rows_filter:literal) => {
+    ($backend:ty, $subagent_rows_filter:literal, $begin:literal) => {
         impl $backend {
             async fn transcript_anchor(&self, session_id: &str, key: &str) -> Result<Option<u64>> {
                 let seq: Option<i64> = sqlx::query_scalar(
@@ -215,7 +215,9 @@ macro_rules! implementation {
             }
 
             async fn backfill_subagent_anchors(&self, session_id: &str) -> Result<Option<usize>> {
-                let mut tx = self.pool.begin().await.context("begin anchor backfill")?;
+                // Reads before it writes: a SQLite snapshot upgraded after another
+                // commit fails at once, whatever the busy timeout says.
+                let mut tx = self.pool.begin_with($begin).await.context("begin anchor backfill")?;
                 let done: bool = sqlx::query_scalar(
                     "SELECT EXISTS(SELECT 1 FROM transcript_anchors WHERE session_id = $1 AND anchor_key = $2)",
                 )
@@ -400,8 +402,13 @@ macro_rules! implementation {
     };
 }
 
-implementation!(PostgresStorage, "payload->'update'->>'sessionUpdate' = $2");
+implementation!(
+    PostgresStorage,
+    "payload->'update'->>'sessionUpdate' = $2",
+    "BEGIN"
+);
 implementation!(
     SqliteStorage,
-    "json_extract(payload, '$.update.sessionUpdate') = $2"
+    "json_extract(payload, '$.update.sessionUpdate') = $2",
+    "BEGIN IMMEDIATE"
 );

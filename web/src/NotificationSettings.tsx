@@ -37,10 +37,9 @@ const CATEGORIES: readonly {
   label: string;
   description: string;
 }[] = [
-  { key: "completed", label: "Agent finished", description: "A completed answer is ready to review" },
-  { key: "input", label: "Needs your input", description: "The agent asks a question or needs a decision" },
-  { key: "permission", label: "Permission requests", description: "A tool is waiting for approval" },
-  { key: "error", label: "Session errors", description: "A running session cannot continue normally" },
+  { key: "input", label: "Needs your input", description: "A tool or an agent call is waiting for your decision" },
+  { key: "error", label: "Failures", description: "A task failed or a session cannot continue normally" },
+  { key: "completed", label: "Tasks finished", description: "A subagent or an agent call completed" },
 ];
 
 function PreferenceRow({
@@ -193,7 +192,9 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
           checked={preferences.categories[category.key]}
           disabled={!enabled}
           onChange={(checked): void => updateSystemNotificationPreferences({
-            categories: { [category.key]: checked },
+            categories: category.key === "input"
+              ? { input: checked, permission: checked }
+              : { [category.key]: checked },
           })}
         />
       ))}

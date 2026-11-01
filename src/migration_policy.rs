@@ -11,6 +11,10 @@ use sha2::Digest as _;
 
 const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
+        "0077_task_notifications.sql",
+        "03a0fd2dd1eecaef9e3f2ca412bce80d8a6a397163a163b374663c8ed7e7adcf",
+    ),
+    (
         "0076_transcript_anchors.sql",
         "78ec90e353c869baf29657f26636cf7e554816a05f1f1c0cdaa8410095c73d3e",
     ),
@@ -184,6 +188,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0051_task_notifications.sql",
+        "03a0fd2dd1eecaef9e3f2ca412bce80d8a6a397163a163b374663c8ed7e7adcf",
+    ),
     (
         "0050_transcript_anchors.sql",
         "6a688157c22f7a265e334213480271fdae3f20432398cfc84f51a2d129fe4d2b",

@@ -95,6 +95,12 @@ schema = 1
 # duration string such as "6h", from 1h to 30d; applies live.
 # auto_update_idle_limit = "12h"
 
+[notifications]
+# Deliver task notifications over Web Push. Turning this off stops delivery;
+# intents are still recorded and expire unsent. It exists for rollback.
+# boolean (true or false); applies live.
+# delivery = true
+
 [sessions]
 # When a new session targets a Device whose session slots are full, hibernate
 # the longest-idle eligible session on it first instead of refusing.
