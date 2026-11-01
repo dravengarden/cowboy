@@ -25,6 +25,7 @@ fn fixture() -> (UsageSnapshot, Vec<PluginUsageSpec>) {
             manual_refresh_after_ms: 3456,
             next_auto_refresh_at_ms: 3456,
             stale: true,
+            failures: 0,
         }),
     };
     (

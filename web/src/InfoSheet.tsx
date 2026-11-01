@@ -241,9 +241,8 @@ function ProviderUsageCardBody({
   const summary = record(usage.activity?.summary);
   const title = identity.title;
   const stale = usage.refresh?.stale === true;
-  const statusLabel = identity.statusLabel ?? (stale
-    ? "CACHED"
-    : plan
+  // The plan never yields to a cache marker; freshness lives on the identity line.
+  const statusLabel = identity.statusLabel ?? (plan
     ? plan.toUpperCase()
     : usage.status === "available"
     ? usageAvailableStatus(usage.provider) ?? "LIVE"
@@ -388,11 +387,7 @@ function ProviderUsageCardBody({
           <Stack direction="row" alignItems="center" spacing={0.25} sx={{ flexShrink: 0 }}>
             <Typography
               variant="caption"
-              color={stale
-                ? "warning.main"
-                : usage.status === "available"
-                ? "success.main"
-                : "text.secondary"}
+              color={usage.status === "available" ? "success.main" : "text.secondary"}
             >
               {statusLabel}
             </Typography>
