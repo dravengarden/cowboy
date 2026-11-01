@@ -2,10 +2,12 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import type { GitChangeTarget } from "./codeApi.ts";
 import {
+  comparisonFetchable,
   resolveReviewComparison,
   reviewCompareBranches,
   reviewCompareLabel,
   reviewCompareScenarios,
+  reviewFetchAge,
 } from "./reviewCompareModel.ts";
 
 const main = { reference: "refs/remotes/origin/main", label: "origin/main" };
@@ -96,4 +98,15 @@ test("Not pushed stops at HEAD where the Machine can", () => {
     resolveReviewComparison(unpushed.comparison, comparisons, main.reference),
     unpushed.comparison,
   );
+});
+
+test("fetch age stays short and only remote branches fetch", () => {
+  assertEquals(reviewFetchAge(1_000, 1_000), "Fetched just now");
+  assertEquals(reviewFetchAge(0, 3 * 60_000), "Fetched 3m ago");
+  assertEquals(reviewFetchAge(0, 2 * 3_600_000), "Fetched 2h ago");
+  assertEquals(reviewFetchAge(0, 50 * 3_600_000), "Fetched 2d ago");
+  assertEquals(comparisonFetchable(main.reference), true);
+  assertEquals(comparisonFetchable(`committed:${main.reference}`), true);
+  assertEquals(comparisonFetchable(other.reference), false);
+  assertEquals(comparisonFetchable(null), false);
 });

@@ -795,7 +795,15 @@ mod tests {
         assert!(outbox(root.path()) >= 2);
         // Delivery probes, closes the breaker and drains the queue.
         service.status.store(200, Ordering::SeqCst);
-        memory.deliver().await;
+        // A background delivery may still hold the lock, and then this one
+        // yields to it, so wait for the outcome and not for one attempt.
+        for _ in 0..200 {
+            memory.deliver().await;
+            if !memory.known_down() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         assert!(!memory.known_down());
         settle(root.path()).await;
     }

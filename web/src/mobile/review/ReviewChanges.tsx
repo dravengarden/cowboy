@@ -3,6 +3,7 @@ import {
   CallSplit,
   CheckCircleOutline,
   ChevronRight,
+  CloudDownloadOutlined,
   DeleteOutline,
   DescriptionOutlined,
   ErrorOutline,
@@ -33,6 +34,7 @@ import {
   type CodeChanges,
   type CodeChangeStatus,
   fetchCodeChanges,
+  fetchReviewComparison,
   type GitChangeTarget,
 } from "./codeApi";
 import {
@@ -47,9 +49,11 @@ import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewComparePicker } from "./ReviewComparePicker";
 import {
   comparisonAvailable,
+  comparisonFetchable,
   resolveReviewComparison,
   reviewCompareLabel,
   reviewCompareScenarios,
+  reviewFetchAge,
 } from "./reviewCompareModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
@@ -276,6 +280,7 @@ export function ReviewChanges({
   const [visibleCount, setVisibleCount] = useState(REVIEW_WINDOW_SIZE);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [fetchError, setFetchError] = useState<string>();
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
@@ -406,6 +411,20 @@ export function ReviewChanges({
     settleRetry,
   ]);
 
+  const fetchComparison = useCallback(async (): Promise<void> => {
+    if (!sessionId || !comparison) return;
+    setFetchError(undefined);
+    try {
+      await fetchReviewComparison(sessionId, comparison);
+      onComparisonResolved?.(comparison);
+      await load();
+    } catch (reason) {
+      setFetchError(
+        reason instanceof Error ? reason.message : "Could not fetch this branch",
+      );
+    }
+  }, [comparison, load, onComparisonResolved, sessionId]);
+
   // Another device chose, or the stored choice arrived after the first read.
   useEffect(() => {
     if (comparison === undefined || preferredComparison === undefined) return;
@@ -524,6 +543,16 @@ export function ReviewChanges({
           </Typography>
           <UnfoldMore fontSize="small" sx={{ color: "text.secondary" }} />
         </ButtonBase>
+        {result?.fetchAvailable && comparisonFetchable(comparison) && (
+          <NetworkIconButton
+            data-review-fetch
+            size="small"
+            aria-label="Fetch this branch"
+            networkAction={fetchComparison}
+          >
+            <CloudDownloadOutlined fontSize="small" />
+          </NetworkIconButton>
+        )}
         {queue.length > 0 && (
           <Chip
             data-review-unread
@@ -538,6 +567,26 @@ export function ReviewChanges({
           />
         )}
       </Stack>
+      {fetchError
+        ? (
+          <Typography
+            role="alert"
+            variant="caption"
+            color="error.main"
+            sx={{ mx: 1.75, mb: 0.5 }}
+          >
+            {fetchError}
+          </Typography>
+        )
+        : result?.fetchedAtMs !== undefined && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mx: 1.75, mb: 0.5 }}
+          >
+            {reviewFetchAge(result.fetchedAtMs, Date.now())}
+          </Typography>
+        )}
       <ReviewComparePicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}

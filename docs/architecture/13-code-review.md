@@ -185,6 +185,20 @@ Code can already open and grants no file access; every read keeps its own
 authority check. A project binding therefore shows that registered checkout,
 not a task worktree of it.
 
+Code reads never touch the network, so remote branches stay as old as the last
+fetch. Where the worktree is local to the Controller, **Fetch this branch**
+(`POST /api/sessions/SESSION/review-fetch`, MCP `sessions.review_fetch`) updates
+that one branch. It is a
+mutation under the session's write authorization, not a Code read: it takes only
+a remote branch already listed as a comparison, uses the remote the repository
+names with `ext::` transports refused, and is bounded to 30 seconds. The result
+lands in `refs/cowboy/review/<remote>/<branch>`, so the agent's remote-tracking
+refs do not move. A comparison and the ahead/behind facts use that ref while it
+is at least as new as the remote-tracking ref. The fetch time is that ref's
+file time, shown under the comparison. Diff snapshots are keyed by comparison
+name, so a fetch forgets the session's snapshots. Repeating a fetch is harmless,
+so it keeps no receipt. Machine adapters do not offer it yet.
+
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists
 open pull requests that are not checked out. See
