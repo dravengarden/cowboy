@@ -887,6 +887,28 @@ export async function runSessionContextBrowserConformance(
     });
     await until(() => forkMode() === "fork");
     check(true, "fork: the same agent on a fork-capable Machine forks natively");
+    // The server refuses a new agent while prompts wait, so the form explains
+    // that up front and follows the live queue.
+    const queue = (version: number, rows: { id: string; text: string; content: [] }[]) =>
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch",
+        state: `queue:${sessions[0]!.id}`,
+        version,
+        value: { queue: rows },
+        confirmed: [],
+        resync: true,
+      });
+    const waits = () => container.querySelector("[data-new-session-wait]");
+    queue(1, [{ id: "q1", text: "one", content: [] }, { id: "q2", text: "two", content: [] }]);
+    await until(() => Boolean(waits()));
+    check(
+      continueRun().disabled && forkRun().disabled &&
+        waits()!.textContent!.includes("the 2 queued messages are sent or removed"),
+      "queue: Replace and Fork say why they wait before being pressed",
+    );
+    queue(2, []);
+    await until(() => !waits());
+    check(!continueRun().disabled && !forkRun().disabled, "queue: the form reopens when the queue drains");
     const beforeFork = writes.length;
     forkRun().click();
     await until(() => writes.length > beforeFork);

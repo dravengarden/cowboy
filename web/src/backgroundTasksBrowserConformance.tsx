@@ -19,6 +19,7 @@ import { closeBackgroundTasks, inspectorState, openBackgroundTask } from "./back
 import { BrowserProductTheme } from "./browserProductTheme";
 import { type CallApproval, currentCallApproval, receiveCallApproval } from "./callApproval";
 import { derive } from "./derive";
+import { ProviderQuotaStatusRow } from "./ProviderQuotaStatus";
 import type { ManagedCallSummary } from "./managedCalls";
 import type { AcpUpdate, Envelope } from "./protocol";
 import { classifySurface } from "./surface/profile";
@@ -455,6 +456,49 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     await waitFor(() => document.querySelector("[data-calls-dock-legacy-switch]"), "the inspector offers the switch");
     closeBackgroundTasks();
     passed.push("the Calls panel rollback switch is reachable");
+
+    // The quota notice is a peer of the bar: same inset and row height, one
+    // line even with every limit named, and no surface of its own.
+    for (const desktop of [true, false]) {
+      surface = desktop ? DESKTOP : MOBILE;
+      render(
+        <Box sx={{ width: desktop ? 760 : 320 }}>
+          <ProviderQuotaStatusRow
+            displayName="Claude · Mink"
+            details="5h resets 23:29 · 7d resets Nov 3 23:29"
+            activeTurn
+            desktop={desktop}
+            refresh={(): Promise<void> => Promise.resolve()}
+          />
+          <BackgroundTasksBarView sessionId="s" desktop={desktop} tasks={[]} backgroundActivity={1} />
+        </Box>,
+      );
+      await settle(2);
+      const row = await waitFor(
+        () => document.querySelector<HTMLElement>("[data-provider-quota-status]"),
+        "quota row",
+      );
+      const bar = await waitFor(
+        () => document.querySelector<HTMLElement>("[data-background-tasks-open]"),
+        "activity bar",
+      );
+      const icon = row.querySelector("svg");
+      const activity = bar.querySelector<HTMLElement>("[data-bar-part='activity']");
+      const text = row.querySelector<HTMLElement>("span");
+      const label = desktop ? "Desktop" : "Mobile";
+      check(icon && activity && text, `${label} quota row parts`);
+      check(
+        Math.abs(icon.getBoundingClientRect().left - activity.getBoundingClientRect().left) < 1,
+        `${label} quota row shares the bar inset`,
+      );
+      check(
+        Math.abs(row.getBoundingClientRect().height - bar.getBoundingClientRect().height) < 2,
+        `${label} quota row matches the bar height`,
+      );
+      check(text.scrollWidth >= text.clientWidth && text.getClientRects().length === 1, `${label} quota row is one line`);
+      check(getComputedStyle(row).backgroundColor === "rgba(0, 0, 0, 0)", `${label} quota row has no fill`);
+    }
+    passed.push("the quota notice is one quiet line aligned with the bar");
 
     // 10. T11 an MCP-started call links to the tool card that started it.
     const opened: string[] = [];

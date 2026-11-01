@@ -17,7 +17,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
   "client-update": ["runClientUpdateFixture", 9],
   "subscriptions": ["runSubscriptionsBrowserConformance", 131],
-  "session-context": ["runSessionContextBrowserConformance", 88],
+  "session-context": ["runSessionContextBrowserConformance", 90],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
   "loading-progress": ["runLoadingProgressBrowserConformance", 10],
   "review-context": ["runReviewContextBrowserConformance", 8],
@@ -38,7 +38,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "dormant-session": ["runDormantSessionBrowserConformance", 29],
   "elicitation": ["runElicitationBrowserConformance", 6],
   "subagents": ["runSubagentsBrowserConformance", 7],
-  "background-tasks": ["runBackgroundTasksBrowserConformance", 10],
+  "background-tasks": ["runBackgroundTasksBrowserConformance", 11],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

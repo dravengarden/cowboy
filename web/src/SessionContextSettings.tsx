@@ -323,7 +323,12 @@ function NewSessionForm(
     account: subscription.value,
     forkAvailable: fork !== null && !preset && inheritSettings,
   });
+  // The server refuses a new agent while prompts wait here, so the form says
+  // so first and follows the live queue instead of answering a press with an
+  // error. An injected prompt still running is only known to the server.
+  const queued = useStoreSelector((state) => state.queues.get(session.id)?.length ?? 0);
   const waitForTurn = forkMode === "fork" && fork === "busy";
+  const forkWaits = waitForTurn || (forkMode === "fork" && queued > 0);
   // One operation per distinct request: a retry returns the same copy, and
   // changing any choice asks for a new one.
   const choice = JSON.stringify([provider, subscription.value, preset, inheritSettings]);
@@ -336,6 +341,8 @@ function NewSessionForm(
   const full = continueSources.length > observed.max_sources;
   const ready = placement.ready && subscription.allowed && validPreset;
   const locked = busy || changedElsewhere || unresolved;
+  // A refusal describes the moment it was made.
+  useEffect(() => setError(""), [queued, session.status]);
   const run = async (action: () => Promise<void>, failure: string) => {
     setBusy(true);
     setError("");
@@ -418,7 +425,7 @@ function NewSessionForm(
               : forkMode === "fork"
               ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
               : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
-            {samePlacement && waitForTurn && " Available after the current turn."}
+            {samePlacement && waitForTurn && queued === 0 && " Available after the current turn."}
           </Typography>
         )}
       </Stack>
@@ -484,12 +491,19 @@ function NewSessionForm(
           Remove a linked session so this one can be linked.
         </Alert>
       )}
+      {queued > 0 && (
+        <Typography variant="caption" color="text.secondary" data-new-session-wait>
+          {allowFork && forkMode === "fork" && samePlacement ? "Replace and Fork are" : "Replace is"}{" "}
+          available once {queued === 1 ? "the queued message is" : `the ${queued} queued messages are`}{" "}
+          sent or removed.
+        </Typography>
+      )}
       {error && <Alert severity="error">{error}</Alert>}
       <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
         <Button
           variant="contained"
           data-new-session-continue-run
-          disabled={locked || !ready || full}
+          disabled={locked || !ready || full || queued > 0}
           onClick={() => void continueWork()}
         >
           {busy ? "Saving…" : "Replace this session"}
@@ -498,7 +512,7 @@ function NewSessionForm(
           <Button
             variant="outlined"
             data-new-session-fork-run
-            disabled={locked || !ready || !samePlacement || waitForTurn}
+            disabled={locked || !ready || !samePlacement || forkWaits}
             onClick={() => void forkWork()}
           >
             Fork to new session
