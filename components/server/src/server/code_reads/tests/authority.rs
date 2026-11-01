@@ -34,7 +34,7 @@ async fn revoked_reads_discard_success_conditional_and_error_bodies() {
             let (started, waiting) = oneshot::channel();
             let (release, released) = oneshot::channel();
             let read = guarded_response(
-                || authorized(h.auth(), &product, Some(owner)),
+                || authorized(h.auth(), &product, Some(owner), false),
                 || async {
                     started.send(()).unwrap();
                     released.await.unwrap();
@@ -67,13 +67,28 @@ async fn revoked_reads_discard_success_conditional_and_error_bodies() {
 }
 
 #[tokio::test]
+async fn a_worktree_read_needs_a_principal_who_sees_every_session() {
+    let h = Harness::new().await;
+    let product = h.capture(&h.cookie().await).await;
+    assert!(matches!(
+        authorized(h.auth(), &product, None, true).await,
+        Err(Denial::Visibility)
+    ));
+    assert!(authorized(h.auth(), &product, None, false).await.is_ok());
+    let h = Harness::new().await;
+    h.role(AdminRole::Owner);
+    let product = h.capture(&h.cookie().await).await;
+    assert!(authorized(h.auth(), &product, None, true).await.is_ok());
+}
+
+#[tokio::test]
 async fn revocation_before_read_never_invokes_even_synchronous_setup() {
     let h = Harness::new().await;
     let product = h.capture(&h.cookie().await).await;
     h.revoke("cookie").await;
     let invoked = Cell::new(false);
     let response = guarded_response(
-        || authorized(h.auth(), &product, Some(&h.user.id)),
+        || authorized(h.auth(), &product, Some(&h.user.id), false),
         || {
             invoked.set(true);
             async { "private".into_response() }
@@ -91,7 +106,7 @@ async fn viewer_own_and_shared_reads_keep_success_and_conditional_responses() {
     for owner in [None, Some(h.user.id.as_str())] {
         for status in [StatusCode::OK, StatusCode::NOT_MODIFIED] {
             let response = guarded_response(
-                || authorized(h.auth(), &product, owner),
+                || authorized(h.auth(), &product, owner, false),
                 || async { (status, [(header::ETAG, "\"current\"")], "current").into_response() },
             )
             .await;

@@ -587,7 +587,12 @@ async fn a_worktree_scope_needs_a_colocated_parent_and_ends_with_it() {
     let scope = control
         .workspace_code_scope(control.service.as_str(), "remote", "repo")
         .unwrap();
-    assert!(control.admit_worktree_scope(&scope, &path).is_none());
+    let observed = control.observe_worktree(&path).unwrap();
+    assert!(
+        control
+            .admit_worktree_scope(&scope, &path, observed)
+            .is_none()
+    );
 
     let control = MachineControl::default();
     let (tx, _commands) = mpsc::unbounded_channel();
@@ -601,13 +606,11 @@ async fn a_worktree_scope_needs_a_colocated_parent_and_ends_with_it() {
         .workspace_code_scope(control.service.as_str(), "hawk", "repo")
         .unwrap();
     assert!(control.known_worktree_scope(&parent, &path).is_none());
-    assert!(
-        control
-            .admit_worktree_scope(&parent, "/nonexistent/path")
-            .is_none()
-    );
+    assert!(control.observe_worktree("/nonexistent/path").is_none());
 
-    let admitted = control.admit_worktree_scope(&parent, &path).unwrap();
+    let admitted = control
+        .admit_worktree_scope(&parent, &path, control.observe_worktree(&path).unwrap())
+        .unwrap();
     assert_eq!(admitted.cwd(), path);
     assert_eq!(
         control.known_worktree_scope(&parent, &path),
@@ -617,16 +620,32 @@ async fn a_worktree_scope_needs_a_colocated_parent_and_ends_with_it() {
     assert!(control.workspace_scope_is_current(&admitted));
     assert_eq!(control.workspace_scope_is_colocated(&admitted), Ok(true));
 
-    // A replaced worktree ends only that worktree.
+    // A replaced worktree ends only that worktree, and a retained clone with it.
+    let retained = admitted.clone();
     drop(worktree);
     assert!(control.workspace_scope_is_colocated(&admitted).is_err());
     assert!(control.known_worktree_scope(&parent, &path).is_none());
+    assert!(!control.workspace_scope_is_current(&retained));
     assert!(control.workspace_scope_is_current(&parent));
+
+    // A path replaced between observation and admission is not admitted.
+    let moved = tempfile::tempdir().unwrap();
+    let moved_path = moved.path().to_str().unwrap().to_owned();
+    let observed = control.observe_worktree(&moved_path).unwrap();
+    drop(moved);
+    assert!(
+        control
+            .admit_worktree_scope(&parent, &moved_path, observed)
+            .is_none()
+    );
 
     // The parent's end ends every worktree below it.
     let other = tempfile::tempdir().unwrap();
     let other = other.path().to_str().unwrap().to_owned();
-    let child = control.admit_worktree_scope(&parent, &other).unwrap();
+    let observed = control.observe_worktree(&other).unwrap();
+    let child = control
+        .admit_worktree_scope(&parent, &other, observed)
+        .unwrap();
     observe(&control, &connection, Some(vec![]));
     assert!(!control.workspace_scope_is_current(&child));
 }

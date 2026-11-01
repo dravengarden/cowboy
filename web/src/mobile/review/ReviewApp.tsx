@@ -3132,10 +3132,10 @@ export function ReviewApp({
   const sessionProject = currentSession
     ? resolveReviewDirectory("project", currentSession, sessions, machineInventories).context
     : undefined;
-  const openableWorktreeProject = projectCodeContext?.workspaceId
-    ? { machineId: projectCodeContext.machineId, workspaceId: projectCodeContext.workspaceId }
-    : sessionProject?.workspaceId
-    ? { machineId: sessionProject.machineId, workspaceId: sessionProject.workspaceId }
+  const worktreeProjectSource = projectCodeContext?.workspaceId ? projectCodeContext : sessionProject;
+  const openableWorktreeProject = worktreeProjectSource?.workspaceId &&
+      machineInventories.find((machine) => machine.id === worktreeProjectSource.machineId)?.local
+    ? { machineId: worktreeProjectSource.machineId, workspaceId: worktreeProjectSource.workspaceId }
     : undefined;
   const viewedContext = projectCodeContext?.sessionId.startsWith("worktree::")
     ? projectCodeContext.sessionId
@@ -3990,7 +3990,7 @@ export function ReviewApp({
             }}
           >
             <ReviewDirectorySetting onUseDefault={openDefaultDirectory} onEditingChange={setDirectoryEditing}
-              currentDirectory={workspace ? projectCodeContext?.sessionId.startsWith("workspace::")
+              currentDirectory={workspace ? projectCodeContext?.sessionId.startsWith("workspace::") || projectCodeContext?.sessionId.startsWith("worktree::")
                 ? projectCodeContext.sessionId : `session::${workspace.sessionId}` : undefined} />
             {!directoryEditing && <>
             <Divider />

@@ -188,11 +188,17 @@ A project binding shows the registered checkout. A task worktree of that
 repository that no session owns has its own context,
 `worktree::<machine>::<workspace>::<hex path>`, offered as **Review** on its row
 in the Worktrees tab. It is read through the registered workspace's live
-observation and ends with it, and the Controller admits it only when it reads
-that Machine's roots itself: the path must be canonical, the top of a Git work
-tree, and share the workspace's common Git directory. A worktree a session owns
-is refused here, so it stays under that session's visibility. Machine adapters
-refuse roots they did not export, so remote worktrees are out of scope.
+observation and ends with it, or with its own root being replaced. Only a
+principal who already sees every session may read one: unlike the registered
+checkout it holds work in progress, so the shared workspace policy does not
+extend to it. The Controller admits it only when it reads that Machine's roots
+itself, and the proof comes from the repository: the path must be canonical and
+listed by `git worktree list` in the registered root, because a candidate's own
+`.git` pointer is only its claim. The root is observed before that proof, and
+admission binds that observation. A worktree a session owns is refused here and
+read as that session. Later edits to a worktree's `.git` are not rechecked; the
+principal can read any session on this Machine anyway. Machine adapters refuse
+roots they did not export, so remote worktrees are not offered.
 
 Code reads never touch the network, so remote branches stay as old as the last
 fetch. Where the worktree is local to the Controller, **Fetch this branch**

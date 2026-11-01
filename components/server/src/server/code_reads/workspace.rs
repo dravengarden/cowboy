@@ -57,6 +57,7 @@ pub(in crate::server) async fn resolve_worktree(
     if !control.workspace_scope_is_colocated(&parent).ok()? {
         return None;
     }
+    let observation = control.observe_worktree(path)?;
     let root = std::path::PathBuf::from(parent.cwd());
     let candidate = std::path::PathBuf::from(path);
     let member = tokio::task::spawn_blocking(move || {
@@ -65,7 +66,7 @@ pub(in crate::server) async fn resolve_worktree(
     .await
     .ok()?;
     member
-        .then(|| control.admit_worktree_scope(&parent, path))
+        .then(|| control.admit_worktree_scope(&parent, path, observation))
         .flatten()
         .map(CodeReadScope::Workspace)
 }

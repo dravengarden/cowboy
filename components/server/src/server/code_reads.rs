@@ -72,9 +72,10 @@ async fn authorized(
     auth: ProductRequestAuth<'_>,
     product: &ProductContinuation,
     owner_user_id: Option<&str>,
+    every_session: bool,
 ) -> Result<(), Denial> {
     let principal = product.current(auth).await.ok_or(Denial::Credential)?;
-    if !principal.can_see(owner_user_id) {
+    if !principal.can_see(owner_user_id) || (every_session && !principal.sees_every_session()) {
         return Err(Denial::Visibility);
     }
     Ok(())
@@ -99,10 +100,14 @@ impl Authority {
             // Preserve the existing authenticated shared-workspace read policy.
             CodeReadScope::Workspace(_) => None,
         };
+        // Unlike the registered checkout, a task worktree holds someone's work
+        // in progress, so it is for those who may already see every session.
+        let every_session = matches!(scope, CodeReadScope::Workspace(scope) if scope.is_worktree());
         authorized(
             ProductRequestAuth::from(self.owner.as_ref()),
             &self.product,
             owner,
+            every_session,
         )
         .await?;
         // No await after credential/role validation: recheck the original live

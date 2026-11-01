@@ -174,4 +174,6 @@ test("a worktree context round-trips its path and needs its project", () => {
   assertEquals(context?.kind, "Worktree");
   assertEquals(context?.sessionId, id);
   assertEquals(resolveReviewDirectory(id, owner, [owner], []).context, undefined);
+  const remote = { ...machine, local: false } as MachineSummary;
+  assertEquals(resolveReviewDirectory(id, owner, [owner], [remote]).context, undefined);
 });

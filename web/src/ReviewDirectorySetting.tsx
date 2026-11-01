@@ -51,8 +51,9 @@ export function ReviewDirectorySetting(
     setEditing(value);
     onEditingChange?.(value);
   };
-  const defaultIdentity = resolved.context?.sessionId.startsWith("workspace::")
-    ? resolved.context.sessionId
+  const defaultIdentity = resolved.context?.sessionId.startsWith("workspace::") ||
+      resolved.context?.sessionId.startsWith("worktree::")
+    ? resolved.context?.sessionId
     : resolved.context
     ? `session::${resolved.context.sessionId}`
     : undefined;

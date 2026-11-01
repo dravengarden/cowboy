@@ -1509,31 +1509,26 @@ fn parse_git_worktrees(bytes: &[u8], current: &Path) -> Vec<GitWorktreeSummary> 
         .collect()
 }
 
-/// Whether `path` is the top of a worktree of `root`'s repository. A worktree
-/// shares its common Git directory, so a mere path below a root does not pass,
-/// and neither does an unrelated repository that happens to sit beside it.
+/// Whether `path` is a worktree the repository at `root` itself lists. The
+/// candidate's own `.git` pointer is its claim, so the proof comes from `root`.
+/// The path must already be canonical, spelled exactly as Git reports it.
 #[must_use]
 pub fn is_repository_worktree(root: &Path, path: &Path) -> bool {
-    let top = |dir: &Path| {
-        git_output(dir, &["rev-parse", "--show-toplevel"], 8192)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .and_then(|value| std::fs::canonicalize(value.trim()).ok())
+    if !std::fs::canonicalize(path).is_ok_and(|canonical| canonical.as_os_str() == path.as_os_str())
+    {
+        return false;
+    }
+    let Ok(listed) = git_output(
+        root,
+        &["worktree", "list", "--porcelain", "-z"],
+        4 * 1024 * 1024,
+    ) else {
+        return false;
     };
-    let common = |dir: &Path| {
-        git_output(
-            dir,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            8192,
-        )
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|value| std::fs::canonicalize(value.trim()).ok())
-    };
-    std::fs::canonicalize(path).is_ok_and(|canonical| canonical == path)
-        && top(path).as_deref() == Some(path)
-        && common(path).is_some()
-        && common(path) == common(root)
+    listed
+        .split(|byte| *byte == 0)
+        .filter_map(|line| line.strip_prefix(b"worktree "))
+        .any(|listed| listed == path.as_os_str().as_encoded_bytes())
 }
 
 fn review_reference(reference: &str) -> Option<String> {
@@ -2076,6 +2071,22 @@ mod tests {
 
         assert!(super::is_repository_worktree(&root, &linked));
         assert!(super::is_repository_worktree(&root, &root));
+        let spelled = PathBuf::from(format!("{}/", linked.display()));
+        assert!(
+            !super::is_repository_worktree(&root, &spelled),
+            "another spelling"
+        );
+        // A directory that points its own `.git` at a real worktree proves nothing.
+        let forged = root.with_extension("forged");
+        let _ = fs::remove_dir_all(&forged);
+        fs::create_dir_all(&forged).unwrap();
+        let pointer = fs::read_to_string(linked.join(".git")).unwrap();
+        fs::write(forged.join(".git"), pointer).unwrap();
+        assert!(
+            !super::is_repository_worktree(&root, &forged),
+            "a forged pointer"
+        );
+        fs::remove_dir_all(forged).unwrap();
         assert!(
             !super::is_repository_worktree(&root, &other),
             "another repository"

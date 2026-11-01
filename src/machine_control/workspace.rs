@@ -18,6 +18,9 @@ const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 
 const MAX_WORKTREE_SCOPES: usize = 256;
 
+/// What a candidate worktree path named before its membership was proved.
+pub struct WorktreeObservation(LocalRoot);
+
 fn worktree_key(parent: &WorkspaceCodeScope, path: &str) -> (String, String, String) {
     (
         parent.machine_id().to_owned(),
@@ -77,13 +80,20 @@ impl WorkspaceCodeScope {
             + self.0.incarnation.as_ref().map_or(0, String::len)
     }
 
+    /// A worktree read needs more than the shared workspace policy, because
+    /// its contents are one worktree's work and not the registered checkout.
+    pub fn is_worktree(&self) -> bool {
+        self.0.parent.is_some()
+    }
+
     fn incarnation(&self) -> Option<String> {
         self.0.incarnation.clone()
     }
 
     pub(super) fn matches(&self, live: &LiveState) -> bool {
         if let Some(parent) = &self.0.parent {
-            return parent.matches(live);
+            return parent.matches(live)
+                && live.worktree_scopes.get(&worktree_key(parent, self.cwd())) == Some(self);
         }
         live.is_current(&self.0.connection)
             && live
@@ -260,6 +270,13 @@ impl MachineControl {
             .cloned()
     }
 
+    /// Observe a candidate before proving it belongs, so that admission binds
+    /// the object that was proved and not whatever the path names afterwards.
+    pub fn observe_worktree(&self, path: &str) -> Option<WorktreeObservation> {
+        let local = LocalRoot::observe(path);
+        matches!(local, LocalRoot::Observed(_)).then_some(WorktreeObservation(local))
+    }
+
     /// Admit one worktree below a colocated workspace. The caller has proved
     /// it belongs to that repository; only a Controller that reads the root
     /// itself may do this, so no remote Machine root is ever named by a client.
@@ -267,11 +284,10 @@ impl MachineControl {
         &self,
         parent: &WorkspaceCodeScope,
         path: &str,
+        observation: WorktreeObservation,
     ) -> Option<WorkspaceCodeScope> {
-        let local = LocalRoot::observe(path);
-        if !matches!(local, LocalRoot::Observed(_)) {
-            return None;
-        }
+        let local = observation.0;
+        local.readable(path).ok()?;
         let mut live = self.live.write();
         if !parent.matches(&live) || !live.connections[parent.machine_id()].colocated {
             return None;
@@ -321,6 +337,10 @@ impl MachineControl {
         if let Err(detail) = scope.0.local.readable(scope.cwd()) {
             self.retire_workspace_scope(scope);
             return Err(format!("Workspace read scope ended: {detail}"));
+        }
+        if let Some(parent) = &scope.0.parent {
+            // A worktree is read through its workspace, so both must stand.
+            self.workspace_scope_is_colocated(parent)?;
         }
         Ok(true)
     }

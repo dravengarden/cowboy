@@ -85,10 +85,13 @@ export function resolveReviewDirectory(
   if (value?.startsWith("worktree::")) {
     const [, machineId, workspaceId] = value.split("::");
     const path = worktreeContextPath(value);
-    const workspace = machines.find((m) => m.id === machineId)?.workspaces
-      .find((w) => w.id === workspaceId);
+    const machine = machines.find((m) => m.id === machineId);
+    const workspace = machine?.workspaces.find((w) => w.id === workspaceId);
     if (!machineId || !workspaceId || !path || !workspace) {
       return { error: "This worktree's project is unavailable." };
+    }
+    if (!machine?.local) {
+      return { error: "Worktrees can only be reviewed on this Service's own Machine." };
     }
     return {
       context: {
