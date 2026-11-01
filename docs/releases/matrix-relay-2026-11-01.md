@@ -14,7 +14,13 @@ Real sessions called `memory_search` and received recall:
 | Hawk | Codex, Grok, DeepSeek Harness, Claude DeepSeek, Codex DeepSeek |
 | Falcon | Codex, Grok, DeepSeek Harness |
 | OVH | Claude, Codex (direct) |
-| MacBook Air | Codex, Grok, DeepSeek Harness, Claude DeepSeek, Codex DeepSeek |
+| MacBook Air | Codex, DeepSeek Harness, Claude DeepSeek, Codex DeepSeek |
+
+Grok on the MacBook Air reached and called `memory_search`, but that call returned
+no hits and the account's free usage ran out before it could be repeated. Claude
+DeepSeek and Codex DeepSeek on Falcon were not exercised after the rollout.
+OVH runs Machine `e5ea575a`, without the relay's MCP discovery answers or the
+absent-option fix; its Claude and Codex use Matrix directly.
 
 With Matrix stopped, running Claude DeepSeek, Codex and DeepSeek Harness sessions
 kept answering, and new Codex, Grok and Claude sessions started and answered. Their
