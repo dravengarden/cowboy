@@ -1722,7 +1722,7 @@ impl Store {
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
     ) -> Result<()> {
-        dispatch_storage!(self, upsert_event_batch(events, highwaters, &[]))
+        dispatch_storage!(self, upsert_event_batch(events, highwaters, &[], &[]))
     }
 
     /// [`Self::upsert_event_batch`] plus the durable anchors of new subagent and
@@ -1732,8 +1732,12 @@ impl Store {
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
         anchors: &[crate::transcript_anchors::AnchorWrite],
+        occurrences: &[crate::task_notifications::Occurrence],
     ) -> Result<()> {
-        dispatch_storage!(self, upsert_event_batch(events, highwaters, anchors))
+        dispatch_storage!(
+            self,
+            upsert_event_batch(events, highwaters, anchors, occurrences)
+        )
     }
 
     pub async fn clear_events(&self, session_id: &str, calls_before_ms: i64) -> Result<()> {
@@ -6018,6 +6022,7 @@ impl PostgresStorage {
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
         anchors: &[crate::transcript_anchors::AnchorWrite],
+        occurrences: &[crate::task_notifications::Occurrence],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin event batch")?;
         for env in events {
@@ -6062,6 +6067,20 @@ impl PostgresStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("INSERT anchor {}/{}", anchor.session_id, anchor.key))?;
+        }
+        for occurrence in occurrences {
+            sqlx::query(task_notifications::INSERT_INTENT)
+                .bind(&occurrence.dedupe_key)
+                .bind(occurrence.category.code())
+                .bind(&occurrence.destination)
+                .bind(&occurrence.marker)
+                .bind(created_at_ms.saturating_add(occurrence.category.delay_ms()))
+                .bind(created_at_ms.saturating_add(occurrence.category.ttl_ms()))
+                .bind(created_at_ms)
+                .bind(&occurrence.session_id)
+                .execute(&mut *tx)
+                .await
+                .context("INSERT notification intent")?;
         }
         tx.commit().await.context("commit event batch")?;
         Ok(())

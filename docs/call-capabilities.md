@@ -84,9 +84,11 @@ Cancelling a running call is unaffected by turning `images` off.
 ## Agents cannot widen themselves
 
 `override_widens` and `fresh_session_widens` both treat turning on `images` or
-`self_images` as widening, so an agent can only narrow, including through
-`sessions.duplicate` with `inherit_settings: false`, which already goes through
-`fresh_session_widens`.
+`self_images` as widening, so an agent can only narrow. `sessions.create` and
+`sessions.duplicate` with `inherit_settings: false` are checked against the
+caller's policy. `tools.session_set` refuses widening on every target, not only
+its lineage, because a created session or a copy shares no lineage with its
+origin and could otherwise grant it.
 
 Continuation copies a sparse override. A denial inherited from the source's Owner
 defaults would be lost when the destination's defaults differ, so inheritance

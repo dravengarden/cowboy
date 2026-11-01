@@ -12,6 +12,7 @@ import {
   subagentKey,
   type TaskSummary,
   taskHash,
+  setAcknowledgementTransport,
 } from "./backgroundTasks";
 import { BackgroundTasksBarView } from "./BackgroundTasksBar";
 import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
@@ -541,6 +542,27 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     check(!document.querySelector("[data-task-open-origin]"), "a shell-started call has no structured link");
     closeBackgroundTasks();
     passed.push("T11 only structured MCP identity links a call to its tool card");
+
+    // A notification's link opens details; only the explicit action acknowledges.
+    const acknowledged: string[] = [];
+    setAcknowledgementTransport((_, ack) => {
+      acknowledged.push(ack.task_key);
+      return Promise.resolve(true);
+    });
+    openBackgroundTask("s", subagentKey("c"), "link");
+    render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf(TIMELINE)} />);
+    const markSeen = await waitFor(
+      () => document.querySelector<HTMLButtonElement>("[data-task-mark-seen]"),
+      "a link to an unseen failure offers Mark as seen",
+    );
+    await settle(2);
+    check(acknowledged.length === 0, "opening through a link acknowledges nothing");
+    markSeen.click();
+    await waitFor(() => acknowledged.length === 1 ? true : null, "Mark as seen acknowledges");
+    check(acknowledged[0] === subagentKey("c"), "the acknowledgement names the task");
+    setAcknowledgementTransport(null);
+    closeBackgroundTasks();
+    passed.push("A notification link leaves a failure unseen until Mark as seen");
   } finally {
     document.documentElement.style.fontSize = "";
     globalThis.fetch = originalFetch;

@@ -499,3 +499,17 @@ test("a failed acknowledgement is retried by the next bootstrap", async () => {
   assertEquals(sent, ["subagent:ack@77"], "the marker is the terminal occurrence, not the latest observation");
   setAcknowledgementTransport(null);
 });
+
+test("a local acknowledgement stays in its session", async () => {
+  setAcknowledgementTransport(() => Promise.resolve(true));
+  const failed = subagentSummary(subagentOf(
+    subagentUpdate("shared-child", "idle", 4, { stopReason: "error", observedSeq: 90, terminalSeq: 78 }) as never,
+  )!);
+  acknowledgeTask("session-a", failed);
+  const stored = JSON.parse(globalThis.localStorage?.getItem("cowboy:background-tasks:ack") ?? "[]") as string[];
+  if (globalThis.localStorage) {
+    assertEquals(stored.includes("session-a\nsubagent:shared-child@78"), true);
+    assertEquals(stored.includes("subagent:shared-child@78"), false);
+  }
+  setAcknowledgementTransport(null);
+});

@@ -146,13 +146,22 @@ impl WebPushService {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(Duration::from_secs);
+            .and_then(parse_retry_after);
         Ok(PushResponse {
             status: response.status(),
             retry_after,
         })
     }
+}
+
+/// `Retry-After` is either delay-seconds or an HTTP date.
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let date = chrono::DateTime::parse_from_rfc2822(value.trim()).ok()?;
+    let delay = date.with_timezone(&chrono::Utc) - chrono::Utc::now();
+    Some(delay.to_std().unwrap_or(Duration::ZERO))
 }
 
 /// The storage key of an endpoint; endpoints are capabilities and stay out of
@@ -353,6 +362,7 @@ mod tests {
     #[tokio::test]
     async fn a_push_carries_its_delivery_headers() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let root = tempfile::tempdir().unwrap();
         let service = WebPushService::open(root.path()).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -392,6 +402,17 @@ mod tests {
         assert!(request.contains("urgency: high"), "{request}");
         assert!(request.contains("topic: topic-1"), "{request}");
         assert!(request.contains("ttl: 120"), "{request}");
+    }
+
+    #[test]
+    fn retry_after_accepts_both_forms() {
+        assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
+        assert_eq!(parse_retry_after("soon"), None);
+        let later = (chrono::Utc::now() + chrono::Duration::seconds(90)).to_rfc2822();
+        let delay = parse_retry_after(&later).unwrap();
+        assert!((80..=90).contains(&delay.as_secs()), "{delay:?}");
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(90)).to_rfc2822();
+        assert_eq!(parse_retry_after(&past), Some(Duration::ZERO));
     }
 
     #[test]

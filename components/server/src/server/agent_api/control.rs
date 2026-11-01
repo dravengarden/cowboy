@@ -371,9 +371,8 @@ fn tools_widening(
         "tools.session_set" => {
             let target = input["session_id"].as_str().ok_or("invalid_argument")?;
             let target = hub.session_info(target).ok_or("not_found")?.meta;
-            if !same_lineage(hub, parent, &target) {
-                return Ok(());
-            }
+            // Every target: a copy or a created session shares no lineage, so
+            // limiting this to the lineage would let either grant the other.
             let update =
                 serde_json::from_value(input["body"].clone()).map_err(|_| "invalid_argument")?;
             if web::agent_tools::override_widens(hub, &target, &update) {
@@ -383,6 +382,16 @@ fn tools_widening(
         }
         // A fresh session must not shed the switches a person set on this one.
         "sessions.create" => {
+            let provider = input["body"]["provider"]
+                .as_str()
+                .unwrap_or(&parent.provider);
+            if web::agent_tools::fresh_session_widens(hub, parent, provider) {
+                return Err(DENIED);
+            }
+            Ok(())
+        }
+        // A copy that drops the source's settings starts from the defaults.
+        "sessions.duplicate" if input["body"]["inherit_settings"] == false => {
             let provider = input["body"]["provider"]
                 .as_str()
                 .unwrap_or(&parent.provider);

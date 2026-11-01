@@ -928,6 +928,11 @@ function entryOf(key: string, marker: string): string {
   return `${key}@${marker}`;
 }
 
+/** Child ids and markers are per session, so a local entry names its session. */
+function sessionEntryOf(sessionId: string, entry: string): string {
+  return `${sessionId}\n${entry}`;
+}
+
 type AcknowledgementTransport = (sessionId: string, ack: TaskAcknowledgement) => Promise<boolean>;
 
 async function postAcknowledgement(sessionId: string, ack: TaskAcknowledgement): Promise<boolean> {
@@ -986,7 +991,11 @@ export function useAcknowledgements(sessionId: string): (key: string, marker: st
   );
   const local = new Set(list);
   const account = accountAcknowledgements.get(sessionId);
-  return (key, marker) => local.has(entryOf(key, marker)) || (account?.has(entryOf(key, marker)) ?? false);
+  return (key, marker) => {
+    const entry = entryOf(key, marker);
+    // Unqualified entries are Phase 1's, kept readable on this device.
+    return local.has(sessionEntryOf(sessionId, entry)) || local.has(entry) || (account?.has(entry) ?? false);
+  };
 }
 
 /** Mark an unseen failure seen, here at once and for the account. */
@@ -998,7 +1007,7 @@ export function acknowledgeTask(sessionId: string, task: TaskSummary): void {
     ? String(task.call.finished_at_ms ?? task.call.updated_at_ms)
     : "";
   if (!marker) return;
-  const entry = entryOf(task.key, marker);
+  const entry = sessionEntryOf(sessionId, entryOf(task.key, marker));
   const current = acknowledgements.get();
   if (!current.includes(entry)) acknowledgements.set([...current, entry]);
   sendAcknowledgement(sessionId, { task_key: task.key, marker });

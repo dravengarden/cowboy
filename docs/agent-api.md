@@ -453,7 +453,7 @@ Unclassified operations are refused, and reads are unchanged.
 
 Calls and memory are what a person grants a session, so `tools.session_set`
 returns `tools_widening_denied` when it would enable either, turn on `images` or
-`self_images`, or add a call target, for the parent or a session sharing its fork and continuation lineage.
+`self_images`, or add a call target, on any session.
 Narrowing and review preferences stay available.
 
 Human approval,

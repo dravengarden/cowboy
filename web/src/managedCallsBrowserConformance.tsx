@@ -38,6 +38,8 @@ const toolsDefaults: AgentTools = {
     default: "auto",
     max_concurrent: 4,
     max_per_session: 64,
+    images: true,
+    self_images: false,
   },
 };
 /** A Codex kind's built-in defaults: it calls Claude, never itself. */
@@ -1080,6 +1082,16 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "session tools did not load",
     );
     check(!allow.checked, "agent calls must start off");
+    check(
+      document.querySelector<HTMLInputElement>("input[aria-label='Image calls']")?.checked,
+      "images follow the defaults",
+    );
+    check(
+      document.querySelector<HTMLInputElement>(
+        "input[aria-label=\"Image calls on this agent's own account\"]",
+      )?.checked === false,
+      "the own account starts off",
+    );
     check(
       text().includes("Claude defaults"),
       "inherited defaults must be named",

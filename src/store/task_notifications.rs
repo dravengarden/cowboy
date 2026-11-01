@@ -77,10 +77,6 @@ impl Store {
         dispatch!(self, finish_intent(dedupe_key, state))
     }
 
-    pub async fn defer_intent(&self, dedupe_key: &str, due_at_ms: i64) -> Result<()> {
-        dispatch!(self, defer_intent(dedupe_key, due_at_ms))
-    }
-
     /// Freeze an intent's audience, even an empty one, in one transaction.
     pub async fn freeze_audience(
         &self,
@@ -247,16 +243,6 @@ macro_rules! implementation {
                     .execute(&self.pool)
                     .await
                     .context("UPDATE notification intent state")?;
-                Ok(())
-            }
-
-            async fn defer_intent(&self, dedupe_key: &str, due_at_ms: i64) -> Result<()> {
-                sqlx::query("UPDATE notification_intents SET due_at_ms = $1 WHERE dedupe_key = $2")
-                    .bind(due_at_ms)
-                    .bind(dedupe_key)
-                    .execute(&self.pool)
-                    .await
-                    .context("UPDATE notification intent due time")?;
                 Ok(())
             }
 

@@ -5061,6 +5061,7 @@ impl SqliteStorage {
         events: &[Envelope],
         highwaters: &HashMap<String, u64>,
         anchors: &[crate::transcript_anchors::AnchorWrite],
+        occurrences: &[crate::task_notifications::Occurrence],
     ) -> Result<()> {
         let mut transaction = self
             .pool
@@ -5116,6 +5117,20 @@ impl SqliteStorage {
             .with_context(|| {
                 format!("INSERT SQLite anchor {}/{}", anchor.session_id, anchor.key)
             })?;
+        }
+        for occurrence in occurrences {
+            sqlx::query(super::task_notifications::INSERT_INTENT)
+                .bind(&occurrence.dedupe_key)
+                .bind(occurrence.category.code())
+                .bind(&occurrence.destination)
+                .bind(&occurrence.marker)
+                .bind(timestamp.saturating_add(occurrence.category.delay_ms()))
+                .bind(timestamp.saturating_add(occurrence.category.ttl_ms()))
+                .bind(timestamp)
+                .bind(&occurrence.session_id)
+                .execute(&mut *transaction)
+                .await
+                .context("INSERT SQLite notification intent")?;
         }
         transaction
             .commit()

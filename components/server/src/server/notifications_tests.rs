@@ -155,13 +155,6 @@ async fn storage_contract(url: &str, root: &FsPath) {
     assert_eq!(due[0].owner_user_id, OWNER);
     assert_eq!(due[0].expires_at_ms, 1_000 + Category::Failure.ttl_ms());
 
-    // A deferred intent comes back when the lease ends.
-    store
-        .defer_intent(&due[0].dedupe_key, 40_000)
-        .await
-        .unwrap();
-    assert!(store.due_intents(39_999, 10).await.unwrap().is_empty());
-
     // An empty audience is a frozen audience: a later enrollment gets nothing.
     store
         .freeze_audience(&due[0].dedupe_key, &[], 40_000)
@@ -361,17 +354,14 @@ async fn subagent_endings_are_occurrences_not_snapshots() {
     let mut occurrences = Vec::new();
     let mut terminal = Vec::new();
     while let Some(write) = rx.recv().await {
-        match write {
-            crate::core::StoreWrite::RecordOccurrence(occurrence) => occurrences.push(occurrence),
-            crate::core::StoreWrite::AppendEvent(envelope) => {
-                if let Event::Update { update } = envelope.event
-                    && update["sessionUpdate"] == "cowboy_subagent"
-                    && update["state"] == "idle"
-                {
-                    terminal.push(update["terminalSeq"].as_u64().unwrap());
-                }
+        if let crate::core::StoreWrite::AppendEvent(envelope) = write {
+            occurrences.extend(occurrence_of(&envelope));
+            if let Event::Update { update } = envelope.event
+                && update["sessionUpdate"] == "cowboy_subagent"
+                && update["state"] == "idle"
+            {
+                terminal.push(update["terminalSeq"].as_u64().unwrap());
             }
-            _ => {}
         }
     }
     assert_eq!(occurrences.len(), 2, "{occurrences:?}");

@@ -666,8 +666,8 @@ mod machine_scope_and_tools {
         assert_eq!(set(&hub, &parent, "continued", enable.clone()), DENIED);
         let continued = hub.session_info("continued").unwrap().meta;
         assert_eq!(set(&hub, &continued, "parent", enable.clone()), DENIED);
-        // Outside the lineage this gate does not apply.
-        assert_eq!(set(&hub, &parent, "stranger", enable), Ok(()));
+        // A copy or a created session shares no lineage, and is no way around it.
+        assert_eq!(set(&hub, &parent, "stranger", enable), DENIED);
         // Keeping or narrowing policy stays available to the agent.
         assert_eq!(
             set(

@@ -24,6 +24,9 @@ pub const CALL_PREFIX: &str = "call:";
 pub const BACKFILL_SENTINEL: &str = "backfill:v1";
 /// Anchors the Hub warms from the table at start, newest first.
 pub const HUB_WARM_ANCHORS: usize = 16_384;
+/// Snapshot identities restored at start. Far above the Hub's anchors: a child
+/// without one would look newly ended when its next snapshot arrives.
+pub const WARM_SNAPSHOT_MARKS: usize = 200_000;
 /// Anchors each process keeps in memory before the least recently used is
 /// forgotten (and later resolved through the store again).
 pub const INDEX_CAPACITY: usize = 16_384;
@@ -309,7 +312,15 @@ pub fn mark_of(update: &Value) -> SnapshotMark {
         revision: update.get("revision").and_then(Value::as_u64).unwrap_or(0),
         digest: snapshot_digest(update),
         terminal: subagent_terminal(update),
-        terminal_seq: update.get("terminalSeq").and_then(Value::as_u64),
+        // A row from before stamping keeps the marker it was acknowledged under.
+        terminal_seq: update
+            .get("terminalSeq")
+            .or_else(|| {
+                update
+                    .get("observedSeq")
+                    .filter(|_| subagent_terminal(update))
+            })
+            .and_then(Value::as_u64),
     }
 }
 

@@ -5680,7 +5680,6 @@ impl Hub {
         {
             tracing::warn!(%error, session_id, "live image externalize failed");
         }
-        let mut occurrence = None;
         // A subagent snapshot is fenced by its producer identity (I4) before
         // it receives a seq: an exact duplicate or an older revision of the
         // same worker incarnation never becomes a newer observation.
@@ -5751,20 +5750,6 @@ impl Hub {
                     _ => {}
                 }
             }
-            if let (Some(child), Some(SubagentEnding::Ended), Event::Update { update }) =
-                (&subagent_child, subagent_ending, &event)
-            {
-                occurrence = crate::task_notifications::subagent_outcome(update).map(|category| {
-                    crate::task_notifications::Occurrence::subagent(
-                        session_id, child, seq, category,
-                    )
-                });
-            }
-            if matches!(event, Event::PermissionRequest { .. }) {
-                occurrence = Some(crate::task_notifications::Occurrence::permission(
-                    session_id, seq,
-                ));
-            }
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
                 seq,
@@ -5834,9 +5819,6 @@ impl Hub {
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
-            if let Some(occurrence) = occurrence {
-                let _ = tx.send(StoreWrite::RecordOccurrence(occurrence));
-            }
             if let Some(agent_session_id) = durable_agent_session_id {
                 let _ = tx.send(StoreWrite::SetAgentSessionId {
                     session_id: session_id.to_owned(),

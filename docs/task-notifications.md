@@ -74,9 +74,10 @@ Rules:
 - **Execution failure is not a review result.** A completed review with findings
   is a completion. `cancelled`, `Stopped`, `Ended` and `Not reporting` never
   notify.
-- **Write order.** A Call intent commits in the ledger transaction. An incident's
-  is written by the same store write, right after the incident. An event's goes
-  through the store writer directly after its event.
+- **Write order.** A Call intent commits in the ledger transaction. The store
+  writer derives an event's intent from the event and commits both in one batch.
+  An incident's is written right after the incident, including turn failures and
+  crashes, whose incidents come from the lifecycle stream.
 - **Durability boundary.** An event intent is exactly as durable as the event.
   The worker frame is acknowledged after projection, before the writer commits,
   so a Controller crash in that window loses the transcript row and its intent
@@ -142,7 +143,8 @@ deletes it on hide. Leases live in Controller memory per account and device.
 **Input ignores presence**: it is delivered to every device, always.
 
 A due failure or completion whose session has a live lease of that account is
-**deferred** to the lease's expiry and re-evaluated then. While the person stays
+**deferred** to the lease's expiry and re-evaluated then, at every attempt. The
+audience is frozen first, so deferral never admits a later enrollment. While the person stays
 it keeps deferring until acknowledged or expired; if they leave without opening
 it, a stale lease costs at most 30 seconds and the push still goes out. A
 Controller restart empties the table, which delivers.

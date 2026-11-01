@@ -846,8 +846,20 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         if available {
             read_only_providers.push(provider);
         }
+        // Through the image profile, as scoped discovery and admission do: a
+        // Machine can run read-only work and still refuse images.
         if native_capabilities.contains(&"image.generate")
             && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
+            && child_runtime(
+                state,
+                &placement.machine_id,
+                Some(meta.machine_id.as_str()),
+                provider,
+                cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+            )
+            .await
+            .1
+            .available
         {
             image_providers.push(provider);
         }
@@ -973,11 +985,10 @@ async fn start(
     let policy = agent_tools::effective(state, meta).calls;
     // Before any approval: a person changes this in Tools, and neither Allow
     // once nor Allow for session may override it.
-    let image = request.purpose.is_image();
-    if image && !policy.images {
-        return error("capability_disabled", "not_submitted");
+    if let Some(code) = agent_tools::capability_refusal(&policy, request.purpose.is_image()) {
+        return error(code, "not_submitted");
     }
-    let own_family = image && policy.self_images;
+    let own_family = request.purpose.is_image() && policy.self_images;
     // A continued conversation keeps its own agent.
     let continued = match &request.conversation {
         Conversation::Continue { child_session_id } => {

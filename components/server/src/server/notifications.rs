@@ -22,9 +22,13 @@ use tokio::sync::watch;
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use crate::config::schema::NOTIFICATIONS_DELIVERY;
+use crate::core::Event;
 use crate::store::Store;
 use crate::store::task_notifications::{Delivery, Intent, StoredSubscription};
-use crate::task_notifications::{APPROVAL_PREFIX, Category, PERMISSION_PREFIX};
+use crate::task_notifications::{
+    APPROVAL_PREFIX, Category, Occurrence, PERMISSION_PREFIX, subagent_outcome,
+};
+use crate::transcript_anchors::SUBAGENT_UPDATE;
 use crate::web_push::{
     PushRequest, SubscriptionKeys, WebPushPreferences, WebPushSubscription, endpoint_sha256,
     push_topic, safe_session_id, validate_subscription,
@@ -169,6 +173,30 @@ fn preferences(subscription: &StoredSubscription) -> Option<WebPushPreferences> 
     serde_json::from_str(&subscription.preferences).ok()
 }
 
+/// The occurrence an event carries, committed in the event's own batch.
+pub(super) fn occurrence_of(envelope: &crate::core::Envelope) -> Option<Occurrence> {
+    match &envelope.event {
+        Event::PermissionRequest { .. } => {
+            Some(Occurrence::permission(&envelope.session_id, envelope.seq))
+        }
+        // Only the snapshot that started a terminal occurrence names its own seq.
+        Event::Update { update }
+            if update.get("sessionUpdate").and_then(Value::as_str) == Some(SUBAGENT_UPDATE)
+                && update.get("terminalSeq").and_then(Value::as_u64) == Some(envelope.seq) =>
+        {
+            let child = update.get("sessionId").and_then(Value::as_str)?;
+            let category = subagent_outcome(update)?;
+            Some(Occurrence::subagent(
+                &envelope.session_id,
+                child,
+                envelope.seq,
+                category,
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Turn due intents into deliveries with a frozen audience.
 async fn expand(state: &AppState, store: &Store, now: i64) -> anyhow::Result<()> {
     for intent in store.due_intents(now, BATCH).await? {
@@ -179,17 +207,6 @@ async fn expand(state: &AppState, store: &Store, now: i64) -> anyhow::Result<()>
         }
         if !deliverable(state, store, &intent).await? {
             store.finish_intent(&intent.dedupe_key, "resolved").await?;
-            continue;
-        }
-        // Input ignores presence: a request never depends on a row being noticed.
-        if intent.category != Category::Input
-            && let Some(until) =
-                state
-                    .notifications
-                    .held_until(&intent.owner_user_id, &intent.session_id, now)
-        {
-            COUNTERS.deferred.fetch_add(1, Ordering::Relaxed);
-            store.defer_intent(&intent.dedupe_key, until).await?;
             continue;
         }
         let audience: Vec<String> = store
@@ -326,8 +343,9 @@ async fn send_group(
     store: &Store,
     endpoint: &str,
     group: Vec<Delivery>,
-    now: i64,
 ) -> anyhow::Result<()> {
+    // Sends are sequential: expiry, presence and backoff use this send's time.
+    let now = now_ms();
     let Some(subscription) = store.web_push_subscription(endpoint).await? else {
         return settle(store, &group, "dropped").await;
     };
@@ -352,6 +370,29 @@ async fn send_group(
     let Some(first) = live.first() else {
         return Ok(());
     };
+    // Input ignores presence: a request never depends on a row being noticed.
+    if first.intent.category != Category::Input
+        && let Some(until) = state.notifications.held_until(
+            &first.intent.owner_user_id,
+            &first.intent.session_id,
+            now,
+        )
+    {
+        COUNTERS
+            .deferred
+            .fetch_add(live.len() as u64, Ordering::Relaxed);
+        for delivery in &live {
+            store
+                .retry_delivery(
+                    &delivery.intent.dedupe_key,
+                    &delivery.endpoint_sha256,
+                    delivery.attempts,
+                    until,
+                )
+                .await?;
+        }
+        return Ok(());
+    }
     let title = state
         .hub
         .session_info(&first.intent.session_id)
@@ -393,7 +434,7 @@ async fn send_group(
         }
         Ok(response) if retryable(response.status) => {
             tracing::warn!(status = %response.status, "Web Push service asked to retry");
-            retry(store, &live, response.retry_after, now).await
+            retry(store, &live, response.retry_after, now_ms()).await
         }
         Ok(response) => {
             tracing::warn!(status = %response.status, "Web Push service rejected notification");
@@ -404,7 +445,7 @@ async fn send_group(
         }
         Err(error) => {
             tracing::warn!(%error, "Web Push delivery failed");
-            retry(store, &live, None, now).await
+            retry(store, &live, None, now_ms()).await
         }
     }
 }
@@ -431,7 +472,7 @@ async fn tick(state: &AppState, store: &Store, now: i64) -> anyhow::Result<()> {
     expand(state, store, now).await?;
     let deliveries = store.due_deliveries(now, BATCH).await?;
     for ((endpoint, _), group) in grouped(deliveries) {
-        send_group(state, store, &endpoint, group, now).await?;
+        send_group(state, store, &endpoint, group).await?;
     }
     Ok(())
 }

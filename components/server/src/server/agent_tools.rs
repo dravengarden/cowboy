@@ -541,6 +541,11 @@ pub(super) fn inherited_settings(
     settings
 }
 
+/// A refusal no approval can answer, checked before any is asked for.
+pub(super) fn capability_refusal(policy: &CallsPolicy, image: bool) -> Option<&'static str> {
+    (image && !policy.images).then_some("capability_disabled")
+}
+
 /// Why `provider` cannot run an image call for `caller`, or `None`. Admission
 /// (through `choose`) and both forms of discovery agree through this.
 pub(super) fn image_refusal(
@@ -1256,6 +1261,23 @@ mod tests {
         narrowed.targets.clear();
         assert_eq!(refusal(&narrowed, "claude-code"), Some("policy_denied"));
         assert_eq!(refusal(&narrowed, "codex"), None);
+    }
+
+    #[test]
+    fn a_disabled_capability_is_refused_whatever_approval_would_grant() {
+        let off = policy(false, true);
+        assert_eq!(capability_refusal(&off, true), Some("capability_disabled"));
+        assert_eq!(
+            capability_refusal(&allow_once(off.clone(), "codex", "claude-code"), true),
+            Some("capability_disabled"),
+            "Allow once leaves the switch alone"
+        );
+        assert_eq!(
+            capability_refusal(&off, false),
+            None,
+            "a review is not an image"
+        );
+        assert_eq!(capability_refusal(&policy(true, false), true), None);
     }
 
     #[test]

@@ -1411,7 +1411,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Err(error) => tracing::warn!(%error, "warming transcript anchors failed"),
             }
             match store
-                .recent_subagent_snapshots(crate::transcript_anchors::HUB_WARM_ANCHORS)
+                .recent_subagent_snapshots(crate::transcript_anchors::WARM_SNAPSHOT_MARKS)
                 .await
             {
                 Ok(snapshots) => hub.warm_subagent_marks(snapshots),
@@ -2307,13 +2307,14 @@ async fn apply_store_batch(
     let mut events: BTreeMap<(String, u64), Envelope> = BTreeMap::new();
     let mut highwaters: HashMap<String, u64> = HashMap::new();
     let mut anchors: Vec<crate::transcript_anchors::AnchorWrite> = Vec::new();
-    let mut occurrences = Vec::new();
+    let mut occurrences: Vec<crate::task_notifications::Occurrence> = Vec::new();
     let mut ok = true;
     for write in writes {
         match write {
-            // An occurrence must not split the batch around it.
-            write @ StoreWrite::RecordOccurrence(_) => occurrences.push(write),
+            // Committed with the batch, so it never splits one.
+            StoreWrite::RecordOccurrence(occurrence) => occurrences.push(occurrence),
             StoreWrite::AppendEvent(env) => {
+                occurrences.extend(notifications::occurrence_of(&env));
                 highwaters
                     .entry(env.session_id.clone())
                     .and_modify(|seq| *seq = (*seq).max(env.seq.saturating_add(1)))
@@ -2361,22 +2362,41 @@ async fn apply_store_batch(
                 }
             }
             StoreWrite::ClearEvents { ref session_id, .. } => {
-                ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors)
-                    .await;
+                ok &= flush_event_batch(
+                    store,
+                    reducer,
+                    &mut events,
+                    &mut highwaters,
+                    &mut anchors,
+                    &mut occurrences,
+                )
+                .await;
                 reducer.clear_session(session_id);
                 ok &= retry_store_write(store, &write).await;
             }
             other => {
-                ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors)
-                    .await;
+                ok &= flush_event_batch(
+                    store,
+                    reducer,
+                    &mut events,
+                    &mut highwaters,
+                    &mut anchors,
+                    &mut occurrences,
+                )
+                .await;
                 ok &= retry_store_write(store, &other).await;
             }
         }
     }
-    ok &= flush_event_batch(store, reducer, &mut events, &mut highwaters, &mut anchors).await;
-    for write in &occurrences {
-        ok &= retry_store_write(store, write).await;
-    }
+    ok &= flush_event_batch(
+        store,
+        reducer,
+        &mut events,
+        &mut highwaters,
+        &mut anchors,
+        &mut occurrences,
+    )
+    .await;
     ok
 }
 
@@ -2386,17 +2406,19 @@ async fn flush_event_batch(
     events: &mut BTreeMap<(String, u64), Envelope>,
     highwaters: &mut HashMap<String, u64>,
     anchors: &mut Vec<crate::transcript_anchors::AnchorWrite>,
+    occurrences: &mut Vec<crate::task_notifications::Occurrence>,
 ) -> bool {
-    if events.is_empty() && highwaters.is_empty() && anchors.is_empty() {
+    if events.is_empty() && highwaters.is_empty() && anchors.is_empty() && occurrences.is_empty() {
         return true;
     }
     let rows: Vec<Envelope> = std::mem::take(events).into_values().collect();
     let watermarks = std::mem::take(highwaters);
     let new_anchors = std::mem::take(anchors);
+    let new_occurrences = std::mem::take(occurrences);
     let mut last_error = None;
     for attempt in 0..4 {
         match store
-            .upsert_event_batch_with_anchors(&rows, &watermarks, &new_anchors)
+            .upsert_event_batch_with_anchors(&rows, &watermarks, &new_anchors, &new_occurrences)
             .await
         {
             Ok(()) => {
@@ -2460,6 +2482,15 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                         "truncated": truncated,
                     }),
                 })
+                .await?;
+            store
+                .record_occurrence(
+                    &crate::task_notifications::Occurrence::incident(
+                        &envelope.session_id,
+                        &incident_id,
+                    ),
+                    occurred_at_ms,
+                )
                 .await?;
             tracing::error!(
                 incident_id,
@@ -2534,6 +2565,18 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                 }),
             })
             .await?;
+        // A crash has nobody watching it end; an interruption is recovered.
+        if *status == Status::Crashed {
+            store
+                .record_occurrence(
+                    &crate::task_notifications::Occurrence::incident(
+                        &envelope.session_id,
+                        &incident_id,
+                    ),
+                    occurred_at_ms,
+                )
+                .await?;
+        }
         tracing::error!(
             incident_id,
             session_id = %envelope.session_id,
