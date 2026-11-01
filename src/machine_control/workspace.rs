@@ -19,6 +19,7 @@ const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WORKTREE_SCOPES: usize = 256;
 
 /// What a candidate worktree path named before its membership was proved.
+#[derive(Clone, Copy)]
 pub struct WorktreeObservation(LocalRoot);
 
 fn worktree_key(parent: &WorkspaceCodeScope, path: &str) -> (String, String, String) {
