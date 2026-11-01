@@ -349,6 +349,7 @@ mod tests {
 
     /// One real request to a local push service: the RFC 8030 headers arrive and
     /// `Retry-After` comes back.
+    #[cfg(feature = "full")]
     #[tokio::test]
     async fn a_push_carries_its_delivery_headers() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
