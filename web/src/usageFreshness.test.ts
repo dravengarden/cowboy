@@ -51,6 +51,7 @@ test("a failed attempt keeps the old age and explains the retry", () => {
         manual_refresh_after_ms: now + 12 * 60_000,
         next_auto_refresh_at_ms: now + 12 * 60_000,
         stale: true,
+        failures: 3,
       },
     }),
     now,
@@ -91,4 +92,24 @@ test("manual refresh reports the remaining cooldown", () => {
   });
   assertEquals(manualRefreshWaitMinutes(cooling, now), 3);
   assertEquals(manualRefreshWaitMinutes(usage({}), now), 0);
+});
+
+test("a failure inside the quick retries stays quiet", () => {
+  const retrying = usageFreshness(
+    usage({
+      error: "OpenAI usage is temporarily unavailable. Showing the last update.",
+      refresh: {
+        last_attempt_at_ms: minutes(1),
+        manual_refresh_after_ms: now + 60_000,
+        next_auto_refresh_at_ms: now + 60_000,
+        stale: true,
+        failures: 1,
+      },
+    }),
+    now,
+    false,
+  );
+  assertEquals(retrying?.label, "2m ago");
+  assertEquals(retrying?.tone, "normal");
+  assertEquals(retrying?.failure, undefined);
 });

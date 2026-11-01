@@ -42,6 +42,15 @@ pub struct ProviderRefreshState {
     pub manual_refresh_after_ms: i64,
     pub next_auto_refresh_at_ms: i64,
     pub stale: bool,
+    /// Consecutive failed attempts since the last success. Clients stay quiet
+    /// until the quick retries are exhausted.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failures: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -624,6 +633,7 @@ impl UsageService {
                         manual_refresh_after_ms: retry_at_ms,
                         next_auto_refresh_at_ms: retry_at_ms,
                         stale: stopped || usage.refresh.as_ref().is_some_and(|state| state.stale),
+                        failures: usage.refresh.as_ref().map_or(0, |state| state.failures),
                     });
                     if stopped {
                         usage.error = Some("Usage collection is paused. The Service admission ledger needs repair and a restart.".into());
@@ -637,22 +647,26 @@ impl UsageService {
         };
         let (attempt, local_failure) = self.collect_binding(binding).await;
         let completed_at_ms = now_ms();
+        let detail = attempt.error.as_deref().unwrap_or("");
         let outcome = if matches!(attempt.status, "available" | "exhausted") {
             limiter::Outcome::Success
-        } else if classify_usage_failure(attempt.error.as_deref().unwrap_or(""))
-            == UsageFailureKind::Authentication
-        {
+        } else if classify_usage_failure(detail) == UsageFailureKind::Authentication {
             limiter::Outcome::Authentication
         } else if local_failure
-            || classify_usage_failure(attempt.error.as_deref().unwrap_or(""))
-                == UsageFailureKind::Configuration
+            || classify_usage_failure(detail) == UsageFailureKind::Configuration
+            || never_dispatched(detail)
         {
             limiter::Outcome::LocalFailure
+        } else if provider_throttled(detail) {
+            limiter::Outcome::Throttled
         } else {
             limiter::Outcome::Failure
         };
         permit.finish(outcome, completed_at_ms);
         let budget = self.limiter.view(&binding.account, &key, completed_at_ms);
+        let failures = self.limiter.account_failures(&key);
+        let quick_retry = outcome != limiter::Outcome::Authentication
+            && (1..=limiter::QUICK_RETRIES).contains(&failures);
         let bindings = self.bindings.current();
         {
             let mut snapshot = self.snapshot.lock().await;
@@ -664,12 +678,20 @@ impl UsageService {
                 .find(|usage| usage.provider == binding.account)
                 .and_then(|usage| usage.refresh.as_mut())
             {
-                refresh.manual_refresh_after_ms = refresh
-                    .manual_refresh_after_ms
-                    .max(budget.retry_at_ms(completed_at_ms));
-                refresh.next_auto_refresh_at_ms = refresh
-                    .next_auto_refresh_at_ms
-                    .max(budget.retry_at_ms(completed_at_ms));
+                refresh.failures = failures;
+                if quick_retry {
+                    // Retry at the limiter's quick deadline rather than the
+                    // ordinary transient interval.
+                    refresh.manual_refresh_after_ms = budget.retry_at_ms(completed_at_ms);
+                    refresh.next_auto_refresh_at_ms = budget.retry_at_ms(completed_at_ms);
+                } else {
+                    refresh.manual_refresh_after_ms = refresh
+                        .manual_refresh_after_ms
+                        .max(budget.retry_at_ms(completed_at_ms));
+                    refresh.next_auto_refresh_at_ms = refresh
+                        .next_auto_refresh_at_ms
+                        .max(budget.retry_at_ms(completed_at_ms));
+                }
             }
             update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
             self.persist_snapshot(&snapshot);
@@ -1056,6 +1078,25 @@ fn find_provider<'a>(snapshot: &'a UsageSnapshot, provider: &str) -> Option<&'a 
         .find(|candidate| candidate.provider == provider)
 }
 
+/// A failure the Machine reports before invoking the collector: nothing
+/// reached the Provider, so it must not pause the Provider's other accounts.
+fn never_dispatched(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("changed before host invocation")
+        || detail.contains("has no matching active plugin generation")
+}
+
+/// The Provider itself asked us to slow down: never retry quickly.
+fn provider_throttled(detail: &str) -> bool {
+    // Not "rate limit": collectors read the "rate limits" endpoints, so their
+    // ordinary failures name them.
+    let detail = detail.to_ascii_lowercase();
+    contains_http_status(&detail, 429)
+        || ["too many requests", "rate limited", "rate_limit_exceeded"]
+            .iter()
+            .any(|needle| detail.contains(needle))
+}
+
 fn provider_refresh_due(
     usage: Option<&ProviderUsage>,
     current_time_ms: i64,
@@ -1064,11 +1105,15 @@ fn provider_refresh_due(
     let Some(refresh) = usage.and_then(|usage| usage.refresh.as_ref()) else {
         return true;
     };
-    // Old cache files may contain the former 30-second manual cooldown.
-    if current_time_ms
-        < refresh
-            .last_attempt_at_ms
-            .saturating_add(duration_ms(AUTO_REFRESH_INTERVAL))
+    // Old cache files may contain the former 30-second manual cooldown. A
+    // pending quick retry is due by its own deadline; the durable limiter
+    // still enforces the Provider window and spacing.
+    let quick_retry = (1..=limiter::QUICK_RETRIES).contains(&refresh.failures);
+    if !quick_retry
+        && current_time_ms
+            < refresh
+                .last_attempt_at_ms
+                .saturating_add(duration_ms(AUTO_REFRESH_INTERVAL))
     {
         return false;
     }
@@ -1221,6 +1266,7 @@ fn refresh_state(
             .saturating_add(duration_ms(MANUAL_REFRESH_COOLDOWN)),
         next_auto_refresh_at_ms: attempted_at_ms.saturating_add(duration_ms(next_auto_interval)),
         stale,
+        failures: 0,
     }
 }
 
@@ -2499,11 +2545,50 @@ mod tests {
             manual_refresh_after_ms: 31_000,
             next_auto_refresh_at_ms: 61_000,
             stale: true,
+            failures: 0,
         });
         for policy in [RefreshPolicy::Manual, RefreshPolicy::Background] {
             assert!(!provider_refresh_due(Some(&usage), 300_999, policy));
             assert!(provider_refresh_due(Some(&usage), 301_000, policy));
         }
+        // A pending quick retry is due at its own deadline, before the
+        // ordinary interval; once retries are exhausted the interval returns.
+        for (failures, due_at_61s) in [(1, true), (2, true), (3, false)] {
+            usage.refresh = Some(ProviderRefreshState {
+                last_attempt_at_ms: 1_000,
+                manual_refresh_after_ms: 61_000,
+                next_auto_refresh_at_ms: 61_000,
+                stale: true,
+                failures,
+            });
+            assert_eq!(
+                provider_refresh_due(Some(&usage), 61_000, RefreshPolicy::Background),
+                due_at_61s,
+                "{failures} failures"
+            );
+            assert!(!provider_refresh_due(
+                Some(&usage),
+                60_999,
+                RefreshPolicy::Background
+            ));
+        }
+    }
+
+    #[test]
+    fn quick_retries_skip_throttling_and_failures_that_never_left_the_machine() {
+        assert!(never_dispatched(
+            "active Plugin or authentication generation changed before host invocation"
+        ));
+        assert!(never_dispatched(
+            "Configured usage Machine ovh is temporarily unavailable or has no matching active Plugin generation"
+        ));
+        assert!(!never_dispatched("Machine Plugin host request timed out"));
+        assert!(provider_throttled(
+            "GET /usage failed: status 429 Too Many Requests"
+        ));
+        assert!(!provider_throttled(
+            "failed to fetch codex rate limits: Machine Plugin host request timed out"
+        ));
     }
 
     #[test]

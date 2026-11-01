@@ -1,4 +1,4 @@
-import type { ProviderUsage } from "./usageLimits";
+import { type ProviderUsage, usageFailureIsPersistent } from "./usageLimits";
 
 /** Service accounts are collected every five minutes; twice that is late. */
 export const USAGE_STALE_AFTER_MS = 10 * 60_000;
@@ -60,12 +60,13 @@ export function usageFreshness(
   if (!Number.isFinite(observed) || observed <= 0) return undefined;
   const failed = typeof usage.error === "string" && usage.error.trim() !== "";
   if (failed && !hasNumbers(usage)) return undefined;
+  // A failure still inside the Service's quick retries stays quiet.
+  const persistent = failed && usageFailureIsPersistent(usage);
   const sessionOnly = usage.status === "session-only";
   const age = freshnessAge(observed, now);
-  const stale = usage.refresh?.stale === true || failed ||
-    now - observed > USAGE_STALE_AFTER_MS;
+  const stale = persistent || now - observed > USAGE_STALE_AFTER_MS;
   let failure: string | undefined;
-  if (failed && usage.refresh) {
+  if (persistent && usage.refresh) {
     const parts = [
       `Last try failed ${freshnessAge(usage.refresh.last_attempt_at_ms, now)}`,
     ];
