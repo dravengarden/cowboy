@@ -2,7 +2,7 @@ import type { GitComparison, GitChangeTarget } from "./codeApi.ts";
 
 /** A reason to look at changes, offered before the branch it resolves to. */
 export interface ReviewCompareScenario {
-  readonly key: "uncommitted" | "merge" | "unpushed";
+  readonly key: "uncommitted" | "session" | "merge" | "unpushed";
   readonly title: string;
   readonly detail: string;
   readonly comparison: string | null;
@@ -34,6 +34,17 @@ export function reviewCompareScenarios(
     detail: "Staged and unstaged work",
     comparison: null,
   }];
+  const sessionBase = comparisons.find((item) =>
+    item.reference.startsWith("refs/cowboy/session-bases/")
+  );
+  if (sessionBase) {
+    scenarios.push({
+      key: "session",
+      title: "This session",
+      detail: "Since it started, including anything merged in and uncommitted work",
+      comparison: sessionBase.reference,
+    });
+  }
   const label = (reference: string): string | undefined =>
     comparisons.find((item) => item.reference === reference)?.label;
   const base = defaultComparison ? label(defaultComparison) : undefined;
@@ -74,6 +85,7 @@ export function reviewCompareLabel(
       reference;
   const scenario = scenarios.find((item) => item.comparison === comparison);
   if (!scenario) return `Branch · ${branch}`;
+  if (scenario.key === "session") return scenario.title;
   return branch ? `${scenario.title} · ${branch}` : scenario.title;
 }
 

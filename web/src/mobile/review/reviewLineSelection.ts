@@ -103,7 +103,8 @@ export function reviewSelectionMessage(
   const marker = fence(snippet);
   const language = kind === "diff" ? "diff" : "";
   const against = comparison
-    ? ` (compared with ${comparison.replace(/^(committed:)?refs\/(heads|remotes)\//, "")})`
+    ? ` (compared with ${comparison.replace(/^refs\/cowboy\/session-bases\/.*/, "session start")
+      .replace(/^(committed:)?refs\/(heads|remotes)\//, "")})`
     : "";
   return `\`${selectionLocation(path, text, kind, selection)}\`${against}\n` +
     `${marker}${language}\n${snippet}\n${marker}\n\n`;

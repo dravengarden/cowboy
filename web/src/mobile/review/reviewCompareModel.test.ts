@@ -110,3 +110,20 @@ test("fetch age stays short and only remote branches fetch", () => {
   assertEquals(comparisonFetchable(other.reference), false);
   assertEquals(comparisonFetchable(null), false);
 });
+
+test("a recorded session start is offered as a scenario, not a branch", () => {
+  const start = {
+    reference: "refs/cowboy/session-bases/sess-1",
+    label: "session start",
+  };
+  const all = [...comparisons, start];
+  const scenarios = reviewCompareScenarios(target, all, main.reference);
+  assertEquals(scenarios.map((item) => item.key), [
+    "uncommitted",
+    "session",
+    "merge",
+    "unpushed",
+  ]);
+  assertEquals(reviewCompareLabel(start.reference, scenarios, all), "This session");
+  assertEquals(reviewCompareBranches(all, scenarios, ""), [other]);
+});

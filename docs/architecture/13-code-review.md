@@ -214,6 +214,14 @@ file time, shown under the comparison. Diff snapshots are keyed by comparison
 name, so a fetch forgets the session's snapshots. Repeating a fetch is harmless,
 so it keeps no receipt. Machine adapters do not offer it yet.
 
+An isolated session worktree records where it started in
+`refs/cowboy/session-bases/<session>`, and Changes offers that as **This session**.
+Forks, reused branches and project checkouts have no such record, so they do not
+offer it. It stays an option and not the default: after a merge from the default
+branch it also lists what came in, which **Ready to merge** leaves out. Nothing
+is reconstructed for sessions that lack the ref, and a repository a session only
+reached later has no start of its own.
+
 When an installed workspace extension offers pull requests, the same drawer
 shows the pull request of the target branch and of each worktree, and lists
 open pull requests that are not checked out. See

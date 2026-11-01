@@ -465,6 +465,35 @@ impl LocalCodeProvider {
         }
         comparisons.sort_by(|left, right| left.label.cmp(&right.label));
         comparisons.dedup_by(|left, right| left.reference == right.reference);
+        // An isolated worktree keeps where its session started, under the id
+        // its branch carries. Other branches have no such record to compare.
+        let session_base = git_output(
+            &self.root,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+            512,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|branch| {
+            branch
+                .trim()
+                .strip_prefix("cowboy/")
+                .map(|session| format!("refs/cowboy/session-bases/{session}"))
+        })
+        .filter(|reference| {
+            git_output(
+                &self.root,
+                &["rev-parse", "--verify", "--quiet", reference],
+                256,
+            )
+            .is_ok()
+        });
+        if let Some(reference) = session_base {
+            comparisons.push(GitComparison {
+                reference,
+                label: "session start".to_owned(),
+            });
+        }
 
         let remote_head = git_output(
             &self.root,
@@ -2107,6 +2136,43 @@ mod tests {
         fs::remove_dir_all(linked).unwrap();
         fs::remove_dir_all(other).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_session_branch_offers_where_the_session_started() {
+        let dir = scratch("session-base");
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .status()
+                .unwrap();
+        };
+        git(&["update-ref", "refs/cowboy/session-bases/sess-1", "HEAD"]);
+        let base = "refs/cowboy/session-bases/sess-1";
+        let provider = LocalCodeProvider::new(&dir);
+        let offered = |provider: &LocalCodeProvider| {
+            provider
+                .changes(None)
+                .unwrap()
+                .comparisons
+                .iter()
+                .any(|item| item.reference == base)
+        };
+        assert!(!offered(&provider), "another branch has no record");
+        git(&["checkout", "-qb", "cowboy/sess-2"]);
+        assert!(
+            !offered(&provider),
+            "another session's record is not this one"
+        );
+        git(&["checkout", "-qb", "cowboy/sess-1"]);
+        assert!(offered(&provider));
+        fs::write(dir.join("tracked.rs"), "fn since_start() {}\n").unwrap();
+        git(&["commit", "-qam", "session work"]);
+        let changes = provider.changes(Some(base)).unwrap();
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].path, "tracked.rs");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
