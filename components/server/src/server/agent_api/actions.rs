@@ -260,6 +260,9 @@ fn call_result(mut value: Value) -> Value {
         map.remove("next");
     }
     if value["state"] == "error" && value.get("call_id").is_none() {
+        // The gateway treats a reply without its schema as an uncertain outcome,
+        // which would report a definite refusal as `outcome_unknown`.
+        value["schema"] = json!(1);
         value
     } else {
         success(value)
@@ -779,6 +782,19 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_call_keeps_the_schema_the_gateway_requires() {
+        let refused = call_result(
+            json!({"schema":1,"state":"error","error":{"code":"capability_disabled","admission":"not_submitted"}}),
+        );
+        assert_eq!(refused["schema"], 1);
+        assert_eq!(refused["error"]["code"], "capability_disabled");
+        assert_eq!(refused["error"]["admission"], "not_submitted");
+        let started = call_result(json!({"schema":1,"state":"queued","call_id":"c"}));
+        assert_eq!(started["schema"], 1);
+        assert_eq!(started["value"]["call_id"], "c");
+    }
 
     #[test]
     fn attachment_replacement_requires_an_explicit_list() {

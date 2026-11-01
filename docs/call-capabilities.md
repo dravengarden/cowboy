@@ -149,6 +149,13 @@ Live: from a Codex session on Hawk with `self_images` on, one real `image.genera
 call with its artifact verified; then a new `request_id` refused after turning
 `images` off.
 
+The live run on 2026-11-01 from a Claude session covered discovery, a real image
+through Codex, narrowing, a known `request_id` replaying its original call, and an
+agent's enable refused with `tools_widening_denied`. It found that every refused
+call reached MCP as `outcome_unknown`, because the reply lost the schema the
+gateway requires; that was fixed. `self_images` needs a person to turn it on, so
+the Codex self-call above is outstanding.
+
 ## Later slices
 
 Each needs its own contract:
