@@ -253,6 +253,7 @@ import {
 import { FloatingActionIsland } from "@cowboy/app-shell";
 import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
 import { Sheet } from "./Sheet";
+import { watchTranscriptScroll } from "./transcriptScrollWatch";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
@@ -3922,6 +3923,11 @@ export function Transcript({
   const showTrailingDots = working && !lastIsStreamingAssistant &&
     !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const scroller = parentRef.current;
+    if (!scroller || desktopNavigation) return;
+    return watchTranscriptScroll(scroller, sessionId);
+  }, [desktopNavigation, sessionId]);
   const managesScrollHistoryRef = useRef(managesScrollHistory);
   managesScrollHistoryRef.current = managesScrollHistory;
   const magneticHapticsRef = useRef(magneticHaptics);
