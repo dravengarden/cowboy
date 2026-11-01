@@ -7,6 +7,8 @@ export type SessionNotificationCategory =
 export type NotificationPermissionState = NotificationPermission | "unsupported";
 
 export interface SystemNotificationPreferences {
+  /** 2 is the first with an explicit completion opt-in. */
+  schema: 2;
   enabled: boolean;
   showSessionNames: boolean;
   categories: Record<SessionNotificationCategory, boolean>;
@@ -15,9 +17,10 @@ export interface SystemNotificationPreferences {
 
 export const DEFAULT_SYSTEM_NOTIFICATION_PREFERENCES:
   SystemNotificationPreferences = {
+    schema: 2,
     enabled: false,
     showSessionNames: false,
-    categories: { completed: true, input: true, permission: true, error: true },
+    categories: { completed: false, input: true, permission: true, error: true },
     mutedSessionIds: [],
   };
 

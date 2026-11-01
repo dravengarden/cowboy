@@ -549,7 +549,7 @@ export interface SubagentSummaryContext {
 /** The terminal marker an acknowledgement is bound to. A later failure of the
  *  same entity (a resumed child) is unseen again. */
 function subagentMarker(subagent: Subagent): string {
-  return String(subagent.observedSeq ?? subagent.revision);
+  return String(subagent.terminalSeq ?? subagent.observedSeq ?? subagent.revision);
 }
 
 export function subagentSummary(
@@ -912,22 +912,96 @@ const acknowledgements = persisted<string[]>("cowboy:background-tasks:ack", [], 
   },
 });
 
-export function useAcknowledgements(): (key: string, marker: string) => boolean {
-  const list = useStore(acknowledgements);
-  const set = new Set(list);
-  return (key, marker) => set.has(`${key}@${marker}`);
+export interface TaskAcknowledgement {
+  task_key: string;
+  marker: string;
 }
 
-export function acknowledgeTask(task: TaskSummary): void {
+// The account's acknowledgements per session, from the focused bootstrap.
+const accountAcknowledgements = new Map<string, ReadonlySet<string>>();
+let accountAcknowledgementsVersion = 0;
+const accountListeners = new Set<() => void>();
+// Accepted locally, not yet by the Controller; the next bootstrap retries.
+const unsentAcknowledgements = new Map<string, TaskAcknowledgement[]>();
+
+function entryOf(key: string, marker: string): string {
+  return `${key}@${marker}`;
+}
+
+type AcknowledgementTransport = (sessionId: string, ack: TaskAcknowledgement) => Promise<boolean>;
+
+async function postAcknowledgement(sessionId: string, ack: TaskAcknowledgement): Promise<boolean> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tasks/acknowledge`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(ack),
+    },
+  );
+  // A Controller older than the contract keeps this a device-local fact.
+  return response.ok || response.status === 404 || response.status === 405;
+}
+
+let acknowledgementTransport: AcknowledgementTransport = postAcknowledgement;
+
+/** Fixtures substitute the Controller. */
+export function setAcknowledgementTransport(transport: AcknowledgementTransport | null): void {
+  acknowledgementTransport = transport ?? postAcknowledgement;
+}
+
+function sendAcknowledgement(sessionId: string, ack: TaskAcknowledgement): void {
+  const requeue = (): void => {
+    unsentAcknowledgements.set(sessionId, [...(unsentAcknowledgements.get(sessionId) ?? []), ack]);
+  };
+  acknowledgementTransport(sessionId, ack).then((accepted) => {
+    if (!accepted) requeue();
+  }).catch(requeue);
+}
+
+/** Apply a bootstrap's acknowledgements and retry what never landed. */
+export function receiveTaskAcknowledgements(
+  sessionId: string,
+  rows: readonly TaskAcknowledgement[],
+): void {
+  accountAcknowledgements.set(sessionId, new Set(rows.map((row) => entryOf(row.task_key, row.marker))));
+  accountAcknowledgementsVersion += 1;
+  for (const listener of accountListeners) listener();
+  const unsent = unsentAcknowledgements.get(sessionId) ?? [];
+  unsentAcknowledgements.delete(sessionId);
+  for (const ack of unsent) sendAcknowledgement(sessionId, ack);
+}
+
+export function useAcknowledgements(sessionId: string): (key: string, marker: string) => boolean {
+  const list = useStore(acknowledgements);
+  useSyncExternalStore(
+    (listener) => {
+      accountListeners.add(listener);
+      return (): void => {
+        accountListeners.delete(listener);
+      };
+    },
+    () => accountAcknowledgementsVersion,
+    () => 0,
+  );
+  const local = new Set(list);
+  const account = accountAcknowledgements.get(sessionId);
+  return (key, marker) => local.has(entryOf(key, marker)) || (account?.has(entryOf(key, marker)) ?? false);
+}
+
+/** Mark an unseen failure seen, here at once and for the account. */
+export function acknowledgeTask(sessionId: string, task: TaskSummary): void {
   if (task.attention !== "failed_unseen") return;
-  const marker = task.source === "subagent" && task.subagent
-    ? String(task.subagent.observedSeq ?? task.subagent.revision)
+  const marker = task.subagent
+    ? subagentMarker(task.subagent)
     : task.call
     ? String(task.call.finished_at_ms ?? task.call.updated_at_ms)
     : "";
-  const entry = `${task.key}@${marker}`;
+  if (!marker) return;
+  const entry = entryOf(task.key, marker);
   const current = acknowledgements.get();
   if (!current.includes(entry)) acknowledgements.set([...current, entry]);
+  sendAcknowledgement(sessionId, { task_key: task.key, marker });
 }
 
 /**

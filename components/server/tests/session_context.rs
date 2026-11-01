@@ -79,6 +79,22 @@ impl Fixture {
             .execute(&fixture.store)
             .await
             .unwrap();
+        // Grants persist through the Controller's write-behind queue, and this
+        // process is killed rather than drained.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while sqlx::query_scalar::<_, String>(
+                "SELECT value FROM settings WHERE key = 'cowboy.permissions'",
+            )
+            .fetch_optional(&fixture.store)
+            .await
+            .unwrap()
+            .is_none_or(|grants| !grants.contains("context-fixture"))
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the owner grant reaches the database");
         drop(controller);
         fixture
     }

@@ -12,20 +12,25 @@ export type {
   SystemNotificationPreferences,
 } from "./systemNotificationPolicy.ts";
 
-function normalizePreferences(value: unknown): SystemNotificationPreferences {
+export function normalizePreferences(value: unknown): SystemNotificationPreferences {
   const candidate = value && typeof value === "object"
     ? value as Partial<SystemNotificationPreferences>
     : {};
   const categories = candidate.categories && typeof candidate.categories === "object"
     ? candidate.categories as Partial<Record<SessionNotificationCategory, boolean>>
     : {};
+  // An unversioned value: only permission requests were ever delivered as
+  // input, and `completed` was a default, not an opt-in.
+  const versioned = candidate.schema === 2;
+  const input = versioned ? categories.input !== false : categories.permission !== false;
   return {
+    schema: 2,
     enabled: candidate.enabled === true,
     showSessionNames: candidate.showSessionNames === true,
     categories: {
-      completed: categories.completed !== false,
-      input: categories.input !== false,
-      permission: categories.permission !== false,
+      completed: versioned && categories.completed === true,
+      input,
+      permission: input,
       error: categories.error !== false,
     },
     mutedSessionIds: Array.isArray(candidate.mutedSessionIds)
@@ -173,6 +178,7 @@ async function putSubscription(
       endpoint: json.endpoint,
       keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
       preferences: {
+        schema: prefs.schema,
         showSessionNames: prefs.showSessionNames,
         categories: prefs.categories,
         mutedSessionIds: prefs.mutedSessionIds,

@@ -444,6 +444,8 @@ export interface SessionBootstrapResponse {
   /** Authoritative subagent observations (docs/background-tasks.md I5);
    *  absent from Controllers older than the contract. */
   subagent_state?: import("./backgroundTasks").SubagentStateWire;
+  /** The account's acknowledgements here (docs/task-notifications.md). */
+  task_acknowledgements?: import("./backgroundTasks").TaskAcknowledgement[];
 }
 
 export type Inbound =

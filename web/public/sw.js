@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v2087";
+const VERSION = "cowboy-v2088";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();
 const ASSET_CACHE = `${VERSION}-assets`;
@@ -77,7 +77,8 @@ self.addEventListener("activate", (event) => {
 
 const NOTIFICATION_CATEGORIES = new Set(["completed", "input", "permission", "error"]);
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]{1,160}$/;
-const ACTIVE_SESSIONS = new Map();
+const SAFE_TAG = /^cowboy-[A-Za-z0-9_-]{1,200}$/;
+const SAFE_TASK = /^(subagent|call):[^\s#&]{1,300}$/;
 
 function validNotificationMessage(message) {
   return Boolean(
@@ -90,14 +91,27 @@ function validNotificationMessage(message) {
   );
 }
 
+/** `/?session=…`, with the task's details when the message names one. */
+function notificationUrl(sessionId, task) {
+  const hash = SAFE_TASK.test(task ?? "") ? `#task=${encodeURIComponent(task)}` : "";
+  return `/?session=${encodeURIComponent(sessionId)}${hash}`;
+}
+
 function showSessionNotification(message) {
-  const url = message.test === true ? "/" : `/?session=${encodeURIComponent(message.sessionId)}`;
+  const url = message.test === true ? "/" : notificationUrl(message.sessionId, message.task);
+  const tag = SAFE_TAG.test(message.tag ?? "") ? message.tag : `cowboy-session-${message.sessionId}`;
   return self.registration.showNotification(message.title, {
     body: message.body,
     icon: "/cowboy-app-icon-192-v10.png",
     badge: "/cowboy-app-icon-192-v10.png",
-    tag: `cowboy-session-${message.sessionId}`,
-    data: { url, sessionId: message.test === true ? null : message.sessionId },
+    tag,
+    // A later burst replaces the banner and must still alert.
+    renotify: true,
+    data: {
+      url,
+      sessionId: message.test === true ? null : message.sessionId,
+      task: message.task ?? null,
+    },
   });
 }
 
@@ -288,11 +302,6 @@ self.addEventListener("message", (event) => {
     event.waitUntil(rollbackShell().then((result) => port?.postMessage(result)));
     return;
   }
-  if (message?.type === "cowboy.active-session" && event.source?.id) {
-    if (SAFE_SESSION_ID.test(message.sessionId ?? "")) ACTIVE_SESSIONS.set(event.source.id, message.sessionId);
-    else ACTIVE_SESSIONS.delete(event.source.id);
-    return;
-  }
   if (
     !message ||
     message.type !== "cowboy.session-notification" ||
@@ -309,13 +318,10 @@ self.addEventListener("push", (event) => {
     return;
   }
   if (!validNotificationMessage(message)) return;
-  event.waitUntil((async () => {
-    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const alreadyVisible = windows.some((client) =>
-      client.visibilityState === "visible" && ACTIVE_SESSIONS.get(client.id) === message.sessionId
-    );
-    if (!alreadyVisible) await showSessionNotification(message);
-  })());
+  // Every received push is shown: WebKit can revoke a subscription whose pushes
+  // produce no notification. The Controller decides what not to send
+  // (docs/task-notifications.md#presence).
+  event.waitUntil(showSessionNotification(message));
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -338,7 +344,7 @@ self.addEventListener("notificationclick", (event) => {
     ? data.sessionId
     : null;
   if (!sessionId) return;
-  const target = new URL(`/?session=${encodeURIComponent(sessionId)}`, self.location.origin).href;
+  const target = new URL(notificationUrl(sessionId, data.task), self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const client = windows.find((candidate) => new URL(candidate.url).origin === self.location.origin);

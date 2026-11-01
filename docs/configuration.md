@@ -175,6 +175,7 @@ as a deprecated override for one release.
 | Service | `plugins.auto_update_idle_sessions` | `false` | live |
 | Service | `plugins.auto_update_idle_after` | `"1h"` | live |
 | Service | `plugins.auto_update_idle_limit` | `"12h"` | live |
+| Service | `notifications.delivery` | `true` | live |
 | Service | `sessions.reclaim_on_capacity` | `false` | live |
 | Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
