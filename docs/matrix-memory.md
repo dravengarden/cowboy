@@ -21,6 +21,8 @@ stall the session.
 - Completed turns stay in a private bounded outbox and are delivered later. A
   full or unwritable outbox loses that evidence, not the turn.
 - A failing Matrix MCP server is a failed optional tool, never a startup failure.
+  The relay keeps Matrix's latest MCP discovery answers (protocol metadata only),
+  so a session started during an outage still gets its tools once Matrix returns.
 
 ## Every Machine and every Agent
 
