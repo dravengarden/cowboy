@@ -34,7 +34,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::memory_relay::{
-    Identity, MAX_BODY_BYTES, MCP_HEADERS, Request, Response,
+    Identity, MAX_BODY_BYTES, MCP_HEADERS, Request, Response, UNAVAILABLE,
 };
 
 /// A `/v1` request is part of a turn; MCP tools may run a bounded program.
@@ -54,7 +54,75 @@ struct Persisted {
     secret: String,
 }
 
+/// The backend's latest discovery answers. An MCP client gives up on a server
+/// that fails while it starts, for the rest of its session; answering discovery
+/// here means a session started during an outage gets its tools when the
+/// backend returns. Only protocol metadata is kept, never memory or identity.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(transparent)]
+struct McpDiscovery(HashMap<String, Value>);
+
+fn discovery_key(message: &Value) -> Option<String> {
+    match message["method"].as_str()? {
+        "initialize" => Some(format!(
+            "initialize:{}",
+            message["params"]["protocolVersion"].as_str()?
+        )),
+        method @ ("tools/list" | "resources/list") => Some(method.to_owned()),
+        _ => None,
+    }
+}
+
+impl McpDiscovery {
+    /// Keep a successful answer; report whether it changed.
+    fn learn(&mut self, request: &Value, reply: &str) -> bool {
+        let Some(key) = discovery_key(request) else {
+            return false;
+        };
+        let Ok(reply) = serde_json::from_str::<Value>(reply) else {
+            return false;
+        };
+        let result = &reply["result"];
+        if result.is_null() || self.0.get(&key) == Some(result) {
+            return false;
+        }
+        self.0.insert(key, result.clone());
+        true
+    }
+
+    /// Stand in for an unavailable backend during client startup.
+    fn answer(&self, request: &Value) -> Option<Response> {
+        let id = &request["id"];
+        let method = request["method"].as_str()?;
+        if method.starts_with("notifications/") {
+            return Some(Response {
+                status: 202,
+                body: String::new(),
+            });
+        }
+        // The backend refuses this probe too; clients then use `initialize`.
+        if method == "server/discover" {
+            return Some(Response {
+                status: 400,
+                body: json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "Method not found"},
+                })
+                .to_string(),
+            });
+        }
+        let result = self.0.get(&discovery_key(request)?)?;
+        Some(Response {
+            status: 200,
+            body: json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string(),
+        })
+    }
+}
+
 pub struct MemoryRelay {
+    discovery: Mutex<McpDiscovery>,
+    discovery_path: PathBuf,
     endpoint: String,
     secret: String,
     outbox: PathBuf,
@@ -150,7 +218,14 @@ impl MemoryRelay {
         let listener = bind(persisted.port).await?;
         persisted.port = listener.local_addr()?.port();
         store(&record, &persisted)?;
+        let discovery_path = directory.join("memory-mcp-discovery.json");
+        let discovery = std::fs::read(&discovery_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
         let relay = Arc::new(Self {
+            discovery: Mutex::new(discovery),
+            discovery_path,
             endpoint: format!("http://127.0.0.1:{}", persisted.port),
             secret: persisted.secret,
             outbox: directory.join("memory-outbox"),
@@ -214,6 +289,32 @@ impl MemoryRelay {
         if let Some(waiter) = self.pending.lock().remove(request_id) {
             let _ = waiter.send(response);
         }
+    }
+
+    /// One MCP request: discovery survives an unavailable backend.
+    async fn forward_mcp(&self, session_id: String, request: Request) -> Response {
+        let message: Value = serde_json::from_str(&request.body).unwrap_or_default();
+        let response = self.forward(session_id, request).await;
+        if response.status == 200 {
+            let mut discovery = self.discovery.lock();
+            if discovery.learn(&message, &response.body)
+                && let Ok(bytes) = serde_json::to_vec(&*discovery)
+            {
+                drop(discovery);
+                let path = self.discovery_path.clone();
+                // A cache: losing a write costs only a later outage's answer.
+                tokio::task::spawn_blocking(move || {
+                    let _ = std::fs::write(path, bytes);
+                });
+            }
+            return response;
+        }
+        if response.status == UNAVAILABLE
+            && let Some(answer) = self.discovery.lock().answer(&message)
+        {
+            return answer;
+        }
+        response
     }
 
     async fn forward(&self, session_id: String, request: Request) -> Response {
@@ -294,7 +395,11 @@ async fn serve(
     if request.validate().is_err() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let response = relay.forward(session, request).await;
+    let response = if request.path == "/mcp" {
+        relay.forward_mcp(session, request).await
+    } else {
+        relay.forward(session, request).await
+    };
     (
         StatusCode::from_u16(response.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
         [(header::CONTENT_TYPE, "application/json")],
@@ -619,6 +724,62 @@ mod tests {
         // The first listener still holds the port: the record and tokens survive.
         let second = MemoryRelay::start(root.path()).await.unwrap();
         assert_eq!(second.authenticate(token).unwrap(), "sess-a.b");
+    }
+
+    #[test]
+    fn discovery_outlives_the_backend_and_nothing_else_does() {
+        let initialize =
+            json!({"id": 7, "method": "initialize", "params": {"protocolVersion": "v1"}});
+        let list = json!({"id": 8, "method": "tools/list"});
+        let mut discovery = McpDiscovery::default();
+        // Nothing learned yet: the client sees the outage.
+        assert!(discovery.answer(&list).is_none());
+        assert!(discovery.learn(
+            &list,
+            r#"{"id":1,"result":{"tools":[{"name":"memory_search"}]}}"#
+        ));
+        assert!(!discovery.learn(
+            &list,
+            r#"{"id":2,"result":{"tools":[{"name":"memory_search"}]}}"#
+        ));
+        assert!(!discovery.learn(&list, r#"{"id":3,"error":{"code":1}}"#));
+        assert!(discovery.learn(&initialize, r#"{"result":{"protocolVersion":"v1"}}"#));
+
+        let answer = discovery.answer(&list).unwrap();
+        assert_eq!(answer.status, 200);
+        let answer: Value = serde_json::from_str(&answer.body).unwrap();
+        assert_eq!(answer["id"], 8);
+        assert_eq!(answer["result"]["tools"][0]["name"], "memory_search");
+        // Another protocol version was never negotiated.
+        let other = json!({"id": 9, "method": "initialize", "params": {"protocolVersion": "v2"}});
+        assert!(discovery.answer(&other).is_none());
+        // Startup continues; a real call still reports the outage.
+        let notification = json!({"method": "notifications/initialized"});
+        assert_eq!(discovery.answer(&notification).unwrap().status, 202);
+        let probe = json!({"id": 1, "method": "server/discover"});
+        assert_eq!(discovery.answer(&probe).unwrap().status, 400);
+        let call = json!({"id": 2, "method": "tools/call", "params": {"name": "memory_search"}});
+        assert!(discovery.answer(&call).is_none());
+        assert!(!discovery.learn(&call, r#"{"result":{"content":"private"}}"#));
+    }
+
+    #[tokio::test]
+    async fn a_session_started_during_an_outage_still_gets_its_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let relay = MemoryRelay::start(root.path()).await.unwrap();
+        relay.discovery.lock().learn(
+            &json!({"method": "tools/list"}),
+            r#"{"result":{"tools":[]}}"#,
+        );
+        let request = Request {
+            path: "/mcp".to_owned(),
+            body: r#"{"id":3,"method":"tools/list"}"#.to_owned(),
+            headers: Vec::new(),
+        };
+        // Never attached: the backend is unreachable.
+        let response = relay.forward_mcp("s".to_owned(), request).await;
+        assert_eq!(response.status, 200);
+        assert!(response.body.contains("tools"));
     }
 
     #[tokio::test]
