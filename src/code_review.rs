@@ -2014,9 +2014,13 @@ mod tests {
         assert!(fetched.fetched_at_ms.is_some());
         assert_eq!(oid(&clone, &tracked), before, "agent-visible refs stay put");
 
-        // The comparison now starts from the fetched branch.
+        // The target now counts what the fetched branch has and HEAD lacks.
+        let target = provider
+            .tracked_reference(tracked.clone(), "origin".to_owned())
+            .unwrap();
+        assert_eq!((target.ahead, target.behind), (0, 1));
         let changes = provider.changes(Some(&tracked)).unwrap();
-        assert_eq!(changes.changes.len(), 1);
+        assert!(changes.changes.is_empty(), "the merge base has not moved");
         assert!(changes.fetched_at_ms.is_some());
         assert!(
             provider
