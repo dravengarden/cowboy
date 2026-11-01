@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.17",
   "display": {
@@ -37,7 +37,7 @@
       "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
       "is_default": true,
       "values": {
-        "model": "deepseek-flash",
+        "model": "[\"deepseek-official\",\"deepseek-flash\"]",
         "reasoning_effort": "max"
       }
     }

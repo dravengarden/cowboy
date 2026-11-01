@@ -8,14 +8,25 @@ export interface ReviewCompareScenario {
   readonly comparison: string | null;
 }
 
+const COMMITTED = "committed:";
+
+/** The Git reference a comparison starts from. */
+export function comparisonReference(comparison: string): string {
+  return comparison.startsWith(COMMITTED)
+    ? comparison.slice(COMMITTED.length)
+    : comparison;
+}
+
 /**
- * Branch comparisons run from the merge base to the working tree, so every
- * branch scenario includes uncommitted work and says so.
+ * Branch comparisons run from the merge base to the working tree, so a branch
+ * scenario includes uncommitted work and says so. Not pushed stops at HEAD
+ * where the Machine can; an older one keeps the wider comparison and says so.
  */
 export function reviewCompareScenarios(
   target: GitChangeTarget | undefined,
   comparisons: readonly GitComparison[],
   defaultComparison: string | undefined,
+  committedComparisons = false,
 ): ReviewCompareScenario[] {
   const scenarios: ReviewCompareScenario[] = [{
     key: "uncommitted",
@@ -40,8 +51,10 @@ export function reviewCompareScenarios(
     scenarios.push({
       key: "unpushed",
       title: "Not pushed",
-      detail: `Everything since ${upstreamLabel}, including uncommitted work`,
-      comparison: upstream,
+      detail: committedComparisons
+        ? `Commits not on ${upstreamLabel} yet`
+        : `Everything since ${upstreamLabel}, including uncommitted work`,
+      comparison: committedComparisons ? `${COMMITTED}${upstream}` : upstream,
     });
   }
   return scenarios;
@@ -54,10 +67,11 @@ export function reviewCompareLabel(
   comparisons: readonly GitComparison[],
 ): string {
   if (comparison === undefined) return "Loading comparison";
-  const branch = comparison === null
+  const reference = comparison === null ? null : comparisonReference(comparison);
+  const branch = reference === null
     ? undefined
-    : comparisons.find((item) => item.reference === comparison)?.label ??
-      comparison;
+    : comparisons.find((item) => item.reference === reference)?.label ??
+      reference;
   const scenario = scenarios.find((item) => item.comparison === comparison);
   if (!scenario) return `Branch · ${branch}`;
   return branch ? `${scenario.title} · ${branch}` : scenario.title;
@@ -77,6 +91,14 @@ export function reviewCompareBranches(
   );
 }
 
+export function comparisonAvailable(
+  comparison: string,
+  comparisons: readonly GitComparison[],
+): boolean {
+  const reference = comparisonReference(comparison);
+  return comparisons.some((item) => item.reference === reference);
+}
+
 /**
  * The stored choice decides only when it can still be honoured: a deleted
  * branch falls back to the repository's default instead of failing the list.
@@ -87,9 +109,8 @@ export function resolveReviewComparison(
   defaultComparison: string | undefined,
 ): string | null {
   if (preferred === null) return null;
-  if (
-    preferred !== undefined &&
-    comparisons.some((item) => item.reference === preferred)
-  ) return preferred;
+  if (preferred !== undefined && comparisonAvailable(preferred, comparisons)) {
+    return preferred;
+  }
   return defaultComparison ?? null;
 }
