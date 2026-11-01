@@ -11165,6 +11165,7 @@ async fn serve_axum(
             get(api_session_reload_plan).post(api_session_reload).put(session_provider_updates::configure),
         )
         .route("/api/sessions/{id}/hibernate", post(api_session_hibernate))
+        .route("/api/sessions/{id}/review-fetch", post(api_review_fetch))
         .route("/api/session-maintenance", get(session_maintenance::inventory))
         .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
         .route(
@@ -18956,6 +18957,15 @@ struct CodeChangesResponse {
     default_comparison: Option<String>,
     comparisons: Vec<crate::code_review::GitComparison>,
     committed_comparisons: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fetched_at_ms: Option<u64>,
+    /// Review can fetch the compared branch here; Machine adapters cannot yet.
+    fetch_available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeFetchRequest {
+    comparison: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19768,6 +19778,7 @@ async fn api_code_changes(
     code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let comparison = query.comparison;
+        let mut fetch_available = false;
         let result = match remote_code_request(
             &state,
             &context.scope,
@@ -19782,6 +19793,7 @@ async fn api_code_changes(
                 return (StatusCode::BAD_GATEWAY, "remote git changes unavailable").into_response();
             }
             Ok(None) => {
+                fetch_available = matches!(context.scope, CodeReadScope::Session(_));
                 let result = tokio::task::spawn_blocking(move || {
                     crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
                         .changes(comparison.as_deref())
@@ -19824,10 +19836,62 @@ async fn api_code_changes(
             default_comparison: result.default_comparison,
             comparisons: result.comparisons,
             committed_comparisons: result.committed_comparisons,
+            fetched_at_ms: result.fetched_at_ms,
+            fetch_available,
         })
         .into_response()
     })
     .await
+}
+
+/// Fetch the compared branch into Review's own refs. This is a mutation, so it
+/// sits under the session's write authorization, not the read-only Code guard.
+async fn api_review_fetch(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(request): Json<CodeFetchRequest>,
+) -> Response {
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if !matches!(context.scope, CodeReadScope::Session(_)) {
+        return (
+            StatusCode::CONFLICT,
+            "only a session worktree can be fetched",
+        )
+            .into_response();
+    }
+    match remote_code_request(&state, &context.scope, CodeOperation::Manifest).await {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                "this Machine cannot fetch from Review yet",
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "the session's Machine is unavailable",
+            )
+                .into_response();
+        }
+    }
+    let cwd = context.cwd.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+            .fetch_comparison(&request.comparison)
+    })
+    .await;
+    match result {
+        Ok(Ok(fetched)) => {
+            state.diff_snapshots.forget(&context.scope).await;
+            Json(fetched).into_response()
+        }
+        Ok(Err(error)) => (StatusCode::CONFLICT, error).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "fetch failed").into_response(),
+    }
 }
 
 async fn api_code_repository(

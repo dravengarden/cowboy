@@ -114,3 +114,19 @@ export function resolveReviewComparison(
   }
   return defaultComparison ?? null;
 }
+
+/** How old the compared branch is, in the fewest words that stay honest. */
+export function reviewFetchAge(fetchedAtMs: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - fetchedAtMs) / 60_000);
+  if (minutes < 1) return "Fetched just now";
+  if (minutes < 60) return `Fetched ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24
+    ? `Fetched ${hours}h ago`
+    : `Fetched ${Math.floor(hours / 24)}d ago`;
+}
+
+/** Only a remote branch can be fetched. */
+export function comparisonFetchable(comparison: string | null | undefined): boolean {
+  return !!comparison && comparisonReference(comparison).startsWith("refs/remotes/");
+}

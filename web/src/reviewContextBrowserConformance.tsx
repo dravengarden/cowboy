@@ -175,6 +175,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     }
   }
   globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
+  let fetched = false;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input), location.href);
     if (!url.pathname.startsWith("/api/")) return originalFetch(input, init);
@@ -201,6 +202,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       });
     }
     if (url.pathname.endsWith("/bootstrap")) return json({ messages: [] });
+    if (url.pathname.endsWith("/review-fetch")) {
+      fetched = true;
+      return json({ reference: "refs/remotes/origin/main", oid: "abc" });
+    }
     if (url.pathname.startsWith("/api/code/sessions/")) {
       const context = decodeURIComponent(url.pathname.split("/")[4]!);
       const clean = context === "project" || context === "copy";
@@ -241,7 +246,13 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
               { reference: "refs/remotes/origin/topic", label: "origin/topic" },
             ]
             : [],
-          ...(branches ? { defaultComparison: "refs/remotes/origin/main" } : {}),
+          ...(branches
+            ? {
+              defaultComparison: "refs/remotes/origin/main",
+              fetchAvailable: true,
+              ...(fetched ? { fetchedAtMs: Date.now() } : {}),
+            }
+            : {}),
           changes: clean ? [] : [
             {
               path: "src/app.ts",
@@ -470,6 +481,12 @@ async function checkReviewCompareAndSelection(
     await until(
       () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
       "Unread count is missing",
+    );
+
+    await press(body.querySelector("[data-review-fetch]"), "fetch control");
+    await until(
+      () => fixture.container.textContent?.includes("Fetched just now") === true,
+      "Fetching should say how fresh the branch is",
     );
 
     await press(compare(), "comparison control");

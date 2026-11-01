@@ -139,6 +139,16 @@ impl DiffSnapshotCache {
         Ok(self.page(&snapshot, 0))
     }
 
+    /// A comparison's name can start resolving elsewhere after a fetch, so
+    /// snapshots keyed by that name stop being valid at once.
+    pub async fn forget(&self, owner: &CodeReadScope) {
+        self.inner
+            .lock()
+            .await
+            .entries
+            .retain(|entry| entry.key.owner != *owner);
+    }
+
     pub async fn next_page(&self, owner: &CodeReadScope, cursor: &str) -> Result<DiffPage, String> {
         let (cursor_id, offset) = parse_cursor(cursor)?;
         let snapshot = {

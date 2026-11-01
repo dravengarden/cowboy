@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
+const GIT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_HISTORY_COMMITS: usize = 128;
 const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
@@ -78,6 +79,18 @@ pub struct ChangeList {
     /// that predate it, which would refuse such a comparison.
     #[serde(default)]
     pub committed_comparisons: bool,
+    /// When Review last fetched the compared branch, if it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at_ms: Option<u64>,
+}
+
+/// What a Review fetch left in place; repeating it is harmless.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparisonFetch {
+    pub reference: String,
+    pub oid: String,
+    pub fetched_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,13 +500,79 @@ impl LocalCodeProvider {
             .unwrap_or_default()
     }
 
+    /// A fetched copy of a remote branch, once it is at least as new as the
+    /// remote-tracking ref. An agent's own fetch moves only the latter.
+    fn freshest_reference(&self, reference: &str) -> String {
+        review_reference(reference)
+            .filter(|review| {
+                git_output(
+                    &self.root,
+                    &["merge-base", "--is-ancestor", reference, review],
+                    16,
+                )
+                .is_ok()
+            })
+            .unwrap_or_else(|| reference.to_owned())
+    }
+
+    fn fetched_at_ms(&self, reference: &str) -> Option<u64> {
+        let review = review_reference(reference)?;
+        let path = git_output(&self.root, &["rev-parse", "--git-path", &review], 4096).ok()?;
+        let path = String::from_utf8(path).ok()?;
+        let modified = std::fs::metadata(self.root.join(path.trim()))
+            .ok()?
+            .modified()
+            .ok()?;
+        let age = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+        u64::try_from(age.as_millis()).ok()
+    }
+
+    /// Fetch one remote branch into Review's own ref namespace, from the
+    /// remote the repository already names. Agent-visible refs do not move.
+    pub fn fetch_comparison(&self, comparison: &str) -> Result<ComparisonFetch, String> {
+        let (reference, _) = split_comparison(comparison);
+        ensure_git_worktree(&self.root)?;
+        let (comparisons, _) = self.comparisons()?;
+        if !comparisons.iter().any(|item| item.reference == reference) {
+            return Err("comparison branch is unavailable".to_owned());
+        }
+        let tracked = reference
+            .strip_prefix("refs/remotes/")
+            .ok_or("only a remote branch can be fetched")?;
+        let remotes = git_output(&self.root, &["remote"], 64 * 1024)?;
+        let remotes = String::from_utf8_lossy(&remotes);
+        let (remote, branch) = remotes
+            .lines()
+            .find_map(|remote| {
+                tracked
+                    .strip_prefix(remote)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .map(|branch| (remote, branch))
+            })
+            .filter(|(_, branch)| *branch != "HEAD")
+            .ok_or("this branch has no remote to fetch from")?;
+        let review = review_reference(reference).ok_or("only a remote branch can be fetched")?;
+        git_fetch(
+            &self.root,
+            remote,
+            &format!("+refs/heads/{branch}:{review}"),
+        )?;
+        let oid = git_output(&self.root, &["rev-parse", "--verify", &review], 256)?;
+        Ok(ComparisonFetch {
+            reference: reference.to_owned(),
+            oid: String::from_utf8_lossy(&oid).trim().to_owned(),
+            fetched_at_ms: self.fetched_at_ms(reference),
+        })
+    }
+
     fn comparison_base(&self, comparison: &str) -> Result<String, String> {
         let (reference, _) = split_comparison(comparison);
         let (comparisons, _) = self.comparisons()?;
         if !comparisons.iter().any(|item| item.reference == reference) {
             return Err("comparison branch is unavailable".to_owned());
         }
-        let bytes = git_output(&self.root, &["merge-base", reference, "HEAD"], 128)?;
+        let reference = self.freshest_reference(reference);
+        let bytes = git_output(&self.root, &["merge-base", &reference, "HEAD"], 128)?;
         let oid = String::from_utf8(bytes).map_err(|_| "invalid merge base".to_owned())?;
         let oid = oid.trim();
         safe_oid(oid)?;
@@ -538,7 +617,7 @@ impl LocalCodeProvider {
     }
 
     fn tracked_reference(&self, reference: String, label: String) -> Option<GitTrackedReference> {
-        let range = format!("{reference}...HEAD");
+        let range = format!("{}...HEAD", self.freshest_reference(&reference));
         let counts = git_output(
             &self.root,
             &["rev-list", "--left-right", "--count", &range, "--"],
@@ -857,6 +936,7 @@ impl CodeProvider for LocalCodeProvider {
             let mut revision_input = output;
             revision_input.extend_from_slice(&status);
             revision_input.extend_from_slice(comparison.as_bytes());
+            revision_input.extend_from_slice(base.as_bytes());
             let anchor = format!("{base}\0{}", head.as_deref().unwrap_or(""));
             let counts = self.line_counts(&range);
             return Ok(ChangeList {
@@ -885,6 +965,7 @@ impl CodeProvider for LocalCodeProvider {
                 default_comparison,
                 comparisons,
                 committed_comparisons: true,
+                fetched_at_ms: self.fetched_at_ms(split_comparison(comparison).0),
             });
         }
         let mut fields = status
@@ -939,6 +1020,7 @@ impl CodeProvider for LocalCodeProvider {
             default_comparison,
             comparisons,
             committed_comparisons: true,
+            fetched_at_ms: None,
         })
     }
 
@@ -1427,6 +1509,48 @@ fn parse_git_worktrees(bytes: &[u8], current: &Path) -> Vec<GitWorktreeSummary> 
         .collect()
 }
 
+fn review_reference(reference: &str) -> Option<String> {
+    reference
+        .strip_prefix("refs/remotes/")
+        .map(|tracked| format!("refs/cowboy/review/{tracked}"))
+}
+
+/// A bounded, non-interactive fetch over the repository's configured transport.
+/// Repository config is agent-writable, so `ext::` helpers stay refused.
+fn git_fetch(root: &Path, remote: &str, refspec: &str) -> Result<(), String> {
+    let mut child = Command::new("git")
+        .args(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"])
+        // Without an empty refmap, Git also moves the remote-tracking ref.
+        .args([
+            "--refmap=",
+            "--no-recurse-submodules",
+            "--",
+            remote,
+            refspec,
+        ])
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ALLOW_PROTOCOL", "https:ssh:git:file")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("starting git: {error}"))?;
+    let deadline = std::time::Instant::now() + GIT_FETCH_TIMEOUT;
+    loop {
+        match child.try_wait().map_err(|error| error.to_string())? {
+            Some(status) if status.success() => return Ok(()),
+            Some(_) => return Err(format!("could not fetch from {remote}")),
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("fetching from {remote} timed out"));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
 type LineCounts = std::collections::HashMap<String, (u32, u32)>;
 
 /// `committed:<reference>` stops at `HEAD`; a bare reference runs to the
@@ -1837,6 +1961,70 @@ mod tests {
         assert_eq!(tracked.additions, Some(1));
         assert!(provider.changes(Some("committed:refs/heads/gone")).is_err());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fetching_a_comparison_moves_only_review_refs() {
+        let upstream = scratch("fetch-upstream");
+        let clone = upstream.with_extension("clone");
+        let _ = fs::remove_dir_all(&clone);
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&upstream)
+            .arg(&clone)
+            .status()
+            .unwrap();
+        let reference = "refs/remotes/origin/HEAD";
+        let branch = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&upstream)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let tracked = format!("refs/remotes/origin/{}", branch.trim());
+        let oid = |root: &std::path::Path, name: &str| {
+            String::from_utf8(
+                Command::new("git")
+                    .args(["rev-parse", name])
+                    .current_dir(root)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+            .trim()
+            .to_owned()
+        };
+        fs::write(upstream.join("tracked.rs"), "fn upstream() {}\n").unwrap();
+        Command::new("git")
+            .args(["commit", "-qam", "upstream moved"])
+            .current_dir(&upstream)
+            .status()
+            .unwrap();
+        let before = oid(&clone, &tracked);
+        let provider = LocalCodeProvider::new(&clone);
+
+        assert!(provider.fetch_comparison(reference).is_err());
+        assert!(provider.fetch_comparison("refs/heads/nope").is_err());
+        let fetched = provider.fetch_comparison(&tracked).unwrap();
+        assert_eq!(fetched.oid, oid(&upstream, "HEAD"));
+        assert!(fetched.fetched_at_ms.is_some());
+        assert_eq!(oid(&clone, &tracked), before, "agent-visible refs stay put");
+
+        // The comparison now starts from the fetched branch.
+        let changes = provider.changes(Some(&tracked)).unwrap();
+        assert_eq!(changes.changes.len(), 1);
+        assert!(changes.fetched_at_ms.is_some());
+        assert!(
+            provider
+                .fetch_comparison(&format!("committed:{tracked}"))
+                .is_ok()
+        );
+        fs::remove_dir_all(upstream).unwrap();
+        fs::remove_dir_all(clone).unwrap();
     }
 
     #[test]

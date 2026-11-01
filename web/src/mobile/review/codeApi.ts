@@ -32,6 +32,10 @@ export interface CodeChanges {
   comparisons: GitComparison[];
   /** This Machine reads `committed:<reference>`. */
   committedComparisons?: boolean;
+  /** When Review last fetched the compared branch. */
+  fetchedAtMs?: number;
+  /** Review can fetch here; absent from Controllers that predate it. */
+  fetchAvailable?: boolean;
 }
 
 export interface GitComparison {
@@ -406,6 +410,24 @@ export function fetchCodeDiffPage(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
     signal,
   );
+}
+
+/** Fetch the compared remote branch. Refusals carry a reason worth showing. */
+export async function fetchReviewComparison(
+  sessionId: string,
+  comparison: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/review-fetch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comparison }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error((await response.text()) || "Could not fetch this branch");
+  }
 }
 
 export function fetchCodeChanges(
