@@ -102,8 +102,8 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   worktree revision suitable for conditional revalidation.
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
 - `GET /search?q=<query>&limit=<n>` returns gitignore-aware fuzzy-ranked files.
-- `GET /changes` returns normalized working-tree change records and the
-  revision of that exact status snapshot. Each record may carry a
+- `GET /changes` returns normalized working-tree change records, with line
+  counts where Git has them, and the revision of that exact status snapshot. Each record may carry a
   `fingerprint` that changes whenever that entry's diff can: its Git status,
   the commits it is compared from, and the worktree file's identity (size,
   mtime, ctime, inode; never its bytes). A "reviewed" mark records it, so the
@@ -161,7 +161,9 @@ Machine, path and fact chips unfold from it, so the list keeps the screen.
 Changes names its comparison by the reason to look: **Uncommitted**, **Ready to
 merge** (the default branch), **Not pushed** (the upstream), or any other branch
 from the same sheet. A branch comparison runs from the merge base to the working
-tree, so each of those includes uncommitted work and says so. The choice is the
+tree and says it includes uncommitted work; `committed:<reference>` stops at
+`HEAD`, which is what **Not pushed** uses. A Machine adapter advertises it with
+`committedComparisons`, and an older one keeps the wider comparison, labelled. The choice is the
 `comparison` of the session's synced Review state (`""` is uncommitted, absent
 follows the repository), set with the `setComparison` mutation, which agents
 reach through the same sync operation. A stored branch that no longer exists

@@ -14,6 +14,9 @@ export interface CodeChange {
   unstaged: boolean;
   /** Changes whenever this entry's diff can; absent from older Machines. */
   fingerprint?: string;
+  /** Absent for binary and untracked files and from older Machines. */
+  additions?: number;
+  deletions?: number;
 }
 
 export type CodeDiffScope = "combined" | "staged" | "unstaged";
@@ -27,6 +30,8 @@ export interface CodeChanges {
   comparison?: string;
   defaultComparison?: string;
   comparisons: GitComparison[];
+  /** This Machine reads `committed:<reference>`. */
+  committedComparisons?: boolean;
 }
 
 export interface GitComparison {
