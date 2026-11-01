@@ -415,10 +415,11 @@ export async function runInfoMetricsBrowserConformance(
       "saved Machine order survives the resource grid",
     );
     const olderDetails = container.querySelector<HTMLButtonElement>('[aria-label="Gemini usage details"]')!;
-    check(olderDetails?.getAttribute("aria-expanded") === "false" && !container.textContent?.includes("45d ago"),
+    check(olderDetails?.getAttribute("aria-expanded") === "false" && !container.textContent?.includes("Gemini ACP · Updated"),
       "secondary Provider details are collapsed initially");
     olderDetails.click();
-    await until(() => container.textContent?.includes("45d ago") === true);
+    // Details carry the exact observation time; the header carries the age.
+    await until(() => container.textContent?.includes("Gemini ACP · Updated") === true);
     check(container.textContent?.includes("NOT REPORTED"),
       "expanded Provider details expose real age without a false waiting state");
     check(
@@ -450,6 +451,11 @@ export async function runInfoMetricsBrowserConformance(
       accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Lynx percentages");
     check(!accountCard("otter")!.querySelector("button, input") &&
       !accountCard("otter")!.textContent?.includes("Updated"), "uncollected account has no wrong-account refresh or fabricated timestamp");
+    const lynxFreshness = accountCard("anthropic")!.querySelector<HTMLElement>("[data-usage-freshness]");
+    check(lynxFreshness !== null && /ago|just now|from session/.test(lynxFreshness.textContent ?? ""),
+      "a collected card dates its own numbers in its header");
+    check(!accountCard("otter")!.querySelector("[data-usage-freshness]"),
+      "an uncollected card shows no observation age");
     const changed = () => {
       accounts = { ...accounts, registry: { ...accounts.registry, revision: accounts.registry.revision + 1 } };
       window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED, { detail: { provider_accounts: accounts.registry.revision } }));

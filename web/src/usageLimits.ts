@@ -28,6 +28,19 @@ export interface ProviderRefreshState {
   manual_refresh_after_ms: number;
   next_auto_refresh_at_ms: number;
   stale: boolean;
+  /** Consecutive failed attempts; absent after a success. */
+  failures?: number;
+}
+
+/**
+ * The Service retries a failed collection quickly twice; a single transient
+ * failure (a restart, a Machine reconnecting) is noise. Warn only once those
+ * retries are exhausted.
+ */
+export const USAGE_WARN_AFTER_FAILURES = 3;
+
+export function usageFailureIsPersistent(usage: ProviderUsage | undefined): boolean {
+  return (usage?.refresh?.failures ?? 0) >= USAGE_WARN_AFTER_FAILURES;
 }
 
 export interface ProviderUsage {
@@ -216,7 +229,9 @@ export function providerUsageErrorMessage(
 export function providerUsageRefreshLabel(
   usage: ProviderUsage | undefined,
 ): string | undefined {
-  return usage?.refresh?.stale ? "Cached · retrying automatically" : undefined;
+  return usage?.refresh?.stale && usageFailureIsPersistent(usage)
+    ? "Cached · retrying automatically"
+    : undefined;
 }
 
 export function record(value: unknown): JsonRecord | undefined {

@@ -1,13 +1,17 @@
 {
   "schema_version": 1,
   "id": "matrix",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "display_name": "Matrix",
-  "description": "Shared, evidence-backed long-term memory across Codex and Claude sessions.",
+  "description": "Shared, evidence-backed long-term memory across every Agent session.",
   "supported_platforms": [
     {
       "os": "linux",
       "architecture": "x86_64"
+    },
+    {
+      "os": "macos",
+      "architecture": "aarch64"
     }
   ],
   "protocol": "matrix_http_v1",

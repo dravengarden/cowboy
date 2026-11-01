@@ -242,6 +242,7 @@ mod tests {
                 manual_refresh_after_ms: 830,
                 next_auto_refresh_at_ms: 860,
                 stale: true,
+                failures: 0,
             });
             overlay_provider_session(&mut provider, "agent", &usage, Some(&binding));
             assert_eq!(provider.observed_at_ms, 100);
@@ -281,6 +282,7 @@ mod tests {
             manual_refresh_after_ms: 830,
             next_auto_refresh_at_ms: 860,
             stale: false,
+            failures: 0,
         });
         overlay_provider_session(&mut failed, "agent", &usage, Some(&binding));
         assert_eq!(failed.status, "session-only");

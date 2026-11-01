@@ -736,6 +736,13 @@ async fn run_config_queue(
                     }
                     completion.finish(Ok(()));
                 }
+                // A preference for an option this session does not offer, such
+                // as a default agent where the workspace defines none, has
+                // nothing to apply: it must not block the turn behind it.
+                Err(error) if is_absent_config_option(&error) => {
+                    tracing::warn!(%config_id, %error, "skipping an unavailable config option");
+                    completion.finish(Ok(()));
+                }
                 Err(error) => {
                     let detail = format!("set {config_id}: {error}");
                     state
@@ -748,6 +755,10 @@ async fn run_config_queue(
         }
     })
     .await
+}
+
+fn is_absent_config_option(error: &Error) -> bool {
+    error.to_string().contains("Unknown config option")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1865,6 +1876,14 @@ mod startup_mode_tests {
             surfaced.pointer("/0/options/2/value"),
             Some(&serde_json::json!("always-approve"))
         );
+    }
+
+    #[test]
+    fn only_an_absent_config_option_is_skipped() {
+        let absent = Error::invalid_params().data("Unknown config option: agent");
+        assert!(super::is_absent_config_option(&absent));
+        let refused = Error::invalid_params().data("Unsupported value: fast");
+        assert!(!super::is_absent_config_option(&refused));
     }
 
     #[test]

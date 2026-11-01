@@ -3,6 +3,8 @@ import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
 import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
 import {
+  collect as collectCodex,
+  isTokenExpired as codexTokenExpired,
   nearestCredit as nearestCodexCredit,
   readLines as codexLines,
 } from "./codex/collector/index.js";
@@ -216,4 +218,64 @@ test("Anthropic declares reset through its signed collector", () => {
     true,
     "known Anthropic plans",
   );
+});
+
+function fakeCodex(responses) {
+  const calls = [];
+  return {
+    calls,
+    async request(method, params) {
+      calls.push([method, params ?? null]);
+      const next = responses[method].shift();
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  };
+}
+
+const expired = new Error(
+  'account/rateLimits/read: {"code":-32603,"message":"failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; body={\\"code\\": \\"token_expired\\"}"}',
+);
+
+test("Codex collector refreshes an expired token once and retries", async () => {
+  const rpc = fakeCodex({
+    "account/read": [{ account: { type: "chatgpt" } }, {
+      account: { type: "chatgpt", planType: "pro" },
+    }],
+    "account/rateLimits/read": [expired, { rateLimits: { primary: {} } }],
+    "account/usage/read": [{}],
+  });
+  const result = await collectCodex(rpc);
+  equal(
+    result.account,
+    { account: { type: "chatgpt", planType: "pro" } },
+    "account",
+  );
+  equal(
+    rpc.calls.filter(([method]) => method === "account/read").map(([, p]) => p),
+    [{ refreshToken: false }, { refreshToken: true }],
+    "refresh only after expiry",
+  );
+});
+
+test("Codex collector never refreshes on other failures or a second expiry", async () => {
+  const other = fakeCodex({
+    "account/read": [{ account: { type: "chatgpt" } }],
+    "account/rateLimits/read": [new Error("account/rateLimits/read: 503")],
+  });
+  let failed = false;
+  await collectCodex(other).catch(() => {
+    failed = true;
+  });
+  equal([failed, other.calls.length], [true, 2], "other failure");
+  const twice = fakeCodex({
+    "account/read": [{}, {}],
+    "account/rateLimits/read": [expired, expired],
+  });
+  failed = false;
+  await collectCodex(twice).catch(() => {
+    failed = true;
+  });
+  equal([failed, twice.calls.length], [true, 4], "single refresh");
+  equal(codexTokenExpired(new Error("plain")), false, "plain error");
 });

@@ -1298,8 +1298,9 @@ fn valid_mobile_review_binding(context: &str) -> bool {
 }
 
 fn valid_mobile_review_comparison(value: &str) -> bool {
+    let reference = value.strip_prefix("committed:").unwrap_or(value);
     value.is_empty()
-        || (value.starts_with("refs/")
+        || (reference.starts_with("refs/")
             && value.len() <= 512
             && !value.chars().any(char::is_control))
 }

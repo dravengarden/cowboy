@@ -246,5 +246,6 @@ primary phone/desktop product path.
 - [`releases/ovh-cli-bootstrap-2026-09-29.md`](releases/ovh-cli-bootstrap-2026-09-29.md) — Remote Machine CLI correction and incomplete permanent OVH enrollment
 - [`releases/ovh-luna-acceptance-2026-09-30.md`](releases/ovh-luna-acceptance-2026-09-30.md) — Real OVH Codex/Luna cases, installation receipt and failed network baseline
 - [`releases/ovh-hawk-ssh-repair-2026-09-30.md`](releases/ovh-hawk-ssh-repair-2026-09-30.md) — OVH Luna diagnoses, edits, tests and commits an isolated Hawk project through SSH
+- [`releases/matrix-relay-2026-11-01.md`](releases/matrix-relay-2026-11-01.md) — Matrix on every Machine and Agent over the Machine link, with outage acceptance.
 - [`integrations/zed.md`](integrations/zed.md) — Optional stdio ACP bridge for Zed External Agents
 - [`architecture/14-zed-code-provider.md`](architecture/14-zed-code-provider.md) — Optional isolated Zed-backed code-intelligence adapter
