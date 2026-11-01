@@ -122,6 +122,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
   const requests: string[] = [];
   const commands: string[] = [];
   const mutations: string[] = [];
+  const submits: string[] = [];
   let socket: FixtureSocket | undefined;
   class FixtureSocket {
     static OPEN = 1;
@@ -145,6 +146,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             id: "ovh",
             display_name: "OVH",
             local: false,
+            ...(branches ? { capabilities: { hibernation: true, native_fork: true } } : {}),
             workspaces: [{
               id: "cowboy",
               display_name: "Cowboy",
@@ -168,6 +170,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     send(data: string) {
       commands.push(JSON.parse(data).type);
       const message = JSON.parse(data);
+      if (message.type === "submit") submits.push(data);
       if (message.type === "sync") mutations.push(`${message.state}/${message.name}`);
     }
     close() {
@@ -202,6 +205,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       });
     }
     if (url.pathname.endsWith("/bootstrap")) return json({ messages: [] });
+    if (url.pathname.endsWith("/fork")) {
+      requests.push(url.pathname);
+      return json({ session_id: "explain-fork" });
+    }
     if (url.pathname.endsWith("/review-fetch")) {
       fetched = true;
       return json({ reference: "refs/remotes/origin/main", oid: "abc" });
@@ -367,6 +374,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     requests,
     commands,
     mutations,
+    submits,
     refresh: () => socket?.publish({ type: "sessions", sessions }),
     sync: (state: string, value: unknown, version: number) => socket?.publish({ type: "sync_patch", state, value, version, confirmed: [], resync: true }),
     select: (id: string) => flushSync(() => setActiveSessionId(id)),
@@ -516,6 +524,20 @@ async function checkReviewCompareAndSelection(
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Two taps should select a range");
     check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
 
+    await until(() => !!body.querySelector("[data-review-explain]"), "A forkable session should offer Explain");
+    const beforeExplain = fixture.requests.length;
+    await press(body.querySelector("[data-review-explain]"), "Explain");
+    await until(() => opened.includes("agent"), "Explain should open its fork");
+    check(
+      fixture.requests.slice(beforeExplain).some((request) => request.includes("/api/sessions/worktree/fork")),
+      "Explain should fork the Agent",
+    );
+    const asked = fixture.submits.find((command) => command.includes('"session_id":"explain-fork"'));
+    check(asked?.includes("Do not change any files") && asked.includes("src/app.ts:1"), `Explain should ask its fork, got: ${asked}`);
+    opened.length = 0;
+    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5 again");
+    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6 again");
+    await until(() => bar()?.textContent?.includes("2 lines") === true, "Selection should work again");
     await press(row("Send to Agent"), "Send to Agent");
     await until(() => opened.includes("agent"), "Sending should return to the Agent");
     const draft = getDraft("worktree").text;

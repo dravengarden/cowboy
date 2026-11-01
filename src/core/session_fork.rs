@@ -120,6 +120,30 @@ impl Hub {
         }
     }
 
+    /// The answer that ended the newest finished turn, so a fork can start
+    /// beside a running turn. While the agent works, its answers so far are
+    /// not a fork point, so the walk starts behind the running turn's prompt.
+    #[must_use]
+    pub fn last_completed_answer_id(&self, source: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(source)?;
+        let mut finished = !matches!(
+            session.meta.status,
+            crate::agent_model::Status::Busy | crate::agent_model::Status::Starting
+        );
+        for envelope in session.log.iter().rev() {
+            match update_kind(envelope) {
+                Some(("user_message_chunk", _)) => finished = true,
+                Some(("agent_message_chunk", Some(id))) if finished => {
+                    return Some(id.to_owned());
+                }
+                Some(("context_cleared", _)) => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// The source's newest answer in its current context, if the agent named it.
     #[must_use]
     pub fn last_answer_id(&self, source: &str) -> Option<String> {
@@ -391,6 +415,17 @@ mod tests {
         hub.set_status("source", crate::agent_model::Status::Busy, None);
         assert_eq!(hub.fork_point("source", "b2"), ForkPoint::Running);
         assert_eq!(hub.fork_point("source", "a2"), ForkPoint::Completed);
+        // A running turn's answers do not count; a steer does not end a turn.
+        assert_eq!(
+            hub.last_completed_answer_id("source").as_deref(),
+            Some("a2")
+        );
+        hub.set_status("source", crate::agent_model::Status::Running, None);
+        assert_eq!(
+            hub.last_completed_answer_id("source").as_deref(),
+            Some("b2")
+        );
+        assert_eq!(hub.last_completed_answer_id("missing"), None);
     }
 
     #[test]

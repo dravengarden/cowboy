@@ -1,8 +1,9 @@
-import { glyphSize } from "./surface/desktopSize";
+import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { alpha, Box, Stack, Typography } from "@mui/material";
+import { Box, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import RefreshRounded from "@mui/icons-material/RefreshRounded";
+import { mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
 import { NetworkIconButton } from "./NetworkActionFeedback";
 import { providerName } from "./providerPresentation";
 import { useProviderCatalog } from "./providerCatalog";
@@ -112,75 +113,89 @@ export function ProviderQuotaStatus({
   const displayName = identity?.label ?? providerName(provider, providerVersion, providerDigest);
 
   return (
-    <Box
+    <ProviderQuotaStatusRow
+      displayName={displayName}
+      details={details}
+      activeTurn={activeTurn}
+      desktop={desktop}
+      refreshing={refreshing}
+      {...(serviceAccount || named?.available ? { refresh } : {})}
+    />
+  );
+}
+
+/**
+ * One line in the BackgroundTasksBar's register: a quota wait is context for
+ * the turn, not a decision, so it must not outweigh an approval. Colour stays
+ * on the glyph; the row carries no fill or border of its own.
+ */
+export function ProviderQuotaStatusRow({
+  displayName,
+  details,
+  activeTurn,
+  desktop,
+  refreshing = false,
+  refresh,
+}: {
+  displayName: string;
+  details: string;
+  activeTurn: boolean;
+  desktop: boolean;
+  refreshing?: boolean;
+  refresh?: () => Promise<void>;
+}): React.JSX.Element {
+  return (
+    <Stack
       data-provider-quota-status
       data-composer-stack-slot="quota"
+      role="status"
+      aria-live="polite"
+      title={`${displayName} usage limit reached. ${
+        activeTurn ? "This turn" : "Sending now"
+      } may wait until the provider makes capacity available.`}
+      direction="row"
+      alignItems="center"
+      spacing={0.75}
       sx={{
-        position: "relative",
-        display: "flex",
-        justifyContent: "center",
-        px: desktop ? 0 : 2,
-        ...(desktop && { flexShrink: 0 }),
+        flexShrink: 0,
         width: "100%",
         minWidth: 0,
         boxSizing: "border-box",
-        zIndex: 3,
+        px: desktop ? 1 : 1.5,
+        minHeight: desktop ? desktopSize(32) : mobileComposerPanelHeaderMinHeight,
+        ...(desktop && { borderBottom: 1, borderColor: "divider" }),
       }}
     >
-      <Stack
-        role="alert"
-        aria-live="polite"
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={(theme) => ({
-          width: "100%",
-          maxWidth: desktop ? "none" : 560,
-          minWidth: 0,
-          px: 1.25,
-          py: desktop ? 0.5 : 1,
-          border: desktop ? 0 : 1,
-          ...(desktop && { borderBottom: 1 }),
-          borderColor: alpha(theme.palette.warning.main, 0.42),
-          borderRadius: desktop ? 0 : 2,
-          color: "warning.main",
-          bgcolor: alpha(
-            theme.palette.warning.main,
-            theme.palette.mode === "dark" ? 0.16 : 0.09,
-          ),
-        })}
+      <WarningAmberRounded sx={{ fontSize: glyphSize(16), flexShrink: 0, color: "warning.main" }} />
+      <Typography
+        variant="caption"
+        noWrap
+        component="span"
+        sx={{ flex: 1, minWidth: 0, color: "text.secondary" }}
       >
-        <WarningAmberRounded sx={{ fontSize: glyphSize(20), flexShrink: 0 }} />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            variant="body2"
-            sx={{ fontWeight: 700, lineHeight: 1.35 }}
-          >
-            {displayName} usage limit reached
-          </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", lineHeight: 1.4 }}
-          >
-            {details}. {activeTurn
-              ? "This turn may wait until the provider makes capacity available."
-              : "Sending now may wait until the provider makes capacity available."}
-          </Typography>
+        <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>
+          {displayName}
         </Box>
-        {(serviceAccount || named?.available) && (
-          <NetworkIconButton
-            aria-label="Refresh provider usage"
-            size="small"
-            reliableTouch
-            networkAction={refresh}
-            disabled={refreshing}
-            sx={{ flexShrink: 0, color: "warning.main" }}
-          >
-            <RefreshRounded fontSize="small" />
-          </NetworkIconButton>
-        )}
-      </Stack>
-    </Box>
+        {` · ${details} · ${activeTurn ? "Waiting" : "Sending may wait"}`}
+      </Typography>
+      {refresh && (
+        <NetworkIconButton
+          aria-label="Refresh provider usage"
+          size="small"
+          reliableTouch
+          networkAction={refresh}
+          disabled={refreshing}
+          sx={{
+            flexShrink: 0,
+            color: "text.secondary",
+            width: desktop ? desktopSize(28) : 40,
+            height: desktop ? desktopSize(28) : 40,
+            "& .MuiSvgIcon-root": { fontSize: glyphSize(18) },
+          }}
+        >
+          <RefreshRounded />
+        </NetworkIconButton>
+      )}
+    </Stack>
   );
 }

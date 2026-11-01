@@ -119,7 +119,8 @@ multiselect. Both show selected sessions with account labels, enforce the
 
 The next explicit send checks the saved revision and current authorization. A
 fresh-agent transition requires the source to be idle with no queued prompts or
-native background work. It creates a separate Cowboy session through ordinary
+native background work. Session Settings disables Replace, and a native Fork, while
+the live queue is non-empty and says why instead of waiting for a refusal. It creates a separate Cowboy session through ordinary
 account and placement admission, then sends the message once and opens that
 destination. The original conversation, native identity, account binding and
 files remain available. Linking context alone does not replace an agent.

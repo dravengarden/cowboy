@@ -14,6 +14,10 @@ pub(in crate::server) struct ForkRequest {
     /// Provider ID of a turn-final assistant message; omitted forks it all.
     #[serde(default)]
     pub message_id: Option<String>,
+    /// Fork from the answer that ended the newest finished turn, which needs
+    /// no idle source. Takes the place of `message_id`.
+    #[serde(default)]
+    pub latest_completed: bool,
     /// Live options (model, reasoning, …) the copy uses instead of the
     /// inherited ones; saved before its first launch.
     #[serde(default)]
@@ -109,7 +113,7 @@ async fn fork_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
     id: String,
-    request: ForkRequest,
+    mut request: ForkRequest,
 ) -> Result<(String, bool), String> {
     let lock = write_lock(&id);
     let _guard = lock.lock().await;
@@ -120,7 +124,8 @@ async fn fork_session(
     }
     valid_overrides(&request.config)?;
     if let Some((destination, record)) = state.hub.fork_by_operation(&id, &request.operation) {
-        if record.message_id != request.message_id {
+        // The latest answer moves, so a retry cannot restate the point it took.
+        if !request.latest_completed && record.message_id != request.message_id {
             return Err("This operation already forked another point".into());
         }
         if record.state == ForkState::Refused {
@@ -144,6 +149,14 @@ async fn fork_session(
         .hub
         .agent_session_id_for_resume(&id)
         .ok_or("This conversation has nothing to fork yet")?;
+    if request.latest_completed {
+        request.message_id = Some(
+            state
+                .hub
+                .last_completed_answer_id(&id)
+                .ok_or("Wait for this agent's first answer before forking")?,
+        );
+    }
     admit_point(&state.hub, &info, request.message_id.as_deref())?;
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
     let runtime = runtime_machine_id.as_deref().unwrap_or(&machine_id);

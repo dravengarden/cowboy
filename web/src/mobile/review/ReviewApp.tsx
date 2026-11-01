@@ -67,6 +67,8 @@ import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
 import {
   mutateMobileReview as mutateReviewState,
+  renameSession,
+  send,
   notify,
   openSession,
   useMobileReviewState,
@@ -148,8 +150,12 @@ import { ReviewSelectionBar } from "./ReviewSelectionBar";
 import {
   nextReviewLineSelection,
   type ReviewLineSelection,
+  reviewExplainPrompt,
+  reviewExplainTitle,
   reviewSelectionMessage,
 } from "./reviewLineSelection";
+import { forkAvailability, forkSession } from "../../sessionFork";
+import { requestPickSession } from "../../sessionPickRequest";
 import { presentHoverBlock } from "./symbolPresentation";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
@@ -500,11 +506,14 @@ export function DocumentView({
   outlineLine,
   onOutlineSelect,
   onSendSelection,
+  onExplainSelection,
 }: {
   sessionId: string;
   reviewStateId?: string;
   /** Hand selected lines to the Agent's Composer; absent without an Agent. */
   onSendSelection?: ((message: string) => void) | undefined;
+  /** Ask a fork of the Agent about selected lines; absent where none exists. */
+  onExplainSelection?: ((path: string, message: string) => Promise<void>) | undefined;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
@@ -539,6 +548,14 @@ export function DocumentView({
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const [lineSelection, setLineSelection] = useState<ReviewLineSelection>();
+  const selectionMessage = (selection: ReviewLineSelection): string =>
+    reviewSelectionMessage({
+      path: target.path,
+      text: displayText,
+      kind: target.kind,
+      selection,
+      comparison: target.kind === "diff" ? target.comparison : undefined,
+    });
   const toggleSelectedLine = useCallback((line: number): void => {
     setLineSelection((current) => nextReviewLineSelection(current, line));
   }, []);
@@ -2043,17 +2060,15 @@ export function DocumentView({
             selection={lineSelection}
             onClear={() => setLineSelection(undefined)}
             onSend={() => {
-              onSendSelection(reviewSelectionMessage({
-                path: target.path,
-                text: displayText,
-                kind: target.kind,
-                selection: lineSelection,
-                comparison: target.kind === "diff"
-                  ? target.comparison
-                  : undefined,
-              }));
+              onSendSelection(selectionMessage(lineSelection));
               setLineSelection(undefined);
             }}
+            onExplain={onExplainSelection
+              ? async () => {
+                await onExplainSelection(target.path, selectionMessage(lineSelection));
+                setLineSelection(undefined);
+              }
+              : undefined}
           />
         )}
         {surface.kind === "mobile"
@@ -2369,6 +2384,25 @@ export function ReviewApp({
       openMobileProduct("agent");
     };
   }, [activeSessionId]);
+  const explainSource = currentSession &&
+      forkAvailability(currentSession, machineInventories) !== null
+    ? currentSession.id
+    : undefined;
+  const explainRoot = projectCodeContext?.cwd;
+  const explainSelection = useMemo(() => {
+    if (!explainSource) return undefined;
+    return async (path: string, message: string): Promise<void> => {
+      const fork = await forkSession(explainSource, { latestCompleted: true });
+      renameSession(fork.session_id, reviewExplainTitle(path));
+      const prompt = reviewExplainPrompt(message, explainRoot);
+      if (!send({ type: "submit", session_id: fork.session_id, text: prompt, cmid: `explain-${fork.session_id}` })) {
+        // Nothing is lost offline: the question waits in the fork's Composer.
+        appendDraftText(fork.session_id, prompt);
+      }
+      requestPickSession(fork.session_id, fork.session ?? undefined);
+      openMobileProduct("agent");
+    };
+  }, [explainRoot, explainSource]);
   const preferredGitComparison = syncedReview.comparison === undefined
     ? undefined
     : syncedReview.comparison || null;
@@ -3596,6 +3630,7 @@ export function ReviewApp({
               sessionId={workspace.sessionId}
               reviewStateId={reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)}
               onSendSelection={sendSelectionToAgent}
+              onExplainSelection={explainSelection}
               bufferMode={bufferMode}
               dataRevision={dataRevision}
               active={active}

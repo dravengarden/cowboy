@@ -38,7 +38,9 @@ changes.
   `message_id` (below). The Transcript shows no fork action: switches and
   branches are made in Session Settings.
 - `sessions.fork` in Cowboy MCP and `POST /api/sessions/:id/fork` expose the
-  same operation to agents and scripts.
+  same operation to agents and scripts. `latest_completed` forks from the
+  answer that ended the newest finished turn, without waiting for a running
+  one; **Explain** in [Code Review](architecture/13-code-review.md) uses it.
 
 The fork keeps its source's Provider, subscription and login, runtime Machine,
 execution Machine, project and supported settings (model, reasoning,
