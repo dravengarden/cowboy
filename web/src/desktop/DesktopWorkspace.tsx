@@ -409,6 +409,7 @@ export function DesktopWorkspace({
                   data-desktop-review-toggle
                   size="small"
                   aria-label={reviewOpen ? "Return to the Conversation" : "Review code"}
+                  aria-keyshortcuts={DESKTOP_SHORTCUTS.review}
                   aria-pressed={reviewOpen}
                   color={reviewOpen ? "primary" : "default"}
                   onClick={toggleReviewCommand.run}
