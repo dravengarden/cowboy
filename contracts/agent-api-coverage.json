@@ -82,6 +82,7 @@
     "api_search_files": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_session_bootstrap": "configuration.read",
     "api_session_cache_protection": "sessions.cache_protection",
+    "api_review_fetch": "sessions.review_fetch",
     "api_session_hibernate": "sessions.hibernate",
     "api_session_info": "sessions.info",
     "api_session_prompt": "queue.submit",

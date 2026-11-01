@@ -283,6 +283,11 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/config-revert/restore",
             post(web::config_revert::restore),
         ),
+        "sessions.review_fetch" => (
+            "POST",
+            "/api/sessions/{session_id}/review-fetch",
+            post(web::api_review_fetch),
+        ),
         "sessions.duplicate" => (
             "POST",
             "/api/sessions/{session_id}/duplicate",

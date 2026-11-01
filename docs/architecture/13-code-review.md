@@ -187,7 +187,8 @@ not a task worktree of it.
 
 Code reads never touch the network, so remote branches stay as old as the last
 fetch. Where the worktree is local to the Controller, **Fetch this branch**
-(`POST /api/sessions/SESSION/review-fetch`) updates that one branch. It is a
+(`POST /api/sessions/SESSION/review-fetch`, MCP `sessions.review_fetch`) updates
+that one branch. It is a
 mutation under the session's write authorization, not a Code read: it takes only
 a remote branch already listed as a comparison, uses the remote the repository
 names with `ext::` transports refused, and is bounded to 30 seconds. The result
