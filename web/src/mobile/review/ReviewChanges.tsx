@@ -46,6 +46,7 @@ import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewComparePicker } from "./ReviewComparePicker";
 import {
+  comparisonAvailable,
   resolveReviewComparison,
   reviewCompareLabel,
   reviewCompareScenarios,
@@ -179,6 +180,26 @@ function GitTreeRows({
               }}
               sx={{ my: 0 }}
             />
+            {entry.change.additions !== undefined && (
+              <Typography
+                aria-label={`${entry.change.additions} added, ${entry.change.deletions ?? 0} removed`}
+                variant="caption"
+                noWrap
+                sx={{
+                  flexShrink: 0,
+                  ml: 1,
+                  fontFamily: "var(--cowboy-font-mono)",
+                }}
+              >
+                <Box component="span" sx={{ color: "success.main" }}>
+                  {`+${entry.change.additions}`}
+                </Box>
+                {" "}
+                <Box component="span" sx={{ color: "error.main" }}>
+                  {`−${entry.change.deletions ?? 0}`}
+                </Box>
+              </Typography>
+            )}
             <Typography
               aria-label={entry.change.status}
               variant="caption"
@@ -313,8 +334,14 @@ export function ReviewChanges({
     ? snapshot?.result.defaultComparison ?? undefined
     : undefined;
   const scenarios = useMemo(
-    () => reviewCompareScenarios(target, comparisons, defaultComparison),
-    [comparisons, defaultComparison, target],
+    () =>
+      reviewCompareScenarios(
+        target,
+        comparisons,
+        defaultComparison,
+        snapshot?.result.committedComparisons === true,
+      ),
+    [comparisons, defaultComparison, snapshot, target],
   );
 
   const load = useCallback(async (): Promise<void> => {
@@ -385,7 +412,7 @@ export function ReviewChanges({
     if (comparison === preferredComparison) return;
     if (
       preferredComparison === null ||
-      comparisons.some((item) => item.reference === preferredComparison)
+      comparisonAvailable(preferredComparison, comparisons)
     ) onComparisonResolved?.(preferredComparison);
   }, [comparison, comparisons, onComparisonResolved, preferredComparison]);
 

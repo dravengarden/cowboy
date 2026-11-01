@@ -18894,6 +18894,10 @@ struct CodeChangeResponse {
     unstaged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    additions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deletions: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -18907,6 +18911,7 @@ struct CodeChangesResponse {
     comparison: Option<String>,
     default_comparison: Option<String>,
     comparisons: Vec<crate::code_review::GitComparison>,
+    committed_comparisons: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19758,6 +19763,8 @@ async fn api_code_changes(
                     staged: change.staged,
                     unstaged: change.unstaged,
                     fingerprint: change.fingerprint,
+                    additions: change.additions,
+                    deletions: change.deletions,
                     status: match change.status {
                         crate::code_review::ChangeStatus::Modified => "modified",
                         crate::code_review::ChangeStatus::Added => "added",
@@ -19772,6 +19779,7 @@ async fn api_code_changes(
             comparison: result.comparison,
             default_comparison: result.default_comparison,
             comparisons: result.comparisons,
+            committed_comparisons: result.committed_comparisons,
         })
         .into_response()
     })

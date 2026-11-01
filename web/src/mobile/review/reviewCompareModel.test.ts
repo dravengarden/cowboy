@@ -77,3 +77,23 @@ test("a stored comparison survives only while it exists", () => {
   );
   assertEquals(resolveReviewComparison(undefined, [], undefined), null);
 });
+
+test("Not pushed stops at HEAD where the Machine can", () => {
+  const scenarios = reviewCompareScenarios(
+    target,
+    comparisons,
+    main.reference,
+    true,
+  );
+  const unpushed = scenarios.find((item) => item.key === "unpushed")!;
+  assertEquals(unpushed.comparison, `committed:${topic.reference}`);
+  assertEquals(unpushed.detail, "Commits not on origin/topic yet");
+  assertEquals(
+    reviewCompareLabel(unpushed.comparison, scenarios, comparisons),
+    "Not pushed · origin/topic",
+  );
+  assertEquals(
+    resolveReviewComparison(unpushed.comparison, comparisons, main.reference),
+    unpushed.comparison,
+  );
+});

@@ -38,6 +38,12 @@ pub struct CodeChange {
     /// holds only while it is unchanged. Absent from adapters that predate it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// Lines added and removed, when Git can count them: binary and untracked
+    /// files have none, and adapters that predate it omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +74,10 @@ pub struct ChangeList {
     pub comparison: Option<String>,
     pub default_comparison: Option<String>,
     pub comparisons: Vec<GitComparison>,
+    /// This provider understands `committed:<reference>`. Absent from adapters
+    /// that predate it, which would refuse such a comparison.
+    #[serde(default)]
+    pub committed_comparisons: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,12 +476,24 @@ impl LocalCodeProvider {
         Ok((comparisons, default_comparison))
     }
 
+    /// Lines per path for a diff range. Counts decorate the list, so a failure
+    /// leaves them out rather than losing the changes.
+    fn line_counts(&self, range: &[&str]) -> LineCounts {
+        let mut args = vec!["diff", "--numstat", "-z", "-M"];
+        args.extend(range);
+        args.push("--");
+        git_output(&self.root, &args, 4 * 1024 * 1024)
+            .map(|bytes| parse_numstat(&bytes))
+            .unwrap_or_default()
+    }
+
     fn comparison_base(&self, comparison: &str) -> Result<String, String> {
+        let (reference, _) = split_comparison(comparison);
         let (comparisons, _) = self.comparisons()?;
-        if !comparisons.iter().any(|item| item.reference == comparison) {
+        if !comparisons.iter().any(|item| item.reference == reference) {
             return Err("comparison branch is unavailable".to_owned());
         }
-        let bytes = git_output(&self.root, &["merge-base", comparison, "HEAD"], 128)?;
+        let bytes = git_output(&self.root, &["merge-base", reference, "HEAD"], 128)?;
         let oid = String::from_utf8(bytes).map_err(|_| "invalid merge base".to_owned())?;
         let oid = oid.trim();
         safe_oid(oid)?;
@@ -801,28 +823,34 @@ impl CodeProvider for LocalCodeProvider {
         let (comparisons, default_comparison) = self.comparisons()?;
         if let Some(comparison) = comparison {
             let base = self.comparison_base(comparison)?;
-            let output = git_output(
-                &self.root,
-                &["diff", "--name-status", "-z", "-M", &base, "--"],
-                4 * 1024 * 1024,
-            )?;
+            let (_, committed) = split_comparison(comparison);
+            let mut range = vec![base.as_str()];
+            if committed {
+                range.push("HEAD");
+            }
+            let mut name_status = vec!["diff", "--name-status", "-z", "-M"];
+            name_status.extend(&range);
+            name_status.push("--");
+            let output = git_output(&self.root, &name_status, 4 * 1024 * 1024)?;
             let mut files = parse_commit_files(&output);
-            let tracked = files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            let mut untracked = status
-                .split(|byte| *byte == 0)
-                .filter(|field| field.starts_with(b"?? "))
-                .map(|field| String::from_utf8_lossy(&field[3..]).into_owned())
-                .filter(|path| !tracked.contains(path.as_str()))
-                .map(|path| GitCommitFile {
-                    path,
-                    old_path: None,
-                    status: ChangeStatus::Untracked,
-                })
-                .collect::<Vec<_>>();
-            files.append(&mut untracked);
+            if !committed {
+                let tracked = files
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                let mut untracked = status
+                    .split(|byte| *byte == 0)
+                    .filter(|field| field.starts_with(b"?? "))
+                    .map(|field| String::from_utf8_lossy(&field[3..]).into_owned())
+                    .filter(|path| !tracked.contains(path.as_str()))
+                    .map(|path| GitCommitFile {
+                        path,
+                        old_path: None,
+                        status: ChangeStatus::Untracked,
+                    })
+                    .collect::<Vec<_>>();
+                files.append(&mut untracked);
+            }
             let truncated = files.len() > MAX_CHANGES;
             files.truncate(MAX_CHANGES);
             let head = self.head();
@@ -830,6 +858,7 @@ impl CodeProvider for LocalCodeProvider {
             revision_input.extend_from_slice(&status);
             revision_input.extend_from_slice(comparison.as_bytes());
             let anchor = format!("{base}\0{}", head.as_deref().unwrap_or(""));
+            let counts = self.line_counts(&range);
             return Ok(ChangeList {
                 revision: Self::worktree_revision(head.as_deref(), &revision_input),
                 changes: files
@@ -842,8 +871,11 @@ impl CodeProvider for LocalCodeProvider {
                             staged: false,
                             unstaged: false,
                             fingerprint: None,
+                            additions: None,
+                            deletions: None,
                         };
                         change.fingerprint = Some(self.change_fingerprint(Some(&anchor), &change));
+                        apply_line_counts(&mut change, &counts);
                         change
                     })
                     .collect(),
@@ -852,6 +884,7 @@ impl CodeProvider for LocalCodeProvider {
                 comparison: Some(comparison.to_owned()),
                 default_comparison,
                 comparisons,
+                committed_comparisons: true,
             });
         }
         let mut fields = status
@@ -879,6 +912,8 @@ impl CodeProvider for LocalCodeProvider {
                 staged: has_staged_change(xy),
                 unstaged: has_unstaged_change(xy),
                 fingerprint: None,
+                additions: None,
+                deletions: None,
             });
             if changes.len() > MAX_CHANGES {
                 break;
@@ -888,8 +923,12 @@ impl CodeProvider for LocalCodeProvider {
         let truncated = changes.len() > MAX_CHANGES;
         changes.truncate(MAX_CHANGES);
         let head = self.head();
+        let counts = head
+            .as_deref()
+            .map_or_else(LineCounts::new, |head| self.line_counts(&[head]));
         for change in &mut changes {
             change.fingerprint = Some(self.change_fingerprint(head.as_deref(), change));
+            apply_line_counts(change, &counts);
         }
         Ok(ChangeList {
             revision: Self::worktree_revision(head.as_deref(), &status),
@@ -899,6 +938,7 @@ impl CodeProvider for LocalCodeProvider {
             comparison: None,
             default_comparison,
             comparisons,
+            committed_comparisons: true,
         })
     }
 
@@ -1017,7 +1057,12 @@ impl CodeProvider for LocalCodeProvider {
             args.push("--ignore-all-space".to_owned());
         }
         match (comparison, scope) {
-            (Some(comparison), _) => args.push(self.comparison_base(comparison)?),
+            (Some(comparison), _) => {
+                args.push(self.comparison_base(comparison)?);
+                if split_comparison(comparison).1 {
+                    args.push("HEAD".to_owned());
+                }
+            }
             (None, DiffScope::Combined) => {
                 let base = if let Some(head) = self.head() {
                     head
@@ -1054,7 +1099,11 @@ impl CodeProvider for LocalCodeProvider {
             let refs: Vec<&str> = paired.iter().map(String::as_str).collect();
             bytes = git_output(&self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
         }
-        if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(&self.root, &path)
+        let committed = comparison.is_some_and(|comparison| split_comparison(comparison).1);
+        if bytes.is_empty()
+            && !committed
+            && scope != DiffScope::Staged
+            && !git_path_is_tracked(&self.root, &path)
         {
             bytes = untracked_diff(&self.root, &relative, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
         }
@@ -1378,6 +1427,50 @@ fn parse_git_worktrees(bytes: &[u8], current: &Path) -> Vec<GitWorktreeSummary> 
         .collect()
 }
 
+type LineCounts = std::collections::HashMap<String, (u32, u32)>;
+
+/// `committed:<reference>` stops at `HEAD`; a bare reference runs to the
+/// working tree. Both start from the merge base.
+fn split_comparison(comparison: &str) -> (&str, bool) {
+    comparison
+        .strip_prefix("committed:")
+        .map_or((comparison, false), |reference| (reference, true))
+}
+
+fn apply_line_counts(change: &mut CodeChange, counts: &LineCounts) {
+    if let Some((additions, deletions)) = counts.get(&change.path) {
+        change.additions = Some(*additions);
+        change.deletions = Some(*deletions);
+    }
+}
+
+/// `git diff --numstat -z`: `added\tremoved\tpath\0`, or for a rename an empty
+/// path followed by `old\0new\0`. Binary files count `-` and are left out.
+fn parse_numstat(bytes: &[u8]) -> LineCounts {
+    let mut counts = LineCounts::new();
+    let mut fields = bytes.split(|byte| *byte == 0);
+    while let Some(field) = fields.next() {
+        let text = String::from_utf8_lossy(field);
+        let mut columns = text.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            fields.next();
+            let Some(renamed) = fields.next() else { break };
+            String::from_utf8_lossy(renamed).into_owned()
+        } else {
+            path.to_owned()
+        };
+        if let (Ok(added), Ok(removed)) = (added.parse(), removed.parse()) {
+            counts.insert(path, (added, removed));
+        }
+    }
+    counts
+}
+
 fn parse_commit_files(bytes: &[u8]) -> Vec<GitCommitFile> {
     let mut fields = bytes
         .split(|byte| *byte == 0)
@@ -1608,7 +1701,7 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 mod tests {
     use super::{
         ChangeStatus, CodeProvider as _, DiffScope, GitRepositorySnapshot, GitTrackedReference,
-        LocalCodeProvider, RawFileDocument, preview_media_type,
+        LocalCodeProvider, RawFileDocument, parse_numstat, preview_media_type,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1683,6 +1776,76 @@ mod tests {
             .unwrap();
         assert!(untracked.text.contains("+hello"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn committed_comparison_stops_at_head_and_counts_lines() {
+        let dir = scratch("committed-comparison");
+        Command::new("git")
+            .args(["branch", "base"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn committed() {}\nfn two() {}\n").unwrap();
+        Command::new("git")
+            .args(["commit", "-qam", "branch work"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn dirty() {}\n").unwrap();
+        fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+        let provider = LocalCodeProvider::new(&dir);
+
+        let changes = provider.changes(Some("committed:refs/heads/base")).unwrap();
+        assert!(changes.committed_comparisons);
+        assert_eq!(changes.changes.len(), 1, "uncommitted files stay out");
+        assert_eq!(changes.changes[0].path, "tracked.rs");
+        let added = changes.changes[0].additions.unwrap();
+        assert!(added >= 1, "counts the committed lines, got {added}");
+        let diff = provider
+            .diff_snapshot(
+                "tracked.rs",
+                3,
+                true,
+                DiffScope::Combined,
+                Some("committed:refs/heads/base"),
+            )
+            .unwrap();
+        assert!(diff.text.contains("fn two()"));
+        assert!(!diff.text.contains("fn dirty()"));
+        assert!(
+            provider
+                .diff_snapshot(
+                    "untracked.txt",
+                    3,
+                    true,
+                    DiffScope::Combined,
+                    Some("committed:refs/heads/base"),
+                )
+                .unwrap()
+                .text
+                .is_empty()
+        );
+
+        let working = provider.changes(None).unwrap();
+        let tracked = working
+            .changes
+            .iter()
+            .find(|change| change.path == "tracked.rs")
+            .unwrap();
+        assert_eq!(tracked.deletions, Some(2));
+        assert_eq!(tracked.additions, Some(1));
+        assert!(provider.changes(Some("committed:refs/heads/gone")).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn numstat_reads_renames_and_skips_binaries() {
+        let counts = parse_numstat(b"3\t1\ta.rs\0-\t-\tb.png\x005\t0\t\0old.rs\0new.rs\0");
+        assert_eq!(counts.get("a.rs"), Some(&(3, 1)));
+        assert_eq!(counts.get("b.png"), None);
+        assert_eq!(counts.get("new.rs"), Some(&(5, 0)));
+        assert_eq!(counts.get("old.rs"), None);
     }
 
     #[test]

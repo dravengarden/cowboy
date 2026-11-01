@@ -248,6 +248,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
               status: "modified",
               staged: false,
               unstaged: true,
+              ...(branches ? { additions: 12, deletions: 3 } : {}),
             },
             ...(dense
               ? Array.from({ length: 50 }, (_, index) => ({
@@ -484,6 +485,7 @@ async function checkReviewCompareAndSelection(
     );
 
     await until(() => !!row("app.ts"), "Comparison should list its files");
+    check(row("app.ts")?.textContent?.includes("+12 −3"), "A changed file should show its line counts");
     await press(row("app.ts"), "changed file");
     const lines = () => [
       ...body.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement"),
