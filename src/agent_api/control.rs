@@ -47,7 +47,7 @@ operations! {
     "tools.defaults", false, "{}";
     "tools.session", false, "{session_id:string}";
     "tools.defaults_set", true, "{provider:string,body:{settings:AgentTools|null}}; owner role; tools.defaults supplies shape and choices";
-    "tools.session_set", true, "{session_id:string,body:SessionTools}; tools.session supplies override/effective/catalog; existing Tools policy validation applies";
+    "tools.session_set", true, "{session_id:string,body:SessionTools}; tools.session supplies override/effective/catalog; existing Tools policy validation applies; cannot widen calls or memory for the caller or its lineage (tools_widening_denied)";
     "sessions.create", true, "{body:{provider:string,provider_account_id?:string,machine_id:string,cwd?:string,runtime_machine_id?:string,folder_id?:string,preset?:string,initial_prompt?:string,context_sources?:string[]}}; creates an owned ordinary session on a managed worktree; optional same-owner context links, never copied credentials or native history";
     "sessions.context", false, "{session_id:string}; context links, revision, pending fresh-agent selection and last send receipt; no worker starts";
     "sessions.config_revert", false, "{session_id:string}; values the latest in-place changes (model, reasoning and other sessions.configure options) replaced since the last sent message; empty once a message is sent";
@@ -141,6 +141,7 @@ pub fn list(domain: Option<&str>) -> Value {
         "exceptions":{"identity":"Interactive login, passkeys, credential export and granting authority stay with their identity owner.",
         "host":"Device-local config, binary deployment and host enrollment use their owning CLI; no host credential is inherited by a session.",
         "native":"Filesystem/code editing and native agent execution retain the runtime's native tools.",
+        "machine_scope":"A parent executing outside the Controller host cannot write to other Machines or shared state (machine_scope_denied).",
         "streams":"UI subscriptions, telemetry ingestion and browser leases retain their protocol owners."}})
 }
 

@@ -427,12 +427,36 @@ Writes use one stable identity:
 
 The adapter invokes existing product handlers/typed command writers. It accepts
 no arbitrary URL, headers, cookies, SQL, shell command or host delegation.
+An agent never writes shared Tools defaults, stages a continuation of its own
+lineage without inheritance, or starts a fresh session holding a Tools switch it
+lacks (`tools_widening_denied`). A remote parent names `runtime_machine_id`
+explicitly, and a stored destination is judged again at send time.
 An active product Operator can write; Service configuration and shared Tools
 defaults require Owner. Session targets remain same-owner, non-system and
 non-closing even for an Owner; nested sync targets and draft moves follow the
 same boundary. Reads recheck the original permission observation after I/O.
 Self-cancellation, deletion, reset, reload and force-send are refused so the
-caller does not interrupt the operation it is trying to observe. Human approval,
+caller does not interrupt the operation it is trying to observe.
+
+A parent's reach also depends on where it executes, read from its execution
+binding rather than its runtime Machine. A parent executing on a Machine named
+in `COWBOY_COLOCATED_MACHINES` is already inside the Controller host's trust
+boundary and is unaffected, including a Claude runtime on OVH executing on
+Hawk. Any other parent gets `machine_scope_denied` from `control.apply` when it
+targets a session executing elsewhere, creates or stages a session on another
+Machine (`machine_id` is required, and `runtime_machine_id` may only name the
+parent's Machines), or writes anything shared: Service configuration, Plugins,
+folders, project policy, shared Tools defaults and usage credits. It keeps
+control of same-Machine sessions and may refresh or maintain its own Machine.
+A deployment that names no colocated Machine treats every parent this way.
+Unclassified operations are refused, and reads are unchanged.
+
+Calls and memory are what a person grants a session, so `tools.session_set`
+returns `tools_widening_denied` when it would enable either, or add a call
+target, for the parent or a session sharing its fork and continuation lineage.
+Narrowing and review preferences stay available.
+
+Human approval,
 credentials/login, Device-local configuration, binary maintenance and recovery
 writer promotion keep their owning UI/CLI. Native file/Git/agent execution stays
 with native tools; browser leases and telemetry ingestion keep their protocols.

@@ -204,8 +204,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
               "Content-Security-Policy":
                 // Same-origin workers exercise peer IndexedDB owners; blob:
                 // lets the editor plugin sandbox (a srcdoc
-                // frame inheriting this policy) start its Worker, as on the
-                // production App, which sends no CSP. Attachment previews use
+                // frame inheriting this policy) start its Worker. The production
+                // policy is web_security.rs. Attachment previews use
                 // data/blob URLs and must exercise actual browser decoding.
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data: blob:",
             },

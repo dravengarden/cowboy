@@ -166,6 +166,7 @@ pub(super) async fn enforce(
                     || (path.starts_with("/api/machines/")
                         && path.ends_with("/deployment-health"))))
             || path.starts_with("/api/machine/")
+            || (request.method() == Method::POST && machine_refresh_path(&path))
             || device_bearer
             || path == "/api/auth/status"
             || path.starts_with("/api/auth/device/"));
@@ -246,7 +247,15 @@ pub(super) async fn enforce(
         }
     }
     if let Some(proof) = proof.as_ref()
-        && state.devices.consume(proof, registered, now).is_err()
+        && state
+            .devices
+            .consume(
+                proof,
+                registered,
+                now,
+                crate::product_auth::client_ip(request.headers(), peer),
+            )
+            .is_err()
     {
         return reject_proof();
     }

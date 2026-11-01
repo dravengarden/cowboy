@@ -2897,6 +2897,16 @@ impl Hub {
             .is_some_and(|session| session.meta.require_runtime_launch().is_err())
     }
 
+    /// A known session whose runtime Machine is not `machine_id`. Unknown IDs
+    /// stay false: a Machine may hold workers for sessions the Hub has dropped.
+    pub fn session_runs_elsewhere(&self, session_id: &str, machine_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|session| session.meta.machine_id != machine_id)
+    }
+
     /// Decide whether an incoming runtime snapshot may project lifecycle state
     /// into the Hub. A real connected owner atomically settles startup
     /// reconciliation. A broker-only placeholder is ignored while a persisted

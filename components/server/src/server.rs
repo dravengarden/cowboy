@@ -113,6 +113,7 @@ mod projects;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
+mod web_security;
 mod zed_session;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
@@ -5773,11 +5774,11 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path.starts_with("/api/machine/") {
         return RouteAuth::Public;
     }
-    // Deployment health checks use refresh to ask a connected Machine to
-    // republish its read-only inventory after a declarative workspace update.
-    // It does not install, revoke, reconcile, or otherwise mutate the Machine.
-    if method == Method::POST && path.starts_with("/api/machines/") && path.ends_with("/refresh") {
-        return RouteAuth::Public;
+    // Refreshing republishes a Machine's read-only inventory. The Web and
+    // Operators reach it signed in; host deployment checks reach it through
+    // `internal_machine_refresh` before any principal is resolved.
+    if method == Method::POST && machine_refresh_path(path) {
+        return RouteAuth::ProductOrAdminOperator;
     }
     // Release transactions need a narrow, credential-free liveness signal on
     // both the Controller host and remote Machines. Keep the full inventory
@@ -5893,8 +5894,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::ProductOrAdminOperator;
     }
     if path.starts_with("/api/machines/")
-        && (path.ends_with("/refresh")
-            || path.ends_with("/components/reconcile")
+        && (path.ends_with("/components/reconcile")
             || path.ends_with("/components/reconcile-one")
             || path.ends_with("/components/update-npm"))
     {
@@ -5909,8 +5909,10 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/plugins/catalog/refresh" {
         return RouteAuth::AdminOperator;
     }
+    // Plugin RPC is a mutation surface: the Agent API catalog already requires
+    // an Operator for the same command.
     if plugin_call_path(path) {
-        return RouteAuth::Product;
+        return RouteAuth::ProductOperator;
     }
     if path == "/api/providers/catalog/refresh" {
         return RouteAuth::AdminOperator;
@@ -5971,6 +5973,25 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::AdminOperator;
     }
     RouteAuth::Public
+}
+
+fn machine_refresh_path(path: &str) -> bool {
+    path.strip_prefix("/api/machines/")
+        .and_then(|rest| rest.strip_suffix("/refresh"))
+        .is_some_and(|machine| !machine.is_empty() && !machine.contains('/'))
+}
+
+/// Same rule as the metrics scrape: a direct same-host caller, never a request
+/// that crossed the public reverse proxy.
+fn internal_machine_refresh(
+    method: &Method,
+    path: &str,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> bool {
+    method == Method::POST
+        && machine_refresh_path(path)
+        && crate::product_auth::metrics_scrape_allowed(peer, headers)
 }
 
 fn plugin_call_path(path: &str) -> bool {
@@ -6391,6 +6412,9 @@ async fn enforce_product_api(
 ) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    if internal_machine_refresh(&method, &path, peer, request.headers()) {
+        return next.run(request).await;
+    }
     match classify_route(&method, &path) {
         RouteAuth::Public | RouteAuth::MetricsScrape => return next.run(request).await,
         RouteAuth::AdminViewer => {
@@ -6498,29 +6522,52 @@ async fn enforce_product_api(
             return StatusCode::FORBIDDEN.into_response();
         }
         RouteAuth::ProductSessionSee | RouteAuth::ProductSessionMutate => {
-            if let Some(session_id) = session_id_from_path(&path) {
-                match state.hub.session_info(session_id) {
-                    None => {}
-                    Some(info) => {
-                        let owner = info.meta.owner_user_id.as_deref();
-                        if !principal.can_see(owner) {
-                            return StatusCode::NOT_FOUND.into_response();
-                        }
-                        if matches!(
-                            classify_route(&method, &path),
-                            RouteAuth::ProductSessionMutate
-                        ) && !principal.can_mutate(owner)
-                        {
-                            return StatusCode::FORBIDDEN.into_response();
-                        }
-                    }
-                }
+            if let Err(status) = authorize_session_route(&state.hub, &principal, &method, &path) {
+                return status.into_response();
             }
         }
         _ => {}
     }
     request.extensions_mut().insert(authenticated);
     next.run(request).await
+}
+
+/// Ownership of the session a route names, on the identity its handler will
+/// see. Axum percent-decodes `Path`, so authorizing the raw segment would let
+/// `%73ess-5` miss here and reach handlers that trust this check. Only code
+/// routes admit other IDs: they also address workspace contexts, which are not
+/// Sessions and are authorized by `code_reads::Authority`.
+fn authorize_session_route(
+    hub: &Hub,
+    principal: &ProductPrincipal,
+    method: &Method,
+    path: &str,
+) -> Result<(), StatusCode> {
+    let Some(raw) = session_id_from_path(path) else {
+        return Ok(());
+    };
+    let session_id = percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let Some(info) = hub.session_info(&session_id) else {
+        return if path.starts_with("/api/code/sessions/") {
+            Ok(())
+        } else {
+            Err(StatusCode::NOT_FOUND)
+        };
+    };
+    let owner = info.meta.owner_user_id.as_deref();
+    if !principal.can_see(owner) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if matches!(
+        classify_route(method, path),
+        RouteAuth::ProductSessionMutate
+    ) && !principal.can_mutate(owner)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 fn enforce_product_session_freshness_before_dispatch(path: &str) -> bool {
@@ -14884,6 +14931,22 @@ fn failed_provider_auth_projection_ids(
         .collect()
 }
 
+/// Named accounts always carry evidence. The default account has no recorded
+/// identity to compare, and current Machines send none for it, so here this
+/// only refuses evidence that breaks the signed method's contract.
+fn refresh_identity_evidence(
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    recipe: Option<&cowboy_provider_sdk::NativeIdentityRecipe>,
+    identity: Option<&crate::provider_account::NativeIdentity>,
+) -> Result<(), String> {
+    if account_id.is_default() && identity.is_none() {
+        return Ok(());
+    }
+    provider_accounts::validate_native_evidence(provider_id, recipe, identity)
+        .map_err(str::to_owned)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn accept_provider_auth_refresh_candidate(
     state: &Arc<AppState>,
@@ -14940,25 +15003,25 @@ async fn accept_provider_auth_refresh_candidate(
     let packages = state
         .provider_catalog
         .packages_for_authentication_scope(portable_schema);
+    let method = package
+        .manifest
+        .authentication
+        .methods
+        .iter()
+        .find(|method| method.id == auth_method)
+        .ok_or("unknown refresh method")?;
+    refresh_identity_evidence(
+        provider_id,
+        account_id,
+        method.native_identity.as_ref(),
+        native_identity,
+    )?;
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
     let result = if account_id.is_default() {
         scope
             .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
             .map_err(|error| error.to_string())?
     } else {
-        let method = package
-            .manifest
-            .authentication
-            .methods
-            .iter()
-            .find(|method| method.id == auth_method)
-            .ok_or("unknown refresh method")?;
-        provider_accounts::validate_native_evidence(
-            provider_id,
-            method.native_identity.as_ref(),
-            native_identity,
-        )
-        .map_err(str::to_owned)?;
         scope
             .refresh_current_grant(
                 state.store.as_ref().ok_or("refresh requires persistence")?,
@@ -16139,6 +16202,7 @@ async fn handle_machine_ws(
         // every send/open in that window fails with "hawk is not connected".
         let runtime = RemoteRuntime::connecting(
             hub,
+            machine_id.clone(),
             label.clone(),
             generation,
             provider_auth,
@@ -20270,6 +20334,11 @@ async fn api_code_file_raw(
                 (header::CONTENT_TYPE, result.media_type),
                 (header::ETAG, etag),
                 (header::CACHE_CONTROL, FILE_CACHE_CONTROL.to_owned()),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    web_security::UNTRUSTED_BYTES_CSP.to_owned(),
+                ),
             ],
             result.bytes,
         )
@@ -20611,11 +20680,12 @@ struct HistoryQuery {
 
 /// One cursor-addressed, event- and byte-bounded page of a session's history.
 /// The client pages UP from the WS tail; older pages arrive here. A COMPLETE
-/// past page never changes again, so it's served
-/// `immutable` (one year) — the browser + service worker then satisfy any
-/// re-fetch (scroll back, reload, post-recycle reload) with ZERO network. The
-/// still-growing latest page is `no-store`, but the client never asks for it
-/// (it has the tail over WS). Unknown session → 404; out-of-range page → `[]`.
+/// past page never changes again, so `x-cowboy-history: complete` lets the
+/// service worker satisfy any re-fetch (scroll back, reload, post-recycle
+/// reload) with ZERO network. It stays `no-store` for the HTTP cache because
+/// sign-out can clear the worker's cache but not that one. The still-growing
+/// latest page is unmarked, and the client never asks for it (it has the tail
+/// over WS). Unknown session → 404; out-of-range page → `[]`.
 async fn api_history(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -20655,9 +20725,11 @@ async fn api_history(
             return (StatusCode::SERVICE_UNAVAILABLE, "history unavailable").into_response();
         }
     };
-    let cache = "public, max-age=31536000, immutable";
     (
-        [(header::CACHE_CONTROL, cache)],
+        [
+            (header::CACHE_CONTROL.as_str(), "private, no-store"),
+            ("x-cowboy-history", "complete"),
+        ],
         Json(HistoryResponse {
             events,
             next_before_seq,
@@ -20782,7 +20854,12 @@ async fn api_artifact(
                     (header::CONTENT_TYPE, content_type),
                     (
                         header::CACHE_CONTROL,
-                        "public, max-age=31536000, immutable".to_owned(),
+                        "private, max-age=31536000, immutable".to_owned(),
+                    ),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+                    (
+                        header::CONTENT_SECURITY_POLICY,
+                        web_security::UNTRUSTED_BYTES_CSP.to_owned(),
                     ),
                 ],
                 bytes,
@@ -21023,7 +21100,13 @@ async fn static_handler(
             .body(Body::from(content))
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
-    (
+    let document_csp = name.ends_with(".html").then(|| {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok());
+        web_security::app_document_csp(&content, host)
+    });
+    let mut response = (
         [
             (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, cache_control.to_owned()),
@@ -21031,7 +21114,232 @@ async fn static_handler(
         ],
         Body::from(content),
     )
-        .into_response()
+        .into_response();
+    web_security::harden_static_response(response.headers_mut(), document_csp.as_deref());
+    response
+}
+
+#[cfg(test)]
+mod refresh_identity_evidence_tests {
+    use super::refresh_identity_evidence;
+    use crate::provider_account::{NativeIdentity, ProviderAccountId};
+    use cowboy_provider_sdk::NativeIdentityRecipe;
+
+    #[test]
+    fn default_refresh_refuses_evidence_outside_the_signed_contract() {
+        let default = ProviderAccountId::default();
+        let recipe = NativeIdentityRecipe::FreshLoginJsonV1 {
+            authority: "claude-ai".into(),
+            relative_path: ".claude.json".into(),
+            subject_path: vec!["oauthAccount".into(), "accountUuid".into()],
+            tenant_path: None,
+        };
+        let identity = |authority: &str| NativeIdentity {
+            authority: authority.into(),
+            subject: "subject".into(),
+            tenant: None,
+        };
+        let check = |recipe, identity: Option<&NativeIdentity>| {
+            refresh_identity_evidence("claude-code", &default, recipe, identity)
+        };
+        // No Machine reports identity for the default account today.
+        assert!(check(Some(&recipe), None).is_ok());
+        assert!(check(None, None).is_ok());
+        assert!(check(Some(&recipe), Some(&identity("claude-ai"))).is_ok());
+        assert!(check(Some(&recipe), Some(&identity("elsewhere"))).is_err());
+        assert!(check(None, Some(&identity("claude-ai"))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod machine_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_needs_an_operator_or_a_direct_same_host_caller() {
+        let path = "/api/machines/hawk/refresh";
+        assert_eq!(
+            classify_route(&Method::POST, path),
+            RouteAuth::ProductOrAdminOperator
+        );
+        let local: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let remote: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let direct = HeaderMap::new();
+        assert!(internal_machine_refresh(
+            &Method::POST,
+            path,
+            local,
+            &direct
+        ));
+        assert!(!internal_machine_refresh(
+            &Method::POST,
+            path,
+            remote,
+            &direct
+        ));
+        assert!(!internal_machine_refresh(
+            &Method::GET,
+            path,
+            local,
+            &direct
+        ));
+        let mut proxied = HeaderMap::new();
+        proxied.insert("x-forwarded-for", "192.0.2.1".parse().unwrap());
+        assert!(!internal_machine_refresh(
+            &Method::POST,
+            path,
+            local,
+            &proxied
+        ));
+    }
+
+    #[test]
+    fn a_plugin_named_refresh_is_not_a_machine_refresh() {
+        assert!(!machine_refresh_path("/api/machines/hawk/plugins/refresh"));
+        assert_eq!(
+            classify_route(&Method::POST, "/api/machines/hawk/plugins/refresh"),
+            RouteAuth::ProductOrAdminOperator
+        );
+    }
+}
+
+#[cfg(test)]
+mod session_route_authorization_tests {
+    use super::*;
+    use crate::product_auth::ProductPrincipal;
+    use tower::ServiceExt as _;
+
+    fn principal(user_id: &str, role: crate::admin::AdminRole) -> ProductPrincipal {
+        ProductPrincipal {
+            user_id: user_id.to_owned(),
+            username: user_id.to_owned(),
+            role,
+        }
+    }
+
+    fn hub_with_owned_session() -> Hub {
+        let hub = Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "sess-5".into(),
+            provider: "codex".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".into(),
+            title: String::new(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("owner".into()),
+            owner_username: None,
+        });
+        hub
+    }
+
+    /// Runs the check in front of a handler that reads the decoded `Path`, so
+    /// the test observes what the real extractor would have delivered.
+    async fn status(hub: Hub, who: ProductPrincipal, method: Method, uri: &str) -> StatusCode {
+        let guard = move |request: axum::extract::Request, next: Next| {
+            let (hub, who) = (hub.clone(), who.clone());
+            async move {
+                let path = request.uri().path().to_owned();
+                match authorize_session_route(&hub, &who, request.method(), &path) {
+                    Ok(()) => next.run(request).await,
+                    Err(status) => status.into_response(),
+                }
+            }
+        };
+        let reached = |Path(id): Path<String>| async move {
+            assert_eq!(id, "sess-5");
+            StatusCode::IM_A_TEAPOT
+        };
+        Router::new()
+            .route("/api/sessions/{id}/prompt", post(reached))
+            .route("/api/history/{id}", get(reached))
+            .layer(middleware::from_fn(guard))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn a_percent_encoded_id_reaches_the_same_ownership_check() {
+        use crate::admin::AdminRole::{Operator, Viewer};
+        for (method, uri) in [
+            (Method::POST, "/api/sessions/%73ess-5/prompt"),
+            (Method::GET, "/api/history/%73ess-5"),
+            (Method::POST, "/api/sessions/sess-5/prompt"),
+            (Method::GET, "/api/history/sess-5"),
+        ] {
+            assert_eq!(
+                status(
+                    hub_with_owned_session(),
+                    principal("other", Viewer),
+                    method.clone(),
+                    uri
+                )
+                .await,
+                StatusCode::NOT_FOUND,
+                "{uri}"
+            );
+            assert_eq!(
+                status(
+                    hub_with_owned_session(),
+                    principal("owner", Operator),
+                    method,
+                    uri
+                )
+                .await,
+                StatusCode::IM_A_TEAPOT,
+                "{uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn undecodable_and_unknown_ids_stop_before_session_handlers() {
+        let hub = hub_with_owned_session();
+        let who = principal("owner", crate::admin::AdminRole::Owner);
+        for path in ["/api/sessions/%ff/prompt", "/api/sessions/sess-404/prompt"] {
+            assert_eq!(
+                authorize_session_route(&hub, &who, &Method::POST, path),
+                Err(StatusCode::NOT_FOUND),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            authorize_session_route(&hub, &who, &Method::GET, "/api/code/sessions/%ff/tree"),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn code_routes_keep_workspace_contexts_for_their_own_authority() {
+        let hub = hub_with_owned_session();
+        let who = principal("owner", crate::admin::AdminRole::Viewer);
+        assert_eq!(
+            authorize_session_route(
+                &hub,
+                &who,
+                &Method::GET,
+                "/api/code/sessions/workspace%3Ahawk%3Acowboy/tree"
+            ),
+            Ok(())
+        );
+    }
 }
 
 #[cfg(test)]
@@ -25640,7 +25948,7 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/password/call"),
-            RouteAuth::Product,
+            RouteAuth::ProductOperator,
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/password/ui/index.js"),
@@ -25676,7 +25984,7 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/machines/m-123/refresh"),
-            RouteAuth::Public
+            RouteAuth::ProductOrAdminOperator
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { splashLoadingCss } from "../components/app-shell/loading";
+import { EDITOR_PLUGIN_SANDBOX_BOOT, EDITOR_PLUGIN_SANDBOX_BOOT_ID } from "./src/editorPlugins/sandboxBoot";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +155,23 @@ export default defineConfig({
           return html.replace(
             "</head>",
             `<script type="application/json" id="cowboy-boot-assets">${list}</script></head>`,
+          );
+        },
+      },
+    },
+    {
+      // Never executed here. Its hash in the served CSP is what lets the same
+      // text run inside the srcdoc sandbox (src/editorPlugins/sandboxBoot.ts).
+      name: "cowboy-editor-sandbox-boot",
+      apply: "build",
+      transformIndexHtml: {
+        order: "post",
+        handler(html, ctx): string {
+          if (!ctx.filename.endsWith("index.html")) return html;
+          return html.replace(
+            "</head>",
+            () =>
+              `<script type="text/plain" id="${EDITOR_PLUGIN_SANDBOX_BOOT_ID}">${EDITOR_PLUGIN_SANDBOX_BOOT}</script></head>`,
           );
         },
       },
