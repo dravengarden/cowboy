@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.78.0 records DeepSeek Harness 1.0.10, whose Recommended preset
+uses dsh's advertised model option value. Native pins and its component release
+3.77.0 are unchanged.
+
 Component release 3.77.0 records provider-runtime 1.1.28 for
 claude-deepseek-gateway 0.1.6. dsh cannot send custom headers, so its launcher
 places the opaque session identity in the loopback gateway URLs and the gateway
