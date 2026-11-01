@@ -348,7 +348,32 @@ function ProviderUsageCardBody({
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               {title}
             </Typography>
-            {identity.subtitle && <Typography variant="caption" color="text.secondary">{identity.subtitle}</Typography>}
+            {/* The age sits with the account identity, not among the
+                header actions: the right edge keeps only plan and refresh. */}
+            {(identity.subtitle || freshness) && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                {identity.subtitle}
+                {identity.subtitle && freshness ? " · " : ""}
+                {freshness && (
+                  <Tooltip
+                    title={freshness.exact ? `Updated ${freshness.exact}` : ""}
+                    enterTouchDelay={0}
+                    leaveTouchDelay={2_500}
+                  >
+                    <Box
+                      component="span"
+                      data-usage-freshness={freshness.tone}
+                      sx={{
+                        whiteSpace: "nowrap",
+                        color: freshness.tone === "stale" ? "warning.main" : "inherit",
+                      }}
+                    >
+                      {freshness.label}
+                    </Box>
+                  </Tooltip>
+                )}
+              </Typography>
+            )}
             {(cooldownNotice ?? freshness?.failure) && (
               <Typography
                 variant="caption"
@@ -371,23 +396,6 @@ function ProviderUsageCardBody({
             >
               {statusLabel}
             </Typography>
-            {freshness && (
-              <Tooltip
-                title={freshness.exact ? `Updated ${freshness.exact}` : ""}
-                enterTouchDelay={0}
-                leaveTouchDelay={2_500}
-              >
-                <Typography
-                  component="span"
-                  variant="caption"
-                  data-usage-freshness={freshness.tone}
-                  color={freshness.tone === "stale" ? "warning.main" : "text.secondary"}
-                  sx={{ ml: 0.75, whiteSpace: "nowrap" }}
-                >
-                  {freshness.label}
-                </Typography>
-              </Tooltip>
-            )}
             {onRefresh && (
               <NetworkIconButton
                 aria-label={`Refresh ${title}`}
