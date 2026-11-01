@@ -207,7 +207,7 @@ fn sync_mutations() -> Value {
             "open":"{path:string}", "close":"{path:string}", "activate":"{path:string|null}",
             "reorder":"{paths:string[]}", "setPinned":"{path:string,pinned:boolean}",
             "setMode":"{mode:'files'|'git'}", "setComparison":"{comparison:string|null}: '' uncommitted, a refs/... branch through the working tree, committed:refs/... stopping at HEAD, null follows the repository default",
-            "bind":"{context:string}: show this code context in the session's Review, as session::<id> or workspace::<machine>::<id> (projects.workspaces); use when work spans repositories the session's own worktree does not hold. Grants no file access",
+            "bind":"{context:string}: show this code context in the session's Review, as session::<id>, workspace::<machine>::<id> (projects.workspaces), or worktree::<machine>::<workspace-id>::<hex of the absolute path> for a task worktree of that registered repository no session owns (Hawk-local Machines only); use when work spans repositories the session's own worktree does not hold. Grants no file access",
             "unbind":"{context:string}",
             "markReviewed":"{key:string,revision?:string|null}",
             "setPosition":"{path:string,line:number,revision?:string|null}"

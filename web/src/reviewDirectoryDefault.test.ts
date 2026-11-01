@@ -3,6 +3,7 @@ import { assert, assertEquals } from "@std/assert";
 import {
   inheritedReviewDirectory,
   resolveReviewDirectory,
+  worktreeContextId,
 } from "./reviewDirectoryDefault";
 import { validReviewDirectory } from "./reviewDirectoryIdentity";
 import {
@@ -156,4 +157,21 @@ test("automatic Zed browsing uses real files Machine, with explicit project and 
     resolveReviewDirectory(null, fallback, [fallback], machines).context?.cwd,
     "/projects/cowboy",
   );
+});
+
+test("a worktree context round-trips its path and needs its project", () => {
+  const id = worktreeContextId("hawk", "suger", "/tasks/é/feature");
+  const machine = {
+    id: "hawk",
+    display_name: "Hawk",
+    local: true,
+    workspaces: [{ id: "suger", display_name: "Suger", canonical_path: "/p" }],
+  } as unknown as MachineSummary;
+  const owner = { id: "s", cwd: "/x", title: "s", provider: "codex", status: "exited" } as SessionMeta;
+  const { context } = resolveReviewDirectory(id, owner, [owner], [machine]);
+  assertEquals(context?.cwd, "/tasks/é/feature");
+  assertEquals(context?.title, "Suger · feature");
+  assertEquals(context?.kind, "Worktree");
+  assertEquals(context?.sessionId, id);
+  assertEquals(resolveReviewDirectory(id, owner, [owner], []).context, undefined);
 });

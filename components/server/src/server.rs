@@ -19623,7 +19623,31 @@ fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod workspace_code_context_tests {
-    use super::parse_workspace_code_context;
+    use super::{parse_workspace_code_context, parse_worktree_code_context};
+
+    #[test]
+    fn a_worktree_context_names_an_absolute_path_once() {
+        let hex = |path: &str| {
+            path.bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let value = format!("worktree::hawk::cowboy::{}", hex("/tasks/a"));
+        assert_eq!(
+            parse_worktree_code_context(&value),
+            Some(("hawk", "cowboy", "/tasks/a".to_owned()))
+        );
+        for bad in [
+            format!("worktree::hawk::cowboy::{}", hex("relative")),
+            format!("worktree::hawk::cowboy::{}", hex("/nul\0")),
+            format!("worktree::hawk::::{}", hex("/a")),
+            format!("worktree::hawk::cowboy::{}::extra", hex("/a")),
+            "worktree::hawk::cowboy::zz".to_owned(),
+            "worktree::hawk::cowboy::2".to_owned(),
+        ] {
+            assert_eq!(parse_worktree_code_context(&bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn only_explicit_machine_workspace_pairs_are_code_contexts() {
@@ -19640,7 +19664,57 @@ mod workspace_code_context_tests {
     }
 }
 
+/// `worktree::<machine>::<workspace>::<hex path>`, so a path is one URL segment.
+fn parse_worktree_code_context(value: &str) -> Option<(&str, &str, String)> {
+    let mut parts = value.strip_prefix("worktree::")?.split("::");
+    let (machine_id, workspace_id, encoded) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some()
+        || machine_id.is_empty()
+        || workspace_id.is_empty()
+        || encoded.len() > 8192
+    {
+        return None;
+    }
+    let bytes = (0..encoded.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(encoded.get(index..index + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    let path = String::from_utf8(bytes).ok()?;
+    (path.starts_with('/') && !path.contains('\0')).then_some((machine_id, workspace_id, path))
+}
+
+/// A session's worktree is read as that session, under its owner's visibility;
+/// the workspace policy must not become a second way in.
+fn worktree_belongs_to_a_session(state: &AppState, path: &str) -> bool {
+    state.hub.session_list().iter().any(|session| {
+        session.cwd == path
+            || state
+                .hub
+                .session_code_scope(&session.id)
+                .is_some_and(|scope| scope.cwd() == path)
+    })
+}
+
 async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCodeContext> {
+    if let Some((machine_id, workspace_id, path)) = parse_worktree_code_context(id) {
+        if worktree_belongs_to_a_session(state, &path) {
+            return None;
+        }
+        let store = state.store.as_ref()?;
+        let scope = code_reads::workspace::resolve_worktree(
+            store,
+            &state.machine_control,
+            &state.service_id,
+            machine_id,
+            workspace_id,
+            &path,
+        )
+        .await?;
+        return Some(ResolvedCodeContext {
+            cwd: scope.cwd().into(),
+            scope,
+        });
+    }
     if let Some((machine_id, workspace_id)) = parse_workspace_code_context(id) {
         let store = state.store.as_ref()?;
         let scope = code_reads::workspace::resolve(

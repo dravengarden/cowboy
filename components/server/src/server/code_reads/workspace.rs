@@ -35,5 +35,40 @@ pub(in crate::server) async fn resolve(
     (scope.cwd() == workspace.canonical_path).then_some(CodeReadScope::Workspace(scope))
 }
 
+/// A worktree of a registered workspace, read through that workspace's live
+/// observation. Only a colocated Controller admits one, since it is the party
+/// that can check the path; a Machine adapter refuses roots it did not export.
+pub(in crate::server) async fn resolve_worktree(
+    store: &Store,
+    control: &MachineControl,
+    service_id: &str,
+    machine_id: &str,
+    workspace_id: &str,
+    path: &str,
+) -> Option<CodeReadScope> {
+    let CodeReadScope::Workspace(parent) =
+        resolve(store, control, service_id, machine_id, workspace_id).await?
+    else {
+        return None;
+    };
+    if let Some(scope) = control.known_worktree_scope(&parent, path) {
+        return Some(CodeReadScope::Workspace(scope));
+    }
+    if !control.workspace_scope_is_colocated(&parent).ok()? {
+        return None;
+    }
+    let root = std::path::PathBuf::from(parent.cwd());
+    let candidate = std::path::PathBuf::from(path);
+    let member = tokio::task::spawn_blocking(move || {
+        crate::code_review::is_repository_worktree(&root, &candidate)
+    })
+    .await
+    .ok()?;
+    member
+        .then(|| control.admit_worktree_scope(&parent, path))
+        .flatten()
+        .map(CodeReadScope::Workspace)
+}
+
 #[cfg(test)]
 mod tests;

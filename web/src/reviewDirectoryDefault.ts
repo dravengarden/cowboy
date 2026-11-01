@@ -41,6 +41,28 @@ export function inheritedReviewDirectory(
   };
 }
 
+/** A task worktree of a registered workspace, as a Code context id. */
+export function worktreeContextId(
+  machineId: string,
+  workspaceId: string,
+  path: string,
+): string {
+  const hex = [...new TextEncoder().encode(path)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `worktree::${machineId}::${workspaceId}::${hex}`;
+}
+
+function worktreeContextPath(value: string): string | undefined {
+  const hex = value.split("::")[3];
+  const pairs = hex?.match(/../g);
+  return pairs
+    ? new TextDecoder().decode(
+      Uint8Array.from(pairs, (pair) => Number.parseInt(pair, 16)),
+    )
+    : undefined;
+}
+
 export interface ReviewDirectoryContext {
   sessionId: string;
   cwd: string;
@@ -60,6 +82,27 @@ export function resolveReviewDirectory(
   sessions: readonly SessionMeta[],
   machines: readonly MachineSummary[],
 ): { context?: ReviewDirectoryContext; error?: string } {
+  if (value?.startsWith("worktree::")) {
+    const [, machineId, workspaceId] = value.split("::");
+    const path = worktreeContextPath(value);
+    const workspace = machines.find((m) => m.id === machineId)?.workspaces
+      .find((w) => w.id === workspaceId);
+    if (!machineId || !workspaceId || !path || !workspace) {
+      return { error: "This worktree's project is unavailable." };
+    }
+    return {
+      context: {
+        sessionId: value,
+        cwd: path,
+        provider: "read-only",
+        title: `${workspace.display_name} · ${path.split("/").at(-1)}`,
+        machineId,
+        workspaceId,
+        project: workspace.display_name,
+        kind: "Worktree",
+      },
+    };
+  }
   const session = value?.startsWith("session::")
     ? sessions.find((s) => s.id === value.slice(9))
     : owner;

@@ -8,5 +8,6 @@ export function validReviewDirectory(value: unknown): value is string {
   const parts = value.split("::");
   return parts.every(Boolean) &&
     ((parts[0] === "workspace" && parts.length === 3) ||
-      (parts[0] === "session" && parts.length === 2));
+      (parts[0] === "session" && parts.length === 2) ||
+      (parts[0] === "worktree" && parts.length === 4));
 }

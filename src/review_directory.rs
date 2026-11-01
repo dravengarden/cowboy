@@ -9,7 +9,10 @@ pub fn valid(value: &str) -> bool {
     }
     let parts: Vec<_> = value.split("::").collect();
     parts.iter().all(|part| !part.is_empty())
-        && matches!(parts.as_slice(), ["workspace", _, _] | ["session", _])
+        && matches!(
+            parts.as_slice(),
+            ["workspace", _, _] | ["session", _] | ["worktree", _, _, _]
+        )
 }
 
 /// Preserve the distinction between an absent override (inherit) and null

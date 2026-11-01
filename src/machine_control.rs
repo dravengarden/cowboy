@@ -341,6 +341,9 @@ pub struct LiveState {
     pub events: HashMap<String, Vec<MachineEvent>>,
     plugin_inventory: HashMap<String, PluginInventorySnapshot>,
     workspace_inventory: HashMap<String, HashMap<String, WorkspaceCodeScope>>,
+    /// Worktrees admitted below a colocated workspace, by Machine, workspace
+    /// and path. Each one ends with the workspace scope it was admitted under.
+    worktree_scopes: HashMap<(String, String, String), WorkspaceCodeScope>,
     pub pending: HashMap<String, PendingResponse>,
 }
 

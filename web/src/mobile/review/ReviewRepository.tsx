@@ -251,9 +251,11 @@ function WorktreeRow({
   onOpenSession,
   pull,
   onOpenPull,
+  onOpenWorktree,
 }: {
   row: RepositoryWorktreeRow;
   currentSessionId?: string | undefined;
+  onOpenWorktree?: ((path: string) => void) | undefined;
   onOpenSession?: ((session: SessionMeta) => void) | undefined;
   pull?: PullSummary | undefined;
   onOpenPull?: ((pull: PullSummary) => void) | undefined;
@@ -298,6 +300,15 @@ function WorktreeRow({
             pull={pull}
             onOpen={onOpenPull ? () => onOpenPull(pull) : undefined}
           />
+        )}
+        {onOpenWorktree && (
+          <Button
+            data-repository-open-worktree
+            size="small"
+            onClick={() => onOpenWorktree(worktree.path)}
+          >
+            Review
+          </Button>
         )}
       </Stack>
       {sessions.map((session) => (
@@ -367,6 +378,7 @@ export function ReviewRepository({
   actionsContainer,
   onBrowseFiles,
   linkedSession,
+  onOpenWorktree,
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
@@ -393,6 +405,8 @@ export function ReviewRepository({
   actionsContainer?: HTMLElement | null;
   onBrowseFiles?: () => void;
   linkedSession?: { title: string; onOpen: () => void } | undefined;
+  /** Review a worktree of this repository that no session owns. */
+  onOpenWorktree?: ((path: string) => void) | undefined;
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
   const [changesRefresh, setChangesRefresh] = useState(0);
@@ -1031,6 +1045,7 @@ export function ReviewRepository({
                         row={row}
                         pull={pullOf(row)}
                         onOpenPull={openPull}
+                        onOpenWorktree={onOpenWorktree}
                       />
                     ))}
                   </>

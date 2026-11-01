@@ -16,6 +16,16 @@ const MAX_WORKSPACES_PER_MACHINE: usize = 1024;
 const MAX_WORKSPACES: usize = 4096;
 const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 
+const MAX_WORKTREE_SCOPES: usize = 256;
+
+fn worktree_key(parent: &WorkspaceCodeScope, path: &str) -> (String, String, String) {
+    (
+        parent.machine_id().to_owned(),
+        parent.0.workspace_id.clone(),
+        path.to_owned(),
+    )
+}
+
 /// Only the authenticated registry can construct or renew this observation.
 /// Cloning borrows the SAME incarnation; JSON and equal strings cannot mint it.
 #[derive(Clone, Debug)]
@@ -34,6 +44,8 @@ struct WorkspaceIdentity {
     /// roots it reads directly. `Remote` for a Machine whose roots the
     /// Controller cannot and must not stat.
     local: LocalRoot,
+    /// A worktree of this registered workspace lives and ends with it.
+    parent: Option<WorkspaceCodeScope>,
 }
 
 impl PartialEq for WorkspaceCodeScope {
@@ -70,6 +82,9 @@ impl WorkspaceCodeScope {
     }
 
     pub(super) fn matches(&self, live: &LiveState) -> bool {
+        if let Some(parent) = &self.0.parent {
+            return parent.matches(live);
+        }
         live.is_current(&self.0.connection)
             && live
                 .workspace_inventory
@@ -206,6 +221,7 @@ impl LiveState {
                             cwd: workspace.canonical_path.clone(),
                             incarnation,
                             local,
+                            parent: None,
                         }))
                     });
                 Some((id.into(), scope))
@@ -228,6 +244,59 @@ impl MachineControl {
         let live = self.live.read();
         let scope = live.workspace_inventory.get(machine)?.get(workspace)?;
         scope.matches(&live).then(|| scope.clone())
+    }
+
+    /// The scope of an already admitted worktree of `parent`. Equality is
+    /// identity, so a repeated resolve must return this same object.
+    pub fn known_worktree_scope(
+        &self,
+        parent: &WorkspaceCodeScope,
+        path: &str,
+    ) -> Option<WorkspaceCodeScope> {
+        let live = self.live.read();
+        live.worktree_scopes
+            .get(&worktree_key(parent, path))
+            .filter(|scope| scope.0.parent.as_ref() == Some(parent) && scope.matches(&live))
+            .cloned()
+    }
+
+    /// Admit one worktree below a colocated workspace. The caller has proved
+    /// it belongs to that repository; only a Controller that reads the root
+    /// itself may do this, so no remote Machine root is ever named by a client.
+    pub fn admit_worktree_scope(
+        &self,
+        parent: &WorkspaceCodeScope,
+        path: &str,
+    ) -> Option<WorkspaceCodeScope> {
+        let local = LocalRoot::observe(path);
+        if !matches!(local, LocalRoot::Observed(_)) {
+            return None;
+        }
+        let mut live = self.live.write();
+        if !parent.matches(&live) || !live.connections[parent.machine_id()].colocated {
+            return None;
+        }
+        let key = worktree_key(parent, path);
+        if let Some(scope) = live
+            .worktree_scopes
+            .get(&key)
+            .filter(|scope| scope.0.parent.as_ref() == Some(parent))
+        {
+            return Some(scope.clone());
+        }
+        if live.worktree_scopes.len() >= MAX_WORKTREE_SCOPES {
+            live.worktree_scopes.clear();
+        }
+        let scope = WorkspaceCodeScope(Arc::new(WorkspaceIdentity {
+            connection: parent.0.connection.clone(),
+            workspace_id: parent.0.workspace_id.clone(),
+            cwd: path.into(),
+            incarnation: None,
+            local,
+            parent: Some(parent.clone()),
+        }));
+        live.worktree_scopes.insert(key, scope.clone());
+        Some(scope)
     }
 
     pub fn workspace_scope_is_current(&self, scope: &WorkspaceCodeScope) -> bool {
@@ -326,6 +395,11 @@ impl MachineControl {
     /// the connection and every other Machine keep their own observations.
     fn retire_workspace_scope(&self, scope: &WorkspaceCodeScope) {
         let mut live = self.live.write();
+        if let Some(parent) = &scope.0.parent {
+            live.worktree_scopes
+                .remove(&worktree_key(parent, scope.cwd()));
+            return;
+        }
         let Some(slots) = live.workspace_inventory.get_mut(scope.machine_id()) else {
             return;
         };

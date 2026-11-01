@@ -182,8 +182,17 @@ the reader from the context control (**Bind … to this session**) or by an agen
 with the `bind` and `unbind` mutations. A binding is a browsing value
 (`session::<id>`, `workspace::<machine>::<id>`), so it names a context that
 Code can already open and grants no file access; every read keeps its own
-authority check. A project binding therefore shows that registered checkout,
-not a task worktree of it.
+authority check.
+
+A project binding shows the registered checkout. A task worktree of that
+repository that no session owns has its own context,
+`worktree::<machine>::<workspace>::<hex path>`, offered as **Review** on its row
+in the Worktrees tab. It is read through the registered workspace's live
+observation and ends with it, and the Controller admits it only when it reads
+that Machine's roots itself: the path must be canonical, the top of a Git work
+tree, and share the workspace's common Git directory. A worktree a session owns
+is refused here, so it stays under that session's visibility. Machine adapters
+refuse roots they did not export, so remote worktrees are out of scope.
 
 Code reads never touch the network, so remote branches stay as old as the last
 fetch. Where the worktree is local to the Controller, **Fetch this branch**

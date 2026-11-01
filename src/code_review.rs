@@ -1509,6 +1509,33 @@ fn parse_git_worktrees(bytes: &[u8], current: &Path) -> Vec<GitWorktreeSummary> 
         .collect()
 }
 
+/// Whether `path` is the top of a worktree of `root`'s repository. A worktree
+/// shares its common Git directory, so a mere path below a root does not pass,
+/// and neither does an unrelated repository that happens to sit beside it.
+#[must_use]
+pub fn is_repository_worktree(root: &Path, path: &Path) -> bool {
+    let top = |dir: &Path| {
+        git_output(dir, &["rev-parse", "--show-toplevel"], 8192)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|value| std::fs::canonicalize(value.trim()).ok())
+    };
+    let common = |dir: &Path| {
+        git_output(
+            dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            8192,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|value| std::fs::canonicalize(value.trim()).ok())
+    };
+    std::fs::canonicalize(path).is_ok_and(|canonical| canonical == path)
+        && top(path).as_deref() == Some(path)
+        && common(path).is_some()
+        && common(path) == common(root)
+}
+
 fn review_reference(reference: &str) -> Option<String> {
     reference
         .strip_prefix("refs/remotes/")
@@ -2029,6 +2056,46 @@ mod tests {
         );
         fs::remove_dir_all(upstream).unwrap();
         fs::remove_dir_all(clone).unwrap();
+    }
+
+    #[test]
+    fn only_a_real_worktree_of_the_repository_is_admitted() {
+        let repository = scratch("worktree-root");
+        let root = fs::canonicalize(&repository).unwrap();
+        let linked = root.with_extension("linked");
+        let _ = fs::remove_dir_all(&linked);
+        Command::new("git")
+            .args(["worktree", "add", "-q", "--detach"])
+            .arg(&linked)
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        let other = fs::canonicalize(scratch("worktree-other")).unwrap();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert!(super::is_repository_worktree(&root, &linked));
+        assert!(super::is_repository_worktree(&root, &root));
+        assert!(
+            !super::is_repository_worktree(&root, &other),
+            "another repository"
+        );
+        assert!(
+            !super::is_repository_worktree(&root, &nested),
+            "not a top level"
+        );
+        assert!(!super::is_repository_worktree(&root, &root.join("missing")));
+        #[cfg(unix)]
+        {
+            let alias = root.with_extension("alias");
+            let _ = fs::remove_file(&alias);
+            std::os::unix::fs::symlink(&linked, &alias).unwrap();
+            assert!(!super::is_repository_worktree(&root, &alias), "an alias");
+            fs::remove_file(alias).unwrap();
+        }
+        fs::remove_dir_all(linked).unwrap();
+        fs::remove_dir_all(other).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

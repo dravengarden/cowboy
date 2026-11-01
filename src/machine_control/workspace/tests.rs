@@ -568,3 +568,65 @@ async fn a_remote_root_is_never_observed_by_the_controller() {
     assert_eq!(control.workspace_scope_is_colocated(&original), Ok(false));
     assert!(control.workspace_scope_is_current(&original));
 }
+
+#[tokio::test]
+async fn a_worktree_scope_needs_a_colocated_parent_and_ends_with_it() {
+    let parent_root = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let parent_path = parent_root.path().to_str().unwrap().to_owned();
+    let path = worktree.path().to_str().unwrap().to_owned();
+
+    // A remote Machine's roots are never named by a client.
+    let control = MachineControl::default();
+    let (connection, _commands) = connect(&control, "remote");
+    observe(
+        &control,
+        &connection,
+        Some(vec![root("repo", &parent_path)]),
+    );
+    let scope = control
+        .workspace_code_scope(control.service.as_str(), "remote", "repo")
+        .unwrap();
+    assert!(control.admit_worktree_scope(&scope, &path).is_none());
+
+    let control = MachineControl::default();
+    let (tx, _commands) = mpsc::unbounded_channel();
+    let connection = control.install("hawk".into(), "epoch".into(), true, 21, tx);
+    observe(
+        &control,
+        &connection,
+        Some(vec![root("repo", &parent_path)]),
+    );
+    let parent = control
+        .workspace_code_scope(control.service.as_str(), "hawk", "repo")
+        .unwrap();
+    assert!(control.known_worktree_scope(&parent, &path).is_none());
+    assert!(
+        control
+            .admit_worktree_scope(&parent, "/nonexistent/path")
+            .is_none()
+    );
+
+    let admitted = control.admit_worktree_scope(&parent, &path).unwrap();
+    assert_eq!(admitted.cwd(), path);
+    assert_eq!(
+        control.known_worktree_scope(&parent, &path),
+        Some(admitted.clone()),
+        "identity is stable across resolves"
+    );
+    assert!(control.workspace_scope_is_current(&admitted));
+    assert_eq!(control.workspace_scope_is_colocated(&admitted), Ok(true));
+
+    // A replaced worktree ends only that worktree.
+    drop(worktree);
+    assert!(control.workspace_scope_is_colocated(&admitted).is_err());
+    assert!(control.known_worktree_scope(&parent, &path).is_none());
+    assert!(control.workspace_scope_is_current(&parent));
+
+    // The parent's end ends every worktree below it.
+    let other = tempfile::tempdir().unwrap();
+    let other = other.path().to_str().unwrap().to_owned();
+    let child = control.admit_worktree_scope(&parent, &other).unwrap();
+    observe(&control, &connection, Some(vec![]));
+    assert!(!control.workspace_scope_is_current(&child));
+}

@@ -62,7 +62,7 @@ import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import { sessionExecution } from "../../sessionExecution";
 import { useAnnouncedSessionContext } from "../../SessionContextCue";
-import { inheritedReviewDirectory, resolveReviewDirectory, reviewStateKey } from "../../reviewDirectoryDefault";
+import { inheritedReviewDirectory, resolveReviewDirectory, reviewStateKey, worktreeContextId } from "../../reviewDirectoryDefault";
 import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 import { useRetargetedTouchClickGuard } from "../../useReliableTouchTap";
 import {
@@ -3127,7 +3127,19 @@ export function ReviewApp({
       ),
     [currentSession, linkedContext, sessionReview.bindings, sessions],
   );
-  const viewedContext = projectCodeContext
+  // Worktrees list comes from the repository on screen; its registered project
+  // is what a worktree of it is read under.
+  const sessionProject = currentSession
+    ? resolveReviewDirectory("project", currentSession, sessions, machineInventories).context
+    : undefined;
+  const openableWorktreeProject = projectCodeContext?.workspaceId
+    ? { machineId: projectCodeContext.machineId, workspaceId: projectCodeContext.workspaceId }
+    : sessionProject?.workspaceId
+    ? { machineId: sessionProject.machineId, workspaceId: sessionProject.workspaceId }
+    : undefined;
+  const viewedContext = projectCodeContext?.sessionId.startsWith("worktree::")
+    ? projectCodeContext.sessionId
+    : projectCodeContext
     ? projectCodeContext.workspaceId && projectCodeContext.kind !== "Worktree"
       ? `workspace::${projectCodeContext.machineId}::${projectCodeContext.workspaceId}`
       : `session::${projectCodeContext.sessionId}`
@@ -3361,6 +3373,9 @@ export function ReviewApp({
             embedded={navigationInline}
             actionsContainer={inlineActionsContainer}
             onBrowseFiles={() => activateReviewMode("files")}
+            onOpenWorktree={openableWorktreeProject
+              ? (path) => openBoundContext(worktreeContextId(openableWorktreeProject.machineId, openableWorktreeProject.workspaceId, path))
+              : undefined}
             linkedSession={!projectCodeContext && linkedSessions[0]
               ? { title: linkedSessions[0].title, onOpen: () => openLinkedSession(linkedSessions[0]!) }
               : undefined}
