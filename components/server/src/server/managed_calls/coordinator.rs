@@ -770,15 +770,8 @@ pub(in crate::server) async fn image_capabilities(
             profile,
         )
         .await;
-        let reason = if agent_tools::same_family(provider, &meta.provider) {
-            Some("same_agent")
-        } else if !policy.enabled {
-            Some("calls_disabled")
-        } else if target.is_none() {
-            Some("policy_denied")
-        } else {
-            readiness.reason
-        };
+        let reason =
+            agent_tools::image_refusal(&policy, &meta.provider, provider).or(readiness.reason);
         providers.push(
             json!({"id":provider,"available":reason.is_none() && readiness.available,
             "reason":reason,"runtime_machine_id":runtime,
@@ -807,6 +800,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     let placement = ledger.placement();
     let policy = agent_tools::effective(state, meta).calls;
     let mut providers = Vec::new();
+    let mut read_only_providers = Vec::new();
+    let mut image_providers = Vec::new();
     for provider in agent_tools::CALL_TARGETS {
         let target = policy
             .targets
@@ -831,7 +826,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             readiness.reason
         };
         let available = reason.is_none() && readiness.available;
-        let native_capabilities: Vec<_> = readiness
+        let native_capabilities: Vec<&str> = readiness
             .generation
             .as_ref()
             .and_then(|g| {
@@ -848,6 +843,14 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
                     .collect()
             })
             .unwrap_or_default();
+        if available {
+            read_only_providers.push(provider);
+        }
+        if native_capabilities.contains(&"image.generate")
+            && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
+        {
+            image_providers.push(provider);
+        }
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
@@ -898,6 +901,13 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         "review_input_reuse": true,
         "quota": quota,
         "providers": providers,
+        "capabilities": [
+            {"id": "read_only", "tasks": ["review", "design_review", "analysis"],
+             "enabled": policy.enabled, "providers": read_only_providers},
+            {"id": "image", "tasks": ["image.generate", "image.edit"],
+             "enabled": policy.enabled && policy.images, "self": policy.self_images,
+             "providers": image_providers},
+        ],
         "purposes": ["review","design_review","analysis"],
         "limits": {
             "max_request_bytes": crate::managed_calls::MAX_REQUEST_BYTES,
@@ -961,6 +971,13 @@ async fn start(
         Err(_) => return error("capacity", "not_submitted"),
     }
     let policy = agent_tools::effective(state, meta).calls;
+    // Before any approval: a person changes this in Tools, and neither Allow
+    // once nor Allow for session may override it.
+    let image = request.purpose.is_image();
+    if image && !policy.images {
+        return error("capability_disabled", "not_submitted");
+    }
+    let own_family = image && policy.self_images;
     // A continued conversation keeps its own agent.
     let continued = match &request.conversation {
         Conversation::Continue { child_session_id } => {
@@ -976,16 +993,19 @@ async fn start(
         Some(_) => return error("conversation_unavailable", "not_submitted"),
         None => requested,
     };
-    let (mut targets, selection) = match agent_tools::choose(&policy, &meta.provider, requested) {
-        agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
-        agent_tools::Choice::Refused(code @ ("calls_disabled" | "policy_denied")) => {
-            match await_approval(state, meta, &policy, requested, &request, code) {
-                Ok(admitted) => admitted,
-                Err(refusal) => return refusal,
+    let (mut targets, selection) =
+        match agent_tools::choose(&policy, &meta.provider, requested, own_family) {
+            agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
+            agent_tools::Choice::Refused(code @ ("calls_disabled" | "policy_denied")) => {
+                match await_approval(state, meta, &policy, requested, &request, code) {
+                    Ok(admitted) => admitted,
+                    Err(refusal) => return refusal,
+                }
             }
-        }
-        agent_tools::Choice::Refused(code) => return error(code, "not_submitted"),
-    };
+            agent_tools::Choice::Refused(code) | agent_tools::Choice::Closed(code) => {
+                return error(code, "not_submitted");
+            }
+        };
     if continued.is_some() {
         targets.truncate(1);
     }
@@ -1161,9 +1181,11 @@ fn await_approval(
         }
         super::approval::Gate::Approved => {
             let once = agent_tools::allow_once(policy.clone(), &meta.provider, requested);
-            match agent_tools::choose(&once, &meta.provider, requested) {
+            match agent_tools::choose(&once, &meta.provider, requested, false) {
                 agent_tools::Choice::Candidates { targets, selection } => Ok((targets, selection)),
-                agent_tools::Choice::Refused(code) => Err(error(code, "not_submitted")),
+                agent_tools::Choice::Refused(code) | agent_tools::Choice::Closed(code) => {
+                    Err(error(code, "not_submitted"))
+                }
             }
         }
     }

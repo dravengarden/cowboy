@@ -1,168 +1,184 @@
 # Call capabilities
 
-Status: contract for [background tasks](background-tasks.md) Phase 4, first
-slice. Not implemented.
+Status: [background tasks](background-tasks.md) Phase 4, first
+slice, implemented; revised after the Astra Max design review (11 findings, none rejected; see
+[Decisions](#decisions)).
+
+## What this slice is
+
+A person chooses per session whether agents may use images, and a Codex session
+may generate images through Codex itself. A model sees that state and decides.
+
+It is **policy over the fixed Provider profiles**. It does not deliver a model or
+preset declaring its own capabilities, or an implementation bound at admission;
+those are [later slices](#later-slices). Calls stays the common lifecycle
+([managed native capabilities](managed-native-capabilities.md)).
 
 ## The gap
 
-Calls already is a common lifecycle: admission, placement, receipts, cancellation
-and verified artifacts ([managed native capabilities](managed-native-capabilities.md)).
-What stands between it and "a model exposes what it can do, a person chooses what
-a session may use, and the model decides when to use it" is narrower than a new
-platform:
-
-1. **Policy is per agent, not per capability.** A session can allow Codex but
-   cannot allow Codex's images and refuse its reviews.
-2. **`same_agent` applies to every capability.** It exists so a second opinion
-   comes from another family, yet it also stops a Codex session from generating an
-   image through Codex, which no other installed Provider offers.
-3. **Discovery reports capabilities per Provider, not their state.** A model
-   cannot see which capabilities this session may use without trying them.
-4. **Capability identity is implicit.** A record holds a `purpose`, not the
-   versioned capability that was admitted.
-
-Capabilities still come from the fixed list in the Provider SDK
-(`ManagedRuntimeProfile::capabilities`), and `Purpose` is a closed wire enum read
-by the Machine. Opening those is not part of this slice. See
-[Later slices](#later-slices).
-
-## Native coverage and the residual gap
+- Policy is per agent. A session can allow Codex but cannot refuse its images.
+- `same_agent` exists so a second opinion comes from another family, yet it also
+  stops a Codex session reaching the only Provider that offers images.
+- `calls.capabilities()` reports what Providers offer, not what this session may
+  use, so a model finds out by being refused.
 
 Neither Codex nor Claude Code routes a task to another Provider's account on
-another Machine, so per-capability policy across Providers stays Cowboy's. When a
-native capability registry offers the same scoped routing, this layer goes away.
-Claude is shared: the policy, discovery and admission are Controller-side and do
-not depend on the calling runtime.
+another Machine, so this policy stays Cowboy's until a native registry offers the
+same scoped routing. Claude is shared: it is all Controller-side.
 
-## Identity
+## Switches follow enforceable boundaries
 
-A capability has an id and a version: `review@1`, `design_review@1`, `analysis@1`,
-`image.generate@1`, `image.edit@1`. The Controller holds one table:
+A switch must be enforceable by the runtime. `image.generate` and `image.edit`
+share the `ImageV1` profile, and `review`, `design_review` and `analysis` share
+`ReadOnlyV1`: a request for one can do the other, so finer switches would promise
+what nothing enforces. There is therefore one switch per profile, and the existing
+`calls.enabled` already governs the read-only profile.
 
-```text
-id, version, default_enabled, second_opinion
-```
-
-| id | default | second opinion |
+| Field of `calls` | Default | Meaning |
 |---|---|---|
-| `review` | on | yes |
-| `design_review` | on | yes |
-| `analysis` | on | yes |
-| `image.generate` | on | no |
-| `image.edit` | on | no |
+| `images` | on | Image calls may run at all |
+| `self_images` | off | Image calls may also use the caller's own family |
 
-Every existing capability stays on, so no session changes behavior at upgrade. A
-capability added later defaults off. An id this Controller does not know is
-listed as unknown by discovery and is refused at admission.
+`images` on keeps today's behavior. `self_images` is new authority, so it is off:
+turning it on is the person's choice and spends that family's account.
 
-`second_opinion` carries the family rule: only those capabilities refuse the
-caller's own family, and auto selection for them keeps preferring another family.
-For the others the caller's family is an ordinary target when policy allows it.
+## Policy storage
 
-## Policy
+Both are fields of `CallsPolicy` and `CallsOverride`, so one record and one
+in-memory update hold a session's whole policy. They default on read.
 
-```text
-capabilities:<agent>           {"<id>": bool}   Owner defaults, per calling agent
-session_capabilities:<session> {"<id>": bool}   Session override
-```
+`AgentTools` and `SessionTools` parse strictly, so an older Controller cannot read
+a record holding them, and would silently drop that session's whole override.
+That is safe here for two reasons, and only together:
 
-- These are separate settings keys rather than fields of `AgentTools` and
-  `SessionTools`, whose strict parsing would make a rollback lose or reject the
-  stored policy. An older Controller ignores them.
-- The effective value is session override, then Owner default, then the table.
-  An override holds only what differs and is removed when empty.
-- `calls.enabled` and the allowed targets still apply first. A capability cannot
-  grant what they refuse.
-- `GET`/`PUT /api/sessions/{id}/tools` and `/api/agent-tools/{agent}` carry a
-  sibling `capabilities` object. `tools.session_set` accepts it through the same
-  writer.
-- **An agent cannot widen itself.** `override_widens` also treats enabling a
-  capability as widening, so an agent-submitted change may only turn capabilities
-  off. A person's change is unrestricted.
-- Continuations and duplicated sessions copy the override like the rest of
-  `SessionTools`, under the same widening check.
+- The Controller ships before any writer. Until the Web ships nothing stores these
+  fields, so the release's own automatic rollback finds nothing it cannot read.
+- The activator refuses a release that does not descend from the active revision,
+  so a later rollback is a descendant revert. **A revert must keep the readers.**
 
 ## Admission
 
-After the existing checks, the request's capability is resolved from its
-`purpose`, then:
+Order in `start`, after the existing replay of a known `request_id` (which keeps
+returning the original call whatever the policy says now):
 
-- disabled: `capability_disabled`, `admission: not_submitted`. No approval prompt
-  in this slice: the existing prompt describes an agent target, and a person
-  changes this in Tools.
-- not offered by the selected target's signed profile: the existing
-  `unsupported_capability`.
-- own family: `same_agent` only when `second_opinion`.
+1. An image request with `images` off: `capability_disabled`,
+   `admission: not_submitted`. This precedes approvals, and neither Allow once nor
+   Allow for session can override it: a person changes it in Tools. It is
+   evaluated on every submission, so a resubmission sees a later change.
+2. Selection, through one resolver used by admission, approvals and both forms of
+   discovery. For an image request with `self_images` on, the caller's family is
+   eligible:
+   - explicitly, or by continuing that image conversation;
+   - for `auto`, as the last candidate, only when `calls.default` is `auto`. A fixed
+     default stays fixed.
+   Everything else keeps `same_agent`. `calls.enabled` and explicit target
+   restrictions still apply, and a self-call with calls off is refused without a
+   prompt, because Allow once cannot grant a family target.
 
-Auto selection considers only targets that offer the capability, so
-`provider:"auto"` with `image.generate` reaches Codex instead of refusing because
-another family is preferred. An explicit target is honored or refused, never
-replaced.
+A self-call is not recursion: the image profile has no Cowboy tools. It counts
+against the same parent session limits, which remain soft, advisory count-then-insert
+checks; concurrent submissions can pass them together. Atomic reservation is P6.
 
-A self-call for an image is not recursion: the image profile has no Cowboy tools.
-The target's concurrency and total budgets apply as they do today.
+Cancelling a running call is unaffected by turning `images` off.
 
-The accepted record gains the label `capability: <id>@<version>`. `labels` already
-persist and replay, and the record's `provider_generation_digest` already pins the
-manifest that declared the capability, so no schema or wire change is needed.
-Older records have no label and remain readable.
+## Agents cannot widen themselves
+
+`override_widens` and `fresh_session_widens` both treat turning on `images` or
+`self_images` as widening, so an agent can only narrow, including through
+`sessions.duplicate` with `inherit_settings: false`, which already goes through
+`fresh_session_widens`.
+
+Continuation copies a sparse override. A denial inherited from the source's Owner
+defaults would be lost when the destination's defaults differ, so inheritance
+writes the source's effective `images: false` and `self_images: false` into the
+copy.
 
 ## Discovery
 
-`calls.capabilities()` gains a small list:
+`calls.capabilities()` gains:
 
 ```json
 {"capabilities": [
-  {"id": "image.generate", "version": 1, "enabled": true, "providers": ["codex"]},
-  {"id": "review", "version": 1, "enabled": false, "reason": "capability_disabled",
-   "providers": ["codex"]}
+  {"id": "read_only", "tasks": ["review", "design_review", "analysis"],
+   "enabled": true, "providers": ["codex"]},
+  {"id": "image", "tasks": ["image.generate", "image.edit"],
+   "enabled": true, "self": false, "providers": ["codex"]}
 ]}
 ```
 
-`enabled` is the session's policy. `providers` are targets whose installed signed
-profile offers it and that policy allows. It reads installed state only: no model
-request and no quota refresh. The existing per-Provider fields stay.
+`providers` lists targets this session may use for that profile whose installed
+signed package offers it. The scoped `calls.capabilities({capability})` reports
+`capability_disabled` and uses the same resolver. Discovery reads installed state:
+no model request, no quota refresh. The model decides; nothing here routes a task
+or adds to a resident prompt.
 
-The model decides: nothing here routes a task or adds to resident prompts.
+## Records
+
+Nothing changes in the record or the request. The capability is read from
+`purpose`. In particular no label is added: labels are part of the request digest
+and of the record's match against its request.
 
 ## Product
 
-The session's Tools section and Settings → Agent tools list the capabilities the
-installed Providers offer, each with a switch and the Providers offering it. Copy
-names what it does ("Generate images"), not the id. The section keeps its folded
-layout, and a session override shows a way back to the default, like other fields.
+Tools (session) and Settings → Agent tools gain **Images** and, under it, **Use this
+agent's own account**. A session override shows the way back to the default, like
+the other fields.
 
-## Rollout and rollback
+## Rollout
 
-- Controller, then Web. No Machine release and no migration.
-- Reader and writer ship together: an older Web ignores the sibling object, and
-  its `PUT` omits it, which leaves the stored override untouched.
-- **Rollback widens.** An older Controller ignores these keys, so a capability a
-  person turned off is available again until the Controller returns. The rollback
-  note must say so.
+Controller, confirm health, then Web. No Machine release and no migration.
+
+An already open older Web sends `PUT .../tools` without these fields, which clears
+them from that session's override. That can only happen by a person saving Tools
+in a stale tab, and a Web update prompt covers it.
 
 ## Acceptance
 
-Automated: defaults keep behavior; session over Owner over table; `calls.enabled`
-and target refusals outrank capability state; agent-submitted enable refused,
-disable accepted; person's enable accepted; continuation copy; `capability_disabled`
-before any record; `same_agent` for second-opinion capabilities only; `auto` picks a
-provider offering the capability; explicit target never replaced; a Codex session
-generating an image through Codex; label persisted and replayed; a record without
-the label; discovery performs no model or quota request; an unknown id.
+Automated: defaults keep behavior; session over Owner over built-in; old records
+without the fields; `images` off refuses before approvals and before any record,
+and Allow once cannot override it; a known `request_id` still returns its original
+call after the policy changes, and a conflicting one is still a conflict; `same_agent`
+for read-only tasks always; explicit self image, `auto` last-candidate self image, a
+fixed default not replaced, continuation of a self image; `calls.enabled` off refusing
+a self image; agent-submitted enable refused and disable accepted; a person's enable
+accepted; fresh session and non-inheriting duplicate widening; an inherited denial
+kept across a Provider change; both discovery forms agree, with no model or quota
+request.
 
-Live: from a Codex session on Hawk, one real `image.generate` call, with its
-artifact verified, then the same call refused after the session turns it off.
+Live: from a Codex session on Hawk with `self_images` on, one real `image.generate`
+call with its artifact verified; then a new `request_id` refused after turning
+`images` off.
 
 ## Later slices
 
 Each needs its own contract:
 
-- **Declared capabilities.** Manifest-level capability declarations, per preset,
-  so a model exposes what it can do without a Cowboy release. Requires a Provider
-  SDK and signed plugin release, and opening `Purpose` with readers shipped before
-  writers on Controller, Machine and worker.
-- **The envelope.** `{capability, inputs, implementation}` replacing `purpose`.
-  Only worth doing with declared capabilities.
+- **Declared capabilities.** Manifest-level declarations per preset, so a model
+  exposes what it can do without a Cowboy release. Needs a Provider SDK and signed
+  plugin release, and opening `Purpose` with readers shipped before writers on
+  Controller, Machine and worker. This is what finally answers "different models
+  expose different abilities".
+- **Enforced task boundaries.** Separate generate from edit, or review from
+  analysis, by carrying permitted native actions through the worker and adapter.
+- **The envelope and admission binding.** `{capability, inputs, implementation}`,
+  with the implementation pinned at admission rather than at claim.
 - **P5–P7** of [background tasks](background-tasks.md#8-later-phases-each-needs-its-own-contract-none-blocks-phase-1):
   trust, resource control, discovery.
+
+## Decisions
+
+From the design review (`call-dc3a839502839f73567ddd89`):
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | Creation escapes widening; sparse copies lose denials | Both widening checks cover the switches; inheritance writes effective denials |
+| 2 | Switches not enforced between generate and edit | One switch per runtime profile; finer boundaries are a later slice |
+| 3 | A capability label breaks ledger invariants | No label; read from `purpose` |
+| 4 | Separate keys allow partial updates | Fields of the single policy record |
+| 5 | Rollback removes denials | Controller before writers; a descendant revert keeps the readers |
+| 6 | Approval could override a disabled capability | The denial precedes approvals on every submission |
+| 7 | Auto must keep fixed defaults | Self target only when `calls.default` is `auto` |
+| 8 | Family exception touches more than admission | One resolver for selection, approvals and discovery |
+| 9 | Live test conflicted with replay | New `request_id`; replay covered separately |
+| 10 | Target budgets do not exist | Stated as shared, advisory parent limits |
+| 11 | Digest is not bound at admission | Stated as not delivered; a later slice |

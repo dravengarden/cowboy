@@ -397,6 +397,7 @@ export type CallView = CallTiming & {
 };
 export type CallCapabilities = {
   enabled: boolean; default: string;
+  capabilities: { id: "read_only"|"image"; tasks: string[]; enabled: boolean; self?: boolean; providers: string[] }[]; // what this session may use now
   review_input_reuse: boolean;
   providers: { id: string; available: boolean; reason: string | null; presets: unknown[]; review_candidates:string[]; preset:string|null; options:Record<string,string>|null; quota_account:string|null }[];
   review_selection: string; // quota + preference guidance

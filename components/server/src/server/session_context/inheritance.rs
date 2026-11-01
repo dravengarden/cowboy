@@ -141,10 +141,7 @@ pub(super) fn apply(
     for (key, value) in values {
         state.hub.set_config_preference(&target.id, key, value)?;
     }
-    let tools = super::super::agent_tools::continuation_settings(
-        super::super::agent_tools::session_override(state, &source.id),
-        &target.provider,
-    );
+    let tools = super::super::agent_tools::inherited_settings(state, source, &target.provider);
     state.hub.set_setting(
         format!("{}{}", settings_keys::SESSION_TOOLS_PREFIX, target.id),
         serde_json::json!(tools),

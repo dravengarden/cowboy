@@ -76,6 +76,16 @@ pub(super) struct CallsPolicy {
     pub default: String,
     pub max_concurrent: u16,
     pub max_per_session: u16,
+    /// Image calls may run at all (docs/call-capabilities.md).
+    #[serde(default = "enabled_by_default")]
+    pub images: bool,
+    /// Image calls may also use the caller's own family, and its account.
+    #[serde(default)]
+    pub self_images: bool,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +168,10 @@ pub(super) struct CallsOverride {
     pub targets: Option<Vec<CallTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_images: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +325,8 @@ impl AgentTools {
                 default: AUTO.to_owned(),
                 max_concurrent: 4,
                 max_per_session: 64,
+                images: true,
+                self_images: false,
             },
         }
     }
@@ -355,6 +371,12 @@ impl AgentTools {
         }
         if let Some(default) = &session.calls.default {
             self.calls.default.clone_from(default);
+        }
+        if let Some(images) = session.calls.images {
+            self.calls.images = images;
+        }
+        if let Some(self_images) = session.calls.self_images {
+            self.calls.self_images = self_images;
         }
         if !valid_default(&self.calls.default, &self.calls.targets) {
             AUTO.clone_into(&mut self.calls.default);
@@ -473,6 +495,7 @@ pub(super) fn override_widens(
     (after.memory.tools && !before.memory.tools)
         || (after.memory.recall && !before.memory.recall)
         || (after.calls.enabled && !before.calls.enabled)
+        || image_widens(&before.calls, &after.calls)
         || after
             .calls
             .targets
@@ -492,6 +515,52 @@ pub(super) fn fresh_session_widens(
     (after.memory.tools && !before.memory.tools)
         || (after.memory.recall && !before.memory.recall)
         || (after.calls.enabled && !before.calls.enabled)
+        || image_widens(&before.calls, &after.calls)
+}
+
+fn image_widens(before: &CallsPolicy, after: &CallsPolicy) -> bool {
+    (after.images && !before.images) || (after.self_images && !before.self_images)
+}
+
+/// Copy a source's explicit preferences for a continuation. A denial it only
+/// inherits from its own kind's defaults is written down, so a destination with
+/// other defaults does not lose it.
+pub(super) fn inherited_settings(
+    state: &AppState,
+    source: &crate::core::SessionMeta,
+    provider: &str,
+) -> SessionTools {
+    let mut settings = continuation_settings(session_override(state, &source.id), provider);
+    let policy = effective(state, source).calls;
+    if !policy.images {
+        settings.calls.images = Some(false);
+    }
+    if !policy.self_images {
+        settings.calls.self_images = Some(false);
+    }
+    settings
+}
+
+/// Why `provider` cannot run an image call for `caller`, or `None`. Admission
+/// (through `choose`) and both forms of discovery agree through this.
+pub(super) fn image_refusal(
+    policy: &CallsPolicy,
+    caller: &str,
+    provider: &str,
+) -> Option<&'static str> {
+    if !policy.images {
+        return Some("capability_disabled");
+    }
+    if same_family(provider, caller) && !policy.self_images {
+        return Some("same_agent");
+    }
+    if !policy.enabled {
+        return Some("calls_disabled");
+    }
+    if !same_family(provider, caller) && !policy.targets.iter().any(|t| t.agent == provider) {
+        return Some("policy_denied");
+    }
+    None
 }
 
 /// The session-extension switches a worker launch carries. A change applies
@@ -568,13 +637,31 @@ pub(super) enum Choice {
         selection: &'static str,
     },
     Refused(&'static str),
+    /// Refused with no question to ask: approval cannot grant a family target.
+    Closed(&'static str),
 }
 
 /// Resolve `requested` (an agent id or `auto`) under the parent's policy.
-pub(super) fn choose(policy: &CallsPolicy, parent_agent: &str, requested: &str) -> Choice {
+/// `own_family` admits the caller's family for this request (an image call
+/// with `self_images` on); everything else is a second opinion from another.
+pub(super) fn choose(
+    policy: &CallsPolicy,
+    parent_agent: &str,
+    requested: &str,
+    own_family: bool,
+) -> Choice {
     // Not a policy question a person could answer: never offered, never asked.
     if requested != AUTO && same_family(requested, parent_agent) {
-        return Choice::Refused("same_agent");
+        if !own_family {
+            return Choice::Refused("same_agent");
+        }
+        if !policy.enabled {
+            return Choice::Closed("calls_disabled");
+        }
+        return Choice::Candidates {
+            targets: vec![own_target(requested)],
+            selection: "explicit",
+        };
     }
     if !policy.enabled {
         return Choice::Refused("calls_disabled");
@@ -604,9 +691,25 @@ pub(super) fn choose(policy: &CallsPolicy, parent_agent: &str, requested: &str) 
     // otherwise.
     let mut targets = policy.targets.clone();
     targets.sort_by_key(|target| target.agent == parent_agent);
+    if own_family {
+        targets.extend(
+            CALL_TARGETS
+                .into_iter()
+                .filter(|agent| same_family(agent, parent_agent))
+                .map(own_target),
+        );
+    }
     Choice::Candidates {
         targets,
         selection: AUTO,
+    }
+}
+
+fn own_target(agent: &str) -> CallTarget {
+    CallTarget {
+        agent: agent.to_owned(),
+        preset: None,
+        options: None,
     }
 }
 
@@ -934,27 +1037,29 @@ mod tests {
         let mut disabled = codex.calls.clone();
         disabled.enabled = false;
         assert!(matches!(
-            choose(&disabled, "codex", AUTO),
+            choose(&disabled, "codex", AUTO, false),
             Choice::Refused("calls_disabled")
         ));
         let mut enabled = codex.calls.clone();
-        let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO) else {
+        let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO, false)
+        else {
             panic!("auto must offer candidates");
         };
         assert_eq!(selection, AUTO);
         assert_eq!(targets[0].agent, "claude-code");
         // Its own family is never a call, whatever the policy says.
         assert!(matches!(
-            choose(&enabled, "codex-deepseek", "codex"),
+            choose(&enabled, "codex-deepseek", "codex", false),
             Choice::Refused("same_agent")
         ));
         assert!(matches!(
-            choose(&codex.calls, "codex", "codex"),
+            choose(&codex.calls, "codex", "codex", false),
             Choice::Refused("same_agent")
         ));
         // A fixed default still records the caller's `auto` for replays.
         enabled.default = "claude-code".into();
-        let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO) else {
+        let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO, false)
+        else {
             panic!("a fixed default must offer its target");
         };
         assert_eq!(
@@ -1005,12 +1110,12 @@ mod tests {
         calls.enabled = false;
         calls.targets.clear();
         assert!(matches!(
-            choose(&calls, "claude-code", "codex"),
+            choose(&calls, "claude-code", "codex", false),
             Choice::Refused("calls_disabled")
         ));
         let once = allow_once(calls.clone(), "claude-code", "codex");
         assert!(matches!(
-            choose(&once, "claude-code", "codex"),
+            choose(&once, "claude-code", "codex", false),
             Choice::Candidates {
                 selection: "explicit",
                 ..
@@ -1044,6 +1149,8 @@ mod tests {
                     options: None,
                 }]),
                 default: Some("claude-code".into()),
+                images: None,
+                self_images: None,
             },
         };
         assert!(session.validate());
@@ -1054,7 +1161,7 @@ mod tests {
         assert_eq!(effective.calls.default, AUTO);
         assert!(effective.validate());
         assert!(matches!(
-            choose(&effective.calls, "codex-deepseek", "claude-code"),
+            choose(&effective.calls, "codex-deepseek", "claude-code", false),
             Choice::Refused("policy_denied")
         ));
         let mut invalid = AgentTools::builtin("codex");
@@ -1077,5 +1184,84 @@ mod tests {
             }
             .is_empty()
         );
+    }
+
+    fn policy(images: bool, self_images: bool) -> CallsPolicy {
+        let mut calls = AgentTools::builtin("codex").calls;
+        calls.images = images;
+        calls.self_images = self_images;
+        calls
+    }
+
+    fn agents(choice: Choice) -> Vec<String> {
+        match choice {
+            Choice::Candidates { targets, .. } => targets.into_iter().map(|t| t.agent).collect(),
+            Choice::Refused(code) | Choice::Closed(code) => vec![code.to_owned()],
+        }
+    }
+
+    #[test]
+    fn stored_policies_without_the_image_fields_keep_todays_behaviour() {
+        let mut stored = json!(AgentTools::builtin("codex"));
+        stored["calls"].as_object_mut().unwrap().remove("images");
+        stored["calls"]
+            .as_object_mut()
+            .unwrap()
+            .remove("self_images");
+        let stored: AgentTools = serde_json::from_value(stored).unwrap();
+        assert!(stored.calls.images);
+        assert!(!stored.calls.self_images);
+    }
+
+    #[test]
+    fn only_an_image_call_with_self_images_reaches_the_callers_family() {
+        let on = policy(true, true);
+        assert_eq!(agents(choose(&on, "codex", "codex", true)), ["codex"]);
+        assert_eq!(
+            agents(choose(&on, "codex", "codex", false)),
+            ["same_agent"],
+            "a second opinion stays with another family"
+        );
+        assert_eq!(
+            agents(choose(&on, "codex", AUTO, true)),
+            ["claude-code", "codex"],
+            "Auto keeps its order and tries the own family last"
+        );
+        let mut fixed = on.clone();
+        fixed.default = "claude-code".to_owned();
+        assert_eq!(
+            agents(choose(&fixed, "codex", AUTO, true)),
+            ["claude-code"],
+            "a fixed default stays fixed"
+        );
+        let mut off = on;
+        off.enabled = false;
+        assert!(matches!(
+            choose(&off, "codex", "codex", true),
+            Choice::Closed("calls_disabled")
+        ));
+    }
+
+    #[test]
+    fn discovery_refuses_what_admission_refuses() {
+        let refusal = |policy: &CallsPolicy, provider| image_refusal(policy, "codex", provider);
+        assert_eq!(
+            refusal(&policy(false, true), "codex"),
+            Some("capability_disabled")
+        );
+        assert_eq!(refusal(&policy(true, false), "codex"), Some("same_agent"));
+        assert_eq!(refusal(&policy(true, true), "codex"), None);
+        assert_eq!(refusal(&policy(true, false), "claude-code"), None);
+        let mut narrowed = policy(true, true);
+        narrowed.targets.clear();
+        assert_eq!(refusal(&narrowed, "claude-code"), Some("policy_denied"));
+        assert_eq!(refusal(&narrowed, "codex"), None);
+    }
+
+    #[test]
+    fn turning_an_image_switch_on_is_widening() {
+        assert!(image_widens(&policy(false, false), &policy(true, false)));
+        assert!(image_widens(&policy(true, false), &policy(true, true)));
+        assert!(!image_widens(&policy(true, true), &policy(false, false)));
     }
 }

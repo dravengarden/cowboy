@@ -25,6 +25,10 @@ export interface CallsPolicy {
   default: string;
   max_concurrent: number;
   max_per_session: number;
+  /** Image calls may run at all. Absent from older Controllers. */
+  images?: boolean;
+  /** Image calls may also use the caller's own family. */
+  self_images?: boolean;
 }
 
 export interface ReviewPreferences { claude: string[]; gpt: string[] }
@@ -42,7 +46,14 @@ export interface AgentTools {
 export interface SessionToolsOverride {
   schema: 1;
   memory?: { tools?: boolean; recall?: boolean };
-  calls?: { enabled?: boolean; targets?: CallTarget[]; default?: string; review?: Partial<ReviewPreferences> };
+  calls?: {
+    enabled?: boolean;
+    targets?: CallTarget[];
+    default?: string;
+    review?: Partial<ReviewPreferences>;
+    images?: boolean;
+    self_images?: boolean;
+  };
 }
 
 export interface ToolPreset {
@@ -217,6 +228,12 @@ export function overrideFor(
   }
   if (normalizedDefault(next.calls) !== normalizedDefault(defaults.calls)) {
     calls.default = normalizedDefault(next.calls);
+  }
+  if ((next.calls.images ?? true) !== (defaults.calls.images ?? true)) {
+    calls.images = next.calls.images ?? true;
+  }
+  if ((next.calls.self_images ?? false) !== (defaults.calls.self_images ?? false)) {
+    calls.self_images = next.calls.self_images ?? false;
   }
   if (Object.keys(calls).length > 0) override.calls = calls;
   return override;

@@ -508,6 +508,29 @@ export function AgentToolsEditor(
           ) => <MenuItem key={limit} value={limit}>{limit}</MenuItem>)}
         </Select>
       </Row>
+      {calls.images !== undefined && (
+        <>
+          <Row label="Images" description="Let agents generate or edit images through a call">
+            <Switch
+              checked={calls.images}
+              disabled={disabled || !calls.enabled}
+              onChange={(_, checked): void => setCalls({ images: checked })}
+              slotProps={{ input: { "aria-label": "Image calls" } }}
+            />
+          </Row>
+          <Row
+            label="Use this agent's own account"
+            description="Image calls may also run on this agent's family, which spends its quota"
+          >
+            <Switch
+              checked={calls.self_images ?? false}
+              disabled={disabled || !calls.enabled || !calls.images}
+              onChange={(_, checked): void => setCalls({ self_images: checked })}
+              slotProps={{ input: { "aria-label": "Image calls on this agent's own account" } }}
+            />
+          </Row>
+        </>
+      )}
       <Heading>Memory</Heading>
       <Row label="Memory tools" description="Search and record shared memory">
         <Switch

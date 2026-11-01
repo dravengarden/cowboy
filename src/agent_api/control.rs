@@ -182,7 +182,7 @@ export interface Cowboy {
 const TOOLS_TYPES: &str = r#"
 type CallTarget={agent:string,preset?:string,options?:Record<string,string>}; // preset/options mutually exclusive
 type ReviewPreferences={claude:('opus'|'fable')[],gpt:('astra'|'sol')[]}; // nonempty, unique, preferred first; defaults opus→fable and astra→sol
-type AgentTools={schema:1,matrix:{tools:boolean,recall:boolean},calls:{enabled:boolean,targets:CallTarget[],default:string,max_concurrent:number,max_per_session:number,review?:ReviewPreferences}};
+type AgentTools={schema:1,matrix:{tools:boolean,recall:boolean},calls:{enabled:boolean,targets:CallTarget[],default:string,max_concurrent:number,max_per_session:number,review?:ReviewPreferences,images?:boolean,self_images?:boolean}}; // an agent may only turn the image switches off
 type SessionTools={schema:1,matrix?:{tools?:boolean,recall?:boolean},calls?:{enabled?:boolean,targets?:CallTarget[],default?:string,review?:Partial<ReviewPreferences>}};
 // Review only; each omitted family inherits the agent-kind Settings default.
 // Never widen calls permissions when changing a preference. Read the current document and preserve unrelated fields.

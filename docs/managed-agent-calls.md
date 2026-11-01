@@ -233,9 +233,11 @@ kind (`codex`, `claude-code`):
   session follows later changes to its agent kind's defaults.
 
 An agent never calls its own family (`claude-code`/`claude-deepseek`;
-`codex`/`codex-deepseek`): built-in defaults list only other families, stored
-settings are cleaned of the caller's family, and such a request is refused with
-`same_agent` (not a policy question, so no approval prompt). The Tools editor
+`codex`/`codex-deepseek`) for a second opinion: built-in defaults list only other
+families, stored settings are cleaned of the caller's family, and such a request
+is refused with `same_agent` (not a policy question, so no approval prompt). Image
+calls are the exception, under the `images` and `self_images` switches of
+[call capabilities](call-capabilities.md). The Tools editor
 shows one card per callable agent with its switch and its presets as choices;
 the default-agent chooser appears only when more than one agent is callable. Each
 card starts folded to its name, current choice and switch. Unfolded it lists
