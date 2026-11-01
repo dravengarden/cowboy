@@ -28,6 +28,7 @@ import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
 import { ProviderUsageCredits } from "./ProviderUsageCredits";
 import { UsageExecutorPicker } from "./UsageExecutorPicker";
+import { exactUsageTime, manualRefreshWaitMinutes, usageFreshness } from "./usageFreshness";
 import {
   readUsageExecutors,
   setUsageExecutor,
@@ -44,7 +45,6 @@ import {
   providerUsageErrorMessage,
   providerUsageSlotContext,
   record,
-  relativeUpdateTime,
   resetCountdown,
   scheduledResetCountdown,
   usageAvailableStatus,
@@ -191,6 +191,15 @@ function ProviderUsageCardBody({
   // and survives closing and reopening this sheet on any device.
   const [requesting, setRequesting] = useState(false);
   const refreshBusy = refreshing || requesting;
+  // A manual refresh inside the account's cooldown is a no-op on the Service;
+  // say when it can run instead of silently doing nothing.
+  const [cooldownNotice, setCooldownNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (cooldownNotice === null) return;
+    const timer = window.setTimeout(() => setCooldownNotice(null), 3_000);
+    return (): void => window.clearTimeout(timer);
+  }, [cooldownNotice]);
+  const freshness = usageFreshness(usage, now, refreshBusy);
   const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const usageContext = useMemo(
@@ -305,6 +314,11 @@ function ProviderUsageCardBody({
   useConfirmEnter(resetOpen, () => void submitReset());
   const refresh = async (): Promise<void> => {
     if (!onRefresh || refreshBusy) return;
+    const wait = identity.collector ? manualRefreshWaitMinutes(usage, Date.now()) : 0;
+    if (wait > 0) {
+      setCooldownNotice(`Can refresh in ${String(wait)}m`);
+      return;
+    }
     setRequesting(true);
     try {
       await onRefresh();
@@ -334,7 +348,42 @@ function ProviderUsageCardBody({
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               {title}
             </Typography>
-            {identity.subtitle && <Typography variant="caption" color="text.secondary">{identity.subtitle}</Typography>}
+            {/* The age sits with the account identity, not among the
+                header actions: the right edge keeps only plan and refresh. */}
+            {(identity.subtitle || freshness) && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                {identity.subtitle}
+                {identity.subtitle && freshness ? " · " : ""}
+                {freshness && (
+                  <Tooltip
+                    title={freshness.exact ? `Updated ${freshness.exact}` : ""}
+                    enterTouchDelay={0}
+                    leaveTouchDelay={2_500}
+                  >
+                    <Box
+                      component="span"
+                      data-usage-freshness={freshness.tone}
+                      sx={{
+                        whiteSpace: "nowrap",
+                        color: freshness.tone === "stale" ? "warning.main" : "inherit",
+                      }}
+                    >
+                      {freshness.label}
+                    </Box>
+                  </Tooltip>
+                )}
+              </Typography>
+            )}
+            {(cooldownNotice ?? freshness?.failure) && (
+              <Typography
+                variant="caption"
+                color={cooldownNotice ? "text.secondary" : "warning.main"}
+                sx={{ display: "block" }}
+                role="status"
+              >
+                {cooldownNotice ?? freshness?.failure}
+              </Typography>
+            )}
           </Box>
           <Stack direction="row" alignItems="center" spacing={0.25} sx={{ flexShrink: 0 }}>
             <Typography
@@ -362,6 +411,7 @@ function ProviderUsageCardBody({
             )}
           </Stack>
         </Stack>
+        <Box sx={{ opacity: freshness?.failure ? 0.6 : 1 }}>
         <PluginSlot
           pluginId={usagePluginId(usage.provider)}
           slot="provider.usage"
@@ -376,6 +426,7 @@ function ProviderUsageCardBody({
             </Typography>
           )}
         </PluginSlot>
+        </Box>
         {!!(detailsContext.creditDetails?.length || manageUrl || usage.activity || usage.observed_at_ms > 0 || Children.toArray(children).length) && (
           <Accordion
             disableGutters
@@ -574,7 +625,7 @@ function ProviderUsageCardBody({
         )}
         {usage.observed_at_ms > 0 && <Typography variant="caption" color="text.secondary">
           {usage.source} · {stale ? "Cached" : "Updated"}{" "}
-          {relativeUpdateTime(usage.observed_at_ms, now)}
+          {exactUsageTime(usage.observed_at_ms)}
         </Typography>}
         {children}
               </Stack>
@@ -709,7 +760,6 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => window.clearInterval(timer);
   }, []);
-  const refreshed = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const nextRefreshMinutes = snapshot?.next_refresh_at_ms
     ? Math.max(0, Math.ceil((snapshot.next_refresh_at_ms - clock) / 60_000))
     : null;
@@ -726,12 +776,11 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
             color={error ? "error.main" : "text.secondary"}
             sx={{ display: "block" }}
           >
-            {error
-              ? `Refresh failed · Updated ${refreshed}`
-              : `Updated ${refreshed}`}
-            {nextRefreshMinutes !== null
-              ? ` · Refresh in ${String(nextRefreshMinutes)}m`
-              : ""}
+            {/* Each card dates its own numbers; this line only schedules. */}
+            {[
+              error ? "Refresh failed" : null,
+              nextRefreshMinutes !== null ? `Next refresh in ${String(nextRefreshMinutes)}m` : null,
+            ].filter(Boolean).join(" · ")}
           </Typography>
         </Box>
         <Stack direction="row" sx={{ flexShrink: 0 }}>

@@ -35,6 +35,9 @@ const MAX_EVENTS: usize = 200;
 const MAX_SEGMENT_BYTES: usize = 200_000;
 const MAX_EVENT_CHARS: usize = 12_000;
 const CONTEXT_BUDGET: u32 = 6000;
+/// Grok defers MCP tools behind its own discovery, so a model would otherwise
+/// never learn that they exist.
+const GROK_TOOLS: &str = "Memory tools are the matrix MCP server's: find them with search_tool and call them with use_tool.\n";
 const UNAVAILABLE: &str =
     "[Matrix memory unavailable for this turn. Continue normally and verify facts directly.]";
 
@@ -104,6 +107,7 @@ pub struct AcpMemory {
     tools: bool,
     recall: bool,
     observe: bool,
+    tools_note: &'static str,
     outbox: PathBuf,
     client: reqwest::Client,
     segment: Mutex<Segment>,
@@ -190,7 +194,12 @@ impl AcpMemory {
         if path == "disabled" {
             return None;
         }
-        Self::from_descriptor(Path::new(&path))
+        let tools_note = if provider_id == "grok" {
+            GROK_TOOLS
+        } else {
+            ""
+        };
+        Self::from_descriptor(Path::new(&path), tools_note)
             .inspect_err(|error| {
                 tracing::warn!(error = %format!("{error:#}"), "session runs without memory");
             })
@@ -198,7 +207,7 @@ impl AcpMemory {
             .flatten()
     }
 
-    fn from_descriptor(path: &Path) -> Result<Option<Arc<Self>>> {
+    fn from_descriptor(path: &Path, tools_note: &'static str) -> Result<Option<Arc<Self>>> {
         let descriptor: Value = serde_json::from_slice(&std::fs::read(path)?)?;
         ensure!(descriptor["schema"] == 1, "unsupported descriptor schema");
         let memory = &descriptor["memory"];
@@ -232,6 +241,7 @@ impl AcpMemory {
             tools: memory["enable_tools"] == true,
             recall: memory["enable_recall"] == true,
             observe: memory["observe"] == true,
+            tools_note,
             outbox,
             client: reqwest::Client::builder()
                 .no_proxy()
@@ -387,6 +397,9 @@ impl AcpMemory {
             context.push_str(&format!(
                 "\nCurrent user evidence for memory_put: {cited}. Cite an exact supporting excerpt; automatic learning also runs after the turn.\n"
             ));
+        }
+        if self.tools {
+            context.push_str(self.tools_note);
         }
         Some(context)
     }
@@ -625,7 +638,7 @@ mod tests {
     }
 
     fn open(root: &Path, endpoint: &str) -> Arc<AcpMemory> {
-        AcpMemory::from_descriptor(&descriptor(root, endpoint, true, true))
+        AcpMemory::from_descriptor(&descriptor(root, endpoint, true, true), "")
             .unwrap()
             .unwrap()
     }
@@ -684,7 +697,10 @@ mod tests {
             (json!({"schema": 1, "memory": {"protocol": "other"}}), false),
         ] {
             std::fs::write(&path, body.to_string()).unwrap();
-            assert_eq!(AcpMemory::from_descriptor(&path).unwrap().is_some(), memory);
+            assert_eq!(
+                AcpMemory::from_descriptor(&path, "").unwrap().is_some(),
+                memory
+            );
         }
         let foreign = json!({"schema": 1, "memory": {
             "protocol": "matrix_http_v1",
@@ -692,7 +708,7 @@ mod tests {
             "relay": {"endpoint": "http://example.com", "token": "t", "state_dir": "/tmp/x"},
         }});
         std::fs::write(&path, foreign.to_string()).unwrap();
-        assert!(AcpMemory::from_descriptor(&path).is_err());
+        assert!(AcpMemory::from_descriptor(&path, "").is_err());
     }
 
     #[tokio::test]
@@ -706,6 +722,7 @@ mod tests {
         assert_eq!(prepared.len(), 2);
         assert!(text(&prepared[0]).contains("remembered"));
         assert!(text(&prepared[0]).contains("observation:e0"));
+        assert!(!text(&prepared[0]).contains("search_tool"));
         assert_eq!(text(&prepared[1]), "what did we decide?");
 
         for chunk in ["the ", "answer"] {
@@ -739,6 +756,20 @@ mod tests {
         assert_eq!(last["events"][1]["role"], "assistant");
         assert_eq!(last["events"][1]["text"], "the answer");
         assert_eq!(last["events"][2]["role"], "tool");
+    }
+
+    #[tokio::test]
+    async fn grok_learns_how_to_reach_its_deferred_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service().await;
+        let memory = AcpMemory::from_descriptor(
+            &descriptor(root.path(), &service.endpoint, true, true),
+            GROK_TOOLS,
+        )
+        .unwrap()
+        .unwrap();
+        let prepared = memory.prepare(vec![ContentBlock::from("hello")]).await;
+        assert!(text(&prepared[0]).contains("search_tool"));
     }
 
     #[tokio::test]
@@ -823,16 +854,20 @@ mod tests {
     #[tokio::test]
     async fn tools_follow_the_switch_and_the_agent_capability() {
         let root = tempfile::tempdir().unwrap();
-        let on =
-            AcpMemory::from_descriptor(&descriptor(root.path(), "http://127.0.0.1:1", true, false))
-                .unwrap()
-                .unwrap();
+        let on = AcpMemory::from_descriptor(
+            &descriptor(root.path(), "http://127.0.0.1:1", true, false),
+            "",
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(on.mcp_servers(true).len(), 1);
         assert!(on.mcp_servers(false).is_empty());
-        let off =
-            AcpMemory::from_descriptor(&descriptor(root.path(), "http://127.0.0.1:1", false, true))
-                .unwrap()
-                .unwrap();
+        let off = AcpMemory::from_descriptor(
+            &descriptor(root.path(), "http://127.0.0.1:1", false, true),
+            "",
+        )
+        .unwrap()
+        .unwrap();
         assert!(off.mcp_servers(true).is_empty());
     }
 

@@ -119,9 +119,29 @@ export function nearestCredit(rateLimits) {
     )[0]?.id;
 }
 
-async function collect(rpc) {
-  const account = await rpc.request("account/read", { refreshToken: false });
-  const rateLimits = await rpc.request("account/rateLimits/read", {});
+/** The ChatGPT backend rejected the stored access token as expired. */
+export function isTokenExpired(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /token_expired|\b401 Unauthorized\b/.test(message);
+}
+
+/* A Codex ChatGPT access token lasts ten days and only a running Codex process
+ * refreshes it. With no session alive at expiry nothing did, so every later
+ * session saw a signed-out account until the user logged in again. Reads never
+ * refresh on their own; only after the backend reports the token expired does
+ * the collector ask the native app-server to refresh it, once, and retry. The
+ * Machine then promotes the rotated credential through its compare-and-swap
+ * lineage. Cowboy's usage limiter bounds how often this can run. */
+export async function collect(rpc) {
+  let account = await rpc.request("account/read", { refreshToken: false });
+  let rateLimits;
+  try {
+    rateLimits = await rpc.request("account/rateLimits/read", {});
+  } catch (error) {
+    if (!isTokenExpired(error)) throw error;
+    account = await rpc.request("account/read", { refreshToken: true });
+    rateLimits = await rpc.request("account/rateLimits/read", {});
+  }
   let activity;
   try {
     activity = await rpc.request("account/usage/read", {});
