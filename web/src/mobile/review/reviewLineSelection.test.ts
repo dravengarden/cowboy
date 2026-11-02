@@ -95,3 +95,9 @@ test("a session's Explain forks are found by source and title", () => {
   ], "source");
   assertEquals(found.map((item) => item.id), ["sess-3", "sess-20"]);
 });
+
+test("a Review request asks for a managed review of the same lines", () => {
+  const prompt = reviewExplainPrompt("`a.ts:1`", undefined, "review");
+  assertStringIncludes(prompt, "review.start");
+  assertStringIncludes(prompt, "Do not change any files.\n\n`a.ts:1`");
+});

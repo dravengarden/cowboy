@@ -338,12 +338,14 @@ settings are deliberately out of scope.
 
 Tapping a line number selects it, and a second tap extends the selection to
 that line; line numbers are the target because native text selection on iOS
-competes with the page swipe. **Send to Agent** appends the location and the
+competes with the page swipe. **Send** appends the location and the
 selected text to the active session's Composer and returns to the Agent; nothing
 is sent until the reader does. In a diff the location names file lines, new side
 first, not rows of the diff document.
 
-**Explain** asks a fork of the Agent instead. A fork keeps the conversation, so
+**Explain** asks a fork of the Agent instead, and **Review** asks that same fork
+to start a managed review of the selected lines and report it; a reader has no
+call authority of their own, and a fork is an agent that does. A fork keeps the conversation, so
 it already knows why the code changed and reuses the Provider's prompt cache; it
 has Cowboy MCP for other sessions; and its own worktree holds the source's
 uncommitted files, so nothing it does reaches the source. `latest_completed`

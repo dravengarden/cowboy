@@ -1,3 +1,6 @@
+/** What a reader asks a fork of the Agent about selected lines. */
+export type ReviewQuestion = "explain" | "review";
+
 /** One-based, inclusive lines of the document on screen. */
 export interface ReviewLineSelection {
   readonly from: number;
@@ -118,13 +121,18 @@ export function reviewSelectionMessage(
 export function reviewExplainPrompt(
   selection: string,
   viewedRoot?: string | undefined,
+  kind: ReviewQuestion = "explain",
 ): string {
   const where = viewedRoot
     ? `\nThe reader is looking at ${viewedRoot}, not this worktree.`
     : "";
-  return "Explain this code to the person reviewing it: what it does and why " +
-    "it is written this way, using what you remember of this work first. " +
-    `Do not change any files.${where}\n\n${selection}`;
+  const ask = kind === "review"
+    ? "Review this code for concrete defects. Start a Cowboy review focused on " +
+      "these lines with review.start, then report what it found and what you " +
+      "checked yourself. A failed or partial review is not a clean one. "
+    : "Explain this code to the person reviewing it: what it does and why " +
+      "it is written this way, using what you remember of this work first. ";
+  return `${ask}Do not change any files.${where}\n\n${selection}`;
 }
 
 const EXPLAIN_TITLE = "Explain · ";
