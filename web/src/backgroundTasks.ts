@@ -998,6 +998,11 @@ export function useAcknowledgements(sessionId: string): (key: string, marker: st
   };
 }
 
+/** Whether this device acknowledged a task in this session. */
+export function acknowledgedInSession(sessionId: string, key: string, marker: string): boolean {
+  return acknowledgements.get().includes(sessionEntryOf(sessionId, entryOf(key, marker)));
+}
+
 /** Mark an unseen failure seen, here at once and for the account. */
 export function acknowledgeTask(sessionId: string, task: TaskSummary): void {
   if (task.attention !== "failed_unseen") return;

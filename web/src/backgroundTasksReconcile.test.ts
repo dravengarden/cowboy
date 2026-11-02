@@ -4,6 +4,7 @@ import {
   applySubagentAuthority,
   barSummary,
   buildTaskSummaries,
+  acknowledgedInSession,
   acknowledgeTask,
   authoritativeSubagent,
   callSummary,
@@ -506,10 +507,9 @@ test("a local acknowledgement stays in its session", async () => {
     subagentUpdate("shared-child", "idle", 4, { stopReason: "error", observedSeq: 90, terminalSeq: 78 }) as never,
   )!);
   acknowledgeTask("session-a", failed);
-  const stored = JSON.parse(globalThis.localStorage?.getItem("cowboy:background-tasks:ack") ?? "[]") as string[];
-  if (globalThis.localStorage) {
-    assertEquals(stored.includes("session-a\nsubagent:shared-child@78"), true);
-    assertEquals(stored.includes("subagent:shared-child@78"), false);
-  }
+  // The store binds its storage at import, so another test file replacing
+  // `localStorage` must not decide this: ask the store, not the global.
+  assertEquals(acknowledgedInSession("session-a", "subagent:shared-child", "78"), true);
+  assertEquals(acknowledgedInSession("session-b", "subagent:shared-child", "78"), false);
   setAcknowledgementTransport(null);
 });
