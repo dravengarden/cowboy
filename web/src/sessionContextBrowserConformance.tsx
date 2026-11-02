@@ -909,6 +909,22 @@ export async function runSessionContextBrowserConformance(
     queue(2, []);
     await until(() => !waits());
     check(!continueRun().disabled && !forkRun().disabled, "queue: the form reopens when the queue drains");
+    // The prompt carrying this session's context holds Replace the same way,
+    // and only while it runs.
+    const idleSession = sessions[0]!;
+    context = { ...context, injection_pending: true };
+    sessions[0] = { ...idleSession, status: "busy" };
+    flushSync(() => root.render(<Fixture desktop />));
+    await until(() => Boolean(waits()));
+    check(
+      continueRun().disabled && waits()!.textContent!.includes("the submitted message finishes"),
+      "injection: Replace says it waits for the submitted message",
+    );
+    context = { ...context, injection_pending: false };
+    sessions[0] = idleSession;
+    flushSync(() => root.render(<Fixture desktop />));
+    await until(() => !waits() && !continueRun().disabled);
+    check(true, "injection: the form reopens when the turn ends");
     const beforeFork = writes.length;
     forkRun().click();
     await until(() => writes.length > beforeFork);

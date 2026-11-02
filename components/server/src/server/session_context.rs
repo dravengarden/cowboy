@@ -261,7 +261,7 @@ fn view(
     Ok(serde_json::json!({
         "revision":context.revision,"applied_revision":context.applied_revision,
         "sources":context.sources,"source_sessions":sources,"links":links,"pending_links":crate::session_context::pending_links(&context),"next_agent":context.next_agent,
-        "delivery":delivery,"max_sources":crate::session_context::MAX_SOURCES,
+        "delivery":delivery,"injection_pending":context.injection.is_some(),"max_sources":crate::session_context::MAX_SOURCES,
     }))
 }
 
@@ -297,6 +297,12 @@ pub(super) struct Edit {
     resolve_operation: Option<String>,
 }
 
+/// A fresh agent must not overtake the prompt that carries this session's own
+/// context. The view exposes the injection so a form can wait on live status.
+fn submitted_running(context: &Context, status: Status) -> bool {
+    context.injection.is_some() && status == Status::Busy
+}
+
 /// Links wait for the next prompt without holding anything. Only a new agent
 /// needs this session settled first.
 fn editable(info: &SessionInfo, context: &Context, new_agent: bool) -> Result<(), String> {
@@ -307,9 +313,7 @@ fn editable(info: &SessionInfo, context: &Context, new_agent: bool) -> Result<()
     {
         return Err("A send is unresolved. Check its destination before changing context; do not send it again.".into());
     }
-    if new_agent
-        && (info.queue_count > 0 || context.injection.is_some() && info.meta.status == Status::Busy)
-    {
+    if new_agent && (info.queue_count > 0 || submitted_running(context, info.meta.status)) {
         return Err(
             "Wait for the submitted message or resolve the queue before changing context".into(),
         );
@@ -825,6 +829,25 @@ pub(super) async fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_running_injection_holds_a_new_agent() {
+        let context = |injection: serde_json::Value| -> Context {
+            serde_json::from_value(serde_json::json!({
+                "revision": 1, "applied_revision": 1, "sources": [], "injection": injection,
+            }))
+            .unwrap()
+        };
+        let carried = context(serde_json::json!({
+            "cmid": "context-op", "follows_first_prompt": true, "sources": [],
+        }));
+        assert!(submitted_running(&carried, Status::Busy));
+        assert!(!submitted_running(&carried, Status::Running));
+        assert!(!submitted_running(
+            &context(serde_json::Value::Null),
+            Status::Busy
+        ));
+    }
 
     #[test]
     fn account_continuation_waits_only_for_foreground_work() {

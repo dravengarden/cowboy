@@ -45,6 +45,9 @@ export interface SessionContext {
   }[];
   pending_links?: string[];
   delivery: ContextDelivery | null;
+  /** A submitted prompt still carries this session's context. While the
+   *  session is busy the server refuses a new agent. */
+  injection_pending?: boolean;
   max_sources: number;
 }
 
