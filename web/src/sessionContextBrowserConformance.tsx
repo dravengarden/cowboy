@@ -77,7 +77,7 @@ export async function runSessionContextBrowserConformance(
       active_session_leases: 0,
     }],
   } as MachineSummary;
-  let context: SessionContext;
+  let context!: SessionContext;
   let sendFailure: number | null = null;
   let parentDismissals = 0;
   const writes: { url: string; body: Record<string, unknown> }[] = [];
