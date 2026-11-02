@@ -1,4 +1,5 @@
 import { useDraftRoute } from "../../documents/navigation";
+import { useReviewOpenRequest } from "../../useReviewOpenRequest";
 import { openMobileProduct } from "../appPagerMotion";
 import { Box } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -152,6 +153,7 @@ export function MobileProductShell({
   const agentPageRef = useRef<HTMLDivElement>(null);
   const reviewPageRef = useRef<HTMLDivElement>(null);
   const workspace = useActiveWorkspaceBinding();
+  useReviewOpenRequest(workspace?.sessionId, () => openMobileProduct("review"));
   const draftActiveRef = useRef(draft.active);
   draftActiveRef.current = draft.active;
   useEffect(() => { if (draft.active) openMobileProduct("agent"); }, [draft.active]);

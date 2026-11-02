@@ -750,12 +750,27 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
             "session_id id text content fire_at_ms delivery",
         ),
         "drafts.unschedule" => ("unschedule_draft", "session_id id"),
+        "sessions.review_open" => ("sync", "session_id path"),
         "sync.apply" => ("sync", "state name args"),
         _ => return None,
     })
 }
 
 fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'static str> {
+    if name == "sessions.review_open" {
+        only_keys(input, &["session_id", "path"]).map_err(|_| "invalid_argument")?;
+        let session = arg_str(input, "session_id").map_err(|_| "invalid_argument")?;
+        let path = input["path"].as_str().ok_or("invalid_argument")?;
+        return command_value(
+            "sync.apply",
+            &json!({
+                "state": format!("mobile-review:{session}"),
+                "name": "open",
+                "args": {"path": path, "reveal": true}
+            }),
+            operation,
+        );
+    }
     let (kind, fields) = command(name).ok_or("unknown_operation")?;
     let mut fields_value = input.as_object().ok_or("invalid_argument")?.clone();
     if fields_value

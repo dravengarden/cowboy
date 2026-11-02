@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { ReviewApp } from "./mobile/review/ReviewApp";
+import { ReviewChanges } from "./mobile/review/ReviewChanges";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import { getActiveSessionId, setActiveSessionId } from "./controlPlane";
 import type { SessionMeta } from "./protocol";
@@ -970,7 +971,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
   }
 }
 
-async function checkDesktopReviewPane(): Promise<string> {
+async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewContextPreview>): Promise<string> {
   const host = document.createElement("div");
   host.style.cssText = "height:600px;display:flex";
   document.body.append(host);
@@ -1011,6 +1012,19 @@ async function checkDesktopReviewPane(): Promise<string> {
     openMobileProduct("agent");
     await until(() => !host.querySelector("[data-desktop-review]"), "Agent should return to the Conversation");
     check(host.querySelector("[data-fixture-transcript]") === transcript, "Returning replaced the transcript");
+    const request = {mode:"files",tabs:[{path:"README.md",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:1,reveal_revision:1};
+    fixture.sync("mobile-review:project", request, 1000);
+    await wait();
+    check(!host.querySelector("[data-desktop-review]"), "Another session's open request stole focus");
+    fixture.sync("mobile-review:worktree", request, 1000);
+    await until(() => !!host.querySelector("[data-desktop-review]"), "Live MCP navigation did not open Review");
+    openMobileProduct("agent");
+    await until(() => !host.querySelector("[data-desktop-review]"), "Could not leave requested Review");
+    fixture.sync("mobile-review:worktree", request, 1001);
+    await wait();
+    check(!host.querySelector("[data-desktop-review]"), "Repeated observation replayed navigation");
+    fixture.sync("mobile-review:worktree", {...request,open_revision:2,reveal_revision:2}, 1002);
+    await until(() => !!host.querySelector("[data-desktop-review]"), "A fresh same-file request was ignored");
     return "Desktop shows Review in the Conversation pane and returns to the same transcript";
   } finally {
     root.unmount();
@@ -1024,9 +1038,57 @@ export async function runReviewCompareBrowserConformance(): Promise<string[]> {
     return [
       await checkReviewCompareAndSelection(fixture),
       await checkLinkedSessionReview(fixture),
-      await checkDesktopReviewPane(),
+      await checkDesktopReviewPane(fixture),
+      await checkChangedDocuments(),
     ];
   } finally {
     fixture.cleanup();
+  }
+}
+
+async function checkChangedDocuments(): Promise<string> {
+  const originalFetch = globalThis.fetch;
+  const container = document.createElement("div");
+  container.style.cssText = "width:390px;height:600px";
+  document.body.append(container);
+  const root = createRoot(container);
+  const previews: string[] = [];
+  const diffs: string[] = [];
+  const comparison = "refs/remotes/origin/main";
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), location.href);
+    check(url.searchParams.get("comparison") === comparison, "Document list lost its comparison");
+    return new Response(JSON.stringify({
+      apiVersion: 1, revision: "docs", truncated: false,
+      comparisons: [{reference: comparison, label: "origin/main"}],
+      changes: [
+        {path: "design.md", status: "modified", staged: false, unstaged: true},
+        {path: "removed.md", status: "deleted", staged: false, unstaged: true},
+        {path: "app.ts", status: "modified", staged: false, unstaged: true},
+      ],
+    }), {headers: {"Content-Type": "application/json"}});
+  };
+  try {
+    flushSync(() => root.render(<BrowserProductTheme><ReviewChanges
+      sessionId="documents" comparison={comparison} documentsOnly compact
+      reviewed={new Set()} onRevision={() => {}}
+      onPreview={(path) => previews.push(path)}
+      onOpenDiff={(entry) => diffs.push(entry.change.path)}
+    /></BrowserProductTheme>));
+    await until(() => !!container.querySelector('[aria-label="Preview current file design.md"]'), "Document preview action missing");
+    check(!container.textContent?.includes("app.ts"), "Non-document shown in document filter");
+    check(container.textContent?.includes("removed.md"), "Deleted document missing from review");
+    check(!container.querySelector('[aria-label="Preview current file removed.md"]'), "Deleted document offers live preview");
+    flushSync(() => container.querySelector<HTMLElement>('[aria-label="Preview current file design.md"]')!.click());
+    check(previews[0] === "design.md" && diffs.length === 0, "Preview also opened a diff");
+    const row = [...container.querySelectorAll<HTMLElement>('[role="button"]')].find((element) => element.textContent?.includes("design.md"));
+    check(row, "Document diff row missing");
+    flushSync(() => row.click());
+    check(diffs[0] === "design.md", "Document row did not open its diff");
+    return "changed documents retain comparison, separate preview from diff, and keep deleted files reviewable";
+  } finally {
+    flushSync(() => root.unmount());
+    container.remove();
+    globalThis.fetch = originalFetch;
   }
 }

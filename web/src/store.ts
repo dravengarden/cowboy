@@ -3397,6 +3397,8 @@ export interface MobileReviewTabState {
 }
 
 export interface MobileReviewState {
+  readonly open_revision?: number;
+  readonly reveal_revision?: number;
   readonly directory?: string | null;
   readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
   readonly remote_selected?: boolean;
@@ -3450,14 +3452,15 @@ const mobileReviewMutators = {
     const kept = bindings.filter((context) => context !== args.context);
     return kept.length > 0 ? { ...rest, bindings: kept } : rest;
   },
-  open: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
+  open: (value: MobileReviewState, args: { path: string; reveal?: boolean }): MobileReviewState => {
     const existing = value.tabs.find((tab) => tab.path === args.path);
     let tabs = existing ? [...value.tabs] : [...value.tabs, { path: args.path, pinned: false }];
     if (tabs.length > 12) {
       const evict = tabs.findIndex((tab) => !tab.pinned);
       tabs = tabs.filter((_, index) => index !== (evict < 0 ? 0 : evict));
     }
-    return { ...value, mode: "files", tabs, active: args.path };
+    return { ...value, mode: "files", tabs, active: args.path, open_revision: (value.open_revision ?? 0) + 1,
+      ...(args.reveal ? { reveal_revision: (value.reveal_revision ?? 0) + 1, remote_selected: false } : {}) };
   },
   close: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
     const tabs = value.tabs.filter((tab) => tab.path !== args.path);

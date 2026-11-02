@@ -1163,6 +1163,11 @@ struct MobileReviewPosition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MobileReviewState {
+    /// Reopening the active path is still a new navigation intent.
+    #[serde(default)]
+    open_revision: u64,
+    #[serde(default)]
+    reveal_revision: u64,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1204,6 +1209,8 @@ fn default_mobile_review_mode() -> String {
 impl Default for MobileReviewState {
     fn default() -> Self {
         Self {
+            open_revision: 0,
+            reveal_revision: 0,
             directory: None,
             future: std::collections::BTreeMap::new(),
             remote_review: None,
@@ -4252,6 +4259,11 @@ impl Hub {
                     }
                     state.active = Some(path);
                     state.mode = "files".to_owned();
+                    state.open_revision = state.open_revision.saturating_add(1);
+                    if args.get("reveal") == Some(&serde_json::Value::Bool(true)) {
+                        state.reveal_revision = state.reveal_revision.saturating_add(1);
+                        state.remote_selected = false;
+                    }
                 }
                 "close" => {
                     let path = mobile_review_string_arg(args, "path", 4096)?;

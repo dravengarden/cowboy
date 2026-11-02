@@ -427,6 +427,30 @@ Writes use one stable identity:
 
 The adapter invokes existing product handlers/typed command writers. It accepts
 no arbitrary URL, headers, cookies, SQL, shell command or host delegation.
+
+To prepare a session's worktree document in Cowboy Zed, discover
+`sessions.review_open` and submit a worktree-relative path:
+
+```json
+{"action":"control.apply","operation":"open-design-1","arguments":{"name":"sessions.review_open","input":{"session_id":"owned-id","path":"docs/design.md"}}}
+```
+
+This uses the same synchronized Review tabs as a user opening a file. Markdown
+defaults to rendered preview; reopening the active path returns it to preview.
+It does not change the active session or grant filesystem access. An accepted
+receipt means navigation state was saved, not that an online browser rendered
+the file. Observe `sync.read` for `mobile-review:<session>`; the client adopts
+the selection when viewing that session's worktree. A different bound code
+context retains its own tabs. Both Codex and Claude use this shared interface.
+
+Worktree's **Changed documents** entry filters the existing Git comparison to
+Markdown paths, including renamed and deleted documents. Click a row for its
+diff, or its preview button for the current worktree file (deleted files have
+no preview button). The comparison picker retains Review's branch/committed/
+uncommitted semantics; it is not an authorship claim about which agent wrote
+each change. Agents use native Git to identify paths and the synchronized
+`comparison` value to match that scope; Cowboy owns only UI navigation here.
+
 An agent never writes shared Tools defaults, stages a continuation of its own
 lineage without inheritance, or starts a fresh session holding a Tools switch it
 lacks (`tools_widening_denied`). A remote parent names `runtime_machine_id`

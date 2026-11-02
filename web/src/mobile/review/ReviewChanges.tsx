@@ -11,6 +11,7 @@ import {
   FolderOutlined,
   Refresh,
   UnfoldMore,
+  VisibilityOutlined,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -19,6 +20,7 @@ import {
   ButtonBase,
   Chip,
   CircularProgress,
+  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
@@ -47,6 +49,7 @@ import { buildGitChangeTree, type GitChangeTreeNode } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewComparePicker } from "./ReviewComparePicker";
+import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
   comparisonAvailable,
   comparisonFetchable,
@@ -86,6 +89,7 @@ function GitTreeRows({
   onOpenDiff,
   queue,
   reviewed,
+  onPreview,
 }: {
   nodes: GitChangeTreeNode[];
   depth: number;
@@ -94,6 +98,7 @@ function GitTreeRows({
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   queue: GitReviewEntry[];
   reviewed: ReadonlySet<string>;
+  onPreview?: ((path: string) => void) | undefined;
 }): React.JSX.Element {
   return (
     <>
@@ -139,6 +144,7 @@ function GitTreeRows({
                   onOpenDiff={onOpenDiff}
                   queue={queue}
                   reviewed={reviewed}
+                  onPreview={onPreview}
                 />
               )}
             </Box>
@@ -154,68 +160,84 @@ function GitTreeRows({
           ),
         );
         return (
-          <ListItemButton
+          <Stack
+            direction="row"
+            alignItems="center"
             key={`${entry.scope}:${entry.change.path}`}
-            onClick={() => onOpenDiff(entry, queue)}
-            sx={{
-              minHeight: 38,
-              py: 0,
-              pl: 0.75 + depth * 1.5,
-              pr: 1.25,
-            }}
           >
-            <ListItemIcon
+            <ListItemButton
+              key={`${entry.scope}:${entry.change.path}`}
+              onClick={() => onOpenDiff(entry, queue)}
               sx={{
-                minWidth: 28,
-                color: isReviewed ? "success.main" : "text.secondary",
-                "& svg": { fontSize: "1.125rem" },
+                minHeight: 38,
+                py: 0,
+                pl: 0.75 + depth * 1.5,
+                pr: 1.25,
               }}
             >
-              {isReviewed
-                ? <CheckCircleOutline fontSize="small" />
-                : <ChangeIcon status={entry.change.status} />}
-            </ListItemIcon>
-            <ListItemText
-              primary={node.name}
-              primaryTypographyProps={{
-                noWrap: true,
-                fontFamily: "var(--cowboy-font-mono)",
-                fontSize: "0.8125rem",
-              }}
-              sx={{ my: 0 }}
-            />
-            {entry.change.additions !== undefined && (
-              <Typography
-                aria-label={`${entry.change.additions} added, ${entry.change.deletions ?? 0} removed`}
-                variant="caption"
-                noWrap
+              <ListItemIcon
                 sx={{
-                  flexShrink: 0,
-                  ml: 1,
-                  fontFamily: "var(--cowboy-font-mono)",
+                  minWidth: 28,
+                  color: isReviewed ? "success.main" : "text.secondary",
+                  "& svg": { fontSize: "1.125rem" },
                 }}
               >
-                <Box component="span" sx={{ color: "success.main" }}>
-                  {`+${entry.change.additions}`}
-                </Box>
-                {" "}
-                <Box component="span" sx={{ color: "error.main" }}>
-                  {`−${entry.change.deletions ?? 0}`}
-                </Box>
+                {isReviewed
+                  ? <CheckCircleOutline fontSize="small" />
+                  : <ChangeIcon status={entry.change.status} />}
+              </ListItemIcon>
+              <ListItemText
+                primary={node.name}
+                primaryTypographyProps={{
+                  noWrap: true,
+                  fontFamily: "var(--cowboy-font-mono)",
+                  fontSize: "0.8125rem",
+                }}
+                sx={{ my: 0 }}
+              />
+              {entry.change.additions !== undefined && (
+                <Typography
+                  aria-label={`${entry.change.additions} added, ${
+                    entry.change.deletions ?? 0
+                  } removed`}
+                  variant="caption"
+                  noWrap
+                  sx={{
+                    flexShrink: 0,
+                    ml: 1,
+                    fontFamily: "var(--cowboy-font-mono)",
+                  }}
+                >
+                  <Box component="span" sx={{ color: "success.main" }}>
+                    {`+${entry.change.additions}`}
+                  </Box>{" "}
+                  <Box component="span" sx={{ color: "error.main" }}>
+                    {`−${entry.change.deletions ?? 0}`}
+                  </Box>
+                </Typography>
+              )}
+              <Typography
+                aria-label={entry.change.status}
+                variant="caption"
+                fontWeight={700}
+                color={entry.change.status === "conflicted"
+                  ? "error.main"
+                  : "text.secondary"}
+                sx={{ ml: 1, fontFamily: "var(--cowboy-font-mono)" }}
+              >
+                {statusLabel[entry.change.status]}
               </Typography>
+            </ListItemButton>
+            {onPreview && isMarkdownReviewPath(entry.change.path) &&
+              entry.change.status !== "deleted" && (
+              <IconButton
+                aria-label={`Preview current file ${entry.change.path}`}
+                onClick={() => onPreview(entry.change.path)}
+              >
+                <VisibilityOutlined fontSize="small" />
+              </IconButton>
             )}
-            <Typography
-              aria-label={entry.change.status}
-              variant="caption"
-              fontWeight={700}
-              color={entry.change.status === "conflicted"
-                ? "error.main"
-                : "text.secondary"}
-              sx={{ ml: 1, fontFamily: "var(--cowboy-font-mono)" }}
-            >
-              {statusLabel[entry.change.status]}
-            </Typography>
-          </ListItemButton>
+          </Stack>
         );
       })}
     </>
@@ -239,12 +261,14 @@ export function ReviewChanges({
   onBrowseFiles,
   linkedSession,
   compact = false,
+  documentsOnly = false,
+  onPreview,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
-  comparison?: string | null;
+  comparison?: string | null | undefined;
   /** The session's stored choice; `undefined` follows the repository. */
   preferredComparison?: string | null | undefined;
   target?: GitChangeTarget | undefined;
@@ -260,6 +284,8 @@ export function ReviewChanges({
   /** A linked session's worktree, for a session with nothing of its own. */
   linkedSession?: { title: string; onOpen: () => void } | undefined;
   compact?: boolean;
+  documentsOnly?: boolean;
+  onPreview?: ((path: string) => void) | undefined;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
@@ -292,8 +318,17 @@ export function ReviewChanges({
     ? snapshot?.result.comparisons ?? []
     : [];
   const sections = useMemo(
-    () => groupGitChanges(changes, comparison ?? undefined),
-    [changes, comparison],
+    () =>
+      groupGitChanges(
+        documentsOnly
+          ? changes.filter((change) =>
+            isMarkdownReviewPath(change.path) ||
+            !!change.oldPath && isMarkdownReviewPath(change.oldPath)
+          )
+          : changes,
+        comparison ?? undefined,
+      ),
+    [changes, comparison, documentsOnly],
   );
   const queue = useMemo(() => reviewQueue(sections), [sections]);
   const isUnread = useCallback(
@@ -420,7 +455,9 @@ export function ReviewChanges({
       await load();
     } catch (reason) {
       setFetchError(
-        reason instanceof Error ? reason.message : "Could not fetch this branch",
+        reason instanceof Error
+          ? reason.message
+          : "Could not fetch this branch",
       );
     }
   }, [comparison, load, onComparisonResolved, sessionId]);
@@ -560,9 +597,7 @@ export function ReviewChanges({
             variant={unreadOnly ? "filled" : "outlined"}
             color={unreadOnly ? "primary" : "default"}
             aria-pressed={unreadOnly}
-            label={unreadCount === 0
-              ? "All viewed"
-              : `${unreadCount} unread`}
+            label={unreadCount === 0 ? "All viewed" : `${unreadCount} unread`}
             onClick={() => setUnreadOnly((current) => !current)}
           />
         )}
@@ -637,12 +672,14 @@ export function ReviewChanges({
               Git changes are unavailable
             </Alert>
           )
-          : changes.length === 0
+          : queue.length === 0
           ? (
             <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
               <DescriptionOutlined color="disabled" />
               <Typography color="text.secondary">
-                {comparison
+                {documentsOnly
+                  ? "No Markdown changes in this comparison"
+                  : comparison
                   ? "No changes from this branch"
                   : "Working tree is clean"}
               </Typography>
@@ -686,24 +723,26 @@ export function ReviewChanges({
             <Stack spacing={0.5}>
               {visibleSections.map((section) => (
                 <Box component="section" key={section.kind}>
-                  {visibleSections.length > 1 && <Stack
-                    direction="row"
-                    alignItems="center"
-                    sx={{ px: 1, minHeight: 28 }}
-                  >
-                    <Typography
-                      variant="overline"
-                      color={section.kind === "conflicts"
-                        ? "error.main"
-                        : "text.secondary"}
-                      sx={{ flex: 1, letterSpacing: "0.08em" }}
+                  {visibleSections.length > 1 && (
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      sx={{ px: 1, minHeight: 28 }}
                     >
-                      {section.label}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {sectionCounts.get(section.kind)}
-                    </Typography>
-                  </Stack>}
+                      <Typography
+                        variant="overline"
+                        color={section.kind === "conflicts"
+                          ? "error.main"
+                          : "text.secondary"}
+                        sx={{ flex: 1, letterSpacing: "0.08em" }}
+                      >
+                        {section.label}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {sectionCounts.get(section.kind)}
+                      </Typography>
+                    </Stack>
+                  )}
                   <List
                     disablePadding
                     sx={{
@@ -726,6 +765,7 @@ export function ReviewChanges({
                       onOpenDiff={onOpenDiff}
                       queue={queue}
                       reviewed={reviewed}
+                      onPreview={onPreview}
                     />
                   </List>
                 </Box>

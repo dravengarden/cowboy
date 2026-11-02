@@ -37,6 +37,7 @@ import {
 import { useStoreSelector } from "../store";
 import { desktopLeaderSequence, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
 import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "../mobile/appPagerMotion";
+import { useReviewOpenRequest } from "../useReviewOpenRequest";
 import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
 
 const ReviewApp = lazy(async () => {
@@ -234,6 +235,7 @@ export function DesktopWorkspace({
   // Review takes the Conversation pane and leaves the transcript mounted, so
   // returning keeps its reading position; the Prompt stays beside the code.
   const [reviewSession, setReviewSession] = useState<string>();
+  useReviewOpenRequest(sessionId, () => setReviewSession(sessionId));
   const reviewOpen = reviewSession === sessionId;
   const toggleReviewCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleReview",

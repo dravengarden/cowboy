@@ -115,6 +115,8 @@ import type { PullSummary } from "../../extensions/api";
 import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
+import { ReviewChanges } from "./ReviewChanges";
+import { useReviewOpenRequest } from "../../useReviewOpenRequest";
 import { ReviewOutline } from "./ReviewOutline";
 import { ReviewNavigation } from "./ReviewNavigation";
 import { type ReviewBufferMode, reviewBufferMode } from "./ownedReviewBuffer";
@@ -2214,6 +2216,11 @@ export function ReviewApp({
       kind?: "Worktree" | "Project code" | "Workspace";
     } | undefined
   >();
+  useReviewOpenRequest(currentSession?.id, () => {
+    if (!currentSession) return;
+    setProjectCodeContext(undefined);
+    setReadingDefault({ owner: currentSession.id, value: `session::${currentSession.id}` });
+  });
   // A context override belongs to the session in which it was selected. Never
   // issue even one read for that project under a newly selected session.
   const explicitProjectContext = selectedProjectContext?.ownerSessionId === (boundWorkspace?.sessionId ?? null)
@@ -2622,6 +2629,7 @@ export function ReviewApp({
     }
     setMarkdownPreview(isMarkdownReviewPath(path));
     const line = syncedReviewRef.current.positions?.[path]?.line;
+    setCloseRequest((value) => value + 1);
     setSourceTarget((current) =>
       current?.path === path ? current : {
         kind: "source",
@@ -2632,7 +2640,7 @@ export function ReviewApp({
         }),
       }
     );
-  }, [syncedReview.active, workspace?.sessionId]);
+  }, [syncedReview.active, syncedReview.open_revision, workspace?.sessionId]);
 
   const openSource = (
     path: string,
@@ -3395,6 +3403,20 @@ export function ReviewApp({
             contextLabel={contextLabel}
             embedded={navigationInline}
             actionsContainer={inlineActionsContainer}
+            documentChanges={<ReviewChanges
+              sessionId={workspace?.sessionId}
+              documentsOnly
+              compact
+              onPreview={openSource}
+              onOpenDiff={openDiff}
+              reviewed={reviewedMarks}
+              onRevision={adoptManifestRevision}
+              comparison={gitComparison}
+              preferredComparison={preferredGitComparison}
+              onComparisonChange={changeGitComparison}
+              onComparisonResolved={adoptGitComparison}
+              refreshToken={dataRevision}
+            />}
           />
         )
         : (

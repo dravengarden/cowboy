@@ -1,6 +1,63 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[test]
+fn review_open_uses_owned_sync_tabs_and_original_operation() {
+    let hub = crate::core::Hub::new();
+    fixture(&hub, "own", Some("owner"), false);
+    let input = json!({"session_id":"own","path":"docs/design.md"});
+    let command = command_value("sessions.review_open", &input, "open-doc").unwrap();
+    assert_eq!(
+        command,
+        json!({"type":"sync","state":"mobile-review:own","name":"open","args":{"path":"docs/design.md","reveal":true},"id":"open-doc"})
+    );
+    for _ in 0..2 {
+        hub.sync_apply(
+            "mobile-review:own",
+            "open-doc".into(),
+            "open",
+            &command["args"],
+        )
+        .unwrap();
+    }
+    let state = hub.sync_value("mobile-review:own");
+    assert_eq!(state["active"], "docs/design.md");
+    assert_eq!(state["mode"], "files");
+    assert_eq!(state["tabs"].as_array().unwrap().len(), 1);
+    assert_eq!(state["open_revision"], 1);
+    assert_eq!(state["reveal_revision"], 1);
+    hub.sync_apply(
+        "mobile-review:own",
+        "reopen-doc".into(),
+        "open",
+        &command["args"],
+    )
+    .unwrap();
+    assert_eq!(hub.sync_value("mobile-review:own")["reveal_revision"], 2);
+    for path in ["../secret", "/etc/passwd", "docs/../../secret"] {
+        assert!(
+            hub.sync_apply(
+                "mobile-review:own",
+                format!("invalid-{path}"),
+                "open",
+                &json!({"path":path})
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(
+        hub.sync_value("mobile-review:own")["active"],
+        "docs/design.md"
+    );
+    for input in [
+        json!({"path":"README.md"}),
+        json!({"session_id":"own"}),
+        json!({"session_id":"own","path":"README.md","state":"foreign"}),
+    ] {
+        assert!(command_value("sessions.review_open", &input, "bad").is_err());
+    }
+}
+
 #[tokio::test]
 async fn slow_admitted_writer_survives_the_short_submission_reply() {
     let (release, blocked) = tokio::sync::oneshot::channel::<()>();
@@ -187,6 +244,10 @@ fn sync_and_direct_commands_cannot_target_foreign_system_or_missing_sessions() {
     fixture(&hub, "system", Some("owner"), true);
     for id in ["own", "foreign", "unowned", "system", "missing"] {
         for (name, input) in [
+            (
+                "sessions.review_open",
+                json!({"session_id":id,"path":"docs/design.md"}),
+            ),
             ("sessions.rename", json!({"session_id":id,"title":"x"})),
             (
                 "drafts.move",

@@ -15,6 +15,7 @@ macro_rules! operations {
 }
 
 operations! {
+    "sessions.review_open", true, "{session_id:string,path:string}; select a worktree-relative file in this session's Cowboy Zed Review using the existing synchronized tabs. Markdown opens as rendered preview; other files use their normal viewer. Does not switch the user's active session, grant filesystem access, or start an agent. accepted means navigation state saved, NOT proof a browser displayed it; inspect sync.read mobile-review:<session>. Offline clients adopt it when they next open this session. Use native Git to identify changed paths and sync.read for Review's comparison";
     "operations.receipt", false, "{operation:string}; full durable result for this parent; select/paginate large results";
     "configuration.service", false, "{}; persisted Service file revision/values; configuration.read('service') gives effective values";
     "configuration.service_set", true, "{expected_revision:string,changes:Record<string,unknown|null>}; owner role; dotted keys from configuration.schema('service'); null restores default; live fields apply, restart fields await restart";
@@ -204,7 +205,7 @@ fn sync_mutations() -> Value {
             "setDirectory":"{directory:string|null}|{inherit:true}; prefer preferences.update for revision-checked defaults",
             "setRemoteReview":"{binding:null|{plugin_id:string,view:string,host:string,owner:string,repository:string,repository_id:string,number:string}}",
             "selectRemoteReview":"{selected:boolean}",
-            "open":"{path:string}", "close":"{path:string}", "activate":"{path:string|null}",
+            "open":"{path:string,reveal?:boolean}; reveal requests the active session's Review surface without changing the active session", "close":"{path:string}", "activate":"{path:string|null}",
             "reorder":"{paths:string[]}", "setPinned":"{path:string,pinned:boolean}",
             "setMode":"{mode:'files'|'git'}", "setComparison":"{comparison:string|null}: '' uncommitted, a refs/... branch through the working tree, committed:refs/... stopping at HEAD, null follows the repository default",
             "bind":"{context:string}: show this code context in the session's Review, as session::<id>, workspace::<machine>::<id> (projects.workspaces), or worktree::<machine>::<workspace-id>::<hex of the absolute path> for a task worktree of that registered repository no session owns (Hawk-local Machines only); use when work spans repositories the session's own worktree does not hold. Grants no file access",

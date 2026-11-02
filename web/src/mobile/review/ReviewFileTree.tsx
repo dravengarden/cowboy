@@ -12,6 +12,7 @@ import {
 import {
   Alert,
   Box,
+  Button,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -23,7 +24,13 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
@@ -213,6 +220,7 @@ export function ReviewFileTree({
   contextLabel = "Worktree",
   embedded = false,
   actionsContainer,
+  documentChanges,
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
@@ -223,7 +231,9 @@ export function ReviewFileTree({
   contextLabel?: string;
   embedded?: boolean;
   actionsContainer?: HTMLElement | null;
+  documentChanges?: ReactNode;
 }): React.JSX.Element {
+  const [showDocuments, setShowDocuments] = useState(false);
   const [root, setRoot] = useState<DirectoryPage>({
     apiVersion: 1,
     path: "",
@@ -673,145 +683,160 @@ export function ReviewFileTree({
           </Typography>
         </Box>
       </Stack>
-      <TextField
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Find a file"
-        aria-label="Find a file"
-        size="small"
-        fullWidth
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search fontSize="small" />
-              </InputAdornment>
-            ),
-            endAdornment: query
-              ? (
-                <InputAdornment position="end">
-                  <IconButton
-                    size="small"
-                    aria-label="Clear file search"
-                    onClick={() => setQuery("")}
-                  >
-                    <Close fontSize="small" />
-                  </IconButton>
-                </InputAdornment>
-              )
-              : undefined,
-          },
-        }}
-        sx={{ px: 1.5, pb: 1.25 }}
-      />
-      {root.truncated && (
-        <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
-          Root folder limited to 200 entries
-        </Alert>
+      {documentChanges && (
+        <Button
+          aria-pressed={showDocuments}
+          onClick={() => setShowDocuments((value) => !value)}
+          sx={{ mx: 1.5, mb: 1 }}
+        >
+          {showDocuments ? "Browse all files" : "Changed documents"}
+        </Button>
       )}
-      <Box
-        ref={treeScrollerRef}
-        data-mobile-overflow-layer="true"
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          px: 0.75,
-          pb: embedded ? 2 : "calc(80px + env(safe-area-inset-bottom, 0px))",
-          ...mobileNativeYScrollSx,
-        }}
-      >
-        {query.trim()
-          ? searching
-            ? (
-              <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
-                <CircularProgress size={24} />
-              </Box>
-            )
-            : searchFailed
-            ? <Alert severity="error">File search is unavailable</Alert>
-            : searchResults.length === 0
-            ? (
-              <Typography
-                color="text.secondary"
-                textAlign="center"
-                sx={{ pt: 6 }}
-              >
-                No matching files
-              </Typography>
-            )
-            : (
-              <List disablePadding>
-                {searchResults.map((path) => {
-                  const split = path.lastIndexOf("/");
-                  return (
-                    <ListItemButton
-                      key={path}
-                      onClick={() => onOpenFile(path)}
-                      sx={{ minHeight: 48, borderRadius: 2 }}
-                    >
-                      <ListItemIcon
-                        sx={{ minWidth: 34, color: "text.secondary" }}
+      {showDocuments ? documentChanges : (
+        <>
+          <TextField
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Find a file"
+            aria-label="Find a file"
+            size="small"
+            fullWidth
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: query
+                  ? (
+                    <InputAdornment position="end">
+                      <IconButton
+                        size="small"
+                        aria-label="Clear file search"
+                        onClick={() => setQuery("")}
                       >
-                        <DescriptionOutlined fontSize="small" />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={split >= 0 ? path.slice(split + 1) : path}
-                        secondary={split >= 0
-                          ? path.slice(0, split)
-                          : undefined}
-                        primaryTypographyProps={{
-                          noWrap: true,
-                          fontFamily: "var(--cowboy-font-mono)",
-                          fontSize: "0.875rem",
-                        }}
-                        secondaryTypographyProps={{ noWrap: true }}
-                      />
-                    </ListItemButton>
-                  );
-                })}
-              </List>
-            )
-          : loading
-          ? (
-            <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
-              <CircularProgress size={24} />
-            </Box>
-          )
-          : error
-          ? (
-            <Alert
-              severity="error"
-              action={
-                <NetworkIconButton
-                  size="small"
-                  aria-label="Retry"
-                  networkAction={() => load(true)}
-                >
-                  <Refresh fontSize="small" />
-                </NetworkIconButton>
-              }
-            >
-              Could not load the worktree
+                        <Close fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                  : undefined,
+              },
+            }}
+            sx={{ px: 1.5, pb: 1.25 }}
+          />
+          {root.truncated && (
+            <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
+              Root folder limited to 200 entries
             </Alert>
-          )
-          : (
-            <List disablePadding>
-              {sessionId && (
-                <DirectoryRows
-                  entries={root.entries}
-                  onOpenFile={onOpenFile}
-                  expanded={expanded}
-                  pages={pages}
-                  loading={directoryLoading}
-                  failed={directoryFailed}
-                  onToggleDirectory={toggleDirectory}
-                  onRetryDirectory={retryDirectory}
-                  currentPath={currentPath}
-                />
-              )}
-            </List>
           )}
-      </Box>
+          <Box
+            ref={treeScrollerRef}
+            data-mobile-overflow-layer="true"
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              px: 0.75,
+              pb: embedded
+                ? 2
+                : "calc(80px + env(safe-area-inset-bottom, 0px))",
+              ...mobileNativeYScrollSx,
+            }}
+          >
+            {query.trim()
+              ? searching
+                ? (
+                  <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
+                    <CircularProgress size={24} />
+                  </Box>
+                )
+                : searchFailed
+                ? <Alert severity="error">File search is unavailable</Alert>
+                : searchResults.length === 0
+                ? (
+                  <Typography
+                    color="text.secondary"
+                    textAlign="center"
+                    sx={{ pt: 6 }}
+                  >
+                    No matching files
+                  </Typography>
+                )
+                : (
+                  <List disablePadding>
+                    {searchResults.map((path) => {
+                      const split = path.lastIndexOf("/");
+                      return (
+                        <ListItemButton
+                          key={path}
+                          onClick={() => onOpenFile(path)}
+                          sx={{ minHeight: 48, borderRadius: 2 }}
+                        >
+                          <ListItemIcon
+                            sx={{ minWidth: 34, color: "text.secondary" }}
+                          >
+                            <DescriptionOutlined fontSize="small" />
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={split >= 0 ? path.slice(split + 1) : path}
+                            secondary={split >= 0
+                              ? path.slice(0, split)
+                              : undefined}
+                            primaryTypographyProps={{
+                              noWrap: true,
+                              fontFamily: "var(--cowboy-font-mono)",
+                              fontSize: "0.875rem",
+                            }}
+                            secondaryTypographyProps={{ noWrap: true }}
+                          />
+                        </ListItemButton>
+                      );
+                    })}
+                  </List>
+                )
+              : loading
+              ? (
+                <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              )
+              : error
+              ? (
+                <Alert
+                  severity="error"
+                  action={
+                    <NetworkIconButton
+                      size="small"
+                      aria-label="Retry"
+                      networkAction={() => load(true)}
+                    >
+                      <Refresh fontSize="small" />
+                    </NetworkIconButton>
+                  }
+                >
+                  Could not load the worktree
+                </Alert>
+              )
+              : (
+                <List disablePadding>
+                  {sessionId && (
+                    <DirectoryRows
+                      entries={root.entries}
+                      onOpenFile={onOpenFile}
+                      expanded={expanded}
+                      pages={pages}
+                      loading={directoryLoading}
+                      failed={directoryFailed}
+                      onToggleDirectory={toggleDirectory}
+                      onRetryDirectory={retryDirectory}
+                      currentPath={currentPath}
+                    />
+                  )}
+                </List>
+              )}
+          </Box>
+        </>
+      )}
       <ReviewNavigationActions
         embedded={embedded}
         container={actionsContainer}
