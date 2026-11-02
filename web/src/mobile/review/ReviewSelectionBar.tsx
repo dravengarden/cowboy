@@ -1,7 +1,7 @@
-import { Close, HelpOutline, SendOutlined } from "@mui/icons-material";
+import { Close } from "@mui/icons-material";
 import { Button, IconButton, Stack, Typography } from "@mui/material";
 import { useState } from "react";
-import type { ReviewLineSelection } from "./reviewLineSelection";
+import type { ReviewLineSelection, ReviewQuestion } from "./reviewLineSelection";
 
 /** What can be done with the selected lines, where a thumb can reach it. */
 export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {
@@ -9,20 +9,20 @@ export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {
   onClear: () => void;
   onSend: () => void;
   /** Ask a fork of the Agent; absent where a session cannot be forked. */
-  onExplain?: (() => Promise<void>) | undefined;
+  onExplain?: ((kind: ReviewQuestion) => Promise<void>) | undefined;
 }): React.JSX.Element {
   const count = selection.to - selection.from + 1;
-  const [explaining, setExplaining] = useState(false);
+  const [asking, setAsking] = useState<ReviewQuestion>();
   const [error, setError] = useState<string>();
-  const explain = async (): Promise<void> => {
-    setExplaining(true);
+  const ask = async (kind: ReviewQuestion): Promise<void> => {
+    setAsking(kind);
     setError(undefined);
     try {
-      await onExplain?.();
+      await onExplain?.(kind);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not start Explain");
     } finally {
-      setExplaining(false);
+      setAsking(undefined);
     }
   };
   return (
@@ -64,24 +64,33 @@ export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {
         {count === 1 ? "1 line" : `${count} lines`}
       </Typography>
       {onExplain && (
-        <Button
-          data-review-explain
-          size="small"
-          startIcon={<HelpOutline />}
-          disabled={explaining}
-          onClick={() => void explain()}
-        >
-          {explaining ? "Starting…" : "Explain"}
-        </Button>
+        <>
+          <Button
+            data-review-explain
+            size="small"
+            disabled={asking !== undefined}
+            onClick={() => void ask("explain")}
+          >
+            {asking === "explain" ? "Starting…" : "Explain"}
+          </Button>
+          <Button
+            data-review-ask-review
+            size="small"
+            disabled={asking !== undefined}
+            onClick={() => void ask("review")}
+          >
+            {asking === "review" ? "Starting…" : "Review"}
+          </Button>
+        </>
       )}
       <Button
         size="small"
         variant="contained"
         disableElevation
-        startIcon={<SendOutlined />}
+        aria-label="Send to Agent"
         onClick={onSend}
       >
-        Send to Agent
+        Send
       </Button>
     </Stack>
     </>

@@ -525,6 +525,7 @@ async function checkReviewCompareAndSelection(
     check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
 
     await until(() => !!body.querySelector("[data-review-explain]"), "A forkable session should offer Explain");
+    check(body.querySelector("[data-review-ask-review]"), "Review should sit beside Explain");
     const beforeExplain = fixture.requests.length;
     await press(body.querySelector("[data-review-explain]"), "Explain");
     await until(() => opened.includes("agent"), "Explain should open its fork");
@@ -538,7 +539,7 @@ async function checkReviewCompareAndSelection(
     await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5 again");
     await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6 again");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Selection should work again");
-    await press(row("Send to Agent"), "Send to Agent");
+    await press(body.querySelector('[aria-label="Send to Agent"]'), "Send to Agent");
     await until(() => opened.includes("agent"), "Sending should return to the Agent");
     const draft = getDraft("worktree").text;
     check(

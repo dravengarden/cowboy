@@ -151,6 +151,7 @@ import { ReviewSelectionBar } from "./ReviewSelectionBar";
 import {
   nextReviewLineSelection,
   type ReviewLineSelection,
+  type ReviewQuestion,
   reviewExplainPrompt,
   reviewExplainSessions,
   reviewExplainTitle,
@@ -515,7 +516,7 @@ export function DocumentView({
   /** Hand selected lines to the Agent's Composer; absent without an Agent. */
   onSendSelection?: ((message: string) => void) | undefined;
   /** Ask a fork of the Agent about selected lines; absent where none exists. */
-  onExplainSelection?: ((path: string, message: string) => Promise<void>) | undefined;
+  onExplainSelection?: ((path: string, message: string, kind: ReviewQuestion) => Promise<void>) | undefined;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
@@ -2066,8 +2067,8 @@ export function DocumentView({
               setLineSelection(undefined);
             }}
             onExplain={onExplainSelection
-              ? async () => {
-                await onExplainSelection(target.path, selectionMessage(lineSelection));
+              ? async (kind) => {
+                await onExplainSelection(target.path, selectionMessage(lineSelection), kind);
                 setLineSelection(undefined);
               }
               : undefined}
@@ -2393,7 +2394,7 @@ export function ReviewApp({
   const explainRoot = projectCodeContext?.cwd;
   const explainSelection = useMemo(() => {
     if (!explainSource) return undefined;
-    return async (path: string, message: string): Promise<void> => {
+    return async (path: string, message: string, kind: ReviewQuestion): Promise<void> => {
       // One Explain per session: follow-ups stay in it until the Agent moves
       // on, and then a new fork takes over and the old one goes to Trash.
       const earlier = reviewExplainSessions(sessions, explainSource);
@@ -2406,7 +2407,7 @@ export function ReviewApp({
           void trashItems({ sessions: earlier.map((session) => session.id) }).catch(() => undefined);
         }
       }
-      const prompt = reviewExplainPrompt(message, explainRoot);
+      const prompt = reviewExplainPrompt(message, explainRoot, kind);
       if (!send({ type: "submit", session_id: fork.session_id, text: prompt, cmid: `explain-${crypto.randomUUID()}` })) {
         // Nothing is lost offline: the question waits in the fork's Composer.
         appendDraftText(fork.session_id, prompt);
