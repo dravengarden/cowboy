@@ -795,10 +795,8 @@ impl PluginManifest {
         validate_id(&self.id, "plugin id")?;
         validate_version(&self.version, "plugin version")?;
         validate_version(&self.component_release, "component release")?;
-        ensure!(
-            !self.publisher.trim().is_empty(),
-            "plugin publisher is empty"
-        );
+        // Names the trusted key file, so a path here would choose the trust root.
+        validate_id(&self.publisher, "plugin publisher")?;
         ensure!(
             !self.entrypoint.is_empty()
                 && !self.entrypoint.starts_with('/')
@@ -1676,6 +1674,27 @@ fn validate_version(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_publisher_cannot_name_a_key_outside_the_trust_root() {
+        let manifest = |publisher: &str| PluginManifest {
+            schema_version: 1,
+            id: "zed".to_owned(),
+            version: "1.0.0".to_owned(),
+            component_release: "1.0.0".to_owned(),
+            publisher: publisher.to_owned(),
+            kind: PluginKind::CodeIntelligence,
+            entrypoint: "adapter/Cargo.toml".to_owned(),
+            components: vec![ComponentDependency {
+                id: "cowboy.plugin-contract".to_owned(),
+                version: "1.0.0".to_owned(),
+            }],
+        };
+        assert!(manifest("dravengarden-cardea-v2").validate().is_ok());
+        for publisher in ["../../tmp/attacker", "/tmp/attacker", "a/b", "a.b", "", " "] {
+            assert!(manifest(publisher).validate().is_err(), "{publisher:?}");
+        }
+    }
 
     #[test]
     fn manifest_rejects_ranges_and_duplicate_components() {
