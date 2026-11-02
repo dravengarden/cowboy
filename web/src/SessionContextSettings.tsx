@@ -98,6 +98,10 @@ export function SessionContextSettings(
     void reload();
     setOpen(false);
   };
+  // The injection ends with its turn, without a context announcement.
+  useEffect(() => {
+    if (open) void reload();
+  }, [open, reload, session.status]);
   const stagedAgent = Boolean(data?.next_agent) &&
     data?.revision !== data?.applied_revision;
   return (
@@ -324,10 +328,12 @@ function NewSessionForm(
     forkAvailable: fork !== null && !preset && inheritSettings,
   });
   // The server refuses a new agent while prompts wait here, so the form says
-  // so first and follows the live queue instead of answering a press with an
-  // error. An injected prompt still running is only known to the server.
+  // so first and follows the live queue and status instead of answering a
+  // press with an error.
   const queued = useStoreSelector((state) => state.queues.get(session.id)?.length ?? 0);
   const waitForTurn = forkMode === "fork" && fork === "busy";
+  const submittedRunning = observed.injection_pending === true && session.status === "busy";
+  const replaceWaits = queued > 0 || submittedRunning;
   const forkWaits = waitForTurn || (forkMode === "fork" && queued > 0);
   // One operation per distinct request: a retry returns the same copy, and
   // changing any choice asks for a new one.
@@ -491,6 +497,11 @@ function NewSessionForm(
           Remove a linked session so this one can be linked.
         </Alert>
       )}
+      {submittedRunning && queued === 0 && (
+        <Typography variant="caption" color="text.secondary" data-new-session-wait>
+          Replace is available once the submitted message finishes.
+        </Typography>
+      )}
       {queued > 0 && (
         <Typography variant="caption" color="text.secondary" data-new-session-wait>
           {allowFork && forkMode === "fork" && samePlacement ? "Replace and Fork are" : "Replace is"}{" "}
@@ -503,7 +514,7 @@ function NewSessionForm(
         <Button
           variant="contained"
           data-new-session-continue-run
-          disabled={locked || !ready || full || queued > 0}
+          disabled={locked || !ready || full || replaceWaits}
           onClick={() => void continueWork()}
         >
           {busy ? "Saving…" : "Replace this session"}
