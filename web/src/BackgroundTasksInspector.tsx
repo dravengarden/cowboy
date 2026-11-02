@@ -287,7 +287,7 @@ function TaskDetail({
                 onClick={(): void => onOpenConversation(task)}
                 sx={{ textTransform: "none" }}
               >
-                Conversation
+                Back to transcript
               </Button>
             </Box>
           )}
@@ -394,6 +394,7 @@ export function BackgroundTasksInspector({
   const selected = selectedKey ? byKey.get(selectedKey) ?? lastSeen.current.get(selectedKey) ?? null : null;
   const [level, setLevel] = useState<MobileLevel>("list");
   const depth = useRef(0);
+  const consumedDeepLink = useRef<string | null>(null);
 
   // `␣G` and deep links open this session's inspector.
   useEffect(() => {
@@ -406,11 +407,19 @@ export function BackgroundTasksInspector({
     return () => globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
   }, [sessionId]);
   useEffect(() => {
+    // A task hash is an initial navigation intent, not an instruction to
+    // reopen on every task refresh. Close renders before history.go finishes.
+    if (consumedDeepLink.current === sessionId) return;
+    if (open) {
+      consumedDeepLink.current = sessionId;
+      return;
+    }
     const key = taskKeyFromHash(globalThis.location?.hash ?? "");
     if (key && byKey.has(key) && inspectorState().sessionId === null) {
+      consumedDeepLink.current = sessionId;
       openBackgroundTask(sessionId, key, "link");
     }
-  }, [sessionId, byKey]);
+  }, [sessionId, byKey, open]);
 
   // Opening details acknowledges an unseen failure. A notification's link only
   // opens them: reaching a row is not seeing it, so it asks for an explicit
@@ -421,11 +430,12 @@ export function BackgroundTasksInspector({
     }
   }, [open, selected, desktop, level, sessionId, state.origin]);
 
-  // Mobile: list -> detail -> conversation, one history entry per level, so
+  // Mobile calls open their transcript first, with details one step deeper.
+  // Other sources retain their own detail view. One entry per level, so
   // the system Back walks up a level and finally returns to the transcript.
   useLayoutEffect(() => {
     if (!open || desktop) return;
-    setLevel(state.key ? "detail" : "list");
+    setLevel(state.key ? (selected?.source === "call" ? "conversation" : "detail") : "list");
     const entries = state.key ? 2 : 1;
     if (globalThis.history) {
       globalThis.history.pushState({ cowboyTasks: 1 }, "");
@@ -447,12 +457,14 @@ export function BackgroundTasksInspector({
         setLevel("list");
         selectBackgroundTask(null);
       } else if (target === 2) {
+        setLevel(selected?.source === "call" ? "conversation" : "detail");
+      } else if (target === 3) {
         setLevel("detail");
       }
     };
     globalThis.addEventListener("popstate", onPop);
     return () => globalThis.removeEventListener("popstate", onPop);
-  }, [open, desktop]);
+  }, [open, desktop, selected?.source]);
 
   if (!open) return null;
 
@@ -468,7 +480,7 @@ export function BackgroundTasksInspector({
   const select = (key: string): void => {
     selectBackgroundTask(key);
     if (!desktop) {
-      setLevel("detail");
+      setLevel(byKey.get(key)?.source === "call" ? "conversation" : "detail");
       globalThis.history?.pushState({ cowboyTasks: 2 }, "", taskHash(key));
       depth.current = 2;
     }
@@ -485,9 +497,7 @@ export function BackgroundTasksInspector({
       setActiveSessionId(callConversationId(task.call));
       return;
     }
-    setLevel("conversation");
-    globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(task.key));
-    depth.current = 3;
+    globalThis.history?.back();
   };
   const answerApproval = (): void => {
     close();
@@ -757,7 +767,33 @@ export function BackgroundTasksInspector({
             </Stack>
           )
           : level === "conversation" && selected.call
-          ? <CallConversation call={selected.call} desktop={false} onDetails={(): void => globalThis.history?.back()} />
+          ? (
+            <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ pb: 1, borderBottom: 1, borderColor: "divider" }}>
+                <TaskChip task={selected} />
+                <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 0 }}>
+                  {selected.subtitle}
+                </Typography>
+                <Button
+                  size="small"
+                  data-task-open-details
+                  onClick={(): void => {
+                    setLevel("detail");
+                    globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
+                    depth.current = 3;
+                  }}
+                  sx={{ minHeight: 44, textTransform: "none" }}
+                >
+                  Details
+                </Button>
+              </Stack>
+              <CallConversation call={selected.call} desktop={false} onDetails={(): void => {
+                setLevel("detail");
+                globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
+                depth.current = 3;
+              }} />
+            </Box>
+          )
           : detail}
       </Box>
     </Sheet>

@@ -399,7 +399,7 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     receiveCallApproval("s", null);
     passed.push("T10 expired approvals are not actionable");
 
-    // 7. T16 Mobile: bar -> list -> detail -> conversation, one history entry
+    // 7. T16 Mobile: bar -> list -> conversation -> detail, one history entry
     // per level; Back walks up and returns to the transcript at its scroll.
     scene(background, false);
     await settle();
@@ -416,13 +416,15 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
       "Back from the lead's details shows the list",
     );
     document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "a task opens its details");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "a call opens its transcript first");
     check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
-    document.querySelector<HTMLElement>("[data-task-open-conversation]")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "the call conversation opens");
+    check(document.querySelector("[data-call-transcript]"), "the full live transcript is mounted");
+    check(!document.querySelector("[data-task-diagnostics]"), "execution metadata does not displace the transcript");
+    document.querySelector<HTMLElement>("[data-task-open-details]")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "Back returns to details");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='list']"), "Back returns to the list");
     history.back();
@@ -441,7 +443,24 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
       document.querySelector("[data-diagnostic='reconciled_by']")?.textContent === "bootstrap",
       "Diagnostics name how the row was reconciled",
     );
-    closeBackgroundTasks();
+    // iOS can deliver history traversal after the close has rendered. Keep
+    // the task hash in place until then: it must not reopen the sheet.
+    const originalGo = history.go;
+    let pendingBack = 0;
+    history.go = (delta = 0): void => { pendingBack = delta; };
+    try {
+      document.querySelector<HTMLElement>("button[aria-label='Close']")!.click();
+      await settle();
+      scene({ ...background, byKey: new Map(background.byKey) }, false);
+      await settle();
+      check(inspector() === null, "Close stays closed while the old task hash awaits history traversal");
+    } finally {
+      history.go = originalGo;
+    }
+    if (pendingBack) {
+      history.go(pendingBack);
+      await settle();
+    }
     history.replaceState(history.state, "", location.pathname);
     await settle();
     passed.push("T16 deep links open details with diagnostics");
