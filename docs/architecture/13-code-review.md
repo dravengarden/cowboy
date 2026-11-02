@@ -349,9 +349,12 @@ has Cowboy MCP for other sessions; and its own worktree holds the source's
 uncommitted files, so nothing it does reaches the source. `latest_completed`
 forks from the newest finished turn, so asking does not wait for a running one.
 The selection goes as the fork's first message and the reader lands in that
-session to follow up. Each Explain is its own fork with its own worktree, and it
-stays in the sessions list until removed. A session that cannot fork does not
-offer it. See [session fork](../session-fork.md).
+session to follow up. A session keeps one Explain: while no later turn has
+finished, the next question goes to the same fork (`reuse`, checked by the
+Controller against the fork's recorded answer). After that the fork's code and
+conversation are behind, so a new one takes over and the old one moves to Trash,
+where it can be restored; one still answering refuses and goes with the next. A
+session that cannot fork does not offer it. See [session fork](../session-fork.md).
 
 Code Review owns only code-surface typography: its 12/14/16/18 px setting
 changes CodeMirror source and diff text without changing Agent or sheet text.

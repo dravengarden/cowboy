@@ -18,6 +18,10 @@ pub(in crate::server) struct ForkRequest {
     /// no idle source. Takes the place of `message_id`.
     #[serde(default)]
     pub latest_completed: bool,
+    /// With `latest_completed`: an earlier fork to return instead while it
+    /// still starts from that same answer, so follow-ups stay in one session.
+    #[serde(default)]
+    pub reuse: Option<String>,
     /// Live options (model, reasoning, …) the copy uses instead of the
     /// inherited ones; saved before its first launch.
     #[serde(default)]
@@ -109,6 +113,17 @@ fn admit_point(
     }
 }
 
+/// A fork still answers for its source while nothing has finished since it
+/// was taken. After that its copy of the code and the conversation are behind.
+fn reusable_fork(hub: &crate::core::Hub, source: &str, fork: &str, latest: &str) -> bool {
+    hub.session_fork(fork).is_some_and(|record| {
+        record.source_session_id == source
+            && record.message_id.as_deref() == Some(latest)
+            && record.state != ForkState::Refused
+    }) && hub.session_info(fork).is_some()
+        && !hub.session_is_trashed(fork)
+}
+
 async fn fork_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -150,12 +165,18 @@ async fn fork_session(
         .agent_session_id_for_resume(&id)
         .ok_or("This conversation has nothing to fork yet")?;
     if request.latest_completed {
-        request.message_id = Some(
-            state
-                .hub
-                .last_completed_answer_id(&id)
-                .ok_or("Wait for this agent's first answer before forking")?,
-        );
+        let latest = state
+            .hub
+            .last_completed_answer_id(&id)
+            .ok_or("Wait for this agent's first answer before forking")?;
+        if let Some(fork) = request
+            .reuse
+            .as_deref()
+            .filter(|fork| reusable_fork(&state.hub, &id, fork, &latest))
+        {
+            return Ok((fork.to_owned(), false));
+        }
+        request.message_id = Some(latest);
     }
     admit_point(&state.hub, &info, request.message_id.as_deref())?;
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
@@ -521,6 +542,42 @@ mod tests {
         let mut detached = info.meta;
         detached.workspace_id = None;
         assert!(placement(&detached).is_err());
+    }
+
+    #[test]
+    fn a_fork_is_reused_only_from_the_same_answer_of_its_own_source() {
+        let hub = Hub::new();
+        source(&hub);
+        let fork = |id: &str, source: &str, message: &str, state: ForkState| {
+            hub.create_local_session(
+                id.to_owned(),
+                "claude-code".to_owned(),
+                "/tmp".to_owned(),
+                "t".to_owned(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+            hub.stage_fork(
+                id,
+                &ForkRecord {
+                    source_session_id: source.to_owned(),
+                    source_agent_session_id: "thread".to_owned(),
+                    message_id: Some(message.to_owned()),
+                    point: None,
+                    operation: id.to_owned(),
+                    state,
+                },
+            );
+        };
+        fork("current", "source", "a1", ForkState::Forked);
+        fork("refused", "source", "a1", ForkState::Refused);
+        fork("foreign", "other", "a1", ForkState::Forked);
+
+        assert!(reusable_fork(&hub, "source", "current", "a1"));
+        assert!(!reusable_fork(&hub, "source", "current", "a2"), "behind");
+        assert!(!reusable_fork(&hub, "source", "refused", "a1"));
+        assert!(!reusable_fork(&hub, "source", "foreign", "a1"));
+        assert!(!reusable_fork(&hub, "source", "missing", "a1"));
     }
 
     #[test]

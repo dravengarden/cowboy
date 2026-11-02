@@ -69,6 +69,7 @@ import {
   mutateMobileReview as mutateReviewState,
   renameSession,
   send,
+  trashItems,
   notify,
   openSession,
   useMobileReviewState,
@@ -151,6 +152,7 @@ import {
   nextReviewLineSelection,
   type ReviewLineSelection,
   reviewExplainPrompt,
+  reviewExplainSessions,
   reviewExplainTitle,
   reviewSelectionMessage,
 } from "./reviewLineSelection";
@@ -2392,17 +2394,27 @@ export function ReviewApp({
   const explainSelection = useMemo(() => {
     if (!explainSource) return undefined;
     return async (path: string, message: string): Promise<void> => {
-      const fork = await forkSession(explainSource, { latestCompleted: true });
-      renameSession(fork.session_id, reviewExplainTitle(path));
+      // One Explain per session: follow-ups stay in it until the Agent moves
+      // on, and then a new fork takes over and the old one goes to Trash.
+      const earlier = reviewExplainSessions(sessions, explainSource);
+      const fork = await forkSession(explainSource, { latestCompleted: true, reuse: earlier.at(-1)?.id });
+      const reused = earlier.some((session) => session.id === fork.session_id);
+      if (!reused) {
+        renameSession(fork.session_id, reviewExplainTitle(path));
+        // An Explain still answering stays, and the next one clears it.
+        if (earlier.length > 0) {
+          void trashItems({ sessions: earlier.map((session) => session.id) }).catch(() => undefined);
+        }
+      }
       const prompt = reviewExplainPrompt(message, explainRoot);
-      if (!send({ type: "submit", session_id: fork.session_id, text: prompt, cmid: `explain-${fork.session_id}` })) {
+      if (!send({ type: "submit", session_id: fork.session_id, text: prompt, cmid: `explain-${crypto.randomUUID()}` })) {
         // Nothing is lost offline: the question waits in the fork's Composer.
         appendDraftText(fork.session_id, prompt);
       }
       requestPickSession(fork.session_id, fork.session ?? undefined);
       openMobileProduct("agent");
     };
-  }, [explainRoot, explainSource]);
+  }, [explainRoot, explainSource, sessions]);
   const preferredGitComparison = syncedReview.comparison === undefined
     ? undefined
     : syncedReview.comparison || null;

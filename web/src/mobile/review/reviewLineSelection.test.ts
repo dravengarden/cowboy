@@ -4,6 +4,7 @@ import {
   diffSelectionLines,
   nextReviewLineSelection,
   reviewExplainPrompt,
+  reviewExplainSessions,
   reviewExplainTitle,
   reviewSelectionMessage,
 } from "./reviewLineSelection.ts";
@@ -80,4 +81,17 @@ test("an Explain request carries the selection and says where it was read", () =
     "looking at /tasks/source",
   );
   assertEquals(reviewExplainTitle("src/review/app.ts"), "Explain · app.ts");
+});
+
+test("a session's Explain forks are found by source and title", () => {
+  const session = (id: string, title: string, forked_from?: string) =>
+    ({ id, title, ...(forked_from ? { forked_from } : {}) });
+  const found = reviewExplainSessions([
+    session("sess-20", "Explain · b.ts", "source"),
+    session("sess-3", "Explain · a.ts", "source"),
+    session("sess-4", "Explain · a.ts", "other"),
+    session("sess-5", "Long task (fork)", "source"),
+    session("sess-6", "Explain · c.ts"),
+  ], "source");
+  assertEquals(found.map((item) => item.id), ["sess-3", "sess-20"]);
 });

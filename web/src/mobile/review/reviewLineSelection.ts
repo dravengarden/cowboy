@@ -127,6 +127,19 @@ export function reviewExplainPrompt(
     `Do not change any files.${where}\n\n${selection}`;
 }
 
+const EXPLAIN_TITLE = "Explain · ";
+
 export function reviewExplainTitle(path: string): string {
-  return `Explain · ${path.split("/").at(-1)}`;
+  return `${EXPLAIN_TITLE}${path.split("/").at(-1)}`;
+}
+
+/** This session's Explain forks, oldest first. The list is the record. */
+export function reviewExplainSessions<
+  T extends { id: string; title: string; forked_from?: string | undefined },
+>(sessions: readonly T[], source: string): T[] {
+  return sessions
+    .filter((session) =>
+      session.forked_from === source && session.title.startsWith(EXPLAIN_TITLE)
+    )
+    .toSorted((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
 }

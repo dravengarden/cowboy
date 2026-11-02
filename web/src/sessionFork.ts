@@ -44,6 +44,8 @@ export async function forkSession(
     messageId?: string;
     /** The newest finished turn; needs no idle source. */
     latestCompleted?: boolean;
+    /** With `latestCompleted`, an earlier fork still current for that turn. */
+    reuse?: string | undefined;
     operation?: string;
     /** Live options (model, reasoning, …) the copy uses instead of the inherited ones. */
     config?: Record<string, string | boolean>;
@@ -59,6 +61,7 @@ export async function forkSession(
         operation: options.operation ?? operationId(),
         ...(options.messageId ? { message_id: options.messageId } : {}),
         ...(options.latestCompleted ? { latest_completed: true } : {}),
+        ...(options.reuse ? { reuse: options.reuse } : {}),
         ...(options.config && Object.keys(options.config).length > 0
           ? { config: options.config }
           : {}),
