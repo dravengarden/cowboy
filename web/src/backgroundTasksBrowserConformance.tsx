@@ -399,7 +399,7 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     receiveCallApproval("s", null);
     passed.push("T10 expired approvals are not actionable");
 
-    // 7. T16 Mobile: bar -> list -> detail -> conversation, one history entry
+    // 7. T16 Mobile: bar -> list -> conversation -> detail, one history entry
     // per level; Back walks up and returns to the transcript at its scroll.
     scene(background, false);
     await settle();
@@ -416,13 +416,15 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
       "Back from the lead's details shows the list",
     );
     document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "a task opens its details");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "a call opens its transcript first");
     check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
-    document.querySelector<HTMLElement>("[data-task-open-conversation]")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "the call conversation opens");
+    check(document.querySelector("[data-call-transcript]"), "the full live transcript is mounted");
+    check(!document.querySelector("[data-task-diagnostics]"), "execution metadata does not displace the transcript");
+    document.querySelector<HTMLElement>("[data-task-open-details]")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "Back returns to details");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='list']"), "Back returns to the list");
     history.back();
