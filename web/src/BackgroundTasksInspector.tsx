@@ -394,6 +394,7 @@ export function BackgroundTasksInspector({
   const selected = selectedKey ? byKey.get(selectedKey) ?? lastSeen.current.get(selectedKey) ?? null : null;
   const [level, setLevel] = useState<MobileLevel>("list");
   const depth = useRef(0);
+  const consumedDeepLink = useRef<string | null>(null);
 
   // `␣G` and deep links open this session's inspector.
   useEffect(() => {
@@ -406,11 +407,19 @@ export function BackgroundTasksInspector({
     return () => globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
   }, [sessionId]);
   useEffect(() => {
+    // A task hash is an initial navigation intent, not an instruction to
+    // reopen on every task refresh. Close renders before history.go finishes.
+    if (consumedDeepLink.current === sessionId) return;
+    if (open) {
+      consumedDeepLink.current = sessionId;
+      return;
+    }
     const key = taskKeyFromHash(globalThis.location?.hash ?? "");
     if (key && byKey.has(key) && inspectorState().sessionId === null) {
+      consumedDeepLink.current = sessionId;
       openBackgroundTask(sessionId, key, "link");
     }
-  }, [sessionId, byKey]);
+  }, [sessionId, byKey, open]);
 
   // Opening details acknowledges an unseen failure. A notification's link only
   // opens them: reaching a row is not seeing it, so it asks for an explicit

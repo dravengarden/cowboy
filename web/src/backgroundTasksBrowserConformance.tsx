@@ -443,7 +443,24 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
       document.querySelector("[data-diagnostic='reconciled_by']")?.textContent === "bootstrap",
       "Diagnostics name how the row was reconciled",
     );
-    closeBackgroundTasks();
+    // iOS can deliver history traversal after the close has rendered. Keep
+    // the task hash in place until then: it must not reopen the sheet.
+    const originalGo = history.go;
+    let pendingBack = 0;
+    history.go = (delta = 0): void => { pendingBack = delta; };
+    try {
+      document.querySelector<HTMLElement>("button[aria-label='Close']")!.click();
+      await settle();
+      scene({ ...background, byKey: new Map(background.byKey) }, false);
+      await settle();
+      check(inspector() === null, "Close stays closed while the old task hash awaits history traversal");
+    } finally {
+      history.go = originalGo;
+    }
+    if (pendingBack) {
+      history.go(pendingBack);
+      await settle();
+    }
     history.replaceState(history.state, "", location.pathname);
     await settle();
     passed.push("T16 deep links open details with diagnostics");
