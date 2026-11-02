@@ -655,6 +655,21 @@ impl PluginCatalog {
     }
 }
 
+/// The publisher comes from the unsigned manifest and selects the key that
+/// verifies its own release, so a path here would choose the trust root.
+fn trusted_publisher_key(trust_root: &Path, publisher: &str) -> Result<PathBuf> {
+    ensure!(
+        publisher.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        }),
+        "invalid plugin publisher"
+    );
+    Ok(trust_root.join(format!("{publisher}.pub")))
+}
+
 fn load_catalog_root(
     root: &Path,
     next: &mut BTreeMap<(String, String, String), CatalogArtifact>,
@@ -699,7 +714,7 @@ fn load_catalog_root(
         release
             .validate_bytes(&bytes)
             .with_context(|| format!("validating Plugin release {}", release_path.display()))?;
-        let key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
+        let key_path = trusted_publisher_key(&trust_root, &package.manifest.publisher)?;
         let public_key = fs::read_to_string(&key_path)
             .with_context(|| format!("reading trusted publisher {}", key_path.display()))?;
         ensure!(
@@ -998,4 +1013,25 @@ pub fn latest_unique_release_identity<'a>(
         }
     }
     (!ambiguous).then_some(latest).flatten()
+}
+
+#[cfg(test)]
+mod publisher_key_tests {
+    use super::trusted_publisher_key;
+    use std::path::Path;
+
+    #[test]
+    fn a_publisher_cannot_name_a_key_outside_the_trust_root() {
+        let root = Path::new("/catalog/trusted-publishers");
+        assert_eq!(
+            trusted_publisher_key(root, "dravengarden-cardea-v2").unwrap(),
+            root.join("dravengarden-cardea-v2.pub")
+        );
+        for publisher in ["../../tmp/attacker", "/tmp/attacker", "a/b", "a.b", "", " "] {
+            assert!(
+                trusted_publisher_key(root, publisher).is_err(),
+                "{publisher:?}"
+            );
+        }
+    }
 }
