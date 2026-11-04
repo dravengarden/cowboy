@@ -30,7 +30,7 @@ import {
   useState,
 } from "react";
 import { Box, IconButton, Link, Menu, MenuItem, useMediaQuery, useTheme } from "@mui/material";
-import { Check, ContentCopy } from "@mui/icons-material";
+import { BrokenImageOutlined, Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -152,6 +152,95 @@ function parseImages(md: string): { src: string; alt: string }[] {
     if (src && !src.startsWith("cowboy-att:")) out.push({ src, alt });
   }
   return out;
+}
+
+/** A Markdown image whose address does not load, such as a placeholder
+ *  (`<gif link>`) or a path on the agent's machine, keeps its alt text and
+ *  address readable instead of the browser's broken-image glyph. */
+function UnavailableMarkdownImage({ src: encoded, alt }: { src: string; alt: string }): React.JSX.Element {
+  // react-markdown percent-encodes the destination; show what the agent wrote.
+  let src = encoded;
+  try {
+    src = decodeURI(encoded);
+  } catch {
+    // Keep a malformed escape as written.
+  }
+  const label = alt.trim() || src.split(/[/?#]/).filter(Boolean).at(-1) || src;
+  return (
+    <Box
+      component="span"
+      role="img"
+      aria-label={`Image unavailable: ${label}`}
+      title={src}
+      data-markdown-image-unavailable
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        maxWidth: "100%",
+        my: 0.5,
+        px: 1,
+        py: 0.5,
+        fontSize: "0.85em",
+        fontStyle: "normal",
+        color: "text.secondary",
+        bgcolor: "action.hover",
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+        overflowWrap: "anywhere",
+        verticalAlign: "middle",
+      }}
+    >
+      <BrokenImageOutlined sx={{ fontSize: "1.2em", flexShrink: 0 }} />
+      <span>
+        {label}
+        {label !== src && (
+          <Box component="span" sx={{ opacity: 0.7, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+            {" · "}
+            {src}
+          </Box>
+        )}
+      </span>
+    </Box>
+  );
+}
+
+function MarkdownImage(
+  { src, alt, onOpen, onFail }: {
+    src: string;
+    alt: string;
+    onOpen: (src: string) => void;
+    onFail: (src: string) => void;
+  },
+): React.JSX.Element {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (failedSrc === src) return <UnavailableMarkdownImage src={src} alt={alt} />;
+  return (
+    <Box
+      component={ProtectedImage}
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onClick={() => onOpen(src)}
+      onError={() => {
+        setFailedSrc(src);
+        onFail(src);
+      }}
+      sx={{
+        display: "block",
+        maxWidth: "100%",
+        maxHeight: 200,
+        width: "auto",
+        my: 0.5,
+        borderRadius: 1,
+        border: 1,
+        borderColor: "divider",
+        objectFit: "contain",
+        cursor: "zoom-in",
+      }}
+    />
+  );
 }
 
 // Keep these renderer component identities stable across streamed Markdown
@@ -701,7 +790,13 @@ const MarkdownImpl = memo(function MarkdownImpl({
   // Images render as capped thumbnails in the bubble; tapping opens the shared
   // fullscreen lightbox. Gallery = this message's images (per-message scope), so
   // swipe/←→ pages within the one message.
-  const galleryImages = useMemo(() => parseImages(text), [text]);
+  // An image that fails to load leaves the gallery, so paging never lands on
+  // a broken frame.
+  const [failedImages, setFailedImages] = useState<ReadonlySet<string>>(() => new Set());
+  const galleryImages = useMemo(
+    () => parseImages(text).filter((image) => !failedImages.has(image.src)),
+    [text, failedImages],
+  );
   const [lbIndex, setLbIndex] = useState<number | null>(null);
   // Renderer components are element types. A fresh function per render makes
   // ReactMarkdown remount every paragraph, heading, and link, which detaches
@@ -709,6 +804,13 @@ const MarkdownImpl = memo(function MarkdownImpl({
   // refs so a host re-render never changes those identities.
   const galleryImagesRef = useRef(galleryImages);
   galleryImagesRef.current = galleryImages;
+  const openImage = useCallback((url: string): void => {
+    const i = galleryImagesRef.current.findIndex((g) => g.src === url);
+    setLbIndex(i >= 0 ? i : 0);
+  }, []);
+  const markImageFailed = useCallback((url: string): void => {
+    setFailedImages((previous) => previous.has(url) ? previous : new Set(previous).add(url));
+  }, []);
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
   const nativeLinkMenu = useContext(SurfaceContext)?.kind === "desktop" && hasNativeExternalOpener();
@@ -725,27 +827,11 @@ const MarkdownImpl = memo(function MarkdownImpl({
       // `<img src="cowboy-att:…">` is the blank rounded box in a user bubble.
       if (!url || url.startsWith("cowboy-att:")) return null;
       return (
-        <Box
-          component={ProtectedImage}
+        <MarkdownImage
           src={url}
           alt={alt ?? ""}
-          loading="lazy"
-          onClick={() => {
-            const i = galleryImagesRef.current.findIndex((g) => g.src === url);
-            setLbIndex(i >= 0 ? i : 0);
-          }}
-          sx={{
-            display: "block",
-            maxWidth: "100%",
-            maxHeight: 200,
-            width: "auto",
-            my: 0.5,
-            borderRadius: 1,
-            border: 1,
-            borderColor: "divider",
-            objectFit: "contain",
-            cursor: "zoom-in",
-          }}
+          onOpen={openImage}
+          onFail={markImageFailed}
         />
       );
     },
