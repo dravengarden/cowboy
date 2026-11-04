@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.5.20",
+  "version": "3.5.21",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.17",
   "display": {
@@ -128,7 +128,16 @@
         "model": "gpt-6.1-sol",
         "reasoning_effort": "medium"
       },
-      "error_rules": [],
+      "error_rules": [
+        {
+          "when": {
+            "op": "contains",
+            "value": "serverOverloaded"
+          },
+          "classification": "provider-overloaded",
+          "keep_worker_alive": true
+        }
+      ],
       "execution": {
         "interface": "jsonrpc_v1",
         "executor_digests": [

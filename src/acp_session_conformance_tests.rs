@@ -1642,6 +1642,31 @@ fn partial_stream_policy_preserves_worker_but_never_replays_a_prompt() {
     }
 }
 
+#[test]
+fn codex_overloaded_model_fails_the_turn_but_keeps_the_worker() {
+    let source: cowboy_provider_sdk::StandardProviderSource =
+        serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
+    let behavior = source.compile().unwrap().runtime.behavior;
+    // The exact detail the patched codex-acp produced on 2026-11-02/03; each
+    // one used to mark the session crashed and cost a worker restart.
+    let overloaded = "Internal error: {\n  \"message\": \"Selected model is at capacity. Please try a different model.\",\n  \"codexErrorInfo\": \"serverOverloaded\"\n}";
+    assert!(crate::provider::keeps_worker_alive_for_behavior(
+        &behavior, overloaded
+    ));
+    // Tools may already have run before the capacity error; never replay.
+    assert!(!crate::provider::should_retry_without_visible_update(
+        &behavior, overloaded, false, 0
+    ));
+    for detail in [
+        "Internal error: CODEX_API_KEY or OPENAI_API_KEY is not set",
+        "Internal error: connection closed",
+    ] {
+        assert!(!crate::provider::keeps_worker_alive_for_behavior(
+            &behavior, detail
+        ));
+    }
+}
+
 fn native_cycle(cycle: Option<&str>) -> ClaudeSdkMessageNotification {
     ClaudeSdkMessageNotification {
         session_id: NATIVE.to_owned(),
