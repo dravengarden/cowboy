@@ -69,3 +69,32 @@ export async function checkNativeMarkdownLinks(): Promise<string> {
     else delete native.__TAURI_INTERNALS__;
   }
 }
+
+export async function checkUnavailableMarkdownImage(): Promise<string> {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    flushSync(() => root.render(
+      <BrowserProductTheme>
+        <MarkdownImpl text="![Before and after](<gif link>)" />
+      </BrowserProductTheme>,
+    ));
+    check(container.querySelector("img"), "A Markdown image first renders as an image");
+    for (let attempt = 0; attempt < 30 && !container.querySelector("[data-markdown-image-unavailable]"); attempt++) {
+      await tick();
+    }
+    const fallback = container.querySelector<HTMLElement>("[data-markdown-image-unavailable]");
+    check(fallback, "An image address that does not load leaves the broken-image glyph");
+    check(!container.querySelector("img"), "The broken image element is replaced");
+    check(fallback.textContent?.includes("Before and after"), "The fallback keeps the alt text");
+    check(fallback.textContent?.includes("gif link"), "The fallback shows the address as written");
+    fallback.click();
+    await tick();
+    check(!document.querySelector("[role='dialog']"), "An unavailable image does not open the lightbox");
+    return "A Markdown image that fails to load is replaced by its alt text and address and stays out of the lightbox";
+  } finally {
+    root.unmount();
+    container.remove();
+  }
+}
