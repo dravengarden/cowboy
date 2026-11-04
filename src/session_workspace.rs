@@ -321,9 +321,22 @@ pub async fn prepare(
             .await
             .context("validating origin default branch")?;
         let refspec = format!("+{head_ref}:{base_ref}");
-        git_remote_output(&repository, ["fetch", "origin", refspec.as_str()])
-            .await
-            .context("fetching origin default branch for isolated session")?;
+        // Write only this session's base ref. A plain fetch also updates
+        // `refs/remotes/origin/*` opportunistically, so two sessions prepared
+        // at once from one checkout (or a concurrent user fetch) fail with
+        // "cannot lock ref 'refs/remotes/origin/main'".
+        git_remote_output(
+            &repository,
+            [
+                "fetch",
+                "--no-write-fetch-head",
+                "--refmap=",
+                "origin",
+                refspec.as_str(),
+            ],
+        )
+        .await
+        .context("fetching origin default branch for isolated session")?;
         let revision_spec = format!("{base_ref}^{{commit}}");
         (
             git_output(&repository, ["rev-parse", revision_spec.as_str()])
@@ -3125,6 +3138,67 @@ mod tests {
         assert!(capture_cleanup_workspace(&managed, "sess-clean", &outside).is_err());
         assert!(session.join("target").is_dir());
         assert!(capture_cleanup_workspace(&managed, "../escape", &session).is_err());
+    }
+
+    #[tokio::test]
+    async fn fetches_the_session_base_without_moving_remote_tracking_refs() {
+        let temp = TestDir::new();
+        let remote = temp.0.join("remote.git");
+        let source = temp.0.join("source");
+        let other = temp.0.join("other");
+        let managed = temp.0.join("managed");
+        git(&temp.0, &["init", "--bare", remote.to_str().unwrap()]);
+        git(
+            &temp.0,
+            &["clone", remote.to_str().unwrap(), source.to_str().unwrap()],
+        );
+        for (key, value) in [
+            ("user.name", "Cowboy Test"),
+            ("user.email", "test@example.invalid"),
+        ] {
+            git(&source, &["config", key, value]);
+        }
+        std::fs::write(source.join("value.txt"), "first\n").unwrap();
+        git(&source, &["add", "value.txt"]);
+        git(&source, &["commit", "-m", "first"]);
+        git(&source, &["push", "-u", "origin", "HEAD:main"]);
+        git(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        let tracked = git_output(&source, ["rev-parse", "refs/remotes/origin/main"])
+            .await
+            .unwrap();
+        git(
+            &temp.0,
+            &["clone", remote.to_str().unwrap(), other.to_str().unwrap()],
+        );
+        for (key, value) in [
+            ("user.name", "Cowboy Test"),
+            ("user.email", "test@example.invalid"),
+        ] {
+            git(&other, &["config", key, value]);
+        }
+        std::fs::write(other.join("value.txt"), "second\n").unwrap();
+        git(&other, &["commit", "-am", "second"]);
+        git(&other, &["push", "origin", "HEAD:main"]);
+        let published = git_output(&other, ["rev-parse", "HEAD"]).await.unwrap();
+
+        let prepared = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-1".to_owned(),
+                ..Default::default()
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        assert_eq!(prepared.revision.as_deref(), Some(published.as_str()));
+        assert_eq!(
+            git_output(&source, ["rev-parse", "refs/remotes/origin/main"])
+                .await
+                .unwrap(),
+            tracked,
+            "the user's remote-tracking ref belongs to the user's own fetches"
+        );
     }
 
     #[tokio::test]

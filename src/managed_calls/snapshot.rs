@@ -444,7 +444,12 @@ pub async fn prepare(
     if !round.validate() {
         return Err("invalid_request");
     }
-    let source = PathBuf::from(&round.source_cwd);
+    // Callers name the session's cwd or root as they see it, which can pass
+    // through a symlinked home directory. Containment and the top-level check
+    // compare real paths, so resolve it once and capture from the real path.
+    let Ok(source) = std::fs::canonicalize(&round.source_cwd) else {
+        return Err("source_unavailable");
+    };
     let git = Git::new();
     if !source_permitted(&git, &source, roots, workspaces).await {
         return Err("source_unavailable");
@@ -1011,6 +1016,63 @@ mod tests {
             "not review input\n"
         );
         close(&managed, "child-1").unwrap();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn resolves_a_symlinked_source_path_before_checking_containment() {
+        let base = root();
+        let real = base.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let source = real.join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("a"), "a\n").unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-qm", "base"]);
+        // A session cwd under a symlinked home directory, as Hawk's
+        // `~/.local/state/cowboy-machine/worktrees` link reports it.
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let managed = base.join("managed");
+        let roots = crate::session_workspace::WorktreeRoots::single(real.clone());
+        let prepared = prepare(
+            &managed,
+            "hawk",
+            &round(&alias.join("source"), "aliased", vec![]),
+            &roots,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(PathBuf::from(prepared.cwd).join("a")).unwrap(),
+            "a\n"
+        );
+        close(&managed, "child-1").unwrap();
+        // Resolving the link never widens containment: a link inside the
+        // roots that points outside them is still refused.
+        let outside = base.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        git(&outside, &["init", "-q"]);
+        let inner = real.join("inner");
+        std::os::unix::fs::symlink(&outside, &inner).unwrap();
+        let mut escaped = round(&inner, "escaped", vec![]);
+        escaped.child_session_id = "child-escaped".into();
+        assert_eq!(
+            prepare(&managed, "hawk", &escaped, &roots, &[])
+                .await
+                .unwrap_err(),
+            "source_unavailable"
+        );
+        let mut missing = round(&base.join("missing"), "missing", vec![]);
+        missing.child_session_id = "child-missing".into();
+        assert_eq!(
+            prepare(&managed, "hawk", &missing, &roots, &[])
+                .await
+                .unwrap_err(),
+            "source_unavailable"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
