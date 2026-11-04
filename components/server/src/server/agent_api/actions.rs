@@ -90,6 +90,23 @@ fn input_refusal(error: &crate::managed_calls::InputError) -> CallRefusal {
     })
 }
 
+/// Title and selection reason are display text that never affects reuse or
+/// admission; fold them to the label bound instead of refusing the call.
+fn display_label(text: &str) -> String {
+    const MAX: usize = 256;
+    let line = text
+        .split(char::is_control)
+        .filter(|part| !part.trim().is_empty())
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.len() <= MAX {
+        return line;
+    }
+    let end = line.floor_char_boundary(MAX - '…'.len_utf8());
+    format!("{}…", line[..end].trim_end())
+}
+
 fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, CallRefusal> {
     let input: CallInput = serde_json::from_value(args)
         .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
@@ -124,13 +141,18 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     if input.capability.is_some() && input.purpose.is_some() {
         return Err(refuse("pass capability or purpose, not both"));
     }
+    if input.preset.is_some() && input.child_session_id.is_some() {
+        return Err(refuse(
+            "a child_session_id continuation keeps the child's preset; omit preset, or start a fresh call to change it",
+        ));
+    }
     if input
         .base
         .as_deref()
         .is_some_and(|base| !crate::managed_calls::review::valid_base(base))
     {
         return Err(refuse(
-            "base must be a full 40- or 64-hex commit id, not a short or symbolic ref",
+            "base must be a full 40- or 64-hex commit id, not a short or symbolic ref; resolve it with `git rev-parse <ref>` and never pad a short id",
         ));
     }
     // The request contract reports root and file faults together; split the
@@ -192,10 +214,10 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     };
     let mut labels = std::collections::BTreeMap::new();
     if let Some(title) = input.title {
-        labels.insert("title", title);
+        labels.insert("title", display_label(&title));
     }
     if let Some(reason) = input.reason {
-        labels.insert("selection_reason", reason);
+        labels.insert("selection_reason", display_label(&reason));
     }
     if input.notify {
         labels.insert(crate::managed_calls::review::NOTIFY, "parent".to_owned());
@@ -972,7 +994,18 @@ mod tests {
             "review.start",
             json!({"root":root,"base":"1ef0ea6f","task":"t"}),
         );
-        assert!(short.contains("full 40- or 64-hex"), "{short}");
+        assert!(
+            short.contains("full 40- or 64-hex") && short.contains("git rev-parse"),
+            "{short}"
+        );
+        let continued = message(
+            "calls.start",
+            json!({"instruction":"x","child_session_id":"child-1","preset":"astra-max"}),
+        );
+        assert!(
+            continued.contains("keeps the child's preset"),
+            "{continued}"
+        );
         let task = message(
             "review.start",
             json!({"root":root,"base":"a".repeat(40),"task":"Review commits a..HEAD in apps/x"}),
@@ -1008,6 +1041,26 @@ mod tests {
         for value in [short, task, absolute, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
+    }
+
+    #[test]
+    fn display_labels_fold_to_one_bounded_line() {
+        assert_eq!(
+            display_label("Review\n  the fix\t now"),
+            "Review the fix now"
+        );
+        let long = display_label(&"é".repeat(300));
+        assert!(long.len() <= 256 && long.ends_with('…'), "{}", long.len());
+        let Action::Start { request, .. } = call_action(
+            "review.start",
+            json!({"title":"x".repeat(400),"reason":"a\nb"}),
+            "op",
+        )
+        .unwrap() else {
+            panic!("expected start");
+        };
+        assert!(request.labels["title"].len() <= 256);
+        assert_eq!(request.labels["selection_reason"], "a b");
     }
 
     #[test]
