@@ -196,6 +196,33 @@ impl Supervisor {
         Ok(())
     }
 
+    /// A crashed session whose latest failure is a recoverable turn error
+    /// and whose worker is still alive: the next prompt reuses that worker.
+    fn live_recoverable_turn_failure(&self, session_id: &str) -> bool {
+        let Some(meta) = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+        else {
+            return false;
+        };
+        meta.status == Status::Crashed
+            && self
+                .hub
+                .latest_crash_detail(session_id)
+                .as_deref()
+                .is_some_and(|detail| {
+                    let behavior = meta
+                        .provider_behavior
+                        .clone()
+                        .unwrap_or_else(|| provider::legacy_behavior(&meta.provider));
+                    detail == crate::core::MODEL_REFUSAL_DETAIL
+                        || crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
+                })
+            && self.has_worker(session_id)
+    }
+
     fn has_worker(&self, session_id: &str) -> bool {
         self.runtime_for_session(session_id)
             .is_ok_and(|runtime| runtime.has_worker(session_id))
@@ -203,14 +230,19 @@ impl Supervisor {
 
     /// Editing preferences is not a request to start or recover a process.
     /// This also covers workspace preparation and stopped/offline Machines.
+    ///
+    /// A recoverable turn failure projects `Crashed` while its worker stays
+    /// alive and serves the next prompt, so a change made in that hold (such
+    /// as switching away from an overloaded model) must reach that worker.
     fn defer_configuration(&self, session_id: &str) -> bool {
-        matches!(
+        (matches!(
             self.hub.status(session_id),
             Some(Status::Exited | Status::Crashed | Status::Interrupted)
-        ) || (self.hub.status(session_id) == Some(Status::Starting)
-            && self
-                .runtime_for_session(session_id)
-                .is_ok_and(|runtime| !runtime.has_worker(session_id)))
+        ) && !self.live_recoverable_turn_failure(session_id))
+            || (self.hub.status(session_id) == Some(Status::Starting)
+                && self
+                    .runtime_for_session(session_id)
+                    .is_ok_and(|runtime| !runtime.has_worker(session_id)))
     }
 
     #[must_use]
@@ -1307,23 +1339,7 @@ impl Supervisor {
         if !migrated && !crashed {
             return Ok(false);
         }
-        let live_recoverable_turn_failure = crashed
-            && !migrated
-            && session.is_some_and(|meta| {
-                self.hub
-                    .latest_crash_detail(session_id)
-                    .as_deref()
-                    .is_some_and(|detail| {
-                        let behavior = meta
-                            .provider_behavior
-                            .clone()
-                            .unwrap_or_else(|| provider::legacy_behavior(&meta.provider));
-                        detail == crate::core::MODEL_REFUSAL_DETAIL
-                            || crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
-                    })
-            })
-            && self.runtime_for_session(session_id)?.has_worker(session_id);
-        if live_recoverable_turn_failure {
+        if crashed && !migrated && self.live_recoverable_turn_failure(session_id) {
             tracing::info!(
                 session = session_id,
                 "reusing live ACP worker after recoverable provider turn failure"
@@ -2971,6 +2987,60 @@ mod tests {
             assert_eq!(hub.status("s"), Some(Status::Crashed));
             assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
         }
+    }
+
+    #[tokio::test]
+    async fn configuration_reaches_a_live_worker_held_after_a_recoverable_turn_failure() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
+        );
+        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        worker.launch.as_mut().expect("launch").provider = "codex".to_owned();
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        // Switching away from the failing model must reach the worker that
+        // serves the next prompt, not only the saved preference.
+        hub.set_config_preference("s", "model".into(), serde_json::json!("other"))
+            .unwrap();
+        supervisor
+            .send(
+                "s",
+                AgentCommand::SetConfigOption {
+                    config_id: "model".into(),
+                    value: serde_json::json!("other"),
+                },
+            )
+            .unwrap();
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::SetConfigOption { config_id, value, .. }
+                    if config_id == "model" && value == &serde_json::json!("other")
+            )
+        }));
+        assert!(runtime.has_worker("s"));
+        assert!(
+            !runtime
+                .pending_for_test()
+                .iter()
+                .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+        );
     }
 
     #[tokio::test]

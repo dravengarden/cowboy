@@ -321,21 +321,34 @@ pub async fn prepare(
             .await
             .context("validating origin default branch")?;
         let refspec = format!("+{head_ref}:{base_ref}");
-        // Write only this session's base ref. A plain fetch also updates
-        // `refs/remotes/origin/*` opportunistically, so two sessions prepared
-        // at once from one checkout (or a concurrent user fetch) fail with
-        // "cannot lock ref 'refs/remotes/origin/main'".
-        git_remote_output(
-            &repository,
-            [
-                "fetch",
-                "--no-write-fetch-head",
-                "--refmap=",
-                "origin",
-                refspec.as_str(),
-            ],
-        )
-        .await
+        // A plain fetch also refreshes `refs/remotes/origin/*`, which Review
+        // compares against. When another fetch holds that ref (two sessions
+        // prepared at once from one checkout, or the user's own fetch), it
+        // fails with "cannot lock ref"; the competing fetch refreshes the
+        // tracking ref anyway, so retry writing only this session's base.
+        let fetched = git_remote_output(&repository, ["fetch", "origin", refspec.as_str()]).await;
+        match fetched {
+            Err(error) if format!("{error:#}").contains("cannot lock ref") => {
+                tracing::warn!(
+                    repository = %repository.display(),
+                    error = %format!("{error:#}"),
+                    "remote-tracking ref busy; fetching only the session base"
+                );
+                git_remote_output(
+                    &repository,
+                    [
+                        "fetch",
+                        "--no-write-fetch-head",
+                        "--refmap=",
+                        "origin",
+                        refspec.as_str(),
+                    ],
+                )
+                .await
+                .map(|_| ())
+            }
+            other => other.map(|_| ()),
+        }
         .context("fetching origin default branch for isolated session")?;
         let revision_spec = format!("{base_ref}^{{commit}}");
         (
@@ -3141,45 +3154,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetches_the_session_base_without_moving_remote_tracking_refs() {
+    async fn fetches_the_session_base_while_the_remote_tracking_ref_is_locked() {
         let temp = TestDir::new();
         let remote = temp.0.join("remote.git");
         let source = temp.0.join("source");
-        let other = temp.0.join("other");
         let managed = temp.0.join("managed");
         git(&temp.0, &["init", "--bare", remote.to_str().unwrap()]);
         git(
             &temp.0,
             &["clone", remote.to_str().unwrap(), source.to_str().unwrap()],
         );
-        for (key, value) in [
-            ("user.name", "Cowboy Test"),
-            ("user.email", "test@example.invalid"),
-        ] {
-            git(&source, &["config", key, value]);
-        }
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
         std::fs::write(source.join("value.txt"), "first\n").unwrap();
         git(&source, &["add", "value.txt"]);
         git(&source, &["commit", "-m", "first"]);
         git(&source, &["push", "-u", "origin", "HEAD:main"]);
         git(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
-        let tracked = git_output(&source, ["rev-parse", "refs/remotes/origin/main"])
-            .await
-            .unwrap();
+        std::fs::write(source.join("value.txt"), "second\n").unwrap();
+        git(&source, &["commit", "-am", "second"]);
+        git(&source, &["push", "origin", "HEAD:main"]);
+        let published = git_output(&source, ["rev-parse", "HEAD"]).await.unwrap();
         git(
-            &temp.0,
-            &["clone", remote.to_str().unwrap(), other.to_str().unwrap()],
+            &source,
+            &["update-ref", "refs/remotes/origin/main", "HEAD~1"],
         );
-        for (key, value) in [
-            ("user.name", "Cowboy Test"),
-            ("user.email", "test@example.invalid"),
-        ] {
-            git(&other, &["config", key, value]);
-        }
-        std::fs::write(other.join("value.txt"), "second\n").unwrap();
-        git(&other, &["commit", "-am", "second"]);
-        git(&other, &["push", "origin", "HEAD:main"]);
-        let published = git_output(&other, ["rev-parse", "HEAD"]).await.unwrap();
+        // Another fetch in this checkout holds the tracking ref, as when two
+        // sessions are prepared at once (Falcon, 2026-11-01).
+        let lock = source.join(".git/refs/remotes/origin/main.lock");
+        std::fs::write(&lock, "").unwrap();
 
         let prepared = prepare(
             PrepareWorkspaceRequest {
@@ -3192,12 +3195,29 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(prepared.revision.as_deref(), Some(published.as_str()));
+        std::fs::remove_file(&lock).unwrap();
+
+        // Without contention the ordinary fetch still refreshes the tracking
+        // ref that Review compares against.
+        git(
+            &source,
+            &["update-ref", "refs/remotes/origin/main", "HEAD~1"],
+        );
+        prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-2".to_owned(),
+                ..Default::default()
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             git_output(&source, ["rev-parse", "refs/remotes/origin/main"])
                 .await
                 .unwrap(),
-            tracked,
-            "the user's remote-tracking ref belongs to the user's own fetches"
+            published
         );
     }
 
