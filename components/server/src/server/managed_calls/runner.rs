@@ -92,6 +92,24 @@ async fn advance(
     change(&mut next);
     next.revision = previous.revision + 1;
     next.updated_at_ms = now_ms().max(previous.updated_at_ms);
+    // A call that fails while its child starts still ran on that child's
+    // account; recording it keeps the Calls view from saying "unknown".
+    if previous.state == State::Starting
+        && matches!(next.state, State::Failed | State::Cancelled)
+        && next.provider_account_id.is_none()
+    {
+        next.provider_account_id =
+            state
+                .hub
+                .session_info(&next.child_session_id)
+                .and_then(|child| {
+                    observed_account(
+                        &child.meta,
+                        &next.provider,
+                        next.runtime_machine_id.as_deref(),
+                    )
+                });
+    }
     if previous.state == State::Starting && next.state == State::Running {
         next.started_at_ms = Some(next.updated_at_ms);
         next.provider_account_id =

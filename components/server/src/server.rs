@@ -14893,15 +14893,33 @@ async fn reconcile_account_refresh(
     account_id: &crate::provider_account::ProviderAccountId,
     result: crate::provider_service::ProviderAuthRefreshResult,
 ) -> Result<(), String> {
+    // Log both outcomes like the Service account does, so a named account's
+    // refresh lineage is auditable from the Controller journal.
     let providers = match result {
-        crate::provider_service::ProviderAuthRefreshResult::Stale { .. } => {
+        crate::provider_service::ProviderAuthRefreshResult::Stale { current_generation } => {
+            tracing::info!(
+                %machine_id,
+                %provider_id,
+                account_id = account_id.as_str(),
+                current_generation,
+                "discarding stale account credential refresh and restoring its grant"
+            );
             vec![provider_id.to_owned()]
         }
         crate::provider_service::ProviderAuthRefreshResult::Unchanged(_) => return Ok(()),
-        crate::provider_service::ProviderAuthRefreshResult::Updated(statuses) => statuses
-            .into_iter()
-            .map(|status| status.provider_id)
-            .collect(),
+        crate::provider_service::ProviderAuthRefreshResult::Updated(statuses) => {
+            tracing::info!(
+                %machine_id,
+                %provider_id,
+                account_id = account_id.as_str(),
+                generations = ?statuses.iter().map(|status| status.auth_generation).collect::<Vec<_>>(),
+                "promoted Machine-refreshed account credentials"
+            );
+            statuses
+                .into_iter()
+                .map(|status| status.provider_id)
+                .collect()
+        }
     };
     // A native refresh belongs to this Machine grant. Never broadcast it to
     // another account or overwrite another Machine's independent refresh lineage.
